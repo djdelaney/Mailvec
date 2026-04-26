@@ -1,0 +1,41 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- SQLite. The sqlite-vec extension is loaded at runtime from
+         runtimes/osx-arm64/native/vec0.dylib; fetch it via
+         ops/fetch-sqlite-vec.sh. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core"        Version="10.0.7" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3"     Version="3.0.2" />
+
+    <!-- MIME parsing -->
+    <PackageVersion Include="MimeKit"                           Version="4.16.0" />
+
+    <!-- Generic Host / configuration / logging -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting"                  Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder"     Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Options"                  Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions"     Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console"          Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Http"                     Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="10.5.0" />
+
+    <!-- MCP server -->
+    <PackageVersion Include="ModelContextProtocol"              Version="1.2.0" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore"   Version="1.2.0" />
+
+    <!-- CLI -->
+    <PackageVersion Include="System.CommandLine"                Version="2.0.7" />
+
+    <!-- Testing -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk"            Version="18.4.0" />
+    <PackageVersion Include="xunit"                             Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio"         Version="3.1.5" />
+    <PackageVersion Include="Shouldly"                          Version="4.3.0" />
+    <PackageVersion Include="coverlet.collector"                Version="6.0.4" />
+  </ItemGroup>
+
+</Project>

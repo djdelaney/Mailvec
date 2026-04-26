@@ -1,0 +1,29 @@
+# Copy to ~/.mbsyncrc and fill in the placeholders.
+# App-specific password from https://app.fastmail.com/settings/security/devicekeys
+
+IMAPAccount fastmail
+Host          imap.fastmail.com
+Port          993
+User          you@fastmail.com
+PassCmd       "security find-generic-password -a you@fastmail.com -s mbsync -w"
+TLSType       IMAPS
+TLSVersions   +1.2 +1.3
+AuthMechs     LOGIN
+
+IMAPStore fastmail-remote
+Account fastmail
+
+MaildirStore fastmail-local
+Subfolders Verbatim
+Path       ~/Mail/Fastmail/
+Inbox      ~/Mail/Fastmail/INBOX
+
+Channel fastmail
+Far     :fastmail-remote:
+Near    :fastmail-local:
+Patterns *
+Create  Near
+SyncState *
+# Read-only sync: changes in Fastmail flow down, never up.
+Sync    Pull
+Expunge Near

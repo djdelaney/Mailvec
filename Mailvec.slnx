@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Mailvec.Cli/Mailvec.Cli.csproj" />
+    <Project Path="src/Mailvec.Core/Mailvec.Core.csproj" />
+    <Project Path="src/Mailvec.Embedder/Mailvec.Embedder.csproj" />
+    <Project Path="src/Mailvec.Indexer/Mailvec.Indexer.csproj" />
+    <Project Path="src/Mailvec.Mcp/Mailvec.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Mailvec.Core.Tests/Mailvec.Core.Tests.csproj" />
+    <Project Path="tests/Mailvec.Indexer.Tests/Mailvec.Indexer.Tests.csproj" />
+    <Project Path="tests/Mailvec.Mcp.Tests/Mailvec.Mcp.Tests.csproj" />
+  </Folder>
+</Solution>
