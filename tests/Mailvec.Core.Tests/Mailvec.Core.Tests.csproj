@@ -22,4 +22,8 @@
     <ProjectReference Include="..\..\src\Mailvec.Core\Mailvec.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Parsing\Fixtures\*.eml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

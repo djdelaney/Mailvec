@@ -1,0 +1,36 @@
+using Mailvec.Core.Data;
+using Mailvec.Core.Options;
+using Mailvec.Core.Search;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace Mailvec.Cli.Commands;
+
+internal static class CliServices
+{
+    public static ServiceProvider Build()
+    {
+        var config = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile("appsettings.Local.json", optional: true)
+            .AddEnvironmentVariables()
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging(b => b.AddSimpleConsole(o =>
+        {
+            o.SingleLine = true;
+            o.TimestampFormat = "HH:mm:ss ";
+        }));
+        services.Configure<ArchiveOptions>(config.GetSection(ArchiveOptions.SectionName));
+
+        services.AddSingleton<ConnectionFactory>();
+        services.AddSingleton<SchemaMigrator>();
+        services.AddSingleton<MessageRepository>();
+        services.AddSingleton<KeywordSearchService>();
+
+        return services.BuildServiceProvider();
+    }
+}

@@ -1,9 +1,11 @@
 using System.CommandLine;
+using Mailvec.Cli.Commands;
 
-var root = new RootCommand("Mailvec admin CLI");
-
-// TODO Phase 1: archive status, archive search "<query>"
-// TODO Phase 1: archive rebuild-fts
-// TODO Phase 2: archive reindex [--all|--folder=...]
+var root = new RootCommand("Mailvec admin CLI")
+{
+    StatusCommand.Build(),
+    SearchCommand.Build(),
+    RebuildFtsCommand.Build(),
+};
 
 return await root.Parse(args).InvokeAsync();

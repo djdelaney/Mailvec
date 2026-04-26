@@ -41,4 +41,58 @@ Central package management lives in `Directory.Packages.props`. Shared MSBuild s
 
 ## Status
 
-Phase 0 scaffold only. No working ingest, embedding, or MCP server yet — see the phased build plan in the design doc.
+Built in phases per the [design doc](mailvec-project-scope.md#8-phased-build-plan). Each phase has a hard exit criterion and ships standalone value before the next begins.
+
+### ✅ Phase 0 — Repo scaffold
+
+Solution, projects, central package management, shared MSBuild settings, ops + schema folders, gitignore, README.
+
+### ✅ Phase 1 — Ingest pipeline
+
+A searchable local archive. **Exit criterion met:** point the indexer at a Maildir and `mailvec search "<query>"` returns BM25-ranked hits with snippets.
+
+- Schema migration runner (`Mailvec.Core.Data.SchemaMigrator`) over an embedded `001_initial.sql`.
+- MimeKit-based parser with fixture-driven tests (plain text, multipart, html-only, unicode headers, attachments).
+- `MaildirScanner` — recursive full scan, soft-delete reconciliation, mbsync `new/`→`cur/` rename detection.
+- `MaildirWatcher` — debounced `FileSystemWatcher` with `tmp/` filtering.
+- `MessageIngestService` — `BackgroundService` that runs an initial scan, then reacts to watcher pulses + a periodic safety-net rescan.
+- FTS5 with BM25 ordering and bracketed snippets.
+- `mailvec status | search | rebuild-fts` CLI.
+
+### ⬜ Phase 2 — Semantic layer
+
+Adds locally-generated embeddings and hybrid (FTS + vector) search.
+
+- Ollama HTTP client with retry/backoff (`Microsoft.Extensions.Http.Resilience`).
+- `ChunkingService` — token-aware splitter sized to the embedding model's context window.
+- `EmbeddingWorker` — `BackgroundService` that processes rows where `embedded_at IS NULL` in batches.
+- Hybrid search via Reciprocal Rank Fusion (RRF) over BM25 + cosine similarity.
+- `mailvec search --semantic` for direct comparison against keyword results.
+
+**Exit criterion:** semantic queries surface relevant results that the FTS layer misses (e.g. paraphrased subjects, synonyms).
+
+### ⬜ Phase 3 — MCP exposure
+
+Wires the archive up to Claude.
+
+- AspNetCore MCP server using `ModelContextProtocol.AspNetCore`, bound to `127.0.0.1:3333`.
+- Tools: `search_emails`, `get_email`, `get_thread`, `list_folders`, `find_by_sender`, `recent_emails`.
+- Hybrid search reused from Phase 2.
+
+**Exit criterion:** Claude can answer "when did Bartlett last quote me for the tree work?" without being told where to look.
+
+### ⬜ Phase 4 — Operationalization
+
+Makes the system survive reboots unattended.
+
+- launchd plists for mbsync + the three .NET services (templates already in `ops/launchd/`).
+- `ops/install.sh` — publishes services, rewrites plist `__INSTALL_PREFIX__` placeholders, loads the agents, verifies health.
+- `/health` endpoint on the MCP server.
+- Log rotation via launchd stdout/stderr paths.
+- Coverage / freshness metrics surfaced through `mailvec status`.
+
+**Exit criterion:** reboot the Mac mini; everything comes back without intervention.
+
+### Out of scope (per design doc §11)
+
+Sending mail, modifying Fastmail state, multi-account support, calendar/contacts/files, web UI, real-time push, attachment indexing.

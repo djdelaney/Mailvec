@@ -1,0 +1,177 @@
+using System.Text.Json;
+using Mailvec.Core.Models;
+using Mailvec.Core.Parsing;
+using Microsoft.Data.Sqlite;
+
+namespace Mailvec.Core.Data;
+
+public sealed class MessageRepository(ConnectionFactory connections)
+{
+    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
+
+    /// <summary>
+    /// Insert or update a message. Keyed on Message-ID (RFC 5322); resending the
+    /// same Message-ID with a different Maildir path updates the path in place,
+    /// which covers mbsync's new/ -> cur/ rename and the ingest re-scan path.
+    /// </summary>
+    public long Upsert(ParsedMessage parsed, string folder, string maildirRelativePath, string maildirFilename, DateTimeOffset indexedAt)
+    {
+        ArgumentNullException.ThrowIfNull(parsed);
+
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO messages (
+                message_id, thread_id, maildir_path, maildir_filename, folder,
+                subject, from_address, from_name, to_addresses, cc_addresses,
+                date_sent, date_received, size_bytes, has_attachments,
+                body_text, body_html, raw_headers, indexed_at, deleted_at
+            ) VALUES (
+                $message_id, $thread_id, $maildir_path, $maildir_filename, $folder,
+                $subject, $from_address, $from_name, $to_addresses, $cc_addresses,
+                $date_sent, $date_received, $size_bytes, $has_attachments,
+                $body_text, $body_html, $raw_headers, $indexed_at, NULL
+            )
+            ON CONFLICT(message_id) DO UPDATE SET
+                thread_id        = excluded.thread_id,
+                maildir_path     = excluded.maildir_path,
+                maildir_filename = excluded.maildir_filename,
+                folder           = excluded.folder,
+                subject          = excluded.subject,
+                from_address     = excluded.from_address,
+                from_name        = excluded.from_name,
+                to_addresses     = excluded.to_addresses,
+                cc_addresses     = excluded.cc_addresses,
+                date_sent        = excluded.date_sent,
+                date_received    = excluded.date_received,
+                size_bytes       = excluded.size_bytes,
+                has_attachments  = excluded.has_attachments,
+                body_text        = excluded.body_text,
+                body_html        = excluded.body_html,
+                raw_headers      = excluded.raw_headers,
+                indexed_at       = excluded.indexed_at,
+                deleted_at       = NULL
+            RETURNING id;
+            """;
+
+        cmd.Parameters.AddWithValue("$message_id", parsed.MessageId);
+        cmd.Parameters.AddWithValue("$thread_id", parsed.ThreadId);
+        cmd.Parameters.AddWithValue("$maildir_path", maildirRelativePath);
+        cmd.Parameters.AddWithValue("$maildir_filename", maildirFilename);
+        cmd.Parameters.AddWithValue("$folder", folder);
+        cmd.Parameters.AddWithValue("$subject", (object?)parsed.Subject ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$from_address", (object?)parsed.FromAddress ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$from_name", (object?)parsed.FromName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$to_addresses", JsonSerializer.Serialize(parsed.ToAddresses, JsonOpts));
+        cmd.Parameters.AddWithValue("$cc_addresses", JsonSerializer.Serialize(parsed.CcAddresses, JsonOpts));
+        cmd.Parameters.AddWithValue("$date_sent", (object?)parsed.DateSent?.ToString("O") ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$date_received", indexedAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$size_bytes", parsed.SizeBytes);
+        cmd.Parameters.AddWithValue("$has_attachments", parsed.HasAttachments ? 1 : 0);
+        cmd.Parameters.AddWithValue("$body_text", (object?)parsed.BodyText ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$body_html", (object?)parsed.BodyHtml ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$raw_headers", parsed.RawHeaders);
+        cmd.Parameters.AddWithValue("$indexed_at", indexedAt.ToString("O"));
+
+        var id = cmd.ExecuteScalar()
+            ?? throw new InvalidOperationException("Upsert returned no id");
+        return Convert.ToInt64(id, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public Message? GetById(long id)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? Map(reader) : null;
+    }
+
+    public Message? GetByMessageId(string messageId)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM messages WHERE message_id = $mid";
+        cmd.Parameters.AddWithValue("$mid", messageId);
+
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? Map(reader) : null;
+    }
+
+    public int CountAll()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE deleted_at IS NULL";
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public int MarkDeleted(IEnumerable<long> ids, DateTimeOffset deletedAt)
+    {
+        using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "UPDATE messages SET deleted_at = $at WHERE id = $id AND deleted_at IS NULL";
+        var atParam = cmd.Parameters.Add("$at", SqliteType.Text);
+        var idParam = cmd.Parameters.Add("$id", SqliteType.Integer);
+        atParam.Value = deletedAt.ToString("O");
+
+        var affected = 0;
+        foreach (var id in ids)
+        {
+            idParam.Value = id;
+            affected += cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return affected;
+    }
+
+    private static Message Map(SqliteDataReader r)
+    {
+        return new Message
+        {
+            Id = r.GetInt64(r.GetOrdinal("id")),
+            MessageId = r.GetString(r.GetOrdinal("message_id")),
+            ThreadId = r.IsDBNull(r.GetOrdinal("thread_id")) ? null : r.GetString(r.GetOrdinal("thread_id")),
+            MaildirPath = r.GetString(r.GetOrdinal("maildir_path")),
+            MaildirFilename = r.GetString(r.GetOrdinal("maildir_filename")),
+            Folder = r.GetString(r.GetOrdinal("folder")),
+            Subject = ReadNullableString(r, "subject"),
+            FromAddress = ReadNullableString(r, "from_address"),
+            FromName = ReadNullableString(r, "from_name"),
+            ToAddresses = DeserializeAddresses(ReadNullableString(r, "to_addresses")),
+            CcAddresses = DeserializeAddresses(ReadNullableString(r, "cc_addresses")),
+            DateSent = ReadNullableDate(r, "date_sent"),
+            DateReceived = ReadNullableDate(r, "date_received"),
+            SizeBytes = r.GetInt64(r.GetOrdinal("size_bytes")),
+            HasAttachments = r.GetInt32(r.GetOrdinal("has_attachments")) != 0,
+            BodyText = ReadNullableString(r, "body_text"),
+            BodyHtml = ReadNullableString(r, "body_html"),
+            RawHeaders = ReadNullableString(r, "raw_headers"),
+            IndexedAt = DateTimeOffset.Parse(r.GetString(r.GetOrdinal("indexed_at")), System.Globalization.CultureInfo.InvariantCulture),
+            EmbeddedAt = ReadNullableDate(r, "embedded_at"),
+            DeletedAt = ReadNullableDate(r, "deleted_at"),
+        };
+    }
+
+    private static string? ReadNullableString(SqliteDataReader r, string column)
+    {
+        var ord = r.GetOrdinal(column);
+        return r.IsDBNull(ord) ? null : r.GetString(ord);
+    }
+
+    private static DateTimeOffset? ReadNullableDate(SqliteDataReader r, string column)
+    {
+        var s = ReadNullableString(r, column);
+        return s is null ? null : DateTimeOffset.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static IReadOnlyList<EmailAddress> DeserializeAddresses(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return [];
+        return JsonSerializer.Deserialize<List<EmailAddress>>(json, JsonOpts) ?? [];
+    }
+}

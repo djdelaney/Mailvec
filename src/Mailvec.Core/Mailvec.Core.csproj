@@ -10,4 +10,8 @@
     <PackageReference Include="Microsoft.Extensions.Http" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\schema\001_initial.sql" Link="Schema\001_initial.sql" />
+  </ItemGroup>
+
 </Project>

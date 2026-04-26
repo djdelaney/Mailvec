@@ -1,0 +1,15 @@
+Message-ID: <html-003@newsletter.example>
+Date: Tue, 14 Jan 2025 06:00:00 +0000
+From: "Daily Brief" <hello@newsletter.example>
+To: subscribers@newsletter.example
+Subject: Today in tech
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><head><style>body { font: 14px sans-serif; }</style></head>
+<body>
+<h1>Top Stories</h1>
+<p>SQLite added <strong>vector search</strong> as a loadable extension.</p>
+<script>track('open');</script>
+<p>The local-first movement keeps growing.</p>
+</body></html>
