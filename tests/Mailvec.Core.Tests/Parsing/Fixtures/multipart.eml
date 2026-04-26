@@ -1,0 +1,22 @@
+Message-ID: <multi-002@example.com>
+In-Reply-To: <plain-001@example.com>
+References: <plain-001@example.com>
+Date: Mon, 13 Jan 2025 11:02:00 -0500
+From: bob@example.com
+To: "Alice Example" <alice@example.com>
+Cc: carol@example.com
+Subject: Re: Lunch on Friday?
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary42"
+
+--boundary42
+Content-Type: text/plain; charset=utf-8
+
+Friday at 12:30 works. See you there.
+
+Bob
+--boundary42
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Friday at 12:30 works. See you there.</p><p>Bob</p></body></html>
+--boundary42--

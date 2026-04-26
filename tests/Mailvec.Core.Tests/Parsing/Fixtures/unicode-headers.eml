@@ -1,0 +1,12 @@
+Message-ID: <unicode-004@example.com>
+Date: Wed, 15 Jan 2025 09:30:00 +0900
+From: =?utf-8?B?6Z2S5pyo?= <aoki@example.jp>
+To: =?utf-8?Q?Andr=C3=A9?= <andre@example.fr>
+Subject: =?utf-8?B?6Kqt5pu444GP6KaB55SoIOKAlCDjg6bjg4vjgrPjg7zjg4njga7jg4bjgrnjg4g=?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Testing non-ASCII headers and body content.
+カタカナ も 大丈夫 です。
+
+— 青木

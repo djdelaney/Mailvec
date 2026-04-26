@@ -72,4 +72,12 @@ The `sqlite-vec` extension is fetched as a prebuilt `vec0.dylib` by `ops/fetch-s
 
 ## Current status
 
-Phase 0 scaffold only. `Program.cs` files in each service wire up the host and bind options but have `TODO Phase N:` markers where real services will register. The schema, ops files, and configuration shape are real — the runtime behavior is not. When implementing a phase, check the design doc's "Phased build plan" section for the intended order and exit criteria.
+Phase 1 complete: schema migrations, MimeKit-based parser, `MaildirScanner` + `MaildirWatcher` + `MessageIngestService`, FTS5/BM25 keyword search, and a working `mailvec status | search | rebuild-fts` CLI. Phases 2 (Ollama embeddings) and 3 (MCP server) are not yet implemented — `Mailvec.Embedder/Program.cs` and `Mailvec.Mcp/Program.cs` are still scaffolds.
+
+## Phase 1 gotchas (worth remembering)
+
+- **MimeKit does not ship `HtmlToText`.** The design doc's reference is wrong. We use `HtmlTokenizer` with a small custom walker (`MessageParser.ConvertHtmlToText`) — quality is "good enough for FTS"; revisit if marketing-email noise hurts embedding quality.
+- **`Microsoft.Data.Sqlite.ExecuteNonQuery` silently stops at the first `CREATE TRIGGER ... BEGIN ... END;`.** The internal trigger semicolons confuse its statement iterator. We tokenise scripts ourselves in `SqlScriptSplitter` (BEGIN/END depth-tracking) and execute one statement at a time. Don't replace this with a single multi-statement `ExecuteNonQuery`.
+- **`vec0` must load before the schema applies**, because `001_initial.sql` declares `chunk_embeddings` as a `vec0(...)` virtual table. `ConnectionFactory` loads the extension on every `Open()`. The dylib is copied into each project's `bin/.../runtimes/<rid>/native/` by `Directory.Build.props` (with an `Exists` guard, so the build doesn't break if `ops/fetch-sqlite-vec.sh` hasn't run).
+- **Rename detection.** When mbsync renames `new/foo` → `cur/foo:2,S` between scans, the same Message-ID appears at a fresh path while the old `sync_state` row still references the old path. The scanner uses `SyncStateRepository.FreshMessageIds(since)` to exclude renamed messages from the soft-delete pass — don't bypass this when changing reconciliation logic.
+- **Config env-var convention.** Both indexer and CLI read environment variables with no prefix, so `Archive__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.

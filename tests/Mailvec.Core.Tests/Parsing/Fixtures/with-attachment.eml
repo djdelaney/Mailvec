@@ -1,0 +1,21 @@
+Message-ID: <attach-005@example.com>
+Date: Thu, 16 Jan 2025 14:00:00 -0500
+From: "Carol" <carol@example.com>
+To: alice@example.com
+Subject: Quote attached
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: text/plain; charset=utf-8
+
+Quote is attached. Let me know.
+
+Carol
+--outer
+Content-Type: application/pdf; name="quote-2025.pdf"
+Content-Disposition: attachment; filename="quote-2025.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjAKJSVFT0YK
+--outer--

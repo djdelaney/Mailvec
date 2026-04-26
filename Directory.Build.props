@@ -10,6 +10,23 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <NoWarn>$(NoWarn);NU1507</NoWarn>
+    <MailvecRepoRoot>$(MSBuildThisFileDirectory)</MailvecRepoRoot>
   </PropertyGroup>
+
+  <!-- Copy sqlite-vec native binaries into every project's output directory so
+       `./runtimes/<rid>/native/vec0.dylib` resolves at runtime. The Exists
+       guard prevents a build break when ops/fetch-sqlite-vec.sh hasn't run. -->
+  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-arm64/native/vec0.dylib') ">
+    <None Include="$(MailvecRepoRoot)runtimes/osx-arm64/native/vec0.dylib"
+          Link="runtimes/osx-arm64/native/vec0.dylib"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
+  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-x64/native/vec0.dylib') ">
+    <None Include="$(MailvecRepoRoot)runtimes/osx-x64/native/vec0.dylib"
+          Link="runtimes/osx-x64/native/vec0.dylib"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
 
 </Project>
