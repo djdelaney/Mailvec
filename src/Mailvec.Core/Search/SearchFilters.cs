@@ -9,15 +9,24 @@ namespace Mailvec.Core.Search;
 /// <param name="DateTo">Inclusive upper bound on messages.date_sent.</param>
 /// <param name="FromContains">
 /// Case-insensitive substring match against from_address OR from_name. Useful
-/// for queries like "from bartlett" without needing the full email.
+/// for queries like "from bartlett" without needing the full email. Mutually
+/// exclusive with <see cref="FromExact"/>; if both are set, FromExact wins.
+/// </param>
+/// <param name="FromExact">
+/// Case-insensitive exact-match against from_address (only — names aren't
+/// unique enough for an "exact" filter to mean anything useful). Set this for
+/// "all email from invoice@anthropic.com" lookups.
 /// </param>
 public sealed record SearchFilters(
     string? Folder = null,
     DateTimeOffset? DateFrom = null,
     DateTimeOffset? DateTo = null,
-    string? FromContains = null)
+    string? FromContains = null,
+    string? FromExact = null)
 {
     public static readonly SearchFilters None = new();
 
-    public bool IsEmpty => Folder is null && DateFrom is null && DateTo is null && string.IsNullOrEmpty(FromContains);
+    public bool IsEmpty =>
+        Folder is null && DateFrom is null && DateTo is null
+        && string.IsNullOrEmpty(FromContains) && string.IsNullOrEmpty(FromExact);
 }

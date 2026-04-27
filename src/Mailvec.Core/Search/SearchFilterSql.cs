@@ -33,7 +33,15 @@ internal static class SearchFilterSql
             sql.Append("\n  AND m.date_sent IS NOT NULL AND datetime(m.date_sent) <= datetime($date_to)");
             cmd.Parameters.AddWithValue("$date_to", to.ToString("O"));
         }
-        if (!string.IsNullOrEmpty(filters.FromContains))
+        // FromExact takes precedence over FromContains — exact match is strictly
+        // narrower, and Claude can hit either depending on what it knows about
+        // the sender. Don't AND both clauses; that's confusing semantics.
+        if (!string.IsNullOrEmpty(filters.FromExact))
+        {
+            sql.Append("\n  AND LOWER(m.from_address) = $from_exact");
+            cmd.Parameters.AddWithValue("$from_exact", filters.FromExact.ToLowerInvariant());
+        }
+        else if (!string.IsNullOrEmpty(filters.FromContains))
         {
             // Match either the address or the display name; users say "from
             // Bartlett" without knowing whether that's the name or the local-part.

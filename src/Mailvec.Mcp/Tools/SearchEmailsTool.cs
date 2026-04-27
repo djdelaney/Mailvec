@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
 using Microsoft.Extensions.Options;
@@ -19,20 +20,24 @@ public sealed class SearchEmailsTool(
     KeywordSearchService keyword,
     VectorSearchService vector,
     HybridSearchService hybrid,
+    MessageRepository messages,
     IOptions<McpOptions> mcpOptions)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
 
     [McpServerTool(Name = "search_emails")]
     [Description(
-        "Search the local email archive. Defaults to hybrid (keyword + semantic with " +
-        "reciprocal rank fusion). Returns the most relevant messages, each with its " +
-        "internal id, RFC message_id header, folder, sender, date, snippet, and a " +
-        "score breakdown. Use the returned id with future get_email/get_thread tools.")]
+        "Search or browse the local email archive. " +
+        "If `query` is provided, runs hybrid (keyword + semantic) ranked search by default. " +
+        "If `query` is omitted, returns the most recent messages matching the filters, sorted by date descending — " +
+        "use this for 'show me my recent INBOX mail' or 'find all email from invoice@anthropic.com' style requests. " +
+        "Each result carries the internal id, RFC message_id, folder, sender, date, snippet, and (for ranked queries) score breakdown. " +
+        "Use a result's id or messageId with get_email/get_thread for follow-up.")]
     public async Task<SearchEmailsResponse> SearchEmails(
-        [Description("Free-text query. For mode=keyword this is an FTS5 expression (supports phrase quotes, AND/OR/NOT). For mode=semantic/hybrid it's natural language.")]
-        string query,
-        [Description("Search mode: 'hybrid' (default), 'keyword' (BM25 only), or 'semantic' (vector only).")]
+        [Description("Optional free-text query. With it, results are ranked by relevance; without it, by date descending. " +
+                     "For mode=keyword this is an FTS5 expression (phrase quotes, AND/OR/NOT). For mode=semantic/hybrid it's natural language.")]
+        string? query = null,
+        [Description("Search mode: 'hybrid' (default), 'keyword' (BM25 only), or 'semantic' (vector only). Ignored when query is omitted.")]
         string mode = "hybrid",
         [Description("Max number of results to return. Server caps this at the configured SearchMaxLimit.")]
         int? limit = null,
@@ -42,15 +47,23 @@ public sealed class SearchEmailsTool(
         string? dateFrom = null,
         [Description("Latest message date (inclusive), ISO 8601.")]
         string? dateTo = null,
-        [Description("Case-insensitive substring against from_address OR from_name. Useful when only the sender's name or domain is known.")]
+        [Description("Case-insensitive substring against from_address OR from_name. Useful when only the sender's name or domain is known. Ignored if fromExact is set.")]
         string? fromContains = null,
+        [Description("Case-insensitive exact match on from_address (the email address only, not the display name). Use for 'all email from <addr>' lookups.")]
+        string? fromExact = null,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(query))
-            throw new McpException("query is required.");
-
         var resolvedLimit = ClampLimit(limit);
-        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains);
+        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact);
+
+        // Query-less path: just list filter-matching messages by date.
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            var rows = messages.BrowseByFilters(filters, resolvedLimit);
+            var browseHits = rows.Select(EmailHit.FromMessage).ToList();
+            return new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits);
+        }
+
         var resolvedMode = NormaliseMode(mode);
 
         IReadOnlyList<EmailHit> hits = resolvedMode switch
@@ -77,13 +90,14 @@ public sealed class SearchEmailsTool(
     private static string NormaliseMode(string mode) =>
         mode?.Trim().ToLowerInvariant() ?? "hybrid";
 
-    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains)
+    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains, string? fromExact)
     {
         return new SearchFilters(
             Folder: string.IsNullOrWhiteSpace(folder) ? null : folder.Trim(),
             DateFrom: ParseDate(dateFrom, nameof(dateFrom)),
             DateTo: ParseDate(dateTo, nameof(dateTo)),
-            FromContains: string.IsNullOrWhiteSpace(fromContains) ? null : fromContains.Trim());
+            FromContains: string.IsNullOrWhiteSpace(fromContains) ? null : fromContains.Trim(),
+            FromExact: string.IsNullOrWhiteSpace(fromExact) ? null : fromExact.Trim());
     }
 
     private static DateTimeOffset? ParseDate(string? value, string fieldName)
@@ -96,7 +110,7 @@ public sealed class SearchEmailsTool(
 }
 
 public sealed record SearchEmailsResponse(
-    string Query,
+    string? Query,
     string Mode,
     int Count,
     IReadOnlyList<EmailHit> Results);
@@ -155,6 +169,29 @@ public sealed record EmailHit(
         RrfScore: h.RrfScore,
         Bm25Rank: h.Bm25Rank,
         VectorRank: h.VectorRank);
+
+    /// <summary>
+    /// Used for the query-less browse path, where there's no score to report
+    /// and no FTS snippet — produce a short body excerpt so the row is still
+    /// useful to Claude without forcing a follow-up get_email call.
+    /// </summary>
+    public static EmailHit FromMessage(Mailvec.Core.Models.Message m) => new(
+        Id: m.Id,
+        MessageId: m.MessageId,
+        Folder: m.Folder,
+        Subject: m.Subject,
+        FromAddress: m.FromAddress,
+        FromName: m.FromName,
+        DateSent: m.DateSent,
+        Snippet: BuildBrowseSnippet(m.BodyText));
+
+    private static string BuildBrowseSnippet(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return string.Empty;
+        // Collapse whitespace so HTML-derived bodies don't waste the snippet on linebreaks.
+        var collapsed = System.Text.RegularExpressions.Regex.Replace(body.Trim(), @"\s+", " ");
+        return Truncate(collapsed, 240);
+    }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 }

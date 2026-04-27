@@ -1,6 +1,8 @@
+using System.Text;
 using System.Text.Json;
 using Mailvec.Core.Models;
 using Mailvec.Core.Parsing;
+using Mailvec.Core.Search;
 using Microsoft.Data.Sqlite;
 
 namespace Mailvec.Core.Data;
@@ -98,6 +100,120 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
         using var reader = cmd.ExecuteReader();
         return reader.Read() ? Map(reader) : null;
+    }
+
+    /// <summary>
+    /// Filter-only browse — used by `search_emails` when no query is supplied
+    /// and as the implementation of "recent emails" / "find by sender" tools.
+    /// Sorts by date_sent DESC; messages with NULL date_sent fall to the bottom
+    /// (we don't want them mixed in with current mail when the user asks "what's
+    /// recent").
+    /// </summary>
+    public IReadOnlyList<Message> BrowseByFilters(SearchFilters filters, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        var sql = new StringBuilder("""
+            SELECT m.* FROM messages m
+            WHERE m.deleted_at IS NULL
+            """);
+        SearchFilterSql.Append(sql, cmd, filters);
+        sql.Append("\nORDER BY m.date_sent IS NULL, m.date_sent DESC\nLIMIT $limit;");
+        cmd.CommandText = sql.ToString();
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        var results = new List<Message>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) results.Add(Map(reader));
+        return results;
+    }
+
+    /// <summary>
+    /// All messages in a thread, oldest first. Looks up by either the SQLite
+    /// internal id or the RFC Message-ID header. Returns an empty list if the
+    /// id/Message-ID matches a message with no thread_id (lone message).
+    /// </summary>
+    public IReadOnlyList<Message> GetThreadByMessageId(long? id, string? messageId)
+    {
+        if (id is null && string.IsNullOrEmpty(messageId))
+            throw new ArgumentException("Provide id or messageId.");
+
+        using var conn = connections.Open();
+
+        // First resolve to a thread_id. We can't just JOIN — thread_id may be
+        // NULL (lone message), in which case we still want to return that one
+        // message rather than empty.
+        string? threadId;
+        long? rootId;
+        using (var resolve = conn.CreateCommand())
+        {
+            resolve.CommandText = id is not null
+                ? "SELECT id, thread_id FROM messages WHERE id = $k"
+                : "SELECT id, thread_id FROM messages WHERE message_id = $k";
+            resolve.Parameters.AddWithValue("$k", (object?)id ?? messageId!);
+            using var r = resolve.ExecuteReader();
+            if (!r.Read()) return [];
+            rootId = r.GetInt64(0);
+            threadId = r.IsDBNull(1) ? null : r.GetString(1);
+        }
+
+        using var cmd = conn.CreateCommand();
+        if (threadId is null)
+        {
+            // Lone message — return just it.
+            cmd.CommandText = "SELECT * FROM messages WHERE id = $id AND deleted_at IS NULL";
+            cmd.Parameters.AddWithValue("$id", rootId!.Value);
+        }
+        else
+        {
+            cmd.CommandText = """
+                SELECT * FROM messages
+                WHERE thread_id = $tid AND deleted_at IS NULL
+                ORDER BY date_sent IS NULL, date_sent ASC, id ASC
+                """;
+            cmd.Parameters.AddWithValue("$tid", threadId);
+        }
+
+        var results = new List<Message>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) results.Add(Map(reader));
+        return results;
+    }
+
+    /// <summary>
+    /// One row per non-empty folder, sorted by name. Soft-deleted messages are
+    /// excluded from the count. Useful for the `list_folders` MCP tool so
+    /// Claude knows what folders exist before filtering by one.
+    /// </summary>
+    public IReadOnlyList<FolderStats> FolderStats()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                folder,
+                COUNT(*)         AS msg_count,
+                MIN(date_sent)   AS oldest_date,
+                MAX(date_sent)   AS latest_date
+            FROM messages
+            WHERE deleted_at IS NULL
+            GROUP BY folder
+            ORDER BY folder;
+            """;
+
+        var results = new List<FolderStats>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new FolderStats(
+                Folder: reader.GetString(0),
+                MessageCount: reader.GetInt64(1),
+                OldestDate: ReadNullableDate(reader, "oldest_date"),
+                LatestDate: ReadNullableDate(reader, "latest_date")));
+        }
+        return results;
     }
 
     public int CountAll()
