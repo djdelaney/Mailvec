@@ -27,6 +27,7 @@ internal static class CliServices
         }));
         services.Configure<ArchiveOptions>(config.GetSection(ArchiveOptions.SectionName));
         services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
+        services.Configure<FastmailOptions>(config.GetSection(FastmailOptions.SectionName));
 
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();

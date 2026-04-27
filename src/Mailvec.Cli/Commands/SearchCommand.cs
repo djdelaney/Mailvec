@@ -1,7 +1,9 @@
 using System.CommandLine;
 using Mailvec.Core.Data;
+using Mailvec.Core.Options;
 using Mailvec.Core.Search;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Mailvec.Cli.Commands;
 
@@ -47,12 +49,13 @@ internal static class SearchCommand
     {
         using var sp = CliServices.Build();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
+        var fastmail = sp.GetRequiredService<IOptions<FastmailOptions>>().Value;
 
         if (hybrid)
         {
             var search = sp.GetRequiredService<HybridSearchService>();
             var hits = await search.SearchAsync(query, limit);
-            PrintHybrid(hits, titlesOnly);
+            PrintHybrid(hits, titlesOnly, fastmail);
             return 0;
         }
 
@@ -60,16 +63,16 @@ internal static class SearchCommand
         {
             var search = sp.GetRequiredService<VectorSearchService>();
             var hits = await search.SearchAsync(query, limit);
-            PrintVector(hits, titlesOnly);
+            PrintVector(hits, titlesOnly, fastmail);
             return 0;
         }
 
         var keyword = sp.GetRequiredService<KeywordSearchService>();
-        PrintKeyword(keyword.Search(query, limit), titlesOnly);
+        PrintKeyword(keyword.Search(query, limit), titlesOnly, fastmail);
         return 0;
     }
 
-    private static void PrintKeyword(IReadOnlyList<Mailvec.Core.Models.SearchHit> hits, bool titlesOnly)
+    private static void PrintKeyword(IReadOnlyList<Mailvec.Core.Models.SearchHit> hits, bool titlesOnly, FastmailOptions fastmail)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -80,11 +83,12 @@ internal static class SearchCommand
             Console.WriteLine($"[bm25 {h.Bm25Score,7:F2}]  {date}  {h.Folder,-20}  {from}");
             Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
             if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {h.Snippet}");
+            PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
     }
 
-    private static void PrintVector(IReadOnlyList<VectorHit> hits, bool titlesOnly)
+    private static void PrintVector(IReadOnlyList<VectorHit> hits, bool titlesOnly, FastmailOptions fastmail)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -95,11 +99,12 @@ internal static class SearchCommand
             Console.WriteLine($"[dist {h.Distance,7:F3}]  {date}  {h.Folder,-20}  {from}");
             Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
             if (!titlesOnly) Console.WriteLine($"                  {Truncate(h.ChunkText, 240)}");
+            PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
     }
 
-    private static void PrintHybrid(IReadOnlyList<HybridHit> hits, bool titlesOnly)
+    private static void PrintHybrid(IReadOnlyList<HybridHit> hits, bool titlesOnly, FastmailOptions fastmail)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -111,8 +116,16 @@ internal static class SearchCommand
             Console.WriteLine($"[rrf {h.RrfScore,6:F4}]  {date}  {h.Folder,-20}  {from}    ({legs})");
             Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
             if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Truncate(h.Snippet, 240)}");
+            PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
+    }
+
+    /// <summary>Emits the Fastmail deep-link if AccountId is configured; silent otherwise.</summary>
+    private static void PrintWebmailUrl(string messageIdHeader, FastmailOptions fastmail)
+    {
+        var url = WebmailLinkBuilder.Build(messageIdHeader, fastmail);
+        if (url is not null) Console.WriteLine($"                  {url}");
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
