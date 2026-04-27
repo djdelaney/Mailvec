@@ -1,6 +1,9 @@
 using System.ComponentModel;
 using Mailvec.Core.Data;
 using Mailvec.Core.Models;
+using Mailvec.Core.Options;
+using Mailvec.Core.Search;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
@@ -12,8 +15,9 @@ namespace Mailvec.Mcp.Tools;
 /// often verbose and rarely useful to Claude.
 /// </summary>
 [McpServerToolType]
-public sealed class GetEmailTool(MessageRepository messages)
+public sealed class GetEmailTool(MessageRepository messages, IOptions<FastmailOptions> fastmailOptions)
 {
+    private readonly FastmailOptions _fastmail = fastmailOptions.Value;
     [McpServerTool(Name = "get_email")]
     [Description(
         "Fetch a single email's full body and headers by id. " +
@@ -60,7 +64,8 @@ public sealed class GetEmailTool(MessageRepository messages)
             SizeBytes: msg.SizeBytes,
             HasAttachments: msg.HasAttachments,
             BodyText: msg.BodyText ?? string.Empty,
-            BodyHtml: includeHtml ? msg.BodyHtml : null);
+            BodyHtml: includeHtml ? msg.BodyHtml : null,
+            WebmailUrl: WebmailLinkBuilder.Build(msg.MessageId, _fastmail));
     }
 }
 
@@ -79,4 +84,5 @@ public sealed record GetEmailResponse(
     long SizeBytes,
     bool HasAttachments,
     string BodyText,
-    string? BodyHtml);
+    string? BodyHtml,
+    string? WebmailUrl);
