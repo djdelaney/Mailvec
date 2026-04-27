@@ -156,9 +156,13 @@ The bundle extracts to `~/Library/Application Support/Claude/extensions/<id>/` �
 
 **Updating to a new build:**
 
-1. Bump `version` in `manifest.json`.
-2. `./ops/build-mcpb.sh`
-3. In Claude Desktop: Settings → Extensions → Mailvec → toggle off, then drag the new `.mcpb` on. (Quit + relaunch Claude Desktop afterwards so the new binary is picked up.) The simpler "uninstall, reinstall" path also works but loses your `user_config` values; toggling off keeps them.
+```sh
+./ops/build-mcpb.sh --bump   # patch-bumps manifest.json, builds, opens the result
+```
+
+Then in Claude Desktop: Settings → Extensions → Mailvec → toggle off, accept the install prompt, quit + relaunch. Toggling off (vs uninstalling) preserves your `user_config` values across the upgrade. Claude Desktop ignores re-installs of the same version, so the bump is what makes the new binary actually take effect — without it, the install prompt is a no-op.
+
+To bump manually instead (e.g. for a minor or major version), edit `manifest.json` and run `./ops/build-mcpb.sh` without the flag.
 
 The indexer and embedder run as your own processes outside the bundle — they keep going across updates and don't need to be restarted when you ship a new MCP build.
 
