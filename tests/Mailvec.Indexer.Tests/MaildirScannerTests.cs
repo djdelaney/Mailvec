@@ -27,8 +27,11 @@ public class MaildirScannerTests : IDisposable
 
         var archiveOptions = Microsoft.Extensions.Options.Options.Create(new ArchiveOptions
         {
-            MaildirRoot = _root,
             DatabasePath = _dbPath,
+        });
+        var ingestOptions = Microsoft.Extensions.Options.Options.Create(new IngestOptions
+        {
+            MaildirRoot = _root,
         });
 
         _connections = new ConnectionFactory(archiveOptions);
@@ -37,7 +40,7 @@ public class MaildirScannerTests : IDisposable
         _messages = new MessageRepository(_connections);
         _syncState = new SyncStateRepository(_connections);
         _scanner = new MaildirScanner(
-            archiveOptions,
+            ingestOptions,
             new MessageParser(),
             _messages,
             _syncState,
