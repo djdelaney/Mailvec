@@ -146,10 +146,9 @@ The MCP server is shipped as an [MCPB bundle](https://blog.modelcontextprotocol.
 ./ops/build-mcpb.sh         # writes dist/mailvec-<version>.mcpb (~50 MB)
 ```
 
-**Install:** drag `dist/mailvec-<version>.mcpb` onto Claude Desktop, or `open dist/mailvec-<version>.mcpb`. The install dialog prompts for three values (defined in `manifest.json`):
+**Install:** drag `dist/mailvec-<version>.mcpb` onto Claude Desktop, or `open dist/mailvec-<version>.mcpb`. The install dialog prompts for two values (defined in `manifest.json`):
 
-- **Maildir root** — directory mbsync writes mail into. Default `~/Mail/Fastmail`.
-- **Database path** — SQLite archive. Default `~/Library/Application Support/Mailvec/archive.sqlite`. Created if it doesn't exist (empty schema).
+- **Database path** — SQLite archive. Default `~/Library/Application Support/Mailvec/archive.sqlite`. Created if it doesn't exist (empty schema). The MCP server is pure SQLite reader; the Maildir filesystem is only touched by the indexer/embedder, which run as your own processes outside the bundle.
 - **Ollama endpoint** — default `http://localhost:11434`. Only used to embed search queries; the indexer/embedder are separate processes.
 
 The bundle extracts to `~/Library/Application Support/Claude/extensions/<id>/` — a non-TCC location, which avoids the `~/Documents` read block we hit during early dev.
