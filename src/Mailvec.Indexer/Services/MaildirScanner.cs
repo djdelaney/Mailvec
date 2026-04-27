@@ -8,13 +8,13 @@ using Microsoft.Extensions.Options;
 namespace Mailvec.Indexer.Services;
 
 public sealed class MaildirScanner(
-    IOptions<ArchiveOptions> archiveOptions,
+    IOptions<IngestOptions> ingestOptions,
     MessageParser parser,
     MessageRepository messages,
     SyncStateRepository syncState,
     ILogger<MaildirScanner> logger)
 {
-    private readonly string _maildirRoot = PathExpansion.Expand(archiveOptions.Value.MaildirRoot);
+    private readonly string _maildirRoot = PathExpansion.Expand(ingestOptions.Value.MaildirRoot);
 
     public sealed record ScanResult(int Seen, int Upserted, int FailedToParse, int SoftDeleted);
 
