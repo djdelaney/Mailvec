@@ -108,6 +108,48 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Lazily streams unembedded, undeleted messages for the embedder. Returns
+    /// (id, body_text) tuples; messages with no body text are filtered out.
+    /// </summary>
+    public IEnumerable<(long Id, string BodyText, string? Subject)> EnumerateUnembedded(int batchSize = 50)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, body_text, subject
+            FROM messages
+            WHERE embedded_at IS NULL
+              AND deleted_at IS NULL
+              AND body_text IS NOT NULL
+              AND length(body_text) > 0
+            ORDER BY id
+            LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$limit", batchSize);
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            yield return (
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2));
+        }
+    }
+
+    public int CountUnembedded()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM messages
+            WHERE embedded_at IS NULL AND deleted_at IS NULL
+              AND body_text IS NOT NULL AND length(body_text) > 0
+            """;
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     public int MarkDeleted(IEnumerable<long> ids, DateTimeOffset deletedAt)
     {
         using var conn = connections.Open();

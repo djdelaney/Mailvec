@@ -368,8 +368,8 @@ Single `appsettings.json` pattern per service, with `appsettings.Local.json` ove
   },
   "Embedder": {
     "PollIntervalSeconds": 30,
-    "ChunkSizeTokens": 400,
-    "ChunkOverlapTokens": 50,
+    "ChunkSizeTokens": 200,
+    "ChunkOverlapTokens": 32,
     "MaxConcurrentRequests": 2
   },
   "Mcp": {

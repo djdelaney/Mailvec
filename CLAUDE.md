@@ -72,7 +72,7 @@ The `sqlite-vec` extension is fetched as a prebuilt `vec0.dylib` by `ops/fetch-s
 
 ## Current status
 
-Phase 1 complete: schema migrations, MimeKit-based parser, `MaildirScanner` + `MaildirWatcher` + `MessageIngestService`, FTS5/BM25 keyword search, and a working `mailvec status | search | rebuild-fts` CLI. Phases 2 (Ollama embeddings) and 3 (MCP server) are not yet implemented — `Mailvec.Embedder/Program.cs` and `Mailvec.Mcp/Program.cs` are still scaffolds.
+Phases 1 and 2 complete. The indexer ingests, the embedder embeds, keyword/semantic/hybrid search all work. Phase 3 (MCP server) is not yet implemented — `Mailvec.Mcp/Program.cs` is still a scaffold with `/health` only.
 
 ## Phase 1 gotchas (worth remembering)
 
@@ -81,3 +81,15 @@ Phase 1 complete: schema migrations, MimeKit-based parser, `MaildirScanner` + `M
 - **`vec0` must load before the schema applies**, because `001_initial.sql` declares `chunk_embeddings` as a `vec0(...)` virtual table. `ConnectionFactory` loads the extension on every `Open()`. The dylib is copied into each project's `bin/.../runtimes/<rid>/native/` by `Directory.Build.props` (with an `Exists` guard, so the build doesn't break if `ops/fetch-sqlite-vec.sh` hasn't run).
 - **Rename detection.** When mbsync renames `new/foo` → `cur/foo:2,S` between scans, the same Message-ID appears at a fresh path while the old `sync_state` row still references the old path. The scanner uses `SyncStateRepository.FreshMessageIds(since)` to exclude renamed messages from the soft-delete pass — don't bypass this when changing reconciliation logic.
 - **Config env-var convention.** Both indexer and CLI read environment variables with no prefix, so `Archive__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.
+
+## Phase 2 gotchas
+
+- **`ChunkingService` lives in `Mailvec.Core/Embedding/`, not `Mailvec.Embedder/Services/`** as the design doc shows. It's pure logic with no I/O; keeping it in Core lets us test it from `Mailvec.Core.Tests` without spinning up an `Embedder.Tests` project.
+- **Embedding model is part of the schema, enforced at runtime.** The `chunk_embeddings` virtual table declares a fixed `FLOAT[1024]` dimension; `OllamaClient` validates returned vector lengths against `Ollama:EmbeddingDimensions`; `EmbeddingWorker` refuses to start if `metadata.embedding_model` disagrees with config. Switching models requires `mailvec reindex --all` followed by re-embedding. **Never bypass this check** — mixing vector spaces silently corrupts similarity scores in ways that look plausible.
+- **Vector serialization to sqlite-vec.** `FLOAT[N]` columns are stored as packed little-endian float32 bytes, not BLOBs of any other shape. `VectorBlob.Serialize/Deserialize` in `ChunkRepository.cs` is the only place that does this conversion — keep all sqlite-vec writes/reads going through it.
+- **`chunk_embeddings` has no foreign key to `chunks`** because vec0 virtual tables don't support FKs. `ChunkRepository.DeleteChunks` deletes from both tables explicitly inside one transaction. Don't `DELETE FROM chunks` directly without also cleaning `chunk_embeddings`.
+- **One row per message** in vector search results. `VectorSearchService` uses a window function (`ROW_NUMBER() OVER ... rn=1`) so the same message can't appear twice from different chunks. Hybrid search relies on this invariant when fusing.
+- **RRF k=60** in `HybridSearchService.RrfK` — standard from the literature. Don't tune without benchmarking against a real query set.
+- **Subject is prepended to body before embedding** in `EmbeddingWorker.BuildEmbeddingText`. Newsletters often have a meaningful subject and thin body; replies the other way. Including both is robust.
+- **Empty-body messages get a stamped `embedded_at` with zero chunks** so the worker doesn't loop on them forever. `ChunkRepository.ReplaceChunksForMessage` accepts empty lists for this reason.
+- **Chunk size + client-side fallback.** Default `ChunkSizeTokens=200` (chars/4 = 800 char ceiling). The 4-chars/token heuristic is unreliable on real email — heavy punctuation, embedded URLs, base64, marketing-email HTML residue, and non-ASCII can push real BPE token counts to 1-2 chars/token, exceeding `mxbai-embed-large`'s 512-token context. Since no char-based ceiling is fully safe in the worst case, **`OllamaClient.EmbedAsync` recovers from context-length 400s automatically**: oversize batches get split in half and recursed; a singleton that still doesn't fit is truncated by 50% repeatedly until it succeeds (down to a 64-char floor). Test coverage is in `OllamaClientTests`. Don't disable this fallback without replacing it with a real tokenizer-based pre-check. Note that Ollama's `truncate: true` request flag is **ignored for batched `/api/embed` in current versions**, so we can't rely on the server to handle this; we send it for forward compat.
