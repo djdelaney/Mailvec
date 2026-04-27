@@ -91,8 +91,9 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
             Model = _opts.EmbeddingModel,
             Input = inputs,
             KeepAlive = _opts.KeepAlive,
-            // Ollama's truncate flag is buggy in batched mode in current
-            // versions, so we don't rely on it; sent for forward-compat.
+            // Server-side truncation: works for batched /api/embed as of
+            // Ollama 0.21.2. The 400-recovery path below is kept as a safety
+            // net for older/regressed servers.
             Truncate = true,
         };
 
