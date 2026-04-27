@@ -7,6 +7,7 @@ var root = new RootCommand("Mailvec admin CLI")
     SearchCommand.Build(),
     RebuildFtsCommand.Build(),
     ReindexCommand.Build(),
+    AuditEmbeddingsCommand.Build(),
 };
 
 return await root.Parse(args).InvokeAsync();
