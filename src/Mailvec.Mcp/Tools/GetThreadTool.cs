@@ -1,5 +1,8 @@
 using System.ComponentModel;
 using Mailvec.Core.Data;
+using Mailvec.Core.Options;
+using Mailvec.Core.Search;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
@@ -12,8 +15,9 @@ namespace Mailvec.Mcp.Tools;
 /// threads add up fast.
 /// </summary>
 [McpServerToolType]
-public sealed class GetThreadTool(MessageRepository messages)
+public sealed class GetThreadTool(MessageRepository messages, IOptions<FastmailOptions> fastmailOptions)
 {
+    private readonly FastmailOptions _fastmail = fastmailOptions.Value;
     [McpServerTool(Name = "get_thread")]
     [Description(
         "Fetch all messages in a thread (chronological, oldest first). " +
@@ -49,7 +53,8 @@ public sealed class GetThreadTool(MessageRepository messages)
             FromName: m.FromName,
             DateSent: m.DateSent,
             Snippet: BuildSnippet(m.BodyText),
-            BodyText: includeBodies ? (m.BodyText ?? string.Empty) : null
+            BodyText: includeBodies ? (m.BodyText ?? string.Empty) : null,
+            WebmailUrl: WebmailLinkBuilder.Build(m.MessageId, _fastmail)
         )).ToList();
 
         return new GetThreadResponse(
@@ -80,4 +85,5 @@ public sealed record ThreadEntry(
     string? FromName,
     DateTimeOffset? DateSent,
     string Snippet,
-    string? BodyText);
+    string? BodyText,
+    string? WebmailUrl);
