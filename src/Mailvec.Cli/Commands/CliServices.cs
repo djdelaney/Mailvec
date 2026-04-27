@@ -26,6 +26,7 @@ internal static class CliServices
             o.TimestampFormat = "HH:mm:ss ";
         }));
         services.Configure<ArchiveOptions>(config.GetSection(ArchiveOptions.SectionName));
+        services.Configure<IngestOptions>(config.GetSection(IngestOptions.SectionName));
         services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
 
         services.AddSingleton<ConnectionFactory>();

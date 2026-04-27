@@ -21,9 +21,9 @@ public sealed class MaildirWatcher : IDisposable
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true });
     private FileSystemWatcher? _fsw;
 
-    public MaildirWatcher(IOptions<ArchiveOptions> archive, IOptions<IndexerOptions> indexer, ILogger<MaildirWatcher> logger)
+    public MaildirWatcher(IOptions<IngestOptions> ingest, IOptions<IndexerOptions> indexer, ILogger<MaildirWatcher> logger)
     {
-        _root = PathExpansion.Expand(archive.Value.MaildirRoot);
+        _root = PathExpansion.Expand(ingest.Value.MaildirRoot);
         _debounce = TimeSpan.FromMilliseconds(indexer.Value.DebounceMilliseconds);
         _logger = logger;
     }
