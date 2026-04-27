@@ -25,12 +25,18 @@ public sealed class HybridSearchService(KeywordSearchService keyword, VectorSear
 {
     private const int RrfK = 60;
 
-    public async Task<IReadOnlyList<HybridHit>> SearchAsync(string query, int limit = 20, int candidatesPerLeg = 50, CancellationToken ct = default)
+    public async Task<IReadOnlyList<HybridHit>> SearchAsync(string query, int limit = 20, int candidatesPerLeg = 50, SearchFilters? filters = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        filters ??= SearchFilters.None;
 
-        var keywordHits = keyword.Search(query, limit: candidatesPerLeg);
-        var vectorHits = await vector.SearchAsync(query, limit: candidatesPerLeg, k: candidatesPerLeg * 2, ct).ConfigureAwait(false);
+        // Vec0 KNN runs before our filter join, so when filters are restrictive
+        // the K nearest by raw similarity may all be filtered out. Inflate k
+        // when filters are active so the post-filter set still has signal.
+        var vectorK = filters.IsEmpty ? candidatesPerLeg * 2 : candidatesPerLeg * 10;
+
+        var keywordHits = keyword.Search(query, limit: candidatesPerLeg, filters);
+        var vectorHits = await vector.SearchAsync(query, limit: candidatesPerLeg, k: vectorK, filters, ct).ConfigureAwait(false);
 
         return Fuse(keywordHits, vectorHits, limit);
     }

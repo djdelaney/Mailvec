@@ -1,3 +1,4 @@
+using System.Text;
 using Mailvec.Core.Data;
 using Mailvec.Core.Models;
 using Mailvec.Core.Ollama;
@@ -24,28 +25,36 @@ public sealed class VectorSearchService(ConnectionFactory connections, OllamaCli
     /// Embeds the query, runs k-nearest-neighbour against chunk_embeddings,
     /// joins back to messages (skipping soft-deleted), and returns the best
     /// chunk per message (since one message can have multiple chunks).
+    /// When filters are present, k is internally inflated so post-filter we
+    /// still have a chance of returning `limit` results — vec0 KNN happens
+    /// before the filter join, so a small k + restrictive filter = empty.
     /// </summary>
-    public async Task<IReadOnlyList<VectorHit>> SearchAsync(string query, int limit = 20, int k = 100, CancellationToken ct = default)
+    public async Task<IReadOnlyList<VectorHit>> SearchAsync(string query, int limit = 20, int k = 100, SearchFilters? filters = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
         var vectors = await ollama.EmbedAsync([query], ct).ConfigureAwait(false);
         if (vectors.Length == 0) return [];
 
-        return SearchByVector(vectors[0], limit, k);
+        return SearchByVector(vectors[0], limit, k, filters);
     }
 
     /// <summary>
     /// Same as SearchAsync but skips the embed step. Used by tests with hand-built
     /// vectors and by HybridSearchService when the query was already embedded.
     /// </summary>
-    public IReadOnlyList<VectorHit> SearchByVector(float[] queryVector, int limit, int k)
+    public IReadOnlyList<VectorHit> SearchByVector(float[] queryVector, int limit, int k, SearchFilters? filters = null)
     {
+        filters ??= SearchFilters.None;
+
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         // Take the BEST chunk per message: window over chunks ordered by distance.
         // Vec0 requires the MATCH + k constraint and ORDER BY distance.
-        cmd.CommandText = """
+        // Filters apply in the joined CTE — vec0 cannot itself filter on
+        // joined columns, so we over-fetch (k may be inflated by caller) and
+        // drop non-matching messages here.
+        var sql = new StringBuilder("""
             WITH neighbours AS (
                 SELECT chunk_id, distance
                 FROM chunk_embeddings
@@ -70,13 +79,18 @@ public sealed class VectorSearchService(ConnectionFactory connections, OllamaCli
                 JOIN chunks c   ON c.id = n.chunk_id
                 JOIN messages m ON m.id = c.message_id
                 WHERE m.deleted_at IS NULL
+            """);
+        SearchFilterSql.Append(sql, cmd, filters);
+        sql.Append("""
+
             )
             SELECT message_id, message_id_hdr, folder, subject, from_address, from_name, date_sent, chunk_id, chunk_index, chunk_text, distance
             FROM joined
             WHERE rn = 1
             ORDER BY distance
             LIMIT $limit;
-            """;
+            """);
+        cmd.CommandText = sql.ToString();
         cmd.Parameters.Add("$vec", SqliteType.Blob).Value = VectorBlob.Serialize(queryVector);
         cmd.Parameters.AddWithValue("$k", k);
         cmd.Parameters.AddWithValue("$limit", limit);
