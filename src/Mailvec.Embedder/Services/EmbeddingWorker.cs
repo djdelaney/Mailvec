@@ -21,6 +21,8 @@ public sealed class EmbeddingWorker(
     ILogger<EmbeddingWorker> logger)
     : BackgroundService
 {
+    private int _processedThisRun;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         migrator.EnsureUpToDate();
@@ -30,11 +32,12 @@ public sealed class EmbeddingWorker(
         var batchSize = Math.Max(1, ollamaOptions.Value.MaxBatchSize);
 
         logger.LogInformation(
-            "EmbeddingWorker starting. Model={Model} Dim={Dim} BatchSize={Batch} Poll={Poll}s",
+            "EmbeddingWorker starting. Model={Model} Dim={Dim} BatchSize={Batch} Poll={Poll}s Remaining={Remaining}",
             ollamaOptions.Value.EmbeddingModel,
             ollamaOptions.Value.EmbeddingDimensions,
             batchSize,
-            pollInterval.TotalSeconds);
+            pollInterval.TotalSeconds,
+            messages.CountUnembedded());
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -80,6 +83,7 @@ public sealed class EmbeddingWorker(
             {
                 chunks.ReplaceChunksForMessage(m.Id, [], [], now);
             }
+            _processedThisRun += messageBatch.Count;
             logger.LogDebug("Marked {Count} empty-body messages as embedded", messageBatch.Count);
             return messageBatch.Count;
         }
@@ -104,9 +108,11 @@ public sealed class EmbeddingWorker(
             cursor += msgChunks.Count;
         }
 
+        _processedThisRun += messageBatch.Count;
         logger.LogInformation(
-            "Embedded {Messages} messages ({Chunks} chunks) in {Ms}ms",
-            perMessageChunks.Count, allTexts.Count, sw.ElapsedMilliseconds);
+            "Embedded {Messages} messages ({Chunks} chunks) in {Ms}ms — {Done} done this run, {Remaining} remaining",
+            perMessageChunks.Count, allTexts.Count, sw.ElapsedMilliseconds,
+            _processedThisRun, messages.CountUnembedded());
 
         return messageBatch.Count;
     }

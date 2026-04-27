@@ -6,6 +6,7 @@ using Mailvec.Indexer.Services;
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.Configure<ArchiveOptions>(builder.Configuration.GetSection(ArchiveOptions.SectionName));
+builder.Services.Configure<IngestOptions>(builder.Configuration.GetSection(IngestOptions.SectionName));
 builder.Services.Configure<IndexerOptions>(builder.Configuration.GetSection(IndexerOptions.SectionName));
 
 builder.Services.AddSingleton<ConnectionFactory>();
