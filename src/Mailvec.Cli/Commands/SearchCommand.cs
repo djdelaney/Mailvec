@@ -13,6 +13,7 @@ internal static class SearchCommand
         var limitOpt = new Option<int>("--limit", "-n") { DefaultValueFactory = _ => 20, Description = "Max results." };
         var semanticOpt = new Option<bool>("--semantic") { Description = "Use vector similarity instead of keyword search (requires Ollama + embeddings)." };
         var hybridOpt = new Option<bool>("--hybrid") { Description = "Combine keyword + vector with reciprocal rank fusion." };
+        var titlesOnlyOpt = new Option<bool>("--titles-only", "-t") { Description = "Suppress snippet/body output; show only ranking, headers, and subject." };
 
         var cmd = new Command("search", "Search the archive (keyword by default).")
         {
@@ -20,6 +21,7 @@ internal static class SearchCommand
             limitOpt,
             semanticOpt,
             hybridOpt,
+            titlesOnlyOpt,
         };
 
         cmd.SetAction(async parseResult =>
@@ -28,6 +30,7 @@ internal static class SearchCommand
             var limit = parseResult.GetValue(limitOpt);
             var semantic = parseResult.GetValue(semanticOpt);
             var hybrid = parseResult.GetValue(hybridOpt);
+            var titlesOnly = parseResult.GetValue(titlesOnlyOpt);
 
             if (semantic && hybrid)
             {
@@ -35,12 +38,12 @@ internal static class SearchCommand
                 return 2;
             }
 
-            return await Run(query, limit, semantic, hybrid);
+            return await Run(query, limit, semantic, hybrid, titlesOnly);
         });
         return cmd;
     }
 
-    private static async Task<int> Run(string query, int limit, bool semantic, bool hybrid)
+    private static async Task<int> Run(string query, int limit, bool semantic, bool hybrid, bool titlesOnly)
     {
         using var sp = CliServices.Build();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
@@ -49,7 +52,7 @@ internal static class SearchCommand
         {
             var search = sp.GetRequiredService<HybridSearchService>();
             var hits = await search.SearchAsync(query, limit);
-            PrintHybrid(hits);
+            PrintHybrid(hits, titlesOnly);
             return 0;
         }
 
@@ -57,16 +60,16 @@ internal static class SearchCommand
         {
             var search = sp.GetRequiredService<VectorSearchService>();
             var hits = await search.SearchAsync(query, limit);
-            PrintVector(hits);
+            PrintVector(hits, titlesOnly);
             return 0;
         }
 
         var keyword = sp.GetRequiredService<KeywordSearchService>();
-        PrintKeyword(keyword.Search(query, limit));
+        PrintKeyword(keyword.Search(query, limit), titlesOnly);
         return 0;
     }
 
-    private static void PrintKeyword(IReadOnlyList<Mailvec.Core.Models.SearchHit> hits)
+    private static void PrintKeyword(IReadOnlyList<Mailvec.Core.Models.SearchHit> hits, bool titlesOnly)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -76,12 +79,12 @@ internal static class SearchCommand
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
             Console.WriteLine($"[bm25 {h.Bm25Score,7:F2}]  {date}  {h.Folder,-20}  {from}");
             Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
-            if (!string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {h.Snippet}");
+            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {h.Snippet}");
             Console.WriteLine();
         }
     }
 
-    private static void PrintVector(IReadOnlyList<VectorHit> hits)
+    private static void PrintVector(IReadOnlyList<VectorHit> hits, bool titlesOnly)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -91,12 +94,12 @@ internal static class SearchCommand
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
             Console.WriteLine($"[dist {h.Distance,7:F3}]  {date}  {h.Folder,-20}  {from}");
             Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
-            Console.WriteLine($"                  {Truncate(h.ChunkText, 240)}");
+            if (!titlesOnly) Console.WriteLine($"                  {Truncate(h.ChunkText, 240)}");
             Console.WriteLine();
         }
     }
 
-    private static void PrintHybrid(IReadOnlyList<HybridHit> hits)
+    private static void PrintHybrid(IReadOnlyList<HybridHit> hits, bool titlesOnly)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -107,7 +110,7 @@ internal static class SearchCommand
             var legs = $"bm25={h.Bm25Rank?.ToString() ?? "-"} vec={h.VectorRank?.ToString() ?? "-"}";
             Console.WriteLine($"[rrf {h.RrfScore,6:F4}]  {date}  {h.Folder,-20}  {from}    ({legs})");
             Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
-            if (!string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Truncate(h.Snippet, 240)}");
+            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Truncate(h.Snippet, 240)}");
             Console.WriteLine();
         }
     }
