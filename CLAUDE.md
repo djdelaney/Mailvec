@@ -49,7 +49,7 @@ mbsync ──► ~/Mail/<account>/  (Maildir)
 
 Project map:
 
-- **Mailvec.Core** — shared library. Domain models, SQLite access (with `sqlite-vec` extension loading), Ollama HTTP client, hybrid (FTS+vector RRF) search logic, and `Options/` POCOs (`ArchiveOptions`, `OllamaOptions`, `IndexerOptions`, `EmbedderOptions`, `McpOptions`). All four executables reference Core.
+- **Mailvec.Core** — shared library. Domain models, SQLite access (with `sqlite-vec` extension loading), Ollama HTTP client, hybrid (FTS+vector RRF) search logic, and `Options/` POCOs (`ArchiveOptions`, `IngestOptions`, `OllamaOptions`, `IndexerOptions`, `EmbedderOptions`, `McpOptions`). All four executables reference Core.
 - **Mailvec.Indexer** — `BackgroundService` worker. Scans Maildir, parses with MimeKit, upserts `messages`. Does *not* call Ollama.
 - **Mailvec.Embedder** — `BackgroundService` worker. Polls for `messages WHERE embedded_at IS NULL`, chunks bodies, calls Ollama, writes `chunks` + `chunk_embeddings`.
 - **Mailvec.Mcp** — AspNetCore app exposing MCP tools over HTTP on `127.0.0.1:3333`. Read-only against the database.
@@ -66,15 +66,28 @@ Project map:
 
 Each runnable service has its own `appsettings.json` containing only the sections it needs. Configuration POCOs live in `Mailvec.Core/Options/` and are bound in each service's `Program.cs`. Local overrides go in `appsettings.Local.json` (gitignored).
 
+`ArchiveOptions` (`DatabasePath`, `SqliteVecExtensionPath`) is genuinely shared — both fields are consumed by `ConnectionFactory`, so all four executables bind it. `IngestOptions` (`MaildirRoot`) is bound only by the Indexer (which scans the Maildir) and the CLI (which prints the path in `mailvec status`). The Embedder and MCP server never read the filesystem and do not bind it — keep this isolation when adding new options, the MCP-bundle install flow doesn't need to prompt for a Maildir path the server never reads.
+
 ## sqlite-vec — not a NuGet dependency
 
 The `sqlite-vec` extension is fetched as a prebuilt `vec0.dylib` by `ops/fetch-sqlite-vec.sh` and loaded at runtime via `Microsoft.Data.Sqlite`'s extension-loading API. The path comes from `Archive:SqliteVecExtensionPath` in config. There is a NuGet wrapper (`sqlite-vec` 0.1.7-alpha.2.1) but it has been a prerelease for over a year and lags upstream — do not add it back. The fetch script supports `osx-arm64` and `osx-x64`; add other RIDs there if needed.
 
 ## Current status
 
-Phases 1, 2, and 3 complete. The indexer ingests, the embedder embeds, keyword/semantic/hybrid search all work, and the MCP server exposes four tools — `search_emails`, `get_email`, `get_thread`, `list_folders` — over both Streamable HTTP (`127.0.0.1:3333`, default) and stdio (`--stdio` flag). Claude Desktop launches the stdio binary via `~/.local/bin/mailvec-mcp-stdio` (which `exec`s the published `~/.local/share/mailvec/Mailvec.Mcp.dll`). Phase 4 (launchd plists, install.sh, log rotation) hasn't started yet.
+Phases 1, 2, and 3 complete. The indexer ingests, the embedder embeds, keyword/semantic/hybrid search all work, and the MCP server exposes four tools — `search_emails`, `get_email`, `get_thread`, `list_folders` — over both Streamable HTTP (`127.0.0.1:3333`, default) and stdio (`--stdio` flag). **Claude Desktop integration ships as an MCPB bundle** built by `ops/build-mcpb.sh`; the older `~/.local/bin/mailvec-mcp-stdio` launcher still works but is superseded (the gotcha notes below are kept for reference and for the HTTP transport / smoke-test path). Phase 4 (launchd plists, install.sh, log rotation) hasn't started yet.
 
 The doc's original 6-tool list got merged to 4: `recent_emails` is `search_emails` with `query` omitted (date-sorted browse path via `MessageRepository.BrowseByFilters`), and `find_by_sender` is `search_emails` with `fromExact: "..."` (exact-match alternative to the existing `fromContains` substring filter). One tool with sharper semantics beats two overlapping ones.
+
+## MCPB bundle for Claude Desktop
+
+`ops/build-mcpb.sh` produces `dist/mailvec-<version>.mcpb`. It runs `dotnet publish -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=false`, copies `manifest.json` next to the published `server/` directory, and zips the result. The bundle extracts to `~/Library/Application Support/Claude/extensions/<id>/`, which is *not* under `~/Documents` and so sidesteps the TCC read block documented in the Phase 3 gotchas below.
+
+- **`manifest.json` user_config defaults must use `~/...`, not `${HOME}/...`.** Claude Desktop's MCPB host substitutes its own `${user_config.X}` tokens but passes shell-style `${HOME}` through verbatim. Learned the hard way during install: a default of `${HOME}/Library/...` made `Path.GetDirectoryName` produce `/${HOME}` and the migrator tried to mkdir at the filesystem root, crashing during DI construction. `PathExpansion.Expand` was hardened to also handle `${HOME}` / `$HOME` defensively in case any future host repeats the mistake; tests are in `PathExpansionTests.cs`.
+- **Self-contained, NOT single-file.** `PublishSingleFile=true` would still leave `vec0.dylib` outside the apphost (it's added via `<None CopyToOutputDirectory>` not as a managed dep), but turning it off keeps the layout debuggable: `server/Mailvec.Mcp` plus `server/runtimes/osx-arm64/native/vec0.dylib` are visibly co-located, and `ConnectionFactory.ResolveVecExtension` resolves the relative path against `AppContext.BaseDirectory` exactly as it does in dev builds. Single-file would also make `xattr`/Gatekeeper triage harder.
+- **Bundle size is ~50 MB.** The .NET 10 runtime is the bulk. Fine for personal install. Don't switch to framework-dependent — that brings back the `DOTNET_ROOT` / PATH problem the bundle was built to eliminate.
+- **The bundle is the read-side only.** Indexer + embedder still run as your own processes against the same DB. Updating the bundle does not require restarting them.
+- **Updating an installed bundle:** `ops/build-mcpb.sh --bump` patch-bumps `manifest.json`, rebuilds, and `open`s the new `.mcpb` (which Claude Desktop intercepts as an install prompt). Then in Settings → Extensions toggle Mailvec off and confirm the install, quit + relaunch. Toggling off (vs uninstalling) preserves user_config values across upgrades. Without a version bump, Claude Desktop silently ignores the re-install — so plain `build-mcpb.sh` is fine for "rebuild and inspect locally" but `--bump` is what you need to actually swap the running binary.
+- **First place to look when something's wrong:** `~/Library/Logs/Claude/mcp-server-mailvec.log`. The stdio binary's stderr lands there; Claude Desktop's own "Server disconnected" toast tells you nothing useful.
 
 ## Phase 1 gotchas (worth remembering)
 
@@ -82,7 +95,8 @@ The doc's original 6-tool list got merged to 4: `recent_emails` is `search_email
 - **`Microsoft.Data.Sqlite.ExecuteNonQuery` silently stops at the first `CREATE TRIGGER ... BEGIN ... END;`.** The internal trigger semicolons confuse its statement iterator. We tokenise scripts ourselves in `SqlScriptSplitter` (BEGIN/END depth-tracking) and execute one statement at a time. Don't replace this with a single multi-statement `ExecuteNonQuery`.
 - **`vec0` must load before the schema applies**, because `001_initial.sql` declares `chunk_embeddings` as a `vec0(...)` virtual table. `ConnectionFactory` loads the extension on every `Open()`. The dylib is copied into each project's `bin/.../runtimes/<rid>/native/` by `Directory.Build.props` (with an `Exists` guard, so the build doesn't break if `ops/fetch-sqlite-vec.sh` hasn't run).
 - **Rename detection.** When mbsync renames `new/foo` → `cur/foo:2,S` between scans, the same Message-ID appears at a fresh path while the old `sync_state` row still references the old path. The scanner uses `SyncStateRepository.FreshMessageIds(since)` to exclude renamed messages from the soft-delete pass — don't bypass this when changing reconciliation logic.
-- **Config env-var convention.** Both indexer and CLI read environment variables with no prefix, so `Archive__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.
+- **Config env-var convention.** Both indexer and CLI read environment variables with no prefix, so `Ingest__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.
+- **`MaildirRoot` lives on `IngestOptions`, not `ArchiveOptions`.** Originally on the shared `ArchiveOptions` POCO, but only the Indexer (scanner + watcher) actually reads from the Maildir filesystem; the Embedder and MCP server are pure-SQLite. Carrying the field on the shared POCO leaked into the MCPB manifest as a required user_config prompt the server never used. Split out into `Mailvec.Core/Options/IngestOptions.cs` (section name `Ingest`) and bound only by `Mailvec.Indexer/Program.cs` and `Mailvec.Cli/Commands/CliServices.cs`. **Breaking env-var rename:** `Archive__MaildirRoot` → `Ingest__MaildirRoot` for the indexer and CLI. Anyone with shell snippets / launchd plists / docker envs from before the split needs to update.
 
 ## Phase 2 gotchas
 

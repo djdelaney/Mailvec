@@ -23,6 +23,7 @@ internal static class StatusCommand
 
         var conn = sp.GetRequiredService<ConnectionFactory>().Open();
         var archive = sp.GetRequiredService<IOptions<ArchiveOptions>>().Value;
+        var ingest = sp.GetRequiredService<IOptions<IngestOptions>>().Value;
         var ollama = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
         var metadata = sp.GetRequiredService<MetadataRepository>();
 
@@ -31,7 +32,7 @@ internal static class StatusCommand
         var schemaDim = metadata.Get("embedding_dimensions") ?? "(not set)";
 
         Console.WriteLine($"Database:    {Mailvec.Core.PathExpansion.Expand(archive.DatabasePath)}");
-        Console.WriteLine($"Maildir:     {Mailvec.Core.PathExpansion.Expand(archive.MaildirRoot)}");
+        Console.WriteLine($"Maildir:     {Mailvec.Core.PathExpansion.Expand(ingest.MaildirRoot)}");
         Console.WriteLine();
         Console.WriteLine($"Messages:    {total:N0} total, {deleted:N0} deleted");
         Console.WriteLine($"Embeddings:  {embedded:N0} / {Math.Max(total - deleted, 0):N0} ({Coverage(embedded, total - deleted)})  [{chunkCount:N0} chunks]");
