@@ -72,9 +72,20 @@ The `sqlite-vec` extension is fetched as a prebuilt `vec0.dylib` by `ops/fetch-s
 
 ## Current status
 
-Phases 1, 2, and 3 complete. The indexer ingests, the embedder embeds, keyword/semantic/hybrid search all work, and the MCP server exposes four tools — `search_emails`, `get_email`, `get_thread`, `list_folders` — over both Streamable HTTP (`127.0.0.1:3333`, default) and stdio (`--stdio` flag). Claude Desktop launches the stdio binary via `~/.local/bin/mailvec-mcp-stdio` (which `exec`s the published `~/.local/share/mailvec/Mailvec.Mcp.dll`). Phase 4 (launchd plists, install.sh, log rotation) hasn't started yet.
+Phases 1, 2, and 3 complete. The indexer ingests, the embedder embeds, keyword/semantic/hybrid search all work, and the MCP server exposes four tools — `search_emails`, `get_email`, `get_thread`, `list_folders` — over both Streamable HTTP (`127.0.0.1:3333`, default) and stdio (`--stdio` flag). **Claude Desktop integration ships as an MCPB bundle** built by `ops/build-mcpb.sh`; the older `~/.local/bin/mailvec-mcp-stdio` launcher still works but is superseded (the gotcha notes below are kept for reference and for the HTTP transport / smoke-test path). Phase 4 (launchd plists, install.sh, log rotation) hasn't started yet.
 
 The doc's original 6-tool list got merged to 4: `recent_emails` is `search_emails` with `query` omitted (date-sorted browse path via `MessageRepository.BrowseByFilters`), and `find_by_sender` is `search_emails` with `fromExact: "..."` (exact-match alternative to the existing `fromContains` substring filter). One tool with sharper semantics beats two overlapping ones.
+
+## MCPB bundle for Claude Desktop
+
+`ops/build-mcpb.sh` produces `dist/mailvec-<version>.mcpb`. It runs `dotnet publish -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=false`, copies `manifest.json` next to the published `server/` directory, and zips the result. The bundle extracts to `~/Library/Application Support/Claude/extensions/<id>/`, which is *not* under `~/Documents` and so sidesteps the TCC read block documented in the Phase 3 gotchas below.
+
+- **`manifest.json` user_config defaults must use `~/...`, not `${HOME}/...`.** Claude Desktop's MCPB host substitutes its own `${user_config.X}` tokens but passes shell-style `${HOME}` through verbatim. Learned the hard way during install: a default of `${HOME}/Library/...` made `Path.GetDirectoryName` produce `/${HOME}` and the migrator tried to mkdir at the filesystem root, crashing during DI construction. `PathExpansion.Expand` was hardened to also handle `${HOME}` / `$HOME` defensively in case any future host repeats the mistake; tests are in `PathExpansionTests.cs`.
+- **Self-contained, NOT single-file.** `PublishSingleFile=true` would still leave `vec0.dylib` outside the apphost (it's added via `<None CopyToOutputDirectory>` not as a managed dep), but turning it off keeps the layout debuggable: `server/Mailvec.Mcp` plus `server/runtimes/osx-arm64/native/vec0.dylib` are visibly co-located, and `ConnectionFactory.ResolveVecExtension` resolves the relative path against `AppContext.BaseDirectory` exactly as it does in dev builds. Single-file would also make `xattr`/Gatekeeper triage harder.
+- **Bundle size is ~50 MB.** The .NET 10 runtime is the bulk. Fine for personal install. Don't switch to framework-dependent — that brings back the `DOTNET_ROOT` / PATH problem the bundle was built to eliminate.
+- **The bundle is the read-side only.** Indexer + embedder still run as your own processes against the same DB. Updating the bundle does not require restarting them.
+- **Updating an installed bundle:** bump `version` in `manifest.json`, rebuild, then in Claude Desktop's Settings → Extensions toggle Mailvec off, drag the new `.mcpb` on, quit + relaunch. Toggling off (vs uninstalling) preserves user_config values across upgrades.
+- **First place to look when something's wrong:** `~/Library/Logs/Claude/mcp-server-mailvec.log`. The stdio binary's stderr lands there; Claude Desktop's own "Server disconnected" toast tells you nothing useful.
 
 ## Phase 1 gotchas (worth remembering)
 

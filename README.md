@@ -11,7 +11,7 @@ src/
   Mailvec.Core      shared types, SQLite + Ollama clients, hybrid search
   Mailvec.Indexer   BackgroundService: Maildir -> SQLite (no embeddings)
   Mailvec.Embedder  BackgroundService: SQLite rows -> Ollama embeddings
-  Mailvec.Mcp       AspNetCore MCP server (HTTP, localhost:3333)
+  Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB)
   Mailvec.Cli       admin commands (status, search, reindex, rebuild-fts)
 tests/
   Mailvec.{Core,Indexer,Mcp}.Tests
@@ -22,9 +22,11 @@ ops/
   launchd/             plist templates for mbsync + 3 .NET services
   install.sh           Phase 4 installer (stub)
   fetch-sqlite-vec.sh  one-shot: pulls vec0.dylib from upstream releases
+  build-mcpb.sh        packages a .mcpb bundle into dist/ for Claude Desktop
   dev-fetch-imap.py    dev-only: pulls last N days of mail without mbsync
 runtimes/
   osx-arm64/native  sqlite-vec native binary lands here
+manifest.json       Claude Desktop MCPB manifest (binary entry + user_config)
 ```
 
 ## Build
@@ -133,6 +135,39 @@ unset FASTMAIL_USER FASTMAIL_APP_PASSWORD Archive__MaildirRoot Archive__Database
 # then revoke the app password at https://app.fastmail.com/settings/security/devicekeys
 ```
 
+## Connecting to Claude Desktop
+
+The MCP server is shipped as an [MCPB bundle](https://blog.modelcontextprotocol.io/posts/2025-11-20-adopting-mcpb/) — a single `.mcpb` file that Claude Desktop installs with one drag-and-drop. The bundle contains a self-contained .NET binary plus the `vec0.dylib`, so the user doesn't need a .NET SDK installed.
+
+**Build the bundle:**
+
+```sh
+./ops/fetch-sqlite-vec.sh   # if you haven't yet
+./ops/build-mcpb.sh         # writes dist/mailvec-<version>.mcpb (~50 MB)
+```
+
+**Install:** drag `dist/mailvec-<version>.mcpb` onto Claude Desktop, or `open dist/mailvec-<version>.mcpb`. The install dialog prompts for three values (defined in `manifest.json`):
+
+- **Maildir root** — directory mbsync writes mail into. Default `~/Mail/Fastmail`.
+- **Database path** — SQLite archive. Default `~/Library/Application Support/Mailvec/archive.sqlite`. Created if it doesn't exist (empty schema).
+- **Ollama endpoint** — default `http://localhost:11434`. Only used to embed search queries; the indexer/embedder are separate processes.
+
+The bundle extracts to `~/Library/Application Support/Claude/extensions/<id>/` — a non-TCC location, which avoids the `~/Documents` read block we hit during early dev.
+
+**Updating to a new build:**
+
+1. Bump `version` in `manifest.json`.
+2. `./ops/build-mcpb.sh`
+3. In Claude Desktop: Settings → Extensions → Mailvec → toggle off, then drag the new `.mcpb` on. (Quit + relaunch Claude Desktop afterwards so the new binary is picked up.) The simpler "uninstall, reinstall" path also works but loses your `user_config` values; toggling off keeps them.
+
+The indexer and embedder run as your own processes outside the bundle — they keep going across updates and don't need to be restarted when you ship a new MCP build.
+
+**Notes:**
+
+- The bundled binary is `osx-arm64` only (declared in `manifest.json` `compatibility.platforms`). Add `osx-x64` to `build-mcpb.sh` if you need it.
+- The binary is unsigned. macOS Gatekeeper may prompt the first time Claude Desktop spawns it; allow once and it's fine. If it gets quarantined silently, `xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Claude/extensions/"` clears it.
+- All logs from the spawned MCP server go to stderr and land in `~/Library/Logs/Claude/mcp-server-mailvec.log`. First place to look if anything misbehaves.
+
 ## Status
 
 Built in phases per the [design doc](mailvec-project-scope.md#8-phased-build-plan). Each phase has a hard exit criterion and ships standalone value before the next begins.
@@ -165,15 +200,15 @@ Adds locally-generated embeddings and hybrid (FTS + vector) search. **Exit crite
 - `HybridSearchService` — Reciprocal Rank Fusion (k=60) over BM25 + vector legs.
 - CLI: `search --semantic`, `search --hybrid`, `reindex --all | --folder=NAME`. `status` now surfaces embedding coverage, chunk count, and schema/config model mismatches.
 
-### ⬜ Phase 3 — MCP exposure
+### ✅ Phase 3 — MCP exposure
 
-Wires the archive up to Claude.
+Wires the archive up to Claude. **Exit criterion met.**
 
-- AspNetCore MCP server using `ModelContextProtocol.AspNetCore`, bound to `127.0.0.1:3333`.
-- Tools: `search_emails`, `get_email`, `get_thread`, `list_folders`, `find_by_sender`, `recent_emails`.
+- `Mailvec.Mcp` runs in two transports sharing the same Core wiring:
+  - **HTTP** (default) on `127.0.0.1:3333` for Claude Code and the smoke tests.
+  - **stdio** (`--stdio` flag) for Claude Desktop, packaged as an `.mcpb` bundle (see [Connecting to Claude Desktop](#connecting-to-claude-desktop)).
+- Tools: `search_emails` (keyword / semantic / hybrid with folder/date/sender filters), `get_email`, `get_thread`, `list_folders`. The original 6-tool design merged to 4 — `recent_emails` is `search_emails` with `query` omitted, and `find_by_sender` is `search_emails` with `fromExact`.
 - Hybrid search reused from Phase 2.
-
-**Exit criterion:** Claude can answer "when did Bartlett last quote me for the tree work?" without being told where to look.
 
 ### ⬜ Phase 4 — Operationalization
 

@@ -1,0 +1,58 @@
+{
+  "manifest_version": "0.3",
+  "name": "mailvec",
+  "display_name": "Mailvec",
+  "version": "0.1.0",
+  "description": "Local hybrid (FTS5 + vector) search over your Maildir email archive.",
+  "long_description": "Mailvec exposes the local Mailvec archive (built by the indexer/embedder background services) over MCP. Provides search_emails (keyword, semantic, or hybrid), get_email, get_thread, and list_folders against a SQLite database with sqlite-vec embeddings. The bundled binary is the read-side stdio server only; the indexer and embedder are run separately as your own services.",
+  "author": {
+    "name": "Daniel Delaney"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/Mailvec.Mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/Mailvec.Mcp",
+      "args": ["--stdio"],
+      "env": {
+        "Archive__MaildirRoot": "${user_config.maildir_root}",
+        "Archive__DatabasePath": "${user_config.database_path}",
+        "Ollama__BaseUrl": "${user_config.ollama_base_url}"
+      }
+    }
+  },
+  "user_config": {
+    "maildir_root": {
+      "type": "directory",
+      "title": "Maildir root",
+      "description": "The directory mbsync writes mail into (e.g. ~/Mail/Fastmail). Read-only — Mailvec never writes here.",
+      "required": true,
+      "default": "~/Mail/Fastmail"
+    },
+    "database_path": {
+      "type": "string",
+      "title": "Database path",
+      "description": "Path to the Mailvec SQLite archive. Will be created on first run if it doesn't exist.",
+      "required": true,
+      "default": "~/Library/Application Support/Mailvec/archive.sqlite"
+    },
+    "ollama_base_url": {
+      "type": "string",
+      "title": "Ollama endpoint",
+      "description": "Where the Ollama server is reachable. Used to embed search queries for semantic and hybrid search.",
+      "required": false,
+      "default": "http://localhost:11434"
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {}
+  },
+  "tools": [
+    { "name": "search_emails", "description": "Search the archive by keyword, semantic similarity, or hybrid RRF fusion. Supports folder, date, and sender filters." },
+    { "name": "get_email",     "description": "Fetch a single message by its message_id header or internal id." },
+    { "name": "get_thread",    "description": "Fetch all messages in a thread given any message in the thread." },
+    { "name": "list_folders",  "description": "List Maildir folders with message counts." }
+  ],
+  "keywords": ["email", "search", "maildir", "sqlite", "vector"]
+}
