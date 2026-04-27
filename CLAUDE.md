@@ -49,7 +49,7 @@ mbsync ──► ~/Mail/<account>/  (Maildir)
 
 Project map:
 
-- **Mailvec.Core** — shared library. Domain models, SQLite access (with `sqlite-vec` extension loading), Ollama HTTP client, hybrid (FTS+vector RRF) search logic, and `Options/` POCOs (`ArchiveOptions`, `OllamaOptions`, `IndexerOptions`, `EmbedderOptions`, `McpOptions`). All four executables reference Core.
+- **Mailvec.Core** — shared library. Domain models, SQLite access (with `sqlite-vec` extension loading), Ollama HTTP client, hybrid (FTS+vector RRF) search logic, and `Options/` POCOs (`ArchiveOptions`, `IngestOptions`, `OllamaOptions`, `IndexerOptions`, `EmbedderOptions`, `McpOptions`). All four executables reference Core.
 - **Mailvec.Indexer** — `BackgroundService` worker. Scans Maildir, parses with MimeKit, upserts `messages`. Does *not* call Ollama.
 - **Mailvec.Embedder** — `BackgroundService` worker. Polls for `messages WHERE embedded_at IS NULL`, chunks bodies, calls Ollama, writes `chunks` + `chunk_embeddings`.
 - **Mailvec.Mcp** — AspNetCore app exposing MCP tools over HTTP on `127.0.0.1:3333`. Read-only against the database.
@@ -65,6 +65,8 @@ Project map:
 ## Configuration
 
 Each runnable service has its own `appsettings.json` containing only the sections it needs. Configuration POCOs live in `Mailvec.Core/Options/` and are bound in each service's `Program.cs`. Local overrides go in `appsettings.Local.json` (gitignored).
+
+`ArchiveOptions` (`DatabasePath`, `SqliteVecExtensionPath`) is genuinely shared — both fields are consumed by `ConnectionFactory`, so all four executables bind it. `IngestOptions` (`MaildirRoot`) is bound only by the Indexer (which scans the Maildir) and the CLI (which prints the path in `mailvec status`). The Embedder and MCP server never read the filesystem and do not bind it — keep this isolation when adding new options, the MCP-bundle install flow doesn't need to prompt for a Maildir path the server never reads.
 
 ## sqlite-vec — not a NuGet dependency
 
@@ -93,7 +95,8 @@ The doc's original 6-tool list got merged to 4: `recent_emails` is `search_email
 - **`Microsoft.Data.Sqlite.ExecuteNonQuery` silently stops at the first `CREATE TRIGGER ... BEGIN ... END;`.** The internal trigger semicolons confuse its statement iterator. We tokenise scripts ourselves in `SqlScriptSplitter` (BEGIN/END depth-tracking) and execute one statement at a time. Don't replace this with a single multi-statement `ExecuteNonQuery`.
 - **`vec0` must load before the schema applies**, because `001_initial.sql` declares `chunk_embeddings` as a `vec0(...)` virtual table. `ConnectionFactory` loads the extension on every `Open()`. The dylib is copied into each project's `bin/.../runtimes/<rid>/native/` by `Directory.Build.props` (with an `Exists` guard, so the build doesn't break if `ops/fetch-sqlite-vec.sh` hasn't run).
 - **Rename detection.** When mbsync renames `new/foo` → `cur/foo:2,S` between scans, the same Message-ID appears at a fresh path while the old `sync_state` row still references the old path. The scanner uses `SyncStateRepository.FreshMessageIds(since)` to exclude renamed messages from the soft-delete pass — don't bypass this when changing reconciliation logic.
-- **Config env-var convention.** Both indexer and CLI read environment variables with no prefix, so `Archive__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.
+- **Config env-var convention.** Both indexer and CLI read environment variables with no prefix, so `Ingest__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.
+- **`MaildirRoot` lives on `IngestOptions`, not `ArchiveOptions`.** Originally on the shared `ArchiveOptions` POCO, but only the Indexer (scanner + watcher) actually reads from the Maildir filesystem; the Embedder and MCP server are pure-SQLite. Carrying the field on the shared POCO leaked into the MCPB manifest as a required user_config prompt the server never used. Split out into `Mailvec.Core/Options/IngestOptions.cs` (section name `Ingest`) and bound only by `Mailvec.Indexer/Program.cs` and `Mailvec.Cli/Commands/CliServices.cs`. **Breaking env-var rename:** `Archive__MaildirRoot` → `Ingest__MaildirRoot` for the indexer and CLI. Anyone with shell snippets / launchd plists / docker envs from before the split needs to update.
 
 ## Phase 2 gotchas
 
