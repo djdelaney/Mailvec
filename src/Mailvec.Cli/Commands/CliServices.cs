@@ -1,4 +1,5 @@
 using Mailvec.Core.Data;
+using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
 using Microsoft.Extensions.Configuration;
@@ -25,11 +26,23 @@ internal static class CliServices
             o.TimestampFormat = "HH:mm:ss ";
         }));
         services.Configure<ArchiveOptions>(config.GetSection(ArchiveOptions.SectionName));
+        services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
 
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
         services.AddSingleton<MessageRepository>();
+        services.AddSingleton<MetadataRepository>();
+        services.AddSingleton<ChunkRepository>();
         services.AddSingleton<KeywordSearchService>();
+        services.AddSingleton<VectorSearchService>();
+        services.AddSingleton<HybridSearchService>();
+
+        services.AddHttpClient<OllamaClient>((sp, client) =>
+        {
+            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OllamaOptions>>().Value;
+            client.BaseAddress = new Uri(opts.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
+        });
 
         return services.BuildServiceProvider();
     }

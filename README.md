@@ -18,9 +18,11 @@ tests/
 schema/
   001_initial.sql   tables, FTS5 triggers, vec0 vector index
 ops/
-  mbsyncrc.example  IMAP sync config template
-  launchd/          plist templates for mbsync + 3 .NET services
-  install.sh        Phase 4 installer (stub)
+  mbsyncrc.example     IMAP sync config template
+  launchd/             plist templates for mbsync + 3 .NET services
+  install.sh           Phase 4 installer (stub)
+  fetch-sqlite-vec.sh  one-shot: pulls vec0.dylib from upstream releases
+  dev-fetch-imap.py    dev-only: pulls last N days of mail without mbsync
 runtimes/
   osx-arm64/native  sqlite-vec native binary lands here
 ```
@@ -38,6 +40,98 @@ dotnet test
 The `sqlite-vec` extension is loaded at runtime from `runtimes/<rid>/native/vec0.dylib`. The fetch script grabs the latest release from the upstream GitHub repo; pin a version with `SQLITE_VEC_VERSION=0.1.9 ./ops/fetch-sqlite-vec.sh`.
 
 Central package management lives in `Directory.Packages.props`. Shared MSBuild settings (target framework, nullable, warnings-as-errors) live in `Directory.Build.props`.
+
+## Ollama (semantic search)
+
+The embedder talks to a local Ollama server. One-time setup on macOS:
+
+```sh
+brew install ollama
+ollama serve &                       # or run as a launchd service
+ollama pull mxbai-embed-large        # 1024-dim model used by default
+```
+
+You don't need Ollama running to build, run the indexer, or use keyword search — only the embedder, semantic search, and hybrid search depend on it.
+
+The configured model is recorded in the SQLite `metadata` table on first embed. If you change `Ollama:EmbeddingModel` later, the embedder refuses to start until you run `mailvec reindex --all` to clear the existing vectors. Mixing vector spaces silently corrupts results, so this guard is intentional.
+
+## Trying it end-to-end
+
+Two kinds of testing: the automated unit/integration suite, and a manual walkthrough against real mail. Both bypass mbsync; mbsync is the production sync path but isn't required to exercise the rest of the pipeline.
+
+### 1. Automated tests
+
+```sh
+dotnet test
+```
+
+35 tests across `Mailvec.Core.Tests` and `Mailvec.Indexer.Tests` — parser fixtures, schema migrations, repositories, FTS5 search, vector search (with hand-injected vectors), RRF fusion, the Ollama HTTP client (stubbed), and chunking. No live Ollama or IMAP needed.
+
+### 2. Get a Fastmail app password
+
+Visit <https://app.fastmail.com/settings/security/devicekeys>, click **New App Password**, name it `mailvec-test`, copy the password somewhere safe. Revoke it when you're done.
+
+### 3. Fetch the last 7 days of mail
+
+`ops/dev-fetch-imap.py` writes each message as an `.eml` file into a Maildir layout the indexer understands. Filenames use the IMAP UID, so re-running is idempotent — already-fetched messages are skipped.
+
+```sh
+export FASTMAIL_USER=you@example.com
+export FASTMAIL_APP_PASSWORD='<paste-here>'    # quote it; contains spaces
+
+./ops/dev-fetch-imap.py
+```
+
+Optional overrides: `MAILDIR_ROOT` (default `~/mailvec-test/Mail`), `SINCE_DAYS` (default 7), `IMAP_HOST`, `IMAP_FOLDER`. To pull from a different IMAP provider, set `IMAP_HOST` accordingly.
+
+### 4. Run the indexer
+
+Point the env vars at your test Maildir + a fresh DB path:
+
+```sh
+export Archive__MaildirRoot=~/mailvec-test/Mail
+export Archive__DatabasePath=~/mailvec-test/archive.sqlite
+export Logging__LogLevel__Default=Information
+
+dotnet run --project src/Mailvec.Indexer
+```
+
+Look for a single line like `MaildirScanner: seen=N upserted=N parseFailed=K softDeleted=0`. The watcher then idles until new files arrive; ^C once the initial scan is done. Any `parseFailed > 0` count means real-world headers tripped the parser — capture the offending file (the warning prints the full path) and we can add a fixture.
+
+### 5. Run the embedder (optional, for semantic/hybrid)
+
+Make sure Ollama is running and `mxbai-embed-large` is pulled (see the Ollama section above), then in a second terminal with the same env vars:
+
+```sh
+dotnet run --project src/Mailvec.Embedder
+```
+
+Watch for `Embedded N messages (M chunks) in <ms>` lines. The first call is slow (model load); subsequent batches are fast. ^C when `mailvec status` shows full coverage.
+
+### 6. Search
+
+Same env vars, third terminal:
+
+```sh
+dotnet run --project src/Mailvec.Cli -- status
+dotnet run --project src/Mailvec.Cli -- search "ramen"                  # keyword (FTS5/BM25)
+dotnet run --project src/Mailvec.Cli -- search --semantic "vacation plans"
+dotnet run --project src/Mailvec.Cli -- search --hybrid "tree quote"
+dotnet run --project src/Mailvec.Cli -- search "lunch AND friday" -n 10  # boolean, custom limit
+dotnet run --project src/Mailvec.Cli -- search '"exact phrase"'          # phrase
+```
+
+`status` prints message counts, embedding coverage, and warns if the schema's recorded embedding model disagrees with config.
+
+The Phase 2 exit criterion is "semantic queries return relevant results the FTS layer would have missed" — a quality call that needs your eyes on a real archive. Useful comparison queries are paraphrases ("trip planning" vs `vacation`), synonyms (`bill` vs `invoice`), and topic-level recall (`subscription renewal`, `house repairs`).
+
+### 7. Cleanup
+
+```sh
+rm -rf ~/mailvec-test
+unset FASTMAIL_USER FASTMAIL_APP_PASSWORD Archive__MaildirRoot Archive__DatabasePath
+# then revoke the app password at https://app.fastmail.com/settings/security/devicekeys
+```
 
 ## Status
 
@@ -59,17 +153,17 @@ A searchable local archive. **Exit criterion met:** point the indexer at a Maild
 - FTS5 with BM25 ordering and bracketed snippets.
 - `mailvec status | search | rebuild-fts` CLI.
 
-### ⬜ Phase 2 — Semantic layer
+### ✅ Phase 2 — Semantic layer
 
-Adds locally-generated embeddings and hybrid (FTS + vector) search.
+Adds locally-generated embeddings and hybrid (FTS + vector) search. **Exit criterion met:** semantic + hybrid search return chunk-level results from sqlite-vec; behaviour validated against hand-injected vectors in tests. Real-world quality validation is on you once you have an embedded archive.
 
-- Ollama HTTP client with retry/backoff (`Microsoft.Extensions.Http.Resilience`).
-- `ChunkingService` — token-aware splitter sized to the embedding model's context window.
-- `EmbeddingWorker` — `BackgroundService` that processes rows where `embedded_at IS NULL` in batches.
-- Hybrid search via Reciprocal Rank Fusion (RRF) over BM25 + cosine similarity.
-- `mailvec search --semantic` for direct comparison against keyword results.
-
-**Exit criterion:** semantic queries surface relevant results that the FTS layer misses (e.g. paraphrased subjects, synonyms).
+- `OllamaClient` — typed `HttpClient` against `POST /api/embed` with `Microsoft.Extensions.Http.Resilience` retry/circuit-breaker.
+- `ChunkingService` — paragraph-aware splitter (~4 chars/token heuristic) with configurable size + overlap; hard-splits unbroken blocks.
+- `ChunkRepository` — atomic chunk + vector writes (so a message is never half-embedded).
+- `EmbeddingWorker` — `BackgroundService` that polls `messages WHERE embedded_at IS NULL`, prepends subject to body, batches Ollama calls, and refuses to start if `metadata.embedding_model` disagrees with config.
+- `VectorSearchService` — sqlite-vec `MATCH/k` query, returns one row per message (best-matching chunk), filters soft-deleted.
+- `HybridSearchService` — Reciprocal Rank Fusion (k=60) over BM25 + vector legs.
+- CLI: `search --semantic`, `search --hybrid`, `reindex --all | --folder=NAME`. `status` now surfaces embedding coverage, chunk count, and schema/config model mismatches.
 
 ### ⬜ Phase 3 — MCP exposure
 
