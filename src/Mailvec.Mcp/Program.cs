@@ -71,6 +71,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.Configure<ArchiveOptions>(config.GetSection(ArchiveOptions.SectionName));
     services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
     services.Configure<McpOptions>(config.GetSection(McpOptions.SectionName));
+    services.Configure<FastmailOptions>(config.GetSection(FastmailOptions.SectionName));
 
     services.AddSingleton<ConnectionFactory>();
     services.AddSingleton<SchemaMigrator>();

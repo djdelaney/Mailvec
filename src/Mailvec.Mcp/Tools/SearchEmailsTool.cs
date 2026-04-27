@@ -21,9 +21,11 @@ public sealed class SearchEmailsTool(
     VectorSearchService vector,
     HybridSearchService hybrid,
     MessageRepository messages,
-    IOptions<McpOptions> mcpOptions)
+    IOptions<McpOptions> mcpOptions,
+    IOptions<FastmailOptions> fastmailOptions)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
+    private readonly FastmailOptions _fastmail = fastmailOptions.Value;
 
     [McpServerTool(Name = "search_emails")]
     [Description(
@@ -60,7 +62,7 @@ public sealed class SearchEmailsTool(
         if (string.IsNullOrWhiteSpace(query))
         {
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
-            var browseHits = rows.Select(EmailHit.FromMessage).ToList();
+            var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
             return new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits);
         }
 
@@ -68,16 +70,20 @@ public sealed class SearchEmailsTool(
 
         IReadOnlyList<EmailHit> hits = resolvedMode switch
         {
-            "keyword" => keyword.Search(query, resolvedLimit, filters).Select(EmailHit.FromKeyword).ToList(),
+            "keyword" => keyword.Search(query, resolvedLimit, filters).Select(EmailHit.FromKeyword).Select(WithWebmailUrl).ToList(),
             "semantic" => (await vector.SearchAsync(query, resolvedLimit, k: Math.Max(100, resolvedLimit * 5), filters, ct).ConfigureAwait(false))
-                .Select(EmailHit.FromVector).ToList(),
+                .Select(EmailHit.FromVector).Select(WithWebmailUrl).ToList(),
             "hybrid" => (await hybrid.SearchAsync(query, resolvedLimit, filters: filters, ct: ct).ConfigureAwait(false))
-                .Select(EmailHit.FromHybrid).ToList(),
+                .Select(EmailHit.FromHybrid).Select(WithWebmailUrl).ToList(),
             _ => throw new McpException($"Unknown mode '{mode}'. Use 'keyword', 'semantic', or 'hybrid'."),
         };
 
         return new SearchEmailsResponse(query, resolvedMode, hits.Count, hits);
     }
+
+    /// <summary>Decorates a hit with a Fastmail webmail link if AccountId is configured.</summary>
+    private EmailHit WithWebmailUrl(EmailHit h) =>
+        h with { WebmailUrl = WebmailLinkBuilder.Build(h.MessageId, _fastmail) };
 
     private int ClampLimit(int? requested)
     {
@@ -133,7 +139,10 @@ public sealed record EmailHit(
     double? VectorDistance = null,
     double? RrfScore = null,
     int? Bm25Rank = null,
-    int? VectorRank = null)
+    int? VectorRank = null,
+    // Decorated post-construction by SearchEmailsTool.WithWebmailUrl when
+    // Fastmail:AccountId is configured. The factory methods below leave it null.
+    string? WebmailUrl = null)
 {
     public static EmailHit FromKeyword(Mailvec.Core.Models.SearchHit h) => new(
         Id: h.MessageId,
