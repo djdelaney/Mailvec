@@ -15,20 +15,12 @@
       "command": "${__dirname}/server/Mailvec.Mcp",
       "args": ["--stdio"],
       "env": {
-        "Archive__MaildirRoot": "${user_config.maildir_root}",
         "Archive__DatabasePath": "${user_config.database_path}",
         "Ollama__BaseUrl": "${user_config.ollama_base_url}"
       }
     }
   },
   "user_config": {
-    "maildir_root": {
-      "type": "directory",
-      "title": "Maildir root",
-      "description": "The directory mbsync writes mail into (e.g. ~/Mail/Fastmail). Read-only — Mailvec never writes here.",
-      "required": true,
-      "default": "~/Mail/Fastmail"
-    },
     "database_path": {
       "type": "string",
       "title": "Database path",

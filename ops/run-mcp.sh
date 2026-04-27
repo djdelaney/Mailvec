@@ -10,7 +10,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-export Archive__MaildirRoot="${Archive__MaildirRoot:-$HOME/mailvec-test/Mail}"
 export Archive__DatabasePath="${Archive__DatabasePath:-$HOME/mailvec-test/archive.sqlite}"
 
 cd "$REPO_ROOT"
