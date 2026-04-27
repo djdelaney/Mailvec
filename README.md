@@ -91,7 +91,7 @@ Optional overrides: `MAILDIR_ROOT` (default `~/mailvec-test/Mail`), `SINCE_DAYS`
 Point the env vars at your test Maildir + a fresh DB path:
 
 ```sh
-export Archive__MaildirRoot=~/mailvec-test/Mail
+export Ingest__MaildirRoot=~/mailvec-test/Mail
 export Archive__DatabasePath=~/mailvec-test/archive.sqlite
 export Logging__LogLevel__Default=Information
 
@@ -131,7 +131,7 @@ The Phase 2 exit criterion is "semantic queries return relevant results the FTS 
 
 ```sh
 rm -rf ~/mailvec-test
-unset FASTMAIL_USER FASTMAIL_APP_PASSWORD Archive__MaildirRoot Archive__DatabasePath
+unset FASTMAIL_USER FASTMAIL_APP_PASSWORD Ingest__MaildirRoot Archive__DatabasePath
 # then revoke the app password at https://app.fastmail.com/settings/security/devicekeys
 ```
 
