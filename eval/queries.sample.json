@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "queries": [
+    {
+      "id": "q001",
+      "query": "lease renewal landlord",
+      "filters": {
+        "folder": "INBOX",
+        "dateFrom": "2024-01-01T00:00:00Z"
+      },
+      "relevant": [
+        "<CAEx9pTabc...@mail.gmail.com>",
+        "<20240315.abc123@example.com>"
+      ],
+      "notes": "Back-and-forth with David in March 2024 about renewing the lease."
+    },
+    {
+      "id": "q002",
+      "query": "anthropic invoice",
+      "relevant": [
+        { "messageId": "<billing-2024-03@anthropic.com>", "grade": 3 },
+        { "messageId": "<billing-2024-04@anthropic.com>", "grade": 1 }
+      ],
+      "notes": "March invoice is the canonical hit; April is a near-duplicate worth surfacing too."
+    },
+    {
+      "id": "q003",
+      "query": "flight confirmation tokyo",
+      "filters": { "fromContains": "united" },
+      "relevant": [
+        "<conf-XYZ789@united.com>"
+      ]
+    }
+  ]
+}
