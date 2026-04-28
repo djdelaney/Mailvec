@@ -22,10 +22,12 @@ public sealed class SearchEmailsTool(
     HybridSearchService hybrid,
     MessageRepository messages,
     IOptions<McpOptions> mcpOptions,
-    IOptions<FastmailOptions> fastmailOptions)
+    IOptions<FastmailOptions> fastmailOptions,
+    ToolCallLogger callLog)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
+    private const string ToolName = "search_emails";
 
     [McpServerTool(Name = "search_emails")]
     [Description(
@@ -55,6 +57,8 @@ public sealed class SearchEmailsTool(
         string? fromExact = null,
         CancellationToken ct = default)
     {
+        callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact });
+
         var resolvedLimit = ClampLimit(limit);
         var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact);
 
@@ -63,7 +67,9 @@ public sealed class SearchEmailsTool(
         {
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
             var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
-            return new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits);
+            var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits);
+            callLog.LogResult(ToolName, BuildResultSummary(browseResp));
+            return browseResp;
         }
 
         var resolvedMode = NormaliseMode(mode);
@@ -78,8 +84,25 @@ public sealed class SearchEmailsTool(
             _ => throw new McpException($"Unknown mode '{mode}'. Use 'keyword', 'semantic', or 'hybrid'."),
         };
 
-        return new SearchEmailsResponse(query, resolvedMode, hits.Count, hits);
+        var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits);
+        callLog.LogResult(ToolName, BuildResultSummary(response));
+        return response;
     }
+
+    private static object BuildResultSummary(SearchEmailsResponse r) => new
+    {
+        mode = r.Mode,
+        count = r.Count,
+        // Top hits give enough context to correlate the call against the archive
+        // without dumping full bodies into the log.
+        top = r.Results.Take(5).Select(h => new
+        {
+            id = h.Id,
+            from = h.FromAddress,
+            date = h.DateSent,
+            subject = h.Subject,
+        }),
+    };
 
     /// <summary>Decorates a hit with a Fastmail webmail link if AccountId is configured.</summary>
     private EmailHit WithWebmailUrl(EmailHit h) =>
