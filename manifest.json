@@ -2,12 +2,16 @@
   "manifest_version": "0.3",
   "name": "mailvec",
   "display_name": "Mailvec",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Local hybrid (FTS5 + vector) search over your Maildir email archive.",
   "long_description": "Mailvec exposes the local Mailvec archive (built by the indexer/embedder background services) over MCP. Provides search_emails (keyword, semantic, or hybrid), get_email, get_thread, and list_folders against a SQLite database with sqlite-vec embeddings. The bundled binary is the read-side stdio server only; the indexer and embedder are run separately as your own services.",
   "author": {
     "name": "Daniel Delaney"
   },
+  "icons": [
+    { "src": "assets/mailvec-128.png",      "size": "128x128", "theme": "light" },
+    { "src": "assets/mailvec-128-dark.png", "size": "128x128", "theme": "dark"  }
+  ],
   "server": {
     "type": "binary",
     "entry_point": "server/Mailvec.Mcp",

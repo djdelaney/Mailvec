@@ -106,12 +106,18 @@ fi
 
 cp "$REPO_ROOT/manifest.json" "$STAGING/manifest.json"
 
+# Bundle icons referenced by manifest.json (light + dark variants). Paths in
+# the manifest are resolved relative to the bundle root, so the directory
+# layout under assets/ must mirror what's on disk.
+cp -R "$REPO_ROOT/assets" "$STAGING/assets"
+find "$STAGING/assets" -name '.DS_Store' -delete
+
 # .mcpb is a zip with the manifest at the root. Use -X to strip extra macOS
 # attributes that some MCPB validators reject.
 mkdir -p "$DIST"
 rm -f "$OUTPUT"
 echo "→ Packaging $OUTPUT"
-(cd "$STAGING" && zip -rqX "$OUTPUT" manifest.json server)
+(cd "$STAGING" && zip -rqX "$OUTPUT" manifest.json server assets)
 
 SIZE=$(du -h "$OUTPUT" | awk '{print $1}')
 echo "✓ Built $OUTPUT ($SIZE)"
