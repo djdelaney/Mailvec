@@ -10,8 +10,10 @@ namespace Mailvec.Mcp.Tools;
 /// filter — without this, Claude has to guess names like "INBOX" or "Archive".
 /// </summary>
 [McpServerToolType]
-public sealed class ListFoldersTool(MessageRepository messages)
+public sealed class ListFoldersTool(MessageRepository messages, ToolCallLogger callLog)
 {
+    private const string ToolName = "list_folders";
+
     [McpServerTool(Name = "list_folders")]
     [Description(
         "List all Maildir folders that contain messages, with per-folder counts and date ranges. " +
@@ -19,8 +21,11 @@ public sealed class ListFoldersTool(MessageRepository messages)
         "Soft-deleted messages are excluded from counts.")]
     public ListFoldersResponse ListFolders()
     {
+        callLog.LogCall(ToolName, new { });
         var stats = messages.FolderStats();
-        return new ListFoldersResponse(stats.Count, stats);
+        var response = new ListFoldersResponse(stats.Count, stats);
+        callLog.LogResult(ToolName, new { count = response.Count });
+        return response;
     }
 }
 

@@ -15,9 +15,14 @@ namespace Mailvec.Mcp.Tools;
 /// often verbose and rarely useful to Claude.
 /// </summary>
 [McpServerToolType]
-public sealed class GetEmailTool(MessageRepository messages, IOptions<FastmailOptions> fastmailOptions)
+public sealed class GetEmailTool(
+    MessageRepository messages,
+    IOptions<FastmailOptions> fastmailOptions,
+    ToolCallLogger callLog)
 {
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
+    private const string ToolName = "get_email";
+
     [McpServerTool(Name = "get_email")]
     [Description(
         "Fetch a single email's full body and headers by id. " +
@@ -32,6 +37,8 @@ public sealed class GetEmailTool(MessageRepository messages, IOptions<FastmailOp
         [Description("Include the raw HTML body when present. Default false (text only).")]
         bool includeHtml = false)
     {
+        callLog.LogCall(ToolName, new { id, messageId, includeHtml });
+
         if (id is null && string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Provide either id or messageId.");
         if (id is not null && !string.IsNullOrWhiteSpace(messageId))
@@ -49,7 +56,7 @@ public sealed class GetEmailTool(MessageRepository messages, IOptions<FastmailOp
         if (msg.DeletedAt is not null)
             throw new McpException($"Message {msg.Id} is soft-deleted (gone from disk).");
 
-        return new GetEmailResponse(
+        var response = new GetEmailResponse(
             Id: msg.Id,
             MessageId: msg.MessageId,
             ThreadId: msg.ThreadId,
@@ -66,6 +73,16 @@ public sealed class GetEmailTool(MessageRepository messages, IOptions<FastmailOp
             BodyText: msg.BodyText ?? string.Empty,
             BodyHtml: includeHtml ? msg.BodyHtml : null,
             WebmailUrl: WebmailLinkBuilder.Build(msg.MessageId, _fastmail));
+
+        callLog.LogResult(ToolName, new
+        {
+            id = response.Id,
+            from = response.FromAddress,
+            subject = response.Subject,
+            bodyChars = response.BodyText.Length,
+            htmlChars = response.BodyHtml?.Length,
+        });
+        return response;
     }
 }
 

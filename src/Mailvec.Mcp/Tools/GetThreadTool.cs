@@ -15,9 +15,14 @@ namespace Mailvec.Mcp.Tools;
 /// threads add up fast.
 /// </summary>
 [McpServerToolType]
-public sealed class GetThreadTool(MessageRepository messages, IOptions<FastmailOptions> fastmailOptions)
+public sealed class GetThreadTool(
+    MessageRepository messages,
+    IOptions<FastmailOptions> fastmailOptions,
+    ToolCallLogger callLog)
 {
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
+    private const string ToolName = "get_thread";
+
     [McpServerTool(Name = "get_thread")]
     [Description(
         "Fetch all messages in a thread (chronological, oldest first). " +
@@ -32,6 +37,8 @@ public sealed class GetThreadTool(MessageRepository messages, IOptions<FastmailO
         [Description("Include full body text for every message in the thread. Default false (snippet only).")]
         bool includeBodies = false)
     {
+        callLog.LogCall(ToolName, new { id, messageId, includeBodies });
+
         if (id is null && string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Provide either id or messageId.");
         if (id is not null && !string.IsNullOrWhiteSpace(messageId))
@@ -57,10 +64,19 @@ public sealed class GetThreadTool(MessageRepository messages, IOptions<FastmailO
             WebmailUrl: WebmailLinkBuilder.Build(m.MessageId, _fastmail)
         )).ToList();
 
-        return new GetThreadResponse(
+        var response = new GetThreadResponse(
             ThreadId: rootThreadId,
             Count: entries.Count,
             Messages: entries);
+
+        callLog.LogResult(ToolName, new
+        {
+            threadId = response.ThreadId,
+            count = response.Count,
+            rootSubject = entries[0].Subject,
+            participants = entries.Select(e => e.FromAddress).Where(a => a is not null).Distinct().Take(5),
+        });
+        return response;
     }
 
     private static string BuildSnippet(string? body)

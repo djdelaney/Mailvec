@@ -81,6 +81,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<KeywordSearchService>();
     services.AddSingleton<VectorSearchService>();
     services.AddSingleton<HybridSearchService>();
+    services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
 
     services.AddHttpClient<OllamaClient>((sp, client) =>
     {

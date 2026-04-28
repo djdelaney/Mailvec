@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mailvec",
   "display_name": "Mailvec",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local hybrid (FTS5 + vector) search over your Maildir email archive.",
   "long_description": "Mailvec exposes the local Mailvec archive (built by the indexer/embedder background services) over MCP. Provides search_emails (keyword, semantic, or hybrid), get_email, get_thread, and list_folders against a SQLite database with sqlite-vec embeddings. The bundled binary is the read-side stdio server only; the indexer and embedder are run separately as your own services.",
   "author": {
@@ -21,7 +21,8 @@
       "env": {
         "Archive__DatabasePath": "${user_config.database_path}",
         "Ollama__BaseUrl": "${user_config.ollama_base_url}",
-        "Fastmail__AccountId": "${user_config.fastmail_account_id}"
+        "Fastmail__AccountId": "${user_config.fastmail_account_id}",
+        "Mcp__LogToolCalls": "${user_config.log_tool_calls}"
       }
     }
   },
@@ -46,6 +47,13 @@
       "description": "Enables Fastmail webmail deep-links on search/get results. Format: 'u' followed by 8 hex chars — copy the '?u=...' query param off any app.fastmail.com URL. Leave blank to disable.",
       "required": false,
       "default": ""
+    },
+    "log_tool_calls": {
+      "type": "boolean",
+      "title": "Log tool calls (debug)",
+      "description": "When on, the server logs each tool invocation (args + result summary) to ~/Library/Logs/Claude/mcp-server-mailvec.log. Useful for picking real Claude examples to iterate on result quality. Leave off in normal use.",
+      "required": false,
+      "default": false
     }
   },
   "compatibility": {
