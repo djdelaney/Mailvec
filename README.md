@@ -29,9 +29,11 @@ runtimes/
 manifest.json       Claude Desktop MCPB manifest (binary entry + user_config)
 ```
 
-## Build
+## Setup
 
-Requires .NET 10 SDK.
+Requires .NET 10 SDK and (for semantic / hybrid search only) a local Ollama server.
+
+### Build
 
 ```sh
 ./ops/fetch-sqlite-vec.sh   # downloads vec0.dylib (run once)
@@ -43,15 +45,19 @@ The `sqlite-vec` extension is loaded at runtime from `runtimes/<rid>/native/vec0
 
 Central package management lives in `Directory.Packages.props`. Shared MSBuild settings (target framework, nullable, warnings-as-errors) live in `Directory.Build.props`.
 
-## Ollama (semantic search)
+### Ollama
 
 The embedder talks to a local Ollama server. One-time setup on macOS:
 
 ```sh
 brew install ollama
-ollama serve &                       # or run as a launchd service
+brew services start ollama           # run as a launchd background service
 ollama pull mxbai-embed-large        # 1024-dim model used by default
 ```
+
+**Run Ollama as a service, not in a foreground shell.** `brew services start ollama` registers it as a launchd agent — it survives reboots and writes its own logs to `~/Library/Logs/Homebrew/ollama/*.log`. If you instead run `ollama serve` in a terminal, its `[GIN]` request log lines and `level=INFO source=server.go:...` notices will interleave with the embedder/indexer output. `brew services list` should show `ollama started` once the service is up.
+
+Caveat: `brew services` runs Ollama under a launchd plist that doesn't load your shell config, so any `OLLAMA_*` env vars you set interactively won't apply. To override defaults (e.g. `OLLAMA_KEEP_ALIVE`), edit `~/Library/LaunchAgents/homebrew.mxcl.ollama.plist` under `<EnvironmentVariables>` and `brew services restart ollama`.
 
 You don't need Ollama running to build, run the indexer, or use keyword search — only the embedder, semantic search, and hybrid search depend on it.
 
@@ -102,7 +108,7 @@ Look for a single line like `MaildirScanner: seen=N upserted=N parseFailed=K sof
 
 ### 5. Run the embedder (optional, for semantic/hybrid)
 
-Make sure Ollama is running and `mxbai-embed-large` is pulled (see the Ollama section above), then in a second terminal with the same env vars:
+Make sure Ollama is running and `mxbai-embed-large` is pulled (see [Setup → Ollama](#ollama)), then in a second terminal with the same env vars:
 
 ```sh
 dotnet run --project src/Mailvec.Embedder

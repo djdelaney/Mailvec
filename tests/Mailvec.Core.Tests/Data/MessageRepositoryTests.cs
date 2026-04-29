@@ -6,7 +6,7 @@ namespace Mailvec.Core.Tests.Data;
 
 public class MessageRepositoryTests
 {
-    private static ParsedMessage Sample(string id = "test-001@example.com", string? subject = "Hi") =>
+    private static ParsedMessage Sample(string id = "test-001@example.com", string? subject = "Hi", IReadOnlyList<ParsedAttachment>? attachments = null) =>
         new(
             MessageId: id,
             ThreadId: id,
@@ -20,7 +20,7 @@ public class MessageRepositoryTests
             BodyHtml: null,
             RawHeaders: "Message-ID: <test-001@example.com>\r\n",
             SizeBytes: 512,
-            HasAttachments: false);
+            Attachments: attachments ?? []);
 
     [Fact]
     public void Inserts_then_reads_back_a_message()
@@ -129,5 +129,72 @@ public class MessageRepositoryTests
         stats.TotalMessages.ShouldBe(0);
         stats.OldestDate.ShouldBeNull();
         stats.LatestDate.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Upsert_persists_attachments_and_GetById_hydrates_them()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var attachments = new List<ParsedAttachment>
+        {
+            new(PartIndex: 0, FileName: "mortgage_statement_2024.pdf", ContentType: "application/pdf", SizeBytes: 12345),
+            new(PartIndex: 1, FileName: "ledger.xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", SizeBytes: 6789),
+        };
+
+        var id = repo.Upsert(Sample(attachments: attachments), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        var msg = repo.GetById(id).ShouldNotBeNull();
+        msg.HasAttachments.ShouldBeTrue();
+        msg.Attachments.Count.ShouldBe(2);
+        msg.Attachments[0].FileName.ShouldBe("mortgage_statement_2024.pdf");
+        msg.Attachments[0].ContentType.ShouldBe("application/pdf");
+        msg.Attachments[0].SizeBytes.ShouldBe(12345);
+        msg.Attachments[1].FileName.ShouldBe("ledger.xlsx");
+    }
+
+    [Fact]
+    public void Re_upsert_replaces_attachments_wholesale()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var initial = new List<ParsedAttachment>
+        {
+            new(0, "old-a.pdf", "application/pdf", 100),
+            new(1, "old-b.pdf", "application/pdf", 200),
+        };
+        var id = repo.Upsert(Sample(attachments: initial), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        var replacement = new List<ParsedAttachment>
+        {
+            new(0, "new-only.pdf", "application/pdf", 300),
+        };
+        repo.Upsert(Sample(attachments: replacement), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        var msg = repo.GetById(id).ShouldNotBeNull();
+        msg.Attachments.Count.ShouldBe(1);
+        msg.Attachments[0].FileName.ShouldBe("new-only.pdf");
+    }
+
+    [Fact]
+    public void Re_upsert_to_no_attachments_clears_them()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var initial = new List<ParsedAttachment>
+        {
+            new(0, "doc.pdf", "application/pdf", 100),
+        };
+        var id = repo.Upsert(Sample(attachments: initial), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        repo.GetById(id).ShouldNotBeNull().HasAttachments.ShouldBeTrue();
+
+        repo.Upsert(Sample(attachments: []), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        var msg = repo.GetById(id).ShouldNotBeNull();
+        msg.Attachments.ShouldBeEmpty();
+        msg.HasAttachments.ShouldBeFalse();
     }
 }

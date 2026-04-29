@@ -71,7 +71,7 @@ public sealed class EmbeddingWorker(
         // Chunk every message in the batch up front so we can submit all chunks
         // in fewer Ollama calls (model load overhead matters more than batch size here).
         var perMessageChunks = messageBatch
-            .Select(m => (m.Id, Chunks: chunker.Chunk(BuildEmbeddingText(m.Subject, m.BodyText))))
+            .Select(m => (m.Id, Chunks: chunker.Chunk(BuildEmbeddingText(m.Subject, m.BodyText, m.AttachmentNames))))
             .Where(x => x.Chunks.Count > 0)
             .ToList();
 
@@ -130,14 +130,23 @@ public sealed class EmbeddingWorker(
     }
 
     /// <summary>
-    /// Prepend the subject to the body so it weights into the embedding. Marketing
-    /// emails often have meaningful subjects with thin bodies, and replies the
-    /// other way round; including both is robust.
+    /// Prepend the subject and any attachment filenames to the body so they
+    /// weight into the embedding. Marketing emails often have meaningful
+    /// subjects with thin bodies, and replies the other way round; including
+    /// both is robust. Attachment filenames help when the body is empty
+    /// (e.g. statements arriving with one-line cover text).
     /// </summary>
-    private static string BuildEmbeddingText(string? subject, string body)
+    private static string BuildEmbeddingText(string? subject, string body, string? attachmentNames)
     {
-        if (string.IsNullOrWhiteSpace(subject)) return body;
-        return $"{subject}\n\n{body}";
+        var hasSubject = !string.IsNullOrWhiteSpace(subject);
+        var hasAttachments = !string.IsNullOrWhiteSpace(attachmentNames);
+        if (!hasSubject && !hasAttachments) return body;
+
+        var sb = new System.Text.StringBuilder();
+        if (hasSubject) sb.Append(subject).Append("\n\n");
+        if (hasAttachments) sb.Append("Attachments: ").Append(attachmentNames).Append("\n\n");
+        sb.Append(body);
+        return sb.ToString();
     }
 
     /// <summary>

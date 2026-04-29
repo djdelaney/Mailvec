@@ -22,7 +22,7 @@ public class VectorSearchServiceTests
         BodyHtml: null,
         RawHeaders: $"Message-ID: <{id}>\r\n",
         SizeBytes: 100,
-        HasAttachments: false);
+        Attachments: []);
 
     /// <summary>
     /// Build a 1024-dim "synthetic" embedding where one dimension is hot. Lets us

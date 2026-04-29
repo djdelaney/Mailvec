@@ -31,7 +31,7 @@ public sealed class MessageParser
         }
 
         var fromMailbox = mime.From.Mailboxes.FirstOrDefault();
-        var hasAttachments = mime.Attachments.Any();
+        var attachments = ExtractAttachments(mime);
 
         var messageId = StripAngleBrackets(mime.MessageId)
             ?? throw new InvalidOperationException("Message has no Message-ID header.");
@@ -51,7 +51,29 @@ public sealed class MessageParser
             BodyHtml: bodyHtml,
             RawHeaders: mime.Headers.ToString() ?? string.Empty,
             SizeBytes: sizeBytes,
-            HasAttachments: hasAttachments);
+            Attachments: attachments);
+    }
+
+    private static IReadOnlyList<ParsedAttachment> ExtractAttachments(MimeMessage mime)
+    {
+        var list = new List<ParsedAttachment>();
+        int index = 0;
+        foreach (var entity in mime.Attachments)
+        {
+            var fileName = entity.ContentDisposition?.FileName ?? entity.ContentType?.Name;
+            var contentType = entity.ContentType?.MimeType;
+            long? size = entity is MimePart part && part.Content is { Stream: { } s } && s.CanSeek
+                ? s.Length
+                : null;
+
+            list.Add(new ParsedAttachment(
+                PartIndex: index,
+                FileName: NormalizeName(fileName),
+                ContentType: contentType,
+                SizeBytes: size));
+            index++;
+        }
+        return list;
     }
 
     private static IReadOnlyList<EmailAddress> ToAddressList(InternetAddressList addresses)
@@ -153,4 +175,13 @@ public sealed record ParsedMessage(
     string? BodyHtml,
     string RawHeaders,
     long SizeBytes,
-    bool HasAttachments);
+    IReadOnlyList<ParsedAttachment> Attachments)
+{
+    public bool HasAttachments => Attachments.Count > 0;
+}
+
+public sealed record ParsedAttachment(
+    int PartIndex,
+    string? FileName,
+    string? ContentType,
+    long? SizeBytes);
