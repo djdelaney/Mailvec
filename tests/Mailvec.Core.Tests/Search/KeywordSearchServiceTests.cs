@@ -8,7 +8,7 @@ namespace Mailvec.Core.Tests.Search;
 
 public class KeywordSearchServiceTests
 {
-    private static ParsedMessage M(string id, string subject, string body, string? from = "alice@example.com") => new(
+    private static ParsedMessage M(string id, string subject, string body, string? from = "alice@example.com", IReadOnlyList<ParsedAttachment>? attachments = null) => new(
         MessageId: id,
         ThreadId: id,
         Subject: subject,
@@ -21,7 +21,7 @@ public class KeywordSearchServiceTests
         BodyHtml: null,
         RawHeaders: $"Message-ID: <{id}>\r\n",
         SizeBytes: 100,
-        HasAttachments: false);
+        Attachments: attachments ?? []);
 
     [Fact]
     public void Returns_messages_matching_subject_or_body()
@@ -85,5 +85,32 @@ public class KeywordSearchServiceTests
 
         var hits = search.Search("lunch AND friday");
         hits.Single().MessageIdHeader.ShouldBe("a@x");
+    }
+
+    [Fact]
+    public void Matches_messages_by_attachment_filename()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        var withMortgage = M("a@x", "From the bank", "Your statement is enclosed",
+            attachments: [new ParsedAttachment(0, "mortgage_statement_2024.pdf", "application/pdf", 1234)]);
+        var withDifferent = M("b@x", "From the bank", "Your statement is enclosed",
+            attachments: [new ParsedAttachment(0, "credit_card_2024.pdf", "application/pdf", 5678)]);
+        var noAttachment = M("c@x", "Note about mortgage discussion", "Reminder to call about mortgage",
+            attachments: []);
+
+        repo.Upsert(withMortgage,  "INBOX", "INBOX/cur", "a", now);
+        repo.Upsert(withDifferent, "INBOX", "INBOX/cur", "b", now);
+        repo.Upsert(noAttachment,  "INBOX", "INBOX/cur", "c", now);
+
+        // Searching for "mortgage" should hit the message whose only mention of
+        // "mortgage" is in the attachment filename, plus the body-mention message.
+        var hits = search.Search("mortgage");
+        hits.Select(h => h.MessageIdHeader).ShouldContain("a@x");
+        hits.Select(h => h.MessageIdHeader).ShouldContain("c@x");
+        hits.Select(h => h.MessageIdHeader).ShouldNotContain("b@x");
     }
 }

@@ -73,4 +73,25 @@ public class MessageParserTests
         parsed.HasAttachments.ShouldBeTrue();
         parsed.BodyText.ShouldNotBeNull().ShouldContain("Quote is attached");
     }
+
+    [Fact]
+    public void Extracts_attachment_metadata()
+    {
+        var parsed = _parser.ParseFile(Fixture("with-attachment.eml"));
+
+        var att = parsed.Attachments.ShouldHaveSingleItem();
+        att.PartIndex.ShouldBe(0);
+        att.FileName.ShouldBe("quote-2025.pdf");
+        att.ContentType.ShouldBe("application/pdf");
+        att.SizeBytes.ShouldNotBeNull().ShouldBeGreaterThan(0);
+    }
+
+    [Fact]
+    public void Plain_text_message_has_no_attachments()
+    {
+        var parsed = _parser.ParseFile(Fixture("plain-text.eml"));
+
+        parsed.Attachments.ShouldBeEmpty();
+        parsed.HasAttachments.ShouldBeFalse();
+    }
 }

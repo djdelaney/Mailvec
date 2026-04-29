@@ -5,7 +5,7 @@ namespace Mailvec.Core.Data;
 
 public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<SchemaMigrator> logger)
 {
-    private const int LatestSchemaVersion = 1;
+    private const int LatestSchemaVersion = 2;
 
     public void EnsureUpToDate()
     {

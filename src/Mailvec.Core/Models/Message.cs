@@ -17,6 +17,7 @@ public sealed record Message
     public DateTimeOffset? DateReceived { get; init; }
     public long SizeBytes { get; init; }
     public bool HasAttachments { get; init; }
+    public IReadOnlyList<Attachment> Attachments { get; init; } = [];
     public string? BodyText { get; init; }
     public string? BodyHtml { get; init; }
     public string? RawHeaders { get; init; }

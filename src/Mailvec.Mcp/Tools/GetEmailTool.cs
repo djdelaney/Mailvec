@@ -27,7 +27,8 @@ public sealed class GetEmailTool(
     [Description(
         "Fetch a single email's full body and headers by id. " +
         "Pass either `id` (the internal SQLite id from a search_emails result) OR `messageId` (the RFC Message-ID). " +
-        "Returns subject, from, to, cc, date, folder, attachment metadata, and body text. " +
+        "Returns subject, from, to, cc, date, folder, body text, and per-attachment metadata (filename, content type, size). " +
+        "Attachment payloads (file contents) are not currently exposed — only metadata. " +
         "Set includeHtml=true to also return the raw HTML body when present.")]
     public GetEmailResponse GetEmail(
         [Description("Internal SQLite id, as returned in search_emails results. Mutually exclusive with messageId.")]
@@ -56,6 +57,10 @@ public sealed class GetEmailTool(
         if (msg.DeletedAt is not null)
             throw new McpException($"Message {msg.Id} is soft-deleted (gone from disk).");
 
+        var attachments = msg.Attachments
+            .Select(a => new AttachmentInfo(a.PartIndex, a.FileName, a.ContentType, a.SizeBytes))
+            .ToList();
+
         var response = new GetEmailResponse(
             Id: msg.Id,
             MessageId: msg.MessageId,
@@ -69,7 +74,7 @@ public sealed class GetEmailTool(
             DateSent: msg.DateSent,
             DateReceived: msg.DateReceived,
             SizeBytes: msg.SizeBytes,
-            HasAttachments: msg.HasAttachments,
+            Attachments: attachments,
             BodyText: msg.BodyText ?? string.Empty,
             BodyHtml: includeHtml ? msg.BodyHtml : null,
             WebmailUrl: WebmailLinkBuilder.Build(msg.MessageId, _fastmail));
@@ -99,7 +104,13 @@ public sealed record GetEmailResponse(
     DateTimeOffset? DateSent,
     DateTimeOffset? DateReceived,
     long SizeBytes,
-    bool HasAttachments,
+    IReadOnlyList<AttachmentInfo> Attachments,
     string BodyText,
     string? BodyHtml,
     string? WebmailUrl);
+
+public sealed record AttachmentInfo(
+    int PartIndex,
+    string? FileName,
+    string? ContentType,
+    long? SizeBytes);

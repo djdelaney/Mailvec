@@ -5,6 +5,14 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 -- Core messages table.
+-- attachment_names is a denormalized space-joined list of attachment filenames,
+-- maintained in lockstep with the attachments table by MessageRepository.Upsert.
+-- It exists ONLY as an FTS feed so the index can find messages by their
+-- attached filenames (e.g. "mortgage_statement_2024.pdf") without cross-table
+-- triggers. Filename boundaries are not preserved — FTS5's unicode61 tokenizer
+-- splits on whitespace AND punctuation, so any separator we picked would
+-- tokenize identically. The attachments table below is the source of truth
+-- for per-attachment metadata; never parse this column back into a list.
 CREATE TABLE messages (
     id                INTEGER PRIMARY KEY,
     message_id        TEXT UNIQUE NOT NULL,
@@ -21,6 +29,7 @@ CREATE TABLE messages (
     date_received     TEXT,
     size_bytes        INTEGER,
     has_attachments   INTEGER DEFAULT 0,
+    attachment_names  TEXT,
     body_text         TEXT,
     body_html         TEXT,
     raw_headers       TEXT,
@@ -36,27 +45,45 @@ CREATE INDEX idx_messages_to_embed  ON messages(embedded_at) WHERE embedded_at I
 
 -- Full-text index over messages.
 CREATE VIRTUAL TABLE messages_fts USING fts5(
-    subject, from_name, from_address, body_text,
+    subject, from_name, from_address, body_text, attachment_names,
     content='messages', content_rowid='id',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text)
-    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text);
+    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, attachment_names)
+    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text, new.attachment_names);
 END;
 
 CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text)
-    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text);
+    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text, attachment_names)
+    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text, old.attachment_names);
 END;
 
 CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text)
-    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text);
-    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text)
-    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text);
+    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text, attachment_names)
+    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text, old.attachment_names);
+    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, attachment_names)
+    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text, new.attachment_names);
 END;
+
+-- Per-attachment metadata. Replaced wholesale on every message upsert — no
+-- partial state. part_index is the order within mime.Attachments and is what
+-- a future get_attachment(id, partIndex) MCP tool would key on. Filename can
+-- be NULL (some MIME parts have no Content-Disposition filename / Content-Type
+-- name); content_type and size_bytes are populated when MimeKit can determine
+-- them.
+CREATE TABLE attachments (
+    id            INTEGER PRIMARY KEY,
+    message_id    INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    part_index    INTEGER NOT NULL,
+    filename      TEXT,
+    content_type  TEXT,
+    size_bytes    INTEGER,
+    UNIQUE(message_id, part_index)
+);
+
+CREATE INDEX idx_attachments_message ON attachments(message_id);
 
 -- Per-message text chunks fed to the embedder.
 CREATE TABLE chunks (
@@ -93,6 +120,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '1'),
+    ('schema_version',       '2'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');

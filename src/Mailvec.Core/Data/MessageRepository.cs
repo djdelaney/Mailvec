@@ -21,63 +21,146 @@ public sealed class MessageRepository(ConnectionFactory connections)
         ArgumentNullException.ThrowIfNull(parsed);
 
         using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+
+        long id;
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO messages (
+                    message_id, thread_id, maildir_path, maildir_filename, folder,
+                    subject, from_address, from_name, to_addresses, cc_addresses,
+                    date_sent, date_received, size_bytes, has_attachments, attachment_names,
+                    body_text, body_html, raw_headers, indexed_at, deleted_at
+                ) VALUES (
+                    $message_id, $thread_id, $maildir_path, $maildir_filename, $folder,
+                    $subject, $from_address, $from_name, $to_addresses, $cc_addresses,
+                    $date_sent, $date_received, $size_bytes, $has_attachments, $attachment_names,
+                    $body_text, $body_html, $raw_headers, $indexed_at, NULL
+                )
+                ON CONFLICT(message_id) DO UPDATE SET
+                    thread_id        = excluded.thread_id,
+                    maildir_path     = excluded.maildir_path,
+                    maildir_filename = excluded.maildir_filename,
+                    folder           = excluded.folder,
+                    subject          = excluded.subject,
+                    from_address     = excluded.from_address,
+                    from_name        = excluded.from_name,
+                    to_addresses     = excluded.to_addresses,
+                    cc_addresses     = excluded.cc_addresses,
+                    date_sent        = excluded.date_sent,
+                    date_received    = excluded.date_received,
+                    size_bytes       = excluded.size_bytes,
+                    has_attachments  = excluded.has_attachments,
+                    attachment_names = excluded.attachment_names,
+                    body_text        = excluded.body_text,
+                    body_html        = excluded.body_html,
+                    raw_headers      = excluded.raw_headers,
+                    indexed_at       = excluded.indexed_at,
+                    deleted_at       = NULL
+                RETURNING id;
+                """;
+
+            var attachmentNames = BuildAttachmentNames(parsed.Attachments);
+
+            cmd.Parameters.AddWithValue("$message_id", parsed.MessageId);
+            cmd.Parameters.AddWithValue("$thread_id", parsed.ThreadId);
+            cmd.Parameters.AddWithValue("$maildir_path", maildirRelativePath);
+            cmd.Parameters.AddWithValue("$maildir_filename", maildirFilename);
+            cmd.Parameters.AddWithValue("$folder", folder);
+            cmd.Parameters.AddWithValue("$subject", (object?)parsed.Subject ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$from_address", (object?)parsed.FromAddress ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$from_name", (object?)parsed.FromName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$to_addresses", JsonSerializer.Serialize(parsed.ToAddresses, JsonOpts));
+            cmd.Parameters.AddWithValue("$cc_addresses", JsonSerializer.Serialize(parsed.CcAddresses, JsonOpts));
+            cmd.Parameters.AddWithValue("$date_sent", (object?)parsed.DateSent?.ToString("O") ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$date_received", indexedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("$size_bytes", parsed.SizeBytes);
+            cmd.Parameters.AddWithValue("$has_attachments", parsed.HasAttachments ? 1 : 0);
+            cmd.Parameters.AddWithValue("$attachment_names", (object?)attachmentNames ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$body_text", (object?)parsed.BodyText ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$body_html", (object?)parsed.BodyHtml ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$raw_headers", parsed.RawHeaders);
+            cmd.Parameters.AddWithValue("$indexed_at", indexedAt.ToString("O"));
+
+            var idObj = cmd.ExecuteScalar()
+                ?? throw new InvalidOperationException("Upsert returned no id");
+            id = Convert.ToInt64(idObj, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        ReplaceAttachments(conn, tx, id, parsed.Attachments);
+        tx.Commit();
+        return id;
+    }
+
+    private static string? BuildAttachmentNames(IReadOnlyList<ParsedAttachment> attachments)
+    {
+        if (attachments.Count == 0) return null;
+        var names = attachments
+            .Select(a => a.FileName)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+        return names.Count == 0 ? null : string.Join(' ', names);
+    }
+
+    private static void ReplaceAttachments(SqliteConnection conn, SqliteTransaction tx, long messageId, IReadOnlyList<ParsedAttachment> attachments)
+    {
+        using (var del = conn.CreateCommand())
+        {
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM attachments WHERE message_id = $mid";
+            del.Parameters.AddWithValue("$mid", messageId);
+            del.ExecuteNonQuery();
+        }
+
+        if (attachments.Count == 0) return;
+
+        using var ins = conn.CreateCommand();
+        ins.Transaction = tx;
+        ins.CommandText = """
+            INSERT INTO attachments(message_id, part_index, filename, content_type, size_bytes)
+            VALUES ($mid, $idx, $name, $ct, $size);
+            """;
+        var pMid = ins.Parameters.Add("$mid", SqliteType.Integer);
+        var pIdx = ins.Parameters.Add("$idx", SqliteType.Integer);
+        var pName = ins.Parameters.Add("$name", SqliteType.Text);
+        var pCt = ins.Parameters.Add("$ct", SqliteType.Text);
+        var pSize = ins.Parameters.Add("$size", SqliteType.Integer);
+        pMid.Value = messageId;
+
+        foreach (var a in attachments)
+        {
+            pIdx.Value = a.PartIndex;
+            pName.Value = (object?)a.FileName ?? DBNull.Value;
+            pCt.Value = (object?)a.ContentType ?? DBNull.Value;
+            pSize.Value = (object?)a.SizeBytes ?? DBNull.Value;
+            ins.ExecuteNonQuery();
+        }
+    }
+
+    private IReadOnlyList<Attachment> GetAttachmentsForMessage(SqliteConnection conn, long messageId)
+    {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO messages (
-                message_id, thread_id, maildir_path, maildir_filename, folder,
-                subject, from_address, from_name, to_addresses, cc_addresses,
-                date_sent, date_received, size_bytes, has_attachments,
-                body_text, body_html, raw_headers, indexed_at, deleted_at
-            ) VALUES (
-                $message_id, $thread_id, $maildir_path, $maildir_filename, $folder,
-                $subject, $from_address, $from_name, $to_addresses, $cc_addresses,
-                $date_sent, $date_received, $size_bytes, $has_attachments,
-                $body_text, $body_html, $raw_headers, $indexed_at, NULL
-            )
-            ON CONFLICT(message_id) DO UPDATE SET
-                thread_id        = excluded.thread_id,
-                maildir_path     = excluded.maildir_path,
-                maildir_filename = excluded.maildir_filename,
-                folder           = excluded.folder,
-                subject          = excluded.subject,
-                from_address     = excluded.from_address,
-                from_name        = excluded.from_name,
-                to_addresses     = excluded.to_addresses,
-                cc_addresses     = excluded.cc_addresses,
-                date_sent        = excluded.date_sent,
-                date_received    = excluded.date_received,
-                size_bytes       = excluded.size_bytes,
-                has_attachments  = excluded.has_attachments,
-                body_text        = excluded.body_text,
-                body_html        = excluded.body_html,
-                raw_headers      = excluded.raw_headers,
-                indexed_at       = excluded.indexed_at,
-                deleted_at       = NULL
-            RETURNING id;
+            SELECT part_index, filename, content_type, size_bytes
+            FROM attachments
+            WHERE message_id = $mid
+            ORDER BY part_index;
             """;
+        cmd.Parameters.AddWithValue("$mid", messageId);
 
-        cmd.Parameters.AddWithValue("$message_id", parsed.MessageId);
-        cmd.Parameters.AddWithValue("$thread_id", parsed.ThreadId);
-        cmd.Parameters.AddWithValue("$maildir_path", maildirRelativePath);
-        cmd.Parameters.AddWithValue("$maildir_filename", maildirFilename);
-        cmd.Parameters.AddWithValue("$folder", folder);
-        cmd.Parameters.AddWithValue("$subject", (object?)parsed.Subject ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$from_address", (object?)parsed.FromAddress ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$from_name", (object?)parsed.FromName ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$to_addresses", JsonSerializer.Serialize(parsed.ToAddresses, JsonOpts));
-        cmd.Parameters.AddWithValue("$cc_addresses", JsonSerializer.Serialize(parsed.CcAddresses, JsonOpts));
-        cmd.Parameters.AddWithValue("$date_sent", (object?)parsed.DateSent?.ToString("O") ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$date_received", indexedAt.ToString("O"));
-        cmd.Parameters.AddWithValue("$size_bytes", parsed.SizeBytes);
-        cmd.Parameters.AddWithValue("$has_attachments", parsed.HasAttachments ? 1 : 0);
-        cmd.Parameters.AddWithValue("$body_text", (object?)parsed.BodyText ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$body_html", (object?)parsed.BodyHtml ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$raw_headers", parsed.RawHeaders);
-        cmd.Parameters.AddWithValue("$indexed_at", indexedAt.ToString("O"));
-
-        var id = cmd.ExecuteScalar()
-            ?? throw new InvalidOperationException("Upsert returned no id");
-        return Convert.ToInt64(id, System.Globalization.CultureInfo.InvariantCulture);
+        var list = new List<Attachment>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new Attachment(
+                PartIndex: reader.GetInt32(0),
+                FileName: reader.IsDBNull(1) ? null : reader.GetString(1),
+                ContentType: reader.IsDBNull(2) ? null : reader.GetString(2),
+                SizeBytes: reader.IsDBNull(3) ? null : reader.GetInt64(3)));
+        }
+        return list;
     }
 
     public Message? GetById(long id)
@@ -87,8 +170,13 @@ public sealed class MessageRepository(ConnectionFactory connections)
         cmd.CommandText = "SELECT * FROM messages WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", id);
 
-        using var reader = cmd.ExecuteReader();
-        return reader.Read() ? Map(reader) : null;
+        Message? msg;
+        using (var reader = cmd.ExecuteReader())
+        {
+            msg = reader.Read() ? Map(reader) : null;
+        }
+        if (msg is null) return null;
+        return msg with { Attachments = GetAttachmentsForMessage(conn, msg.Id) };
     }
 
     public Message? GetByMessageId(string messageId)
@@ -98,8 +186,13 @@ public sealed class MessageRepository(ConnectionFactory connections)
         cmd.CommandText = "SELECT * FROM messages WHERE message_id = $mid";
         cmd.Parameters.AddWithValue("$mid", messageId);
 
-        using var reader = cmd.ExecuteReader();
-        return reader.Read() ? Map(reader) : null;
+        Message? msg;
+        using (var reader = cmd.ExecuteReader())
+        {
+            msg = reader.Read() ? Map(reader) : null;
+        }
+        if (msg is null) return null;
+        return msg with { Attachments = GetAttachmentsForMessage(conn, msg.Id) };
     }
 
     /// <summary>
@@ -263,12 +356,12 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// Lazily streams unembedded, undeleted messages for the embedder. Returns
     /// (id, body_text) tuples; messages with no body text are filtered out.
     /// </summary>
-    public IEnumerable<(long Id, string BodyText, string? Subject)> EnumerateUnembedded(int batchSize = 50)
+    public IEnumerable<(long Id, string BodyText, string? Subject, string? AttachmentNames)> EnumerateUnembedded(int batchSize = 50)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, body_text, subject
+            SELECT id, body_text, subject, attachment_names
             FROM messages
             WHERE embedded_at IS NULL
               AND deleted_at IS NULL
@@ -285,7 +378,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
             yield return (
                 reader.GetInt64(0),
                 reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2));
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3));
         }
     }
 
