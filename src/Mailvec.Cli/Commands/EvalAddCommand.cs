@@ -199,10 +199,11 @@ internal static class EvalAddCommand
         {
             var c = candidates[i];
             var date = c.Date?.ToString("yyyy-MM-dd") ?? "          ";
-            Console.WriteLine($"  {i + 1,2}.  {date}  {c.Folder,-20}  {c.From ?? "(unknown)"}");
-            Console.WriteLine($"        {c.Subject ?? "(no subject)"}");
-            if (!string.IsNullOrEmpty(c.Snippet)) Console.WriteLine($"        {Truncate(c.Snippet, 200)}");
-            Console.WriteLine($"        {c.MessageIdHeader}");
+            var rank = Bold($"{i + 1,2}.");
+            Console.WriteLine($"  {rank}  {Bold(c.Subject ?? "(no subject)")}");
+            Console.WriteLine($"       {Dim($"{date}  {c.Folder}  ·  {c.From ?? "(unknown)"}")}");
+            if (!string.IsNullOrEmpty(c.Snippet)) Console.WriteLine($"       {Dim(Truncate(CollapseWhitespace(c.Snippet), 120))}");
+            Console.WriteLine($"       {Dim(c.MessageIdHeader)}");
             Console.WriteLine();
         }
     }
@@ -211,8 +212,10 @@ internal static class EvalAddCommand
 
     private static IReadOnlyList<Pick> PromptForPicks(int candidateCount)
     {
-        Console.WriteLine("Enter ranks of relevant results (e.g., '1 3 5'). Use 'N=G' for graded relevance.");
-        Console.WriteLine("Empty line to abort.");
+        Console.WriteLine($"Enter the {Bold("rank numbers")} (the {Bold("1.")}, {Bold("2.")}, … on the left) of the relevant results,");
+        Console.WriteLine($"separated by spaces. Example: {Bold("1 3 5")} marks results 1, 3, and 5 as relevant.");
+        Console.WriteLine($"For graded relevance use {Bold("N=G")} (e.g. {Bold("2=3")} marks rank 2 with grade 3).");
+        Console.WriteLine("Empty line to abort. (The Message-IDs of your picks are what gets saved.)");
         Console.Write("> ");
         var line = Console.ReadLine();
         if (string.IsNullOrWhiteSpace(line)) return [];
@@ -280,4 +283,29 @@ internal static class EvalAddCommand
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+
+    private static string CollapseWhitespace(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length);
+        var prevWasSpace = false;
+        foreach (var ch in s)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!prevWasSpace && sb.Length > 0) sb.Append(' ');
+                prevWasSpace = true;
+            }
+            else
+            {
+                sb.Append(ch);
+                prevWasSpace = false;
+            }
+        }
+        if (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
+        return sb.ToString();
+    }
+
+    private static readonly bool UseColor = !Console.IsOutputRedirected;
+    private static string Bold(string s) => UseColor ? $"[1m{s}[0m" : s;
+    private static string Dim(string s) => UseColor ? $"[2m{s}[0m" : s;
 }
