@@ -35,6 +35,13 @@ public sealed class SearchEmailsTool(
         "If `query` is provided, runs hybrid (keyword + semantic) ranked search by default. " +
         "If `query` is omitted, returns the most recent messages matching the filters, sorted by date descending — " +
         "use this for 'show me my recent INBOX mail' or 'find all email from invoice@anthropic.com' style requests. " +
+        "The archive may span 10+ years and hundreds of thousands of messages; every response includes " +
+        "`archiveStats` (totalMessages, oldestDate, latestDate) so you can gauge actual scope, and " +
+        "`appliedFilters` echoing the filters you used. " +
+        "Strongly prefer setting `dateFrom`/`dateTo` whenever the user's question implies a time window " +
+        "('last week', 'last quarter', 'in 2023', 'recently', 'before I left $job', 'this year'); on a " +
+        "10-year archive, an unbounded query skews toward old mail and dilutes recent context. When in " +
+        "doubt for casual 'recently'-style asks, a 12-month lower bound is a safe default. " +
         "Each result carries the internal id, RFC message_id, folder, sender, date, snippet, and (for ranked queries) score breakdown. " +
         "Use a result's id or messageId with get_email/get_thread for follow-up.")]
     public async Task<SearchEmailsResponse> SearchEmails(
@@ -47,9 +54,13 @@ public sealed class SearchEmailsTool(
         int? limit = null,
         [Description("Restrict to a single folder, exact match (e.g. 'INBOX', 'Archive.2024').")]
         string? folder = null,
-        [Description("Earliest message date (inclusive), ISO 8601, e.g. '2024-01-01' or '2024-01-01T00:00:00Z'.")]
+        [Description("Earliest message date (inclusive), ISO 8601, e.g. '2024-01-01' or '2024-01-01T00:00:00Z'. " +
+                     "Set this for any time-bounded question — even a loose lower bound (e.g. one year ago) " +
+                     "materially improves relevance on a multi-year archive. Omit only when the user is " +
+                     "explicitly asking across all-time history (e.g. 'the oldest email from X').")]
         string? dateFrom = null,
-        [Description("Latest message date (inclusive), ISO 8601.")]
+        [Description("Latest message date (inclusive), ISO 8601. Pair with `dateFrom` for explicit windows; " +
+                     "omit to mean 'up to the present'.")]
         string? dateTo = null,
         [Description("Case-insensitive substring against from_address OR from_name. Useful when only the sender's name or domain is known. Ignored if fromExact is set.")]
         string? fromContains = null,
@@ -61,13 +72,15 @@ public sealed class SearchEmailsTool(
 
         var resolvedLimit = ClampLimit(limit);
         var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact);
+        var archiveStats = messages.GetArchiveStats();
+        var appliedFilters = AppliedFilters.From(filters);
 
         // Query-less path: just list filter-matching messages by date.
         if (string.IsNullOrWhiteSpace(query))
         {
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
             var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
-            var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits);
+            var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters);
             callLog.LogResult(ToolName, BuildResultSummary(browseResp));
             return browseResp;
         }
@@ -84,7 +97,7 @@ public sealed class SearchEmailsTool(
             _ => throw new McpException($"Unknown mode '{mode}'. Use 'keyword', 'semantic', or 'hybrid'."),
         };
 
-        var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits);
+        var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters);
         callLog.LogResult(ToolName, BuildResultSummary(response));
         return response;
     }
@@ -142,7 +155,32 @@ public sealed record SearchEmailsResponse(
     string? Query,
     string Mode,
     int Count,
-    IReadOnlyList<EmailHit> Results);
+    IReadOnlyList<EmailHit> Results,
+    Mailvec.Core.Models.ArchiveStats ArchiveStats,
+    AppliedFilters AppliedFilters);
+
+/// <summary>
+/// Echo of the filters the server actually applied for this call. Surfaced on
+/// every response so Claude can self-correct when it forgets to scope a query
+/// (e.g. "I left dateFrom null and the archive spans 10 years — let me retry
+/// with a window"). Mirrors <see cref="Mailvec.Core.Search.SearchFilters"/>
+/// shape but uses the wire-format date strings, since that's what Claude
+/// passed in and what's most useful in the response.
+/// </summary>
+public sealed record AppliedFilters(
+    string? Folder,
+    string? DateFrom,
+    string? DateTo,
+    string? FromContains,
+    string? FromExact)
+{
+    public static AppliedFilters From(Mailvec.Core.Search.SearchFilters f) => new(
+        Folder: f.Folder,
+        DateFrom: f.DateFrom?.ToString("O"),
+        DateTo: f.DateTo?.ToString("O"),
+        FromContains: f.FromContains,
+        FromExact: f.FromExact);
+}
 
 /// <summary>
 /// Unified hit shape across the three search modes. Mode-specific fields
