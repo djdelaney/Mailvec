@@ -27,6 +27,102 @@ mailvec eval --json baselines/2026-04-28.json
 mailvec eval --baseline baselines/2026-04-28.json
 ```
 
+## Bootstrapping queries with `eval-add`
+
+`mailvec eval-add` runs a candidate query, prints numbered results, and lets you
+mark which ones are relevant by rank — the labeled query is appended to your
+query set. Adding a query while the search is in front of you is much cheaper
+than curating Message-IDs by hand.
+
+If you've installed `mailvec` on `PATH`, use it directly. From a source checkout
+the equivalent is `dotnet run --project src/Mailvec.Cli -- eval-add ...`.
+
+### Common patterns
+
+```sh
+# Plain — default --mode hybrid, top 10 candidates, binary relevance.
+mailvec eval-add "lease renewal landlord"
+
+# Pick the mode that's most likely to surface the canonical hit. Useful when
+# you want to debug one mode in particular ("hybrid is missing this; can
+# semantic find it on its own?").
+mailvec eval-add "anthropic invoice"        --mode semantic
+mailvec eval-add "exact subject line text"  --mode keyword
+
+# More candidates to label from. Helpful when the obvious top-3 aren't the
+# emails you remember.
+mailvec eval-add "tokyo trip" --top-k 20
+
+# Free-text note saved alongside the query. Future-you will thank you.
+mailvec eval-add "lease renewal" \
+    --notes "March 2024 back-and-forth with David about renewing"
+
+# Skip the y/N confirmation (useful when scripting a batch of additions).
+mailvec eval-add "..." --yes
+```
+
+### Filters
+
+The filters mirror `SearchFilters` 1:1 — what you label here exercises the same
+WHERE-clause path as production search.
+
+```sh
+# Restrict to one folder (exact match).
+mailvec eval-add "team standup notes" --folder "Archive.2024"
+
+# From-substring (case-insensitive against from_address OR from_name) — useful
+# when you remember "it was from someone at United" but not the exact address.
+mailvec eval-add "flight confirmation tokyo" --from-contains united
+
+# From-exact — strictly narrower; matches against from_address only.
+mailvec eval-add "billing alert" --from-exact "invoice@anthropic.com"
+
+# Date range. Accepts ISO 8601 or yyyy-MM-dd; date-only is normalized to UTC midnight.
+mailvec eval-add "lease renewal" --date-from 2024-01-01 --date-to 2024-06-30
+mailvec eval-add "kickoff email"  --date-from 2024-03-15T00:00:00Z
+
+# Filters compose; all are AND-ed (fromExact wins over fromContains if both set).
+mailvec eval-add "Q1 invoice" \
+    --folder INBOX \
+    --from-contains anthropic \
+    --date-from 2024-01-01 --date-to 2024-03-31
+```
+
+### Picking results
+
+After the candidate list prints, you'll see:
+
+```
+Enter ranks of relevant results (e.g., '1 3 5'). Use 'N=G' for graded relevance.
+Empty line to abort.
+>
+```
+
+Syntax:
+
+| Input | Meaning |
+| --- | --- |
+| *(empty)* | Abort — nothing is saved. |
+| `1 3 5` | Ranks 1, 3, 5 are relevant (binary, grade=1). |
+| `1=3 3 5` | Rank 1 has grade 3 (the canonical hit); ranks 3, 5 have grade 1. |
+| `2,4,7` | Commas, spaces, tabs all work as separators. |
+
+Out-of-range ranks and duplicates are skipped with a warning; the rest go through.
+
+### Custom ids and locations
+
+```sh
+# Override the auto-generated id. Default is q001, q002, … incrementing past
+# the highest existing q### in the file.
+mailvec eval-add "..." --id "lease-renewal-david"
+
+# Point at a different query file (e.g., a per-experiment set).
+mailvec eval-add "..." --queries ~/work/mailvec-eval/finance-queries.json
+```
+
+The default location is `~/.local/share/mailvec/eval/queries.json`. The directory
+is created on first save.
+
 ## Query file format
 
 Identity of expected results is the **RFC Message-ID header** (e.g.
