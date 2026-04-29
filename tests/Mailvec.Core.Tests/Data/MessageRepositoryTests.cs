@@ -86,4 +86,48 @@ public class MessageRepositoryTests
         repo.Upsert(Sample(), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
         repo.GetById(id).ShouldNotBeNull().DeletedAt.ShouldBeNull();
     }
+
+    [Fact]
+    public void GetArchiveStats_returns_count_and_date_range_excluding_soft_deleted()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var oldest = new DateTimeOffset(2014, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var middle = new DateTimeOffset(2020, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var newest = new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var p1 = Sample("a@x") with { DateSent = oldest };
+        var p2 = Sample("b@x") with { DateSent = middle };
+        var p3 = Sample("c@x") with { DateSent = newest };
+        repo.Upsert(p1, "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        var midId = repo.Upsert(p2, "INBOX", "INBOX/cur", "f2", DateTimeOffset.UtcNow);
+        repo.Upsert(p3, "INBOX", "INBOX/cur", "f3", DateTimeOffset.UtcNow);
+
+        var stats = repo.GetArchiveStats();
+        stats.TotalMessages.ShouldBe(3);
+        stats.OldestDate.ShouldBe(oldest);
+        stats.LatestDate.ShouldBe(newest);
+
+        // Soft-deleting the only newest message should pull LatestDate back.
+        repo.Upsert(Sample("c@x") with { DateSent = newest }, "INBOX", "INBOX/cur", "f3", DateTimeOffset.UtcNow);
+        var newestRow = repo.GetByMessageId("c@x").ShouldNotBeNull();
+        repo.MarkDeleted([newestRow.Id], DateTimeOffset.UtcNow);
+
+        var afterDelete = repo.GetArchiveStats();
+        afterDelete.TotalMessages.ShouldBe(2);
+        afterDelete.LatestDate.ShouldBe(middle);
+    }
+
+    [Fact]
+    public void GetArchiveStats_on_empty_archive_returns_zero_and_nulls()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var stats = repo.GetArchiveStats();
+        stats.TotalMessages.ShouldBe(0);
+        stats.OldestDate.ShouldBeNull();
+        stats.LatestDate.ShouldBeNull();
+    }
 }
