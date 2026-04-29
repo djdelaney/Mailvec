@@ -225,6 +225,41 @@ public sealed class MessageRepository(ConnectionFactory connections)
     }
 
     /// <summary>
+    /// Whole-archive summary: total non-deleted message count plus the
+    /// oldest/newest date_sent values. Surfaced on every search response so
+    /// Claude can size its filters against actual archive scope.
+    ///
+    /// MIN/MAX use idx_messages_date_sent so they're cheap; COUNT(*) is a
+    /// scan but sub-100ms on archives in the hundreds of thousands. If this
+    /// ever becomes hot enough to matter, cache in a singleton with a short
+    /// TTL or add a partial index on deleted_at.
+    /// </summary>
+    public ArchiveStats GetArchiveStats()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                COUNT(*)       AS total,
+                MIN(date_sent) AS oldest,
+                MAX(date_sent) AS latest
+            FROM messages
+            WHERE deleted_at IS NULL;
+            """;
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+        {
+            return new ArchiveStats(0, null, null);
+        }
+
+        return new ArchiveStats(
+            TotalMessages: reader.GetInt64(0),
+            OldestDate: ReadNullableDate(reader, "oldest"),
+            LatestDate: ReadNullableDate(reader, "latest"));
+    }
+
+    /// <summary>
     /// Lazily streams unembedded, undeleted messages for the embedder. Returns
     /// (id, body_text) tuples; messages with no body text are filtered out.
     /// </summary>
