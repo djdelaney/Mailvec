@@ -21,10 +21,10 @@ public sealed class ListFoldersTool(MessageRepository messages, ToolCallLogger c
         "Soft-deleted messages are excluded from counts.")]
     public ListFoldersResponse ListFolders()
     {
-        callLog.LogCall(ToolName, new { });
+        var startTs = callLog.LogCall(ToolName, new { });
         var stats = messages.FolderStats();
         var response = new ListFoldersResponse(stats.Count, stats);
-        callLog.LogResult(ToolName, new { count = response.Count });
+        callLog.LogResult(ToolName, new { count = response.Count }, startTs);
         return response;
     }
 }

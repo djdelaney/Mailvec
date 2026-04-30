@@ -68,7 +68,7 @@ public sealed class SearchEmailsTool(
         string? fromExact = null,
         CancellationToken ct = default)
     {
-        callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact });
+        var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact });
 
         var resolvedLimit = ClampLimit(limit);
         var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact);
@@ -81,7 +81,7 @@ public sealed class SearchEmailsTool(
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
             var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
             var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters);
-            callLog.LogResult(ToolName, BuildResultSummary(browseResp));
+            callLog.LogResult(ToolName, BuildResultSummary(browseResp), startTs);
             return browseResp;
         }
 
@@ -98,7 +98,7 @@ public sealed class SearchEmailsTool(
         };
 
         var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters);
-        callLog.LogResult(ToolName, BuildResultSummary(response));
+        callLog.LogResult(ToolName, BuildResultSummary(response), startTs);
         return response;
     }
 

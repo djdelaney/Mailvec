@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mailvec.Core.Options;
@@ -6,13 +7,12 @@ using Microsoft.Extensions.Options;
 namespace Mailvec.Mcp;
 
 /// <summary>
-/// Optional per-call logging for the four MCP tools, gated by Mcp:LogToolCalls.
-/// When enabled, emits one "mcp-call" INFO line at the start of each invocation
-/// (the args Claude chose) and one "mcp-result" INFO line on success (a small
-/// summary of what we returned). Designed to produce a grep-friendly corpus of
-/// real Claude usage so result quality can be iterated on. Errors are not
-/// caught here — exceptions surface through the normal MCP/logging path, and
-/// the absence of an "mcp-result" line is itself a signal.
+/// Per-call logging for the four MCP tools. The "mcp-tool" timing line is
+/// emitted unconditionally so latency anomalies are visible in normal
+/// operation; the "mcp-call" args line and "mcp-result" body summary are
+/// gated by Mcp:LogToolCalls and intended for usage-pattern capture. Errors
+/// are not caught here — exceptions surface through the normal MCP/logging
+/// path, and the absence of a trailing "mcp-tool" line is itself a signal.
 /// </summary>
 public sealed class ToolCallLogger
 {
@@ -32,16 +32,19 @@ public sealed class ToolCallLogger
         Enabled = options.Value.LogToolCalls;
     }
 
-    public void LogCall(string tool, object args)
+    public long LogCall(string tool, object args)
     {
-        if (!Enabled) return;
-        _logger.LogInformation("mcp-call tool={Tool} args={Args}", tool, Serialize(args));
+        if (Enabled)
+            _logger.LogInformation("mcp-call tool={Tool} args={Args}", tool, Serialize(args));
+        return Stopwatch.GetTimestamp();
     }
 
-    public void LogResult(string tool, object summary)
+    public void LogResult(string tool, object summary, long startTimestamp)
     {
-        if (!Enabled) return;
-        _logger.LogInformation("mcp-result tool={Tool} result={Result}", tool, Serialize(summary));
+        var elapsedMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        _logger.LogInformation("mcp-tool tool={Tool} elapsedMs={ElapsedMs:F1}", tool, elapsedMs);
+        if (Enabled)
+            _logger.LogInformation("mcp-result tool={Tool} result={Result}", tool, Serialize(summary));
     }
 
     private static string Serialize(object o)
