@@ -80,9 +80,9 @@ internal static class SearchCommand
         {
             var date = h.DateSent?.ToString("yyyy-MM-dd") ?? "          ";
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
-            Console.WriteLine($"[bm25 {h.Bm25Score,7:F2}]  {date}  {h.Folder,-20}  {from}");
-            Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
-            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {h.Snippet}");
+            Console.WriteLine($"[bm25 {h.Bm25Score,7:F2}]  {Bold(h.Subject ?? "(no subject)")}");
+            Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
+            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Dim(h.Snippet)}");
             PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
@@ -96,9 +96,9 @@ internal static class SearchCommand
         {
             var date = h.DateSent?.ToString("yyyy-MM-dd") ?? "          ";
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
-            Console.WriteLine($"[dist {h.Distance,7:F3}]  {date}  {h.Folder,-20}  {from}");
-            Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
-            if (!titlesOnly) Console.WriteLine($"                  {Truncate(h.ChunkText, 240)}");
+            Console.WriteLine($"[dist {h.Distance,7:F3}]  {Bold(h.Subject ?? "(no subject)")}");
+            Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
+            if (!titlesOnly) Console.WriteLine($"                  {Dim(Truncate(h.ChunkText, 240))}");
             PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
@@ -113,9 +113,9 @@ internal static class SearchCommand
             var date = h.DateSent?.ToString("yyyy-MM-dd") ?? "          ";
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
             var legs = $"bm25={h.Bm25Rank?.ToString() ?? "-"} vec={h.VectorRank?.ToString() ?? "-"}";
-            Console.WriteLine($"[rrf {h.RrfScore,6:F4}]  {date}  {h.Folder,-20}  {from}    ({legs})");
-            Console.WriteLine($"                  {h.Subject ?? "(no subject)"}");
-            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Truncate(h.Snippet, 240)}");
+            Console.WriteLine($"[rrf {h.RrfScore,6:F4}]  {Bold(h.Subject ?? "(no subject)")}");
+            Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}    ({legs})")}");
+            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Dim(Truncate(h.Snippet, 240))}");
             PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
@@ -125,8 +125,12 @@ internal static class SearchCommand
     private static void PrintWebmailUrl(string messageIdHeader, FastmailOptions fastmail)
     {
         var url = WebmailLinkBuilder.Build(messageIdHeader, fastmail);
-        if (url is not null) Console.WriteLine($"                  {url}");
+        if (url is not null) Console.WriteLine($"                  {Dim(url)}");
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+
+    private static readonly bool UseColor = !Console.IsOutputRedirected;
+    private static string Bold(string s) => UseColor ? $"\x1b[1m{s}\x1b[0m" : s;
+    private static string Dim(string s) => UseColor ? $"\x1b[2m{s}\x1b[0m" : s;
 }
