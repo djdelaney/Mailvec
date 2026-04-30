@@ -37,7 +37,7 @@ public sealed class GetThreadTool(
         [Description("Include full body text for every message in the thread. Default false (snippet only).")]
         bool includeBodies = false)
     {
-        callLog.LogCall(ToolName, new { id, messageId, includeBodies });
+        var startTs = callLog.LogCall(ToolName, new { id, messageId, includeBodies });
 
         if (id is null && string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Provide either id or messageId.");
@@ -75,7 +75,7 @@ public sealed class GetThreadTool(
             count = response.Count,
             rootSubject = entries[0].Subject,
             participants = entries.Select(e => e.FromAddress).Where(a => a is not null).Distinct().Take(5),
-        });
+        }, startTs);
         return response;
     }
 

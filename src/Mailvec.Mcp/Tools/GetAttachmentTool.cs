@@ -49,7 +49,7 @@ public sealed class GetAttachmentTool(
         [Description("RFC Message-ID header (without angle brackets). Mutually exclusive with id.")]
         string? messageId = null)
     {
-        callLog.LogCall(ToolName, new { id, messageId, partIndex });
+        var startTs = callLog.LogCall(ToolName, new { id, messageId, partIndex });
 
         if (id is null && string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Provide either id or messageId.");
@@ -128,7 +128,7 @@ public sealed class GetAttachmentTool(
             filePath = result.FilePath,
             wasReused = result.WasReused,
             inlineChars = result.InlineText?.Length,
-        });
+        }, startTs);
 
         return new CallToolResult { Content = content };
     }

@@ -38,7 +38,7 @@ public sealed class GetEmailTool(
         [Description("Include the raw HTML body when present. Default false (text only).")]
         bool includeHtml = false)
     {
-        callLog.LogCall(ToolName, new { id, messageId, includeHtml });
+        var startTs = callLog.LogCall(ToolName, new { id, messageId, includeHtml });
 
         if (id is null && string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Provide either id or messageId.");
@@ -86,7 +86,7 @@ public sealed class GetEmailTool(
             subject = response.Subject,
             bodyChars = response.BodyText.Length,
             htmlChars = response.BodyHtml?.Length,
-        });
+        }, startTs);
         return response;
     }
 }
