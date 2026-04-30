@@ -7,7 +7,7 @@ namespace Mailvec.Cli.Commands;
 
 /// <summary>
 /// Re-derives <c>body_text</c> for every message that has stored HTML by
-/// running <see cref="HtmlToTextV2"/> over <c>body_html</c>. Used after
+/// running <see cref="HtmlToText"/> over <c>body_html</c>. Used after
 /// changing the HTML-to-text converter without forcing a full Maildir
 /// re-scan. FTS5 triggers on <c>messages</c> keep the index in sync
 /// automatically. Embeddings reflect the OLD body_text and are stale
@@ -80,7 +80,7 @@ internal static class RebuildBodiesCommand
             foreach (var (id, html) in rows)
             {
                 string newText;
-                try { newText = HtmlToTextV2.Convert(html); }
+                try { newText = HtmlToText.Convert(html); }
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"  id={id}: convert failed ({ex.GetType().Name}: {ex.Message})");
