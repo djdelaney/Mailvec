@@ -45,7 +45,28 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
-        // Foreign-key CASCADE on chunks(message_id) takes care of chunk_embeddings via vec0's own delete.
+        // chunk_embeddings is a vec0 virtual table; FOREIGN KEY ... CASCADE
+        // does not fire across vec0, so we must delete from it explicitly
+        // BEFORE deleting from chunks (otherwise the chunk_id values we need
+        // to target are gone). Also covers any orphan rows from earlier
+        // versions of this method that assumed CASCADE worked.
+        using (var deleteEmbeddings = conn.CreateCommand())
+        {
+            deleteEmbeddings.Transaction = tx;
+            deleteEmbeddings.CommandText = folderFilter is null
+                ? "DELETE FROM chunk_embeddings"
+                : """
+                  DELETE FROM chunk_embeddings
+                  WHERE chunk_id IN (
+                      SELECT c.id FROM chunks c
+                      JOIN messages m ON m.id = c.message_id
+                      WHERE m.folder = $f
+                  )
+                  """;
+            if (folderFilter is not null) deleteEmbeddings.Parameters.AddWithValue("$f", folderFilter);
+            deleteEmbeddings.ExecuteNonQuery();
+        }
+
         using (var deleteChunks = conn.CreateCommand())
         {
             deleteChunks.Transaction = tx;
