@@ -1,7 +1,5 @@
-using System.Text;
 using Mailvec.Core.Models;
 using MimeKit;
-using MimeKit.Text;
 
 namespace Mailvec.Core.Parsing;
 
@@ -27,7 +25,7 @@ public sealed class MessageParser
         // If only HTML is present, derive plain text from it so FTS5 has something to chew on.
         if (string.IsNullOrEmpty(bodyText) && !string.IsNullOrEmpty(bodyHtml))
         {
-            bodyText = ConvertHtmlToText(bodyHtml);
+            bodyText = HtmlToTextV2.Convert(bodyHtml);
         }
 
         var fromMailbox = mime.From.Mailboxes.FirstOrDefault();
@@ -111,55 +109,6 @@ public sealed class MessageParser
         return ownMessageId;
     }
 
-    private static string ConvertHtmlToText(string html)
-    {
-        // MimeKit ships HtmlTokenizer but not a HtmlToText converter, so we
-        // walk the token stream and emit text content. Quality is "good
-        // enough for FTS/embeddings"; revisit if marketing email noise hurts.
-        var tokenizer = new HtmlTokenizer(new StringReader(html));
-        var sb = new StringBuilder(html.Length);
-        bool insideScript = false;
-        bool insideStyle = false;
-
-        while (tokenizer.ReadNextToken(out var token))
-        {
-            switch (token.Kind)
-            {
-                case HtmlTokenKind.Tag:
-                    var tag = (HtmlTagToken)token;
-                    var name = tag.Name?.ToLowerInvariant();
-                    if (name == "script") insideScript = !tag.IsEndTag && !tag.IsEmptyElement;
-                    else if (name == "style") insideStyle = !tag.IsEndTag && !tag.IsEmptyElement;
-                    else if (name is "p" or "br" or "div" or "li" or "tr" or "h1" or "h2" or "h3" or "h4" or "h5" or "h6") sb.Append('\n');
-                    break;
-                case HtmlTokenKind.Data when !insideScript && !insideStyle:
-                    sb.Append(((HtmlDataToken)token).Data);
-                    break;
-            }
-        }
-
-        return CollapseWhitespace(sb.ToString());
-    }
-
-    private static string CollapseWhitespace(string s)
-    {
-        var sb = new StringBuilder(s.Length);
-        bool prevWasSpace = false;
-        foreach (var ch in s)
-        {
-            if (char.IsWhiteSpace(ch))
-            {
-                if (ch == '\n') { sb.Append('\n'); prevWasSpace = false; }
-                else if (!prevWasSpace) { sb.Append(' '); prevWasSpace = true; }
-            }
-            else
-            {
-                sb.Append(ch);
-                prevWasSpace = false;
-            }
-        }
-        return sb.ToString().Trim();
-    }
 }
 
 public sealed record ParsedMessage(
