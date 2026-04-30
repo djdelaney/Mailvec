@@ -1,3 +1,4 @@
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
@@ -69,6 +70,7 @@ static async Task RunHttp(string[] args)
 static void AddMailvecServices(IServiceCollection services, IConfiguration config)
 {
     services.Configure<ArchiveOptions>(config.GetSection(ArchiveOptions.SectionName));
+    services.Configure<IngestOptions>(config.GetSection(IngestOptions.SectionName));
     services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
     services.Configure<McpOptions>(config.GetSection(McpOptions.SectionName));
     services.Configure<FastmailOptions>(config.GetSection(FastmailOptions.SectionName));
@@ -81,6 +83,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<KeywordSearchService>();
     services.AddSingleton<VectorSearchService>();
     services.AddSingleton<HybridSearchService>();
+    services.AddSingleton<AttachmentExtractor>();
     services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
 
     services.AddHttpClient<OllamaClient>((sp, client) =>

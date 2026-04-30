@@ -15,4 +15,20 @@ public sealed class McpOptions
     /// usage patterns to iterate on tool result quality. Off by default.
     /// </summary>
     public bool LogToolCalls { get; set; }
+
+    /// <summary>
+    /// Where get_attachment writes extracted attachment files. The default is
+    /// inside ~/Downloads so the user can find files in Finder / their browser's
+    /// Downloads list. Avoid ~/Library/Caches (hidden from users) and
+    /// ~/Documents (TCC-blocked from Claude Desktop's spawned processes).
+    /// </summary>
+    public string AttachmentDownloadDir { get; set; } = "~/Downloads/mailvec";
+
+    /// <summary>
+    /// For text-ish content types under this many bytes, get_attachment also
+    /// returns the decoded UTF-8 text inline as a separate text content block.
+    /// Convenience for CSV / JSON / logs so Claude can read them in one round
+    /// trip without invoking a filesystem MCP. 0 disables the extra text block.
+    /// </summary>
+    public int AttachmentInlineTextMaxBytes { get; set; } = 256 * 1024;
 }

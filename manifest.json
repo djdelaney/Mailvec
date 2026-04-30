@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "mailvec",
   "display_name": "Mailvec",
-  "version": "0.1.6",
+  "version": "0.1.14",
   "description": "Local hybrid (FTS5 + vector) search over your Maildir email archive.",
-  "long_description": "Mailvec exposes the local Mailvec archive (built by the indexer/embedder background services) over MCP. Provides search_emails (keyword, semantic, or hybrid), get_email, get_thread, and list_folders against a SQLite database with sqlite-vec embeddings. The bundled binary is the read-side stdio server only; the indexer and embedder are run separately as your own services.",
+  "long_description": "Mailvec exposes the local Mailvec archive (built by the indexer/embedder background services) over MCP. Provides search_emails (keyword, semantic, or hybrid), get_email, get_thread, list_folders, and get_attachment against a SQLite database with sqlite-vec embeddings. The bundled binary is the read-side stdio server only; the indexer and embedder are run separately as your own services. get_attachment saves attachments to ~/Downloads/mailvec/ and returns the path — to read the contents from Claude.ai or Claude Desktop, install a filesystem MCP server (e.g. @modelcontextprotocol/server-filesystem) pointed at that directory. In Claude Code, the built-in Read tool opens saved files directly with no extra MCP needed.",
   "author": {
     "name": "Daniel Delaney"
   },
@@ -20,6 +20,7 @@
       "args": ["--stdio"],
       "env": {
         "Archive__DatabasePath": "${user_config.database_path}",
+        "Ingest__MaildirRoot": "${user_config.maildir_root}",
         "Ollama__BaseUrl": "${user_config.ollama_base_url}",
         "Fastmail__AccountId": "${user_config.fastmail_account_id}",
         "Mcp__LogToolCalls": "${user_config.log_tool_calls}"
@@ -33,6 +34,13 @@
       "description": "Path to the Mailvec SQLite archive. Will be created on first run if it doesn't exist.",
       "required": true,
       "default": "~/Library/Application Support/Mailvec/archive.sqlite"
+    },
+    "maildir_root": {
+      "type": "string",
+      "title": "Maildir root",
+      "description": "Path to the directory containing your Maildir folders (where mbsync syncs your mail). Used by get_attachment to read bytes from the original .eml files. Should match the same path the indexer is configured with. Leave at the default if get_attachment isn't important to you — the rest of the tools work without it.",
+      "required": false,
+      "default": "~/Mail/Fastmail"
     },
     "ollama_base_url": {
       "type": "string",
@@ -61,10 +69,11 @@
     "runtimes": {}
   },
   "tools": [
-    { "name": "search_emails", "description": "Search the archive by keyword, semantic similarity, or hybrid RRF fusion. Supports folder, date, and sender filters." },
-    { "name": "get_email",     "description": "Fetch a single message by its message_id header or internal id." },
-    { "name": "get_thread",    "description": "Fetch all messages in a thread given any message in the thread." },
-    { "name": "list_folders",  "description": "List Maildir folders with message counts." }
+    { "name": "search_emails",  "description": "Search the archive by keyword, semantic similarity, or hybrid RRF fusion. Supports folder, date, and sender filters." },
+    { "name": "get_email",      "description": "Fetch a single message by its message_id header or internal id. Returns body text and per-attachment metadata." },
+    { "name": "get_thread",     "description": "Fetch all messages in a thread given any message in the thread." },
+    { "name": "list_folders",   "description": "List Maildir folders with message counts." },
+    { "name": "get_attachment", "description": "Save an email attachment to ~/Downloads/mailvec/ and return the absolute path. Images are also returned inline (Claude vision); small text-ish files have their decoded UTF-8 included. To read other formats (PDF, DOCX, etc.), use a filesystem MCP server or Claude Code's built-in Read on the returned path." }
   ],
   "keywords": ["email", "search", "maildir", "sqlite", "vector"]
 }

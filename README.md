@@ -152,10 +152,13 @@ The MCP server is shipped as an [MCPB bundle](https://blog.modelcontextprotocol.
 ./ops/build-mcpb.sh         # writes dist/mailvec-<version>.mcpb (~50 MB)
 ```
 
-**Install:** drag `dist/mailvec-<version>.mcpb` onto Claude Desktop, or `open dist/mailvec-<version>.mcpb`. The install dialog prompts for two values (defined in `manifest.json`):
+**Install:** drag `dist/mailvec-<version>.mcpb` onto Claude Desktop, or `open dist/mailvec-<version>.mcpb`. The install dialog prompts for these values (defined in `manifest.json`):
 
-- **Database path** — SQLite archive. Default `~/Library/Application Support/Mailvec/archive.sqlite`. Created if it doesn't exist (empty schema). The MCP server is pure SQLite reader; the Maildir filesystem is only touched by the indexer/embedder, which run as your own processes outside the bundle.
+- **Database path** — SQLite archive. Default `~/Library/Application Support/Mailvec/archive.sqlite`. Created if it doesn't exist (empty schema).
+- **Maildir root** — directory containing your Maildir folders, where mbsync syncs your mail. Default `~/Mail/Fastmail`. Used by `get_attachment` to read attachment bytes from the original `.eml` files at extract time. Should match the path the indexer is configured with.
 - **Ollama endpoint** — default `http://localhost:11434`. Only used to embed search queries; the indexer/embedder are separate processes.
+- **Fastmail account id (optional)** — enables webmail deep-links on search results. See [Fastmail webmail deep-links](#fastmail-webmail-deep-links-optional) below.
+- **Log tool calls (debug)** — when on, the server logs each tool invocation to `~/Library/Logs/Claude/mcp-server-mailvec.log`. Off by default.
 
 The bundle extracts to `~/Library/Application Support/Claude/extensions/<id>/` — a non-TCC location, which avoids the `~/Documents` read block we hit during early dev.
 
@@ -176,6 +179,22 @@ The indexer and embedder run as your own processes outside the bundle — they k
 - The bundled binary is `osx-arm64` only (declared in `manifest.json` `compatibility.platforms`). Add `osx-x64` to `build-mcpb.sh` if you need it.
 - The binary is unsigned. macOS Gatekeeper may prompt the first time Claude Desktop spawns it; allow once and it's fine. If it gets quarantined silently, `xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Claude/extensions/"` clears it.
 - All logs from the spawned MCP server go to stderr and land in `~/Library/Logs/Claude/mcp-server-mailvec.log`. First place to look if anything misbehaves.
+
+## Reading attachments
+
+`get_attachment` extracts a single email attachment to `~/Downloads/mailvec/` (configurable via `Mcp:AttachmentDownloadDir`) and returns the absolute path. It deliberately does **not** try to ship the bytes back through MCP — Claude.ai's MCP bridge currently mishandles non-image binary blobs and rejects them as "unsupported image format". Putting the file on disk delegates the "interpret bytes by file type" job to whichever tool is best at it.
+
+How Claude actually reads the file depends on the client:
+
+- **Claude Code** — the built-in `Read` tool can open the saved path directly and handles PDFs, text, images, etc. natively. Nothing extra to install.
+- **Claude.ai web / Claude Desktop** — Claude can't read arbitrary local paths. To make `get_attachment` useful end-to-end, **install a filesystem MCP server** alongside Mailvec. The official one is [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem). Point it at `~/Downloads/mailvec/`, then Claude can call its `read_text_file` / `read_media_file` tools on the path Mailvec just returned. Without a filesystem MCP, `get_attachment` still works — Claude just tells you "I saved it to /Users/.../Downloads/mailvec/foo.pdf" and you open it yourself in Finder.
+
+For convenience, two cases are also inlined as native MCP content blocks regardless of client:
+
+- **Image attachments** are inlined as `ImageContentBlock` so Claude vision can describe / OCR them in one round trip.
+- **Small text-ish files** (`text/*`, `application/json`, `application/xml`, etc., under `Mcp:AttachmentInlineTextMaxBytes` — default 256 KB) have their decoded UTF-8 text included as an additional text block.
+
+The file is also always saved to disk in those cases, so a downstream tool can still pick it up.
 
 ## Fastmail webmail deep-links (optional)
 
@@ -237,8 +256,9 @@ Wires the archive up to Claude. **Exit criterion met.**
 - `Mailvec.Mcp` runs in two transports sharing the same Core wiring:
   - **HTTP** (default) on `127.0.0.1:3333` for Claude Code and the smoke tests.
   - **stdio** (`--stdio` flag) for Claude Desktop, packaged as an `.mcpb` bundle (see [Connecting to Claude Desktop](#connecting-to-claude-desktop)).
-- Tools: `search_emails` (keyword / semantic / hybrid with folder/date/sender filters), `get_email`, `get_thread`, `list_folders`. The original 6-tool design merged to 4 — `recent_emails` is `search_emails` with `query` omitted, and `find_by_sender` is `search_emails` with `fromExact`.
+- Tools: `search_emails` (keyword / semantic / hybrid with folder/date/sender filters), `get_email`, `get_thread`, `list_folders`, `get_attachment`. The original 6-tool design merged to 4 search/fetch tools — `recent_emails` is `search_emails` with `query` omitted, and `find_by_sender` is `search_emails` with `fromExact` — plus `get_attachment` added later for attachment delivery (see [Reading attachments](#reading-attachments)).
 - Hybrid search reused from Phase 2.
+- Attachment indexing: filenames are stored in the `attachments` table and surfaced through FTS5 (so a query like `"mortgage statement"` matches an email whose only mention is in `mortgage_statement_2024.pdf`). Per-attachment metadata (filename, content type, size, partIndex) is returned by `get_email`.
 
 ### ⬜ Phase 4 — Operationalization
 
@@ -254,4 +274,4 @@ Makes the system survive reboots unattended.
 
 ### Out of scope (per design doc §11)
 
-Sending mail, modifying Fastmail state, multi-account support, calendar/contacts/files, web UI, real-time push, attachment indexing.
+Sending mail, modifying Fastmail state, multi-account support, calendar/contacts/files, web UI, real-time push. Attachment **filenames** are indexed (FTS5) and attachments themselves are extractable to disk via `get_attachment`; per-format **content** indexing (PDF text, DOCX text, OCR for image-only PDFs) is still out of scope — let downstream tools (Claude Code's `Read`, a filesystem MCP, your existing PDF skills) interpret the bytes.
