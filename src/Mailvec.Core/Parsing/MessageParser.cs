@@ -25,7 +25,7 @@ public sealed class MessageParser
         // If only HTML is present, derive plain text from it so FTS5 has something to chew on.
         if (string.IsNullOrEmpty(bodyText) && !string.IsNullOrEmpty(bodyHtml))
         {
-            bodyText = HtmlToTextV2.Convert(bodyHtml);
+            bodyText = HtmlToText.Convert(bodyHtml);
         }
 
         var fromMailbox = mime.From.Mailboxes.FirstOrDefault();

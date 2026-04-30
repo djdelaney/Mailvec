@@ -10,7 +10,6 @@ var root = new RootCommand("Mailvec admin CLI")
     AuditEmbeddingsCommand.Build(),
     EvalCommand.Build(),
     EvalAddCommand.Build(),
-    HtmlDiffCommand.Build(),
     RebuildBodiesCommand.Build(),
 };
 

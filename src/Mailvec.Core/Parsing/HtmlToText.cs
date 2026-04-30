@@ -7,12 +7,16 @@ using AngleSharp.Html.Parser;
 namespace Mailvec.Core.Parsing;
 
 /// <summary>
-/// HTML-to-text conversion using AngleSharp's DOM. Targets marketing-email noise
-/// that the tokenizer-based V1 leaves in: hidden preheader text, tracking pixels,
-/// raw tracking URLs in &lt;a href&gt;, &lt;script&gt;/&lt;style&gt; bleed-through.
-/// Output is plain text suitable for FTS indexing and embedding.
+/// HTML-to-text conversion using AngleSharp's DOM. Strips marketing-email
+/// noise: hidden preheader text (display:none / visibility:hidden /
+/// opacity:0 / mso-hide:all), tracking pixels, image-only and
+/// unsubscribe/preferences links, and &lt;script&gt;/&lt;style&gt;/&lt;head&gt;/
+/// &lt;address&gt;/&lt;footer&gt; blocks. Output runs through
+/// <see cref="TextNormalize"/> (zero-width / NBSP cleanup, blank-line collapse)
+/// and <see cref="BoilerplateFilter"/> (line-level footer phrases). Plain
+/// text suitable for FTS indexing and embedding.
 /// </summary>
-public static class HtmlToTextV2
+public static class HtmlToText
 {
     private static readonly HtmlParser Parser = new();
 
