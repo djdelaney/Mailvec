@@ -73,7 +73,7 @@ Two kinds of testing: the automated unit/integration suite, and a manual walkthr
 dotnet test
 ```
 
-35 tests across `Mailvec.Core.Tests` and `Mailvec.Indexer.Tests` — parser fixtures, schema migrations, repositories, FTS5 search, vector search (with hand-injected vectors), RRF fusion, the Ollama HTTP client (stubbed), and chunking. No live Ollama or IMAP needed.
+~100 tests across `Mailvec.Core.Tests` and `Mailvec.Indexer.Tests` — parser fixtures, schema migrations, repositories, FTS5 search, vector search (with hand-injected vectors), RRF fusion, the Ollama HTTP client (stubbed), chunking, attachment extraction, path expansion. No live Ollama or IMAP needed. (`Mailvec.Mcp.Tests` exists as a project but has no cases yet — the MCP layer is exercised through Core and via manual smoke tests.)
 
 ### 2. Get a Fastmail app password
 
@@ -260,17 +260,27 @@ Wires the archive up to Claude. **Exit criterion met.**
 - Hybrid search reused from Phase 2.
 - Attachment indexing: filenames are stored in the `attachments` table and surfaced through FTS5 (so a query like `"mortgage statement"` matches an email whose only mention is in `mortgage_statement_2024.pdf`). Per-attachment metadata (filename, content type, size, partIndex) is returned by `get_email`.
 
-### ⬜ Phase 4 — Operationalization
+### 🟡 Phase 4 — Operationalization
 
-Makes the system survive reboots unattended.
+Makes the system survive reboots unattended. In progress.
 
-- launchd plists for mbsync + the three .NET services (templates already in `ops/launchd/`).
-- `ops/install.sh` — publishes services, rewrites plist `__INSTALL_PREFIX__` placeholders, loads the agents, verifies health.
-- `/health` endpoint on the MCP server.
-- Log rotation via launchd stdout/stderr paths.
-- Coverage / freshness metrics surfaced through `mailvec status`.
+- launchd plist *templates* exist in `ops/launchd/` for mbsync + indexer + embedder + MCP HTTP server. Not yet wired up by `install.sh`.
+- `ops/install.sh` — currently a stub. Will publish services, rewrite plist `__INSTALL_PREFIX__` placeholders, load the agents, verify health.
+- ✅ `/health` endpoint on the MCP server — `GET /health` returns DB / embedding / Ollama status (200 healthy, 503 degraded). HTTP-mode only; stdio sees failures via the MCP `initialize` handshake.
+- Log rotation via launchd stdout/stderr paths — pending.
+- ✅ `mailvec status` already surfaces message count, embedding coverage, schema/config model match.
 
 **Exit criterion:** reboot the Mac mini; everything comes back without intervention.
+
+### ⬜ Phase 5 — Cross-vendor MCP access
+
+The MCPB bundle is Claude Desktop only. Stdio works for any local-spawn client (Claude Code) but not for cloud LLMs. To reach **ChatGPT Connectors, Gemini, and Claude.ai Custom Connectors**, the HTTP transport needs HTTPS + OAuth on top:
+
+- Public reachability over HTTPS via Cloudflare Tunnel or Tailscale **Funnel** (the public variant — ordinary tailnet doesn't reach those clients).
+- MCP OAuth 2.1 (PKCE) — the .NET SDK has scaffolding; choosing an issuer (self-hosted, Cloudflare Access, or Tailscale identity) is the open call.
+- Single-user authorization model: any authenticated caller can use any read-only tool. Revisit if mutating tools land later.
+
+See [`mailvec-project-scope.md`](mailvec-project-scope.md) §8 Phase 5 for sequencing.
 
 ### Out of scope (per design doc §11)
 
