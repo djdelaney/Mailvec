@@ -11,6 +11,7 @@ var root = new RootCommand("Mailvec admin CLI")
     CheckpointCommand.Build(),
     EvalCommand.Build(),
     EvalAddCommand.Build(),
+    EvalImportCommand.Build(),
     RebuildBodiesCommand.Build(),
 };
 
