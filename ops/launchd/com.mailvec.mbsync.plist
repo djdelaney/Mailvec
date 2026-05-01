@@ -13,10 +13,13 @@
     <integer>300</integer>
     <key>RunAtLoad</key>
     <true/>
+    <!-- mbsync is the only non-.NET service, so Serilog doesn't apply. Its
+         output goes through launchd-captured paths instead. Volume is small
+         (few lines per 5-minute sync); rotation isn't worth the complexity. -->
     <key>StandardOutPath</key>
-    <string>/tmp/mailvec-mbsync.out.log</string>
+    <string>__LOG_DIR__/mailvec-mbsync.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/mailvec-mbsync.err.log</string>
+    <string>__LOG_DIR__/mailvec-mbsync.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

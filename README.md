@@ -265,9 +265,9 @@ Wires the archive up to Claude. **Exit criterion met.**
 Makes the system survive reboots unattended. In progress.
 
 - launchd plist *templates* exist in `ops/launchd/` for mbsync + indexer + embedder + MCP HTTP server. Not yet wired up by `install.sh`.
-- `ops/install.sh` — currently a stub. Will publish services, rewrite plist `__INSTALL_PREFIX__` placeholders, load the agents, verify health.
+- `ops/install.sh` — currently a stub. Will publish services, rewrite the `__INSTALL_PREFIX__` and `__LOG_DIR__` placeholders, load the agents, verify health.
 - ✅ `/health` endpoint on the MCP server — `GET /health` returns DB / embedding / Ollama status (200 healthy, 503 degraded). HTTP-mode only; stdio sees failures via the MCP `initialize` handshake.
-- Log rotation via launchd stdout/stderr paths — pending.
+- ✅ Log rotation — handled in-process by Serilog. The three .NET services write rolling daily files to `~/Library/Logs/Mailvec/mailvec-<service>-<YYYYMMDD>.log` (10 MB per-file cap, 14 files retained). Wiring lives in [src/Mailvec.Core/Logging/SerilogSetup.cs](src/Mailvec.Core/Logging/SerilogSetup.cs); the launchd plist sets `MAILVEC_LAUNCHD=1` to suppress the Console sink in production. mbsync (the only non-.NET service) writes to small launchd-captured files that don't need rotation.
 - ✅ `mailvec status` already surfaces message count, embedding coverage, schema/config model match.
 
 **Exit criterion:** reboot the Mac mini; everything comes back without intervention.

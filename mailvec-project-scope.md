@@ -257,6 +257,7 @@ CREATE TABLE metadata (
 - `Microsoft.Data.Sqlite.Core` + `SQLitePCLRaw.bundle_e_sqlite3` — SQLite provider; `vec0.dylib` is loaded at runtime via the extension-loading API.
 - `MimeKit` — MIME parsing.
 - `AngleSharp` — HTML→text conversion. The original doc referenced MimeKit's `HtmlToText`, which doesn't exist; AngleSharp lets us strip marketing-email noise (hidden preheader text, tracking pixels, footer boilerplate). See CLAUDE.md Phase 1 gotchas.
+- `Serilog` + `Serilog.Extensions.Hosting` + `Serilog.Sinks.Console` + `Serilog.Sinks.File` + `Serilog.Settings.Configuration` — in-process rolling-file logging shared across the three .NET services via `SerilogSetup`. Replaced an earlier custom bash rotator + dedicated launchd plist.
 - `Microsoft.Extensions.Configuration.Binder`, `Microsoft.Extensions.Options`, `Microsoft.Extensions.Logging.Abstractions`.
 
 **Mailvec.Indexer**
@@ -400,7 +401,7 @@ Solution, projects, CPM, Directory.Build.props, README, gitignore, CI stub.
 1. launchd plists. Templates exist in `ops/launchd/` for mbsync + indexer + embedder + MCP HTTP server (Ollama installed separately, e.g. via `brew services`). The MCP HTTP plist is the cross-vendor path; Claude Desktop spawns its stdio binary on demand via the MCPB bundle and doesn't need a plist. Wiring them into `~/Library/LaunchAgents` is `install.sh`'s job.
 2. `install.sh` that publishes services, rewrites plist `__INSTALL_PREFIX__` placeholders, copies them to `~/Library/LaunchAgents`, loads the agents, and verifies health. Currently a stub.
 3. ✓ Health endpoint on the MCP server. `GET /health` returns a structured snapshot (DB path / message counts / last-indexed timestamp, schema vs config embedding model, embedding coverage %, Ollama reachability). HTTP 200 when all green, 503 when degraded so monitors can alert without parsing the body. Local-only by virtue of `Mcp:BindAddress=127.0.0.1`.
-4. Log rotation via launchd stdout/stderr paths.
+4. ✓ Log rotation. Done in-process via Serilog's File sink — `Mailvec.Core/Logging/SerilogSetup.cs` is wired in each service's `Program.cs`. Primary log: `~/Library/Logs/Mailvec/mailvec-<service>-<YYYYMMDD>.log`, daily rolling, 10 MB cap per file, 14 files retained. The launchd plist sets `MAILVEC_LAUNCHD=1` so Serilog's Console sink stays off in production (avoids duplicating into `StandardOutPath`); a small `<service>.launchd.log` still captures pre-Serilog startup output and panics. mbsync is the only non-.NET service and writes to its own small launchd-captured files (no rotation needed; volume is negligible). See CLAUDE.md Phase 4 gotchas.
 5. ✓ `mailvec status` surfaces message count, embedding coverage, schema/config model match.
 
 ### Phase 5 — Cross-vendor MCP access (ChatGPT, Gemini, Claude.ai)

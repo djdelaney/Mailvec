@@ -11,13 +11,23 @@
     </array>
     <key>WorkingDirectory</key>
     <string>__INSTALL_PREFIX__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MAILVEC_LAUNCHD</key>
+        <string>1</string>
+        <key>MAILVEC_LOG_DIR</key>
+        <string>__LOG_DIR__</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- Serilog writes the rolling primary log to MAILVEC_LOG_DIR. These two
+         paths only capture pre-Serilog startup output and unhandled native
+         stderr (panics, runtime asserts). They grow slowly; no rotation needed. -->
     <key>StandardOutPath</key>
-    <string>/tmp/mailvec-indexer.out.log</string>
+    <string>__LOG_DIR__/mailvec-indexer.launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/mailvec-indexer.err.log</string>
+    <string>__LOG_DIR__/mailvec-indexer.launchd.log</string>
 </dict>
 </plist>
