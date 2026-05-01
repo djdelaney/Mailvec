@@ -16,6 +16,7 @@ internal static class SearchCommand
         var semanticOpt = new Option<bool>("--semantic") { Description = "Use vector similarity instead of keyword search (requires Ollama + embeddings)." };
         var hybridOpt = new Option<bool>("--hybrid") { Description = "Combine keyword + vector with reciprocal rank fusion." };
         var titlesOnlyOpt = new Option<bool>("--titles-only", "-t") { Description = "Suppress snippet/body output; show only ranking, headers, and subject." };
+        var withIdOpt = new Option<bool>("--with-id", "-i") { Description = "Show each result's RFC 5322 Message-ID. Useful when sourcing IDs for `eval-add --pin-relevant`." };
 
         var cmd = new Command("search", "Search the archive (keyword by default).")
         {
@@ -24,6 +25,7 @@ internal static class SearchCommand
             semanticOpt,
             hybridOpt,
             titlesOnlyOpt,
+            withIdOpt,
         };
 
         cmd.SetAction(async parseResult =>
@@ -33,6 +35,7 @@ internal static class SearchCommand
             var semantic = parseResult.GetValue(semanticOpt);
             var hybrid = parseResult.GetValue(hybridOpt);
             var titlesOnly = parseResult.GetValue(titlesOnlyOpt);
+            var withId = parseResult.GetValue(withIdOpt);
 
             if (semantic && hybrid)
             {
@@ -40,12 +43,12 @@ internal static class SearchCommand
                 return 2;
             }
 
-            return await Run(query, limit, semantic, hybrid, titlesOnly);
+            return await Run(query, limit, semantic, hybrid, titlesOnly, withId);
         });
         return cmd;
     }
 
-    private static async Task<int> Run(string query, int limit, bool semantic, bool hybrid, bool titlesOnly)
+    private static async Task<int> Run(string query, int limit, bool semantic, bool hybrid, bool titlesOnly, bool withId)
     {
         using var sp = CliServices.Build();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
@@ -55,7 +58,7 @@ internal static class SearchCommand
         {
             var search = sp.GetRequiredService<HybridSearchService>();
             var hits = await search.SearchAsync(query, limit);
-            PrintHybrid(hits, titlesOnly, fastmail);
+            PrintHybrid(hits, titlesOnly, withId, fastmail);
             return 0;
         }
 
@@ -63,16 +66,16 @@ internal static class SearchCommand
         {
             var search = sp.GetRequiredService<VectorSearchService>();
             var hits = await search.SearchAsync(query, limit);
-            PrintVector(hits, titlesOnly, fastmail);
+            PrintVector(hits, titlesOnly, withId, fastmail);
             return 0;
         }
 
         var keyword = sp.GetRequiredService<KeywordSearchService>();
-        PrintKeyword(keyword.Search(query, limit), titlesOnly, fastmail);
+        PrintKeyword(keyword.Search(query, limit), titlesOnly, withId, fastmail);
         return 0;
     }
 
-    private static void PrintKeyword(IReadOnlyList<Mailvec.Core.Models.SearchHit> hits, bool titlesOnly, FastmailOptions fastmail)
+    private static void PrintKeyword(IReadOnlyList<Mailvec.Core.Models.SearchHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -83,12 +86,13 @@ internal static class SearchCommand
             Console.WriteLine($"[bm25 {h.Bm25Score,7:F2}]  {Bold(h.Subject ?? "(no subject)")}");
             Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
             if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Dim(h.Snippet)}");
+            if (withId) Console.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
             PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
     }
 
-    private static void PrintVector(IReadOnlyList<VectorHit> hits, bool titlesOnly, FastmailOptions fastmail)
+    private static void PrintVector(IReadOnlyList<VectorHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -99,12 +103,13 @@ internal static class SearchCommand
             Console.WriteLine($"[dist {h.Distance,7:F3}]  {Bold(h.Subject ?? "(no subject)")}");
             Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
             if (!titlesOnly) Console.WriteLine($"                  {Dim(Truncate(h.ChunkText, 240))}");
+            if (withId) Console.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
             PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
     }
 
-    private static void PrintHybrid(IReadOnlyList<HybridHit> hits, bool titlesOnly, FastmailOptions fastmail)
+    private static void PrintHybrid(IReadOnlyList<HybridHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
     {
         if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
         Console.WriteLine($"{hits.Count} result(s):\n");
@@ -116,6 +121,7 @@ internal static class SearchCommand
             Console.WriteLine($"[rrf {h.RrfScore,6:F4}]  {Bold(h.Subject ?? "(no subject)")}");
             Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}    ({legs})")}");
             if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Dim(Truncate(h.Snippet, 240))}");
+            if (withId) Console.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
             PrintWebmailUrl(h.MessageIdHeader, fastmail);
             Console.WriteLine();
         }
