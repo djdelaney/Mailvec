@@ -27,6 +27,13 @@ public static class HtmlToText
         // marketing emails (CAN-SPAM). <footer> is the HTML5 semantic footer,
         // typically copyright / unsubscribe / preferences chrome.
         "address", "footer",
+        // <blockquote> is intentionally NOT dropped: while Gmail and Apple Mail
+        // use it to wrap quoted reply text, Outlook web uses it for content
+        // layout (each paragraph of an original message gets wrapped in a
+        // blockquote with class="elementToProof"). Dropping wholesale destroyed
+        // legitimate Outlook content. Reply-text removal is handled at the
+        // text level by ReplyTrimmer (catches "On X wrote:" headers regardless
+        // of whether the surrounding quote was in a blockquote or not).
     };
 
     private static readonly HashSet<string> BlockTags = new(StringComparer.OrdinalIgnoreCase)
