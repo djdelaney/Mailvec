@@ -66,3 +66,7 @@ runtimes/osx-arm64/native/*.dylib
 /dist/
 *.mcpb
 .DS_Store
+
+# Claude Code local state
+.claude/worktrees/
+.claude/settings.local.json
