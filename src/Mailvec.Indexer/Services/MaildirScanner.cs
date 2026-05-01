@@ -11,6 +11,7 @@ public sealed class MaildirScanner(
     IOptions<IngestOptions> ingestOptions,
     MessageParser parser,
     MessageRepository messages,
+    ChunkRepository chunks,
     SyncStateRepository syncState,
     ILogger<MaildirScanner> logger)
 {
@@ -108,7 +109,18 @@ public sealed class MaildirScanner(
             var relPath = MaildirPaths.RelativeFolderPath(_maildirRoot, filePath);
             var fileName = Path.GetFileName(filePath);
 
-            messages.Upsert(parsed, folderName, relPath, fileName, indexedAt);
+            var outcome = messages.Upsert(parsed, folderName, relPath, fileName, indexedAt);
+            if (outcome.ContentChanged)
+            {
+                // Body bytes mutated upstream — drop the chunks and vectors
+                // built from the old body_text so the embedder regenerates
+                // them against the new content. body_text/FTS already updated
+                // by the upsert + FTS5 triggers.
+                chunks.ClearEmbeddingsForMessage(outcome.Id);
+                logger.LogInformation(
+                    "Content changed for message_id={MessageId} (id={Id}); cleared embeddings.",
+                    parsed.MessageId, outcome.Id);
+            }
             syncState.Upsert(filePath, parsed.MessageId, indexedAt);
             return true;
         }

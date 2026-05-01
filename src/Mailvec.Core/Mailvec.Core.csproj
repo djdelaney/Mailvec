@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\..\schema\001_initial.sql" Link="Schema\001_initial.sql" />
+    <EmbeddedResource Include="..\..\schema\migrations\*.sql" LinkBase="Schema\migrations" />
   </ItemGroup>
 
 </Project>

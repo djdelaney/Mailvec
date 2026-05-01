@@ -7,6 +7,17 @@ using Microsoft.Data.Sqlite;
 
 namespace Mailvec.Core.Data;
 
+/// <summary>
+/// Result of <see cref="MessageRepository.Upsert"/>. Implicitly converts to
+/// <see cref="long"/> so callers that only need the row id can keep their
+/// existing single-value usage; callers that care about content invalidation
+/// destructure or read <see cref="ContentChanged"/> explicitly.
+/// </summary>
+public readonly record struct UpsertOutcome(long Id, bool ContentChanged)
+{
+    public static implicit operator long(UpsertOutcome o) => o.Id;
+}
+
 public sealed class MessageRepository(ConnectionFactory connections)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
@@ -15,13 +26,35 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// Insert or update a message. Keyed on Message-ID (RFC 5322); resending the
     /// same Message-ID with a different Maildir path updates the path in place,
     /// which covers mbsync's new/ -> cur/ rename and the ingest re-scan path.
+    /// Returns the row id and whether the message body content changed compared
+    /// to the prior row (always false on a fresh insert; true only when a row
+    /// with the same Message-ID existed and its <c>content_hash</c> differed
+    /// from the one being written). Callers use the flag to invalidate stale
+    /// embeddings; see <see cref="ChunkRepository.ClearEmbeddingsForMessage"/>.
     /// </summary>
-    public long Upsert(ParsedMessage parsed, string folder, string maildirRelativePath, string maildirFilename, DateTimeOffset indexedAt)
+    public UpsertOutcome Upsert(ParsedMessage parsed, string folder, string maildirRelativePath, string maildirFilename, DateTimeOffset indexedAt)
     {
         ArgumentNullException.ThrowIfNull(parsed);
 
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
+
+        // Read the prior row's content_hash inside the same transaction so
+        // there's no race against another writer mutating it underneath us.
+        // priorHash is null for fresh inserts and for rows recorded before
+        // schema v3 (where content_hash hadn't been backfilled yet) — both
+        // mean "treat as unchanged" so we don't churn embeddings on every
+        // first re-scan after migration.
+        string? priorHash = null;
+        using (var probe = conn.CreateCommand())
+        {
+            probe.Transaction = tx;
+            probe.CommandText = "SELECT content_hash FROM messages WHERE message_id = $mid";
+            probe.Parameters.AddWithValue("$mid", parsed.MessageId);
+            var raw = probe.ExecuteScalar();
+            priorHash = raw is string s ? s : null;
+        }
+        var contentChanged = priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);
 
         long id;
         using (var cmd = conn.CreateCommand())
@@ -32,12 +65,12 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     message_id, thread_id, maildir_path, maildir_filename, folder,
                     subject, from_address, from_name, to_addresses, cc_addresses,
                     date_sent, date_received, size_bytes, has_attachments, attachment_names,
-                    body_text, body_html, raw_headers, indexed_at, deleted_at
+                    body_text, body_html, raw_headers, indexed_at, deleted_at, content_hash
                 ) VALUES (
                     $message_id, $thread_id, $maildir_path, $maildir_filename, $folder,
                     $subject, $from_address, $from_name, $to_addresses, $cc_addresses,
                     $date_sent, $date_received, $size_bytes, $has_attachments, $attachment_names,
-                    $body_text, $body_html, $raw_headers, $indexed_at, NULL
+                    $body_text, $body_html, $raw_headers, $indexed_at, NULL, $content_hash
                 )
                 ON CONFLICT(message_id) DO UPDATE SET
                     thread_id        = excluded.thread_id,
@@ -58,7 +91,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     body_html        = excluded.body_html,
                     raw_headers      = excluded.raw_headers,
                     indexed_at       = excluded.indexed_at,
-                    deleted_at       = NULL
+                    deleted_at       = NULL,
+                    content_hash     = excluded.content_hash
                 RETURNING id;
                 """;
 
@@ -83,6 +117,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.Parameters.AddWithValue("$body_html", (object?)parsed.BodyHtml ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$raw_headers", parsed.RawHeaders);
             cmd.Parameters.AddWithValue("$indexed_at", indexedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("$content_hash", parsed.ContentHash);
 
             var idObj = cmd.ExecuteScalar()
                 ?? throw new InvalidOperationException("Upsert returned no id");
@@ -91,7 +126,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
         ReplaceAttachments(conn, tx, id, parsed.Attachments);
         tx.Commit();
-        return id;
+        return new UpsertOutcome(id, contentChanged);
     }
 
     private static string? BuildAttachmentNames(IReadOnlyList<ParsedAttachment> attachments)
