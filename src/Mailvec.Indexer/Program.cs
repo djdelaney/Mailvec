@@ -1,9 +1,11 @@
 using Mailvec.Core.Data;
+using Mailvec.Core.Logging;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Mailvec.Indexer.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
+SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "indexer");
 
 builder.Services.Configure<ArchiveOptions>(builder.Configuration.GetSection(ArchiveOptions.SectionName));
 builder.Services.Configure<IngestOptions>(builder.Configuration.GetSection(IngestOptions.SectionName));
