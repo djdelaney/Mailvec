@@ -16,6 +16,8 @@ internal static class EvalCommand
         var queryOpt = new Option<string?>("--query") { Description = "Run a single query by id; prints ranks of expected docs and the top-k list." };
         var jsonOpt = new Option<string?>("--json") { Description = "Write the run as a JSON report at this path." };
         var baselineOpt = new Option<string?>("--baseline") { Description = "Path to a previous --json report; diff aggregate + per-query metrics against it." };
+        var verboseOpt = new Option<bool>("--verbose", "-v") { Description = "After the aggregate, list per-query metrics for queries with NDCG<1, sorted worst-first, including expected-doc ranks." };
+        var allQueriesOpt = new Option<bool>("--all-queries") { Description = "With --verbose, list every query (not just regressions). Useful for sanity-checking which queries are scoring perfectly." };
 
         var cmd = new Command("eval", "Run the labeled query set and report search-quality metrics.")
         {
@@ -25,6 +27,8 @@ internal static class EvalCommand
             queryOpt,
             jsonOpt,
             baselineOpt,
+            verboseOpt,
+            allQueriesOpt,
         };
 
         cmd.SetAction(async (parseResult, ct) =>
@@ -35,6 +39,8 @@ internal static class EvalCommand
             var queryId = parseResult.GetValue(queryOpt);
             var jsonPath = parseResult.GetValue(jsonOpt);
             var baselinePath = parseResult.GetValue(baselineOpt);
+            var verbose = parseResult.GetValue(verboseOpt);
+            var allQueries = parseResult.GetValue(allQueriesOpt);
 
             if (!File.Exists(path))
             {
@@ -77,6 +83,11 @@ internal static class EvalCommand
 
             PrintAggregate(modeResults, topK, set.Queries.Count);
 
+            if (verbose)
+            {
+                PrintVerbosePerQuery(modeResults, set, topK, includeAll: allQueries);
+            }
+
             if (baselinePath is not null)
             {
                 if (!File.Exists(baselinePath)) { Console.Error.WriteLine($"Baseline {baselinePath} not found."); return 2; }
@@ -114,6 +125,73 @@ internal static class EvalCommand
         foreach (var r in results)
         {
             Console.WriteLine($"  {ModeName(r.Mode),-10}  {r.MeanNdcg,7:F3}  {r.MeanMrr,7:F3}  {r.MeanRecall,7:F3}");
+        }
+    }
+
+    /// <summary>
+    /// Per-mode dump of every query that didn't score perfectly (NDCG &lt; 1),
+    /// sorted worst-first. For each row, shows the query string, the rank of
+    /// each expected message (or "miss" if not in top-k), and a one-line
+    /// recap of the actual top-3 so you can see what crowded the expected
+    /// docs out. With <paramref name="includeAll"/>, also prints rows that
+    /// scored 1.000 (in NDCG-asc order) — useful as a sanity check that the
+    /// queries you think are passing actually are.
+    /// </summary>
+    private static void PrintVerbosePerQuery(IReadOnlyList<EvalModeResult> results, EvalQuerySet set, int topK, bool includeAll)
+    {
+        var queriesById = set.Queries.ToDictionary(q => q.Id, q => q);
+
+        foreach (var mr in results)
+        {
+            var rows = mr.Queries
+                .Where(q => includeAll || q.Ndcg < 0.9995)
+                .OrderBy(q => q.Ndcg)
+                .ThenBy(q => q.Mrr)
+                .ToList();
+            if (rows.Count == 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"  {ModeName(mr.Mode)}: every query scored NDCG≈1.000 (top-{topK}).");
+                continue;
+            }
+
+            Console.WriteLine();
+            var label = includeAll ? "all queries" : $"{rows.Count} quer{(rows.Count == 1 ? "y" : "ies")} below NDCG=1.000";
+            Console.WriteLine($"  {ModeName(mr.Mode)}: {label} (worst → best)");
+            Console.WriteLine($"    {"Id",-10}  {"NDCG",6}  {"MRR",6}  {"Recall",6}  Query / expected ranks");
+            Console.WriteLine($"    {new string('-', 10)}  {new string('-', 6)}  {new string('-', 6)}  {new string('-', 6)}  {new string('-', 60)}");
+
+            foreach (var q in rows)
+            {
+                var meta = queriesById.GetValueOrDefault(q.Id);
+                var queryText = meta is null ? q.Query : meta.Query;
+                var trimmed = queryText.Length > 60 ? queryText[..57] + "..." : queryText;
+                Console.WriteLine($"    {q.Id,-10}  {q.Ndcg,6:F3}  {q.Mrr,6:F3}  {q.Recall,6:F3}  {trimmed}");
+
+                if (meta is not null)
+                {
+                    for (var i = 0; i < meta.Relevant.Count; i++)
+                    {
+                        var rank = q.RanksOfExpected[i];
+                        var rankStr = rank == 0 ? $"miss (not in top-{topK})" : $"rank {rank}";
+                        var marker = rank == 0 ? "✗" : "✓";
+                        Console.WriteLine($"      {marker} expected {meta.Relevant[i].MessageId}  →  {rankStr}");
+                    }
+                }
+
+                // Show actual top-3 so we can see what the search returned instead.
+                var relevantSet = meta?.Relevant.Select(x => x.MessageId).ToHashSet() ?? [];
+                var actualTop = q.RankedMessageIds.Take(3).ToList();
+                if (actualTop.Count > 0)
+                {
+                    var formatted = actualTop.Select((id, i) =>
+                    {
+                        var hit = relevantSet.Contains(id) ? "✓" : " ";
+                        return $"{hit}{i + 1}.{id}";
+                    });
+                    Console.WriteLine($"      actual top-{actualTop.Count}: {string.Join("  ", formatted)}");
+                }
+            }
         }
     }
 
