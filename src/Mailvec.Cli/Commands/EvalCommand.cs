@@ -18,6 +18,7 @@ internal static class EvalCommand
         var baselineOpt = new Option<string?>("--baseline") { Description = "Path to a previous --json report; diff aggregate + per-query metrics against it." };
         var verboseOpt = new Option<bool>("--verbose", "-v") { Description = "After the aggregate, list per-query metrics for queries with NDCG<1, sorted worst-first, including expected-doc ranks." };
         var allQueriesOpt = new Option<bool>("--all-queries") { Description = "With --verbose, list every query (not just regressions). Useful for sanity-checking which queries are scoring perfectly." };
+        var timingOpt = new Option<bool>("--timing") { Description = "Show per-mode mean/p50/p95 search latency in the aggregate (and Δlatency in --baseline diffs). Latency is always recorded in --json reports regardless of this flag." };
 
         var cmd = new Command("eval", "Run the labeled query set and report search-quality metrics.")
         {
@@ -29,6 +30,7 @@ internal static class EvalCommand
             baselineOpt,
             verboseOpt,
             allQueriesOpt,
+            timingOpt,
         };
 
         cmd.SetAction(async (parseResult, ct) =>
@@ -41,6 +43,7 @@ internal static class EvalCommand
             var baselinePath = parseResult.GetValue(baselineOpt);
             var verbose = parseResult.GetValue(verboseOpt);
             var allQueries = parseResult.GetValue(allQueriesOpt);
+            var timing = parseResult.GetValue(timingOpt);
 
             if (!File.Exists(path))
             {
@@ -83,6 +86,11 @@ internal static class EvalCommand
 
             PrintAggregate(modeResults, topK, set.Queries.Count);
 
+            if (timing)
+            {
+                PrintTiming(modeResults);
+            }
+
             if (verbose)
             {
                 PrintVerbosePerQuery(modeResults, set, topK, includeAll: allQueries);
@@ -92,7 +100,7 @@ internal static class EvalCommand
             {
                 if (!File.Exists(baselinePath)) { Console.Error.WriteLine($"Baseline {baselinePath} not found."); return 2; }
                 var baseline = EvalReport.Load(baselinePath);
-                PrintBaselineDiff(modeResults, baseline);
+                PrintBaselineDiff(modeResults, baseline, includeTiming: timing);
             }
 
             if (jsonPath is not null)
@@ -195,7 +203,25 @@ internal static class EvalCommand
         }
     }
 
-    private static void PrintBaselineDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline)
+    /// <summary>
+    /// Per-mode mean / p50 / p95 latency, in milliseconds. Latency is always
+    /// captured (cheap Stopwatch); this just prints it on demand. Useful when
+    /// scaling the corpus and watching for regressions on the vec0 leg.
+    /// </summary>
+    private static void PrintTiming(IReadOnlyList<EvalModeResult> results)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Latency (ms):");
+        Console.WriteLine();
+        Console.WriteLine($"  {"Mode",-10}  {"mean",8}  {"p50",8}  {"p95",8}");
+        Console.WriteLine($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}");
+        foreach (var r in results)
+        {
+            Console.WriteLine($"  {ModeName(r.Mode),-10}  {r.MeanLatencyMs,8:F1}  {r.P50LatencyMs,8:F1}  {r.P95LatencyMs,8:F1}");
+        }
+    }
+
+    private static void PrintBaselineDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming)
     {
         Console.WriteLine();
         Console.WriteLine($"Baseline ({baseline.RanAt:u}, top-{baseline.TopK}):");
@@ -211,6 +237,39 @@ internal static class EvalCommand
                 continue;
             }
             Console.WriteLine($"  {ModeName(cur.Mode),-10}  {Delta(cur.MeanNdcg - prior.Aggregate.Ndcg),8}  {Delta(cur.MeanMrr - prior.Aggregate.Mrr),8}  {Delta(cur.MeanRecall - prior.Aggregate.Recall),8}");
+        }
+
+        if (includeTiming)
+        {
+            // Pre-timing baselines store 0.0 for latency fields. Any prior with
+            // P95 == 0 is almost certainly missing data, not actually instant —
+            // suppress the diff in that case so we don't print misleading speedup.
+            var anyComparable = current.Any(c =>
+            {
+                var p = baseline.Runs.FirstOrDefault(r => r.Mode == c.Mode);
+                return p is not null && p.Aggregate.P95LatencyMs > 0;
+            });
+            if (anyComparable)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"  {"Mode",-10}  {"Δmean",8}  {"Δp50",8}  {"Δp95",8}  (ms; − = faster)");
+                Console.WriteLine($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}");
+                foreach (var cur in current)
+                {
+                    var prior = baseline.Runs.FirstOrDefault(r => r.Mode == cur.Mode);
+                    if (prior is null || prior.Aggregate.P95LatencyMs == 0)
+                    {
+                        Console.WriteLine($"  {ModeName(cur.Mode),-10}  {"(no data)",8}  {"(no data)",8}  {"(no data)",8}");
+                        continue;
+                    }
+                    Console.WriteLine($"  {ModeName(cur.Mode),-10}  {DeltaMs(cur.MeanLatencyMs - prior.Aggregate.MeanLatencyMs),8}  {DeltaMs(cur.P50LatencyMs - prior.Aggregate.P50LatencyMs),8}  {DeltaMs(cur.P95LatencyMs - prior.Aggregate.P95LatencyMs),8}");
+                }
+            }
+            else
+            {
+                Console.WriteLine();
+                Console.WriteLine("  (baseline has no latency data — re-run baseline with current build to enable Δlatency.)");
+            }
         }
 
         // Per-query NDCG flips, sorted by largest absolute change.
@@ -241,6 +300,12 @@ internal static class EvalCommand
     {
         if (Math.Abs(d) < 0.0005) return "  =0.000";
         return d.ToString("+0.000;-0.000", CultureInfo.InvariantCulture);
+    }
+
+    private static string DeltaMs(double d)
+    {
+        if (Math.Abs(d) < 0.05) return "  =0.0";
+        return d.ToString("+0.0;-0.0", CultureInfo.InvariantCulture);
     }
 
     private static void PrintSingleQuery(EvalQuery q, EvalMode mode, int topK, EvalQueryResult r)
