@@ -13,6 +13,7 @@ public class MaildirScannerTests : IDisposable
     private readonly string _dbPath;
     private readonly ConnectionFactory _connections;
     private readonly MessageRepository _messages;
+    private readonly ChunkRepository _chunks;
     private readonly SyncStateRepository _syncState;
     private readonly MaildirScanner _scanner;
 
@@ -38,11 +39,13 @@ public class MaildirScannerTests : IDisposable
         new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
         _messages = new MessageRepository(_connections);
+        _chunks = new ChunkRepository(_connections);
         _syncState = new SyncStateRepository(_connections);
         _scanner = new MaildirScanner(
             ingestOptions,
             new MessageParser(),
             _messages,
+            _chunks,
             _syncState,
             NullLogger<MaildirScanner>.Instance);
     }
@@ -117,6 +120,88 @@ public class MaildirScannerTests : IDisposable
         var droppedMsg = _messages.GetByMessageId("drop@x").ShouldNotBeNull();
         droppedMsg.DeletedAt.ShouldNotBeNull();
         File.Exists(keep).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Body_change_clears_embeddings_on_rescan()
+    {
+        // Initial scan + simulated embedding.
+        var path = WriteEml("INBOX", "cur", "edit.host:2,S", "original body", "edit@x");
+        _scanner.ScanAll();
+        var msg = _messages.GetByMessageId("edit@x").ShouldNotBeNull();
+
+        _chunks.ReplaceChunksForMessage(
+            msg.Id,
+            [new Mailvec.Core.Embedding.TextChunk(0, "chunk text", 1)],
+            [Hot(0)],
+            DateTimeOffset.UtcNow);
+        _chunks.CountForMessage(msg.Id).ShouldBe(1);
+        EmbeddedAt(msg.Id).ShouldNotBeNull();
+
+        // Rewrite the .eml with a different body but the same Message-ID.
+        File.Delete(path);
+        WriteEml("INBOX", "cur", "edit.host:2,S", "completely different body", "edit@x");
+
+        _scanner.ScanAll();
+
+        // Embeddings should be cleared.
+        _chunks.CountForMessage(msg.Id).ShouldBe(0);
+        EmbeddedAt(msg.Id).ShouldBeNull();
+    }
+
+    [Fact]
+    public void Header_only_change_does_not_clear_embeddings()
+    {
+        var path = WriteEml("INBOX", "cur", "headers.host:2,S", "stable body", "headers@x");
+        _scanner.ScanAll();
+        var msg = _messages.GetByMessageId("headers@x").ShouldNotBeNull();
+
+        _chunks.ReplaceChunksForMessage(
+            msg.Id,
+            [new Mailvec.Core.Embedding.TextChunk(0, "chunk text", 1)],
+            [Hot(0)],
+            DateTimeOffset.UtcNow);
+
+        // Rewrite with extra headers but identical body.
+        File.Delete(path);
+        var dir = Path.GetDirectoryName(path)!;
+        File.WriteAllText(path, $"""
+            Message-ID: <headers@x>
+            Date: Mon, 13 Jan 2025 10:15:00 -0500
+            From: alice@example.com
+            To: bob@example.com
+            Subject: Test
+            X-Spam-Score: 0.0
+            DKIM-Verified: pass
+            MIME-Version: 1.0
+            Content-Type: text/plain; charset=utf-8
+
+            stable body
+
+            """);
+
+        _scanner.ScanAll();
+
+        // Body unchanged -> embeddings preserved.
+        _chunks.CountForMessage(msg.Id).ShouldBe(1);
+        EmbeddedAt(msg.Id).ShouldNotBeNull();
+    }
+
+    private string? EmbeddedAt(long messageId)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT embedded_at FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        var raw = cmd.ExecuteScalar();
+        return raw is string s ? s : null;
+    }
+
+    private static float[] Hot(int idx, int dim = 1024)
+    {
+        var v = new float[dim];
+        v[idx] = 1f;
+        return v;
     }
 
     [Fact]

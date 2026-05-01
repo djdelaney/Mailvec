@@ -12,6 +12,7 @@ builder.Services.Configure<IndexerOptions>(builder.Configuration.GetSection(Inde
 builder.Services.AddSingleton<ConnectionFactory>();
 builder.Services.AddSingleton<SchemaMigrator>();
 builder.Services.AddSingleton<MessageRepository>();
+builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<SyncStateRepository>();
 builder.Services.AddSingleton<MessageParser>();
 builder.Services.AddSingleton<MaildirScanner>();

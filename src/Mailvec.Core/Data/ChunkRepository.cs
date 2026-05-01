@@ -92,6 +92,27 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         return affected;
     }
 
+    /// <summary>
+    /// Clear embeddings (and chunks) for a single message and reset its
+    /// embedded_at stamp so the embedder picks it up on the next poll.
+    /// Used by the indexer when a content-hash change indicates an upstream
+    /// body mutation has invalidated the existing vectors.
+    /// </summary>
+    public void ClearEmbeddingsForMessage(long messageId)
+    {
+        using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+        DeleteChunks(conn, tx, messageId);
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "UPDATE messages SET embedded_at = NULL WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", messageId);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
     private static void DeleteChunks(SqliteConnection conn, SqliteTransaction tx, long messageId)
     {
         // chunk_embeddings has chunk_id PRIMARY KEY but no FK to chunks (vec0 doesn't support that),
