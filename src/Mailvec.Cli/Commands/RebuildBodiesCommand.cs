@@ -50,17 +50,22 @@ internal static class RebuildBodiesCommand
 
         Console.WriteLine($"Re-deriving body_text for {total:N0} messages...");
 
-        // Fetch all (id, body_html) into memory first. The DB has 2.7K test
-        // rows / a few hundred MB max; for a real archive an ORDER BY id
-        // cursor would be safer but this isn't worth the complexity yet.
-        var rows = new List<(long Id, string Html)>(checked((int)total));
+        // Fetch all (id, subject, body_html) into memory first. Subject is
+        // needed by ReplyTrimmer to distinguish replies from forwards. The
+        // DB has 2.7K test rows / a few hundred MB max; for a real archive
+        // an ORDER BY id cursor would be safer but this isn't worth the
+        // complexity yet.
+        var rows = new List<(long Id, string? Subject, string Html)>(checked((int)total));
         using (var fetch = conn.CreateCommand())
         {
-            fetch.CommandText = "SELECT id, body_html FROM messages WHERE body_html IS NOT NULL ORDER BY id";
+            fetch.CommandText = "SELECT id, subject, body_html FROM messages WHERE body_html IS NOT NULL ORDER BY id";
             using var r = fetch.ExecuteReader();
             while (r.Read())
             {
-                rows.Add((r.GetInt64(0), r.GetString(1)));
+                rows.Add((
+                    r.GetInt64(0),
+                    r.IsDBNull(1) ? null : r.GetString(1),
+                    r.GetString(2)));
             }
         }
 
@@ -77,10 +82,17 @@ internal static class RebuildBodiesCommand
             idParam.ParameterName = "$id";
             update.Parameters.Add(idParam);
 
-            foreach (var (id, html) in rows)
+            foreach (var (id, subject, html) in rows)
             {
                 string newText;
-                try { newText = HtmlToText.Convert(html); }
+                try
+                {
+                    newText = HtmlToText.Convert(html);
+                    if (!string.IsNullOrEmpty(newText))
+                    {
+                        newText = ReplyTrimmer.Trim(newText, subject);
+                    }
+                }
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"  id={id}: convert failed ({ex.GetType().Name}: {ex.Message})");

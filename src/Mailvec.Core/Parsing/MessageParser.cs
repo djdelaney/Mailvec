@@ -33,6 +33,15 @@ public sealed class MessageParser
             ? HtmlToText.Convert(bodyHtml)
             : mime.TextBody;
 
+        // Strip quoted reply chains so each message contributes only its new
+        // content. Without this, BM25 over-rewards replies that quote the
+        // original (the matching tokens appear twice) and the same content
+        // gets repeated across every thread message in the embedding space.
+        if (!string.IsNullOrEmpty(bodyText))
+        {
+            bodyText = ReplyTrimmer.Trim(bodyText, mime.Subject);
+        }
+
         var fromMailbox = mime.From.Mailboxes.FirstOrDefault();
         var attachments = ExtractAttachments(mime);
 
