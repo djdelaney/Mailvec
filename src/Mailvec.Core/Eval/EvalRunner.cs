@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mailvec.Core.Search;
 
 namespace Mailvec.Core.Eval;
@@ -12,7 +13,8 @@ public sealed record EvalQueryResult(
     IReadOnlyList<int> RanksOfExpected,  // 1-indexed; 0 = not in top-k. Same order as the query's Relevant list.
     double Ndcg,
     double Mrr,
-    double Recall);
+    double Recall,
+    double LatencyMs);
 
 public sealed record EvalModeResult(
     EvalMode Mode,
@@ -22,6 +24,27 @@ public sealed record EvalModeResult(
     public double MeanNdcg => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.Ndcg);
     public double MeanMrr => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.Mrr);
     public double MeanRecall => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.Recall);
+
+    public double MeanLatencyMs => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.LatencyMs);
+    public double P50LatencyMs => Percentile(Queries.Select(q => q.LatencyMs), 0.50);
+    public double P95LatencyMs => Percentile(Queries.Select(q => q.LatencyMs), 0.95);
+
+    /// <summary>
+    /// Linear-interpolated percentile. For small N (~10 eval queries) this is more
+    /// honest than nearest-rank — the gap between sorted[i] and sorted[i+1] can be
+    /// large enough that nearest-rank lies about both.
+    /// </summary>
+    private static double Percentile(IEnumerable<double> values, double p)
+    {
+        var sorted = values.OrderBy(v => v).ToArray();
+        if (sorted.Length == 0) return 0.0;
+        if (sorted.Length == 1) return sorted[0];
+        var rank = p * (sorted.Length - 1);
+        var lo = (int)Math.Floor(rank);
+        var hi = (int)Math.Ceiling(rank);
+        if (lo == hi) return sorted[lo];
+        return sorted[lo] + (sorted[hi] - sorted[lo]) * (rank - lo);
+    }
 }
 
 /// <summary>
@@ -56,7 +79,12 @@ public sealed class EvalRunner(
         CancellationToken ct = default)
     {
         var filters = query.Filters?.ToSearchFilters();
+
+        // Time only the actual ranking call. Filter/grade bookkeeping below is
+        // CPU-only and would distort sub-100ms measurements.
+        var t0 = Stopwatch.GetTimestamp();
         var ranked = await RankAsync(query.Query, mode, topK, filters, ct).ConfigureAwait(false);
+        var latencyMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
 
         var grades = new Dictionary<string, double>(query.Relevant.Count, StringComparer.Ordinal);
         foreach (var r in query.Relevant) grades[r.MessageId] = r.Grade;
@@ -85,7 +113,8 @@ public sealed class EvalRunner(
             RanksOfExpected: ranksOfExpected,
             Ndcg: EvalMetrics.NdcgAtK(ranked, grades, topK),
             Mrr: EvalMetrics.MrrAtK(ranked, relevantSet, topK),
-            Recall: EvalMetrics.RecallAtK(ranked, relevantSet, topK));
+            Recall: EvalMetrics.RecallAtK(ranked, relevantSet, topK),
+            LatencyMs: latencyMs);
     }
 
     private async Task<IReadOnlyList<string>> RankAsync(
