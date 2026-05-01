@@ -23,6 +23,25 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
     private const int MinTruncatedChars = 64;
 
     /// <summary>
+    /// Cheap reachability check — hits GET /api/tags (the model list endpoint).
+    /// Returns true if Ollama responded with 2xx; false on any HTTP/transport error.
+    /// Bounded by a short internal timeout so the MCP health endpoint can't hang
+    /// on the shared embedder HttpClient's 60s timeout. Does not surface error detail.
+    /// </summary>
+    public async Task<bool> PingAsync(CancellationToken ct = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(2));
+        try
+        {
+            using var response = await http.GetAsync("/api/tags", cts.Token).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException) { return false; }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
+    }
+
+    /// <summary>
     /// Returns one float[] per input string, in the same order. May silently
     /// truncate inputs that exceed the model's context length — log warnings
     /// surface this. Throws on any non-recoverable Ollama error.

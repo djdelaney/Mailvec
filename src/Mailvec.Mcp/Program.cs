@@ -1,5 +1,6 @@
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Health;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
@@ -62,7 +63,15 @@ static async Task RunHttp(string[] args)
 
     var app = builder.Build();
     app.Services.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
-    app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+    // /health returns a structured snapshot of DB / embedding / Ollama state.
+    // Returns 503 when degraded so monitors can alert without parsing the body.
+    app.MapGet("/health", async (HealthService health, CancellationToken ct) =>
+    {
+        var report = await health.CheckAsync(ct).ConfigureAwait(false);
+        return report.Status == "ok"
+            ? Results.Ok(report)
+            : Results.Json(report, statusCode: StatusCodes.Status503ServiceUnavailable);
+    });
     app.MapMcp();
     await app.RunAsync().ConfigureAwait(false);
 }
@@ -84,6 +93,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<VectorSearchService>();
     services.AddSingleton<HybridSearchService>();
     services.AddSingleton<AttachmentExtractor>();
+    services.AddSingleton<HealthService>();
     services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
 
     services.AddHttpClient<OllamaClient>((sp, client) =>
