@@ -22,6 +22,7 @@ public class VectorSearchServiceTests
         BodyHtml: null,
         RawHeaders: $"Message-ID: <{id}>\r\n",
         SizeBytes: 100,
+        ContentHash: $"test-hash-{id}",
         Attachments: []);
 
     /// <summary>
@@ -45,9 +46,9 @@ public class VectorSearchServiceTests
         var search = new VectorSearchService(db.Connections, ollama: null!);   // unused — we use SearchByVector
 
         var now = DateTimeOffset.UtcNow;
-        var idA = messages.Upsert(M("a@x", "Alpha topic", "alpha body text"), "INBOX", "INBOX/cur", "a", now);
-        var idB = messages.Upsert(M("b@x", "Beta topic",  "beta body text"),  "INBOX", "INBOX/cur", "b", now);
-        var idC = messages.Upsert(M("c@x", "Gamma topic", "gamma body text"), "INBOX", "INBOX/cur", "c", now);
+        long idA = messages.Upsert(M("a@x", "Alpha topic", "alpha body text"), "INBOX", "INBOX/cur", "a", now);
+        long idB = messages.Upsert(M("b@x", "Beta topic",  "beta body text"),  "INBOX", "INBOX/cur", "b", now);
+        long idC = messages.Upsert(M("c@x", "Gamma topic", "gamma body text"), "INBOX", "INBOX/cur", "c", now);
 
         // Each message gets one synthetic chunk with a one-hot vector at a distinct index.
         chunks.ReplaceChunksForMessage(idA, [new TextChunk(0, "alpha", 1)], [OneHot(1024, hotIndex: 0)], now);
@@ -76,8 +77,8 @@ public class VectorSearchServiceTests
         var search = new VectorSearchService(db.Connections, ollama: null!);
         var now = DateTimeOffset.UtcNow;
 
-        var keepId = messages.Upsert(M("keep@x", "k", "k"), "INBOX", "INBOX/cur", "k", now);
-        var dropId = messages.Upsert(M("drop@x", "d", "d"), "INBOX", "INBOX/cur", "d", now);
+        long keepId = messages.Upsert(M("keep@x", "k", "k"), "INBOX", "INBOX/cur", "k", now);
+        long dropId = messages.Upsert(M("drop@x", "d", "d"), "INBOX", "INBOX/cur", "d", now);
 
         chunks.ReplaceChunksForMessage(keepId, [new TextChunk(0, "k", 1)], [OneHot(1024, 0)], now);
         chunks.ReplaceChunksForMessage(dropId, [new TextChunk(0, "d", 1)], [OneHot(1024, 1)], now);
@@ -99,7 +100,7 @@ public class VectorSearchServiceTests
         var search = new VectorSearchService(db.Connections, ollama: null!);
         var now = DateTimeOffset.UtcNow;
 
-        var id = messages.Upsert(M("multi@x", "subj", "body"), "INBOX", "INBOX/cur", "m", now);
+        long id = messages.Upsert(M("multi@x", "subj", "body"), "INBOX", "INBOX/cur", "m", now);
 
         // Three chunks: chunk_index 1 is closest to the query.
         var query = OneHot(1024, hotIndex: 5, magnitude: 1f);

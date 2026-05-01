@@ -21,6 +21,7 @@ public class KeywordSearchServiceTests
         BodyHtml: null,
         RawHeaders: $"Message-ID: <{id}>\r\n",
         SizeBytes: 100,
+        ContentHash: $"hash-{id}",
         Attachments: attachments ?? []);
 
     [Fact]

@@ -54,6 +54,7 @@ public sealed class MessageParser
             BodyHtml: bodyHtml,
             RawHeaders: mime.Headers.ToString() ?? string.Empty,
             SizeBytes: sizeBytes,
+            ContentHash: MessageBodyHasher.Hash(mime),
             Attachments: attachments);
     }
 
@@ -129,6 +130,7 @@ public sealed record ParsedMessage(
     string? BodyHtml,
     string RawHeaders,
     long SizeBytes,
+    string ContentHash,
     IReadOnlyList<ParsedAttachment> Attachments)
 {
     public bool HasAttachments => Attachments.Count > 0;

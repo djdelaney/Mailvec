@@ -6,7 +6,7 @@ namespace Mailvec.Core.Tests.Data;
 
 public class MessageRepositoryTests
 {
-    private static ParsedMessage Sample(string id = "test-001@example.com", string? subject = "Hi", IReadOnlyList<ParsedAttachment>? attachments = null) =>
+    private static ParsedMessage Sample(string id = "test-001@example.com", string? subject = "Hi", IReadOnlyList<ParsedAttachment>? attachments = null, string? contentHash = null) =>
         new(
             MessageId: id,
             ThreadId: id,
@@ -20,6 +20,7 @@ public class MessageRepositoryTests
             BodyHtml: null,
             RawHeaders: "Message-ID: <test-001@example.com>\r\n",
             SizeBytes: 512,
+            ContentHash: contentHash ?? $"hash-{id}",
             Attachments: attachments ?? []);
 
     [Fact]
@@ -28,7 +29,7 @@ public class MessageRepositoryTests
         using var db = new TempDatabase();
         var repo = new MessageRepository(db.Connections);
 
-        var id = repo.Upsert(Sample(), folder: "INBOX", "INBOX/cur", "1736780100.1.host:2,S", DateTimeOffset.UtcNow);
+        long id = repo.Upsert(Sample(), folder: "INBOX", "INBOX/cur", "1736780100.1.host:2,S", DateTimeOffset.UtcNow);
         id.ShouldBeGreaterThan(0);
 
         var msg = repo.GetById(id).ShouldNotBeNull();
@@ -196,5 +197,55 @@ public class MessageRepositoryTests
         var msg = repo.GetById(id).ShouldNotBeNull();
         msg.Attachments.ShouldBeEmpty();
         msg.HasAttachments.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Upsert_reports_ContentChanged_false_on_fresh_insert()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var outcome = repo.Upsert(Sample(contentHash: "h1"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        outcome.ContentChanged.ShouldBeFalse();
+        outcome.Id.ShouldBeGreaterThan(0);
+    }
+
+    [Fact]
+    public void Upsert_reports_ContentChanged_false_when_hash_unchanged()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        repo.Upsert(Sample(contentHash: "stable-hash"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        var outcome = repo.Upsert(Sample(contentHash: "stable-hash"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        outcome.ContentChanged.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Upsert_reports_ContentChanged_true_when_hash_changed()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var first = repo.Upsert(Sample(contentHash: "h1"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        var second = repo.Upsert(Sample(contentHash: "h2-different"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        second.Id.ShouldBe(first.Id);
+        second.ContentChanged.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Upsert_persists_content_hash_for_subsequent_change_detection()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        repo.Upsert(Sample(contentHash: "h1"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        repo.Upsert(Sample(contentHash: "h2"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        // Third upsert with the same hash as the second should report no change.
+        var outcome = repo.Upsert(Sample(contentHash: "h2"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        outcome.ContentChanged.ShouldBeFalse();
     }
 }

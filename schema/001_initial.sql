@@ -35,7 +35,12 @@ CREATE TABLE messages (
     raw_headers       TEXT,
     indexed_at        TEXT NOT NULL,
     embedded_at       TEXT,
-    deleted_at        TEXT
+    deleted_at        TEXT,
+    -- Hash of the parsed message body (see Mailvec.Core.Parsing.MessageBodyHasher).
+    -- Populated by the indexer on every parse so we can detect when an upstream
+    -- body mutation should invalidate existing embeddings. NULL until first scan
+    -- under v3. Migration: schema/migrations/003_message_body_hash.sql.
+    content_hash      TEXT
 );
 
 CREATE INDEX idx_messages_thread    ON messages(thread_id);
@@ -120,6 +125,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '2'),
+    ('schema_version',       '3'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');
