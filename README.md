@@ -1,6 +1,6 @@
 # Mailvec
 
-Local-first IMAP archive with keyword (FTS5) and semantic (sqlite-vec) search, exposed to Claude over MCP. Single-account, single-machine, designed to run unattended on a Mac mini. See [`mailvec-project-scope.md`](mailvec-project-scope.md) for the full design.
+Local-first IMAP archive with keyword (FTS5) and semantic (sqlite-vec) search, exposed to Claude over MCP. Single-account, single-machine, designed to run unattended on a Mac mini. See [`mailvec-project-scope.md`](mailvec-project-scope.md) for the full design and [`docs/glossary.md`](docs/glossary.md) for unfamiliar terms (FTS5, RRF, MCP, Maildir, etc.).
 
 Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server works — Fastmail, iCloud, Gmail (with an app password), self-hosted Dovecot, etc. The shipped `ops/mbsyncrc.example` and reference design use Fastmail because that's the author's setup; swap the `Host` / `User` / `PassCmd` lines and the rest of the pipeline (Maildir → SQLite → embeddings → MCP) is unchanged.
 
