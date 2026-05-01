@@ -9,8 +9,8 @@
         "dateFrom": "2024-01-01T00:00:00Z"
       },
       "relevant": [
-        "<CAEx9pTabc...@mail.gmail.com>",
-        "<20240315.abc123@example.com>"
+        "CAEx9pTabc@mail.gmail.com",
+        "20240315.abc123@example.com"
       ],
       "notes": "Back-and-forth with David in March 2024 about renewing the lease."
     },
@@ -18,8 +18,8 @@
       "id": "q002",
       "query": "anthropic invoice",
       "relevant": [
-        { "messageId": "<billing-2024-03@anthropic.com>", "grade": 3 },
-        { "messageId": "<billing-2024-04@anthropic.com>", "grade": 1 }
+        { "messageId": "billing-2024-03@anthropic.com", "grade": 3 },
+        { "messageId": "billing-2024-04@anthropic.com", "grade": 1 }
       ],
       "notes": "March invoice is the canonical hit; April is a near-duplicate worth surfacing too."
     },
@@ -28,7 +28,7 @@
       "query": "flight confirmation tokyo",
       "filters": { "fromContains": "united" },
       "relevant": [
-        "<conf-XYZ789@united.com>"
+        "conf-XYZ789@united.com"
       ]
     }
   ]
