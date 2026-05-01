@@ -19,14 +19,19 @@ public sealed class MessageParser
     {
         ArgumentNullException.ThrowIfNull(mime);
 
-        var bodyText = mime.TextBody;
         var bodyHtml = mime.HtmlBody;
-
-        // If only HTML is present, derive plain text from it so FTS5 has something to chew on.
-        if (string.IsNullOrEmpty(bodyText) && !string.IsNullOrEmpty(bodyHtml))
-        {
-            bodyText = HtmlToText.Convert(bodyHtml);
-        }
+        // Prefer the HTML rendition when present: many senders (American
+        // Airlines, marketing platforms in general) ship a text/plain
+        // multipart alternative that's a broken markdown-ish dump from their
+        // template engine — bare URLs in parens, leaked CSS @import lines,
+        // unclosed HTML attribute fragments. V2's AngleSharp pipeline produces
+        // strictly cleaner output than what those senders inline. Fall back
+        // to mime.TextBody only when there's no HTML at all (genuine plain-
+        // text mail). Keeps the indexer's body_text consistent with what
+        // `mailvec rebuild-bodies` writes.
+        var bodyText = !string.IsNullOrEmpty(bodyHtml)
+            ? HtmlToText.Convert(bodyHtml)
+            : mime.TextBody;
 
         var fromMailbox = mime.From.Mailboxes.FirstOrDefault();
         var attachments = ExtractAttachments(mime);
