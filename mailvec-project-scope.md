@@ -440,7 +440,7 @@ Still open:
 
 - **Thread reconstruction.** Simple `In-Reply-To` / `References` heuristic. Acceptable today; revisit if mismatches with Fastmail's JMAP threading become a usability issue.
 - **JMAP-specific metadata.** IMAP flags are available via mbsync; JMAP-only fields (masked email, server-side labels) require a separate JMAP path. Not currently planned.
-- **WAL checkpointing strategy.** No periodic checkpoint configured; relies on SQLite's automatic checkpoint at 1000 frames. Worth measuring `-wal` file growth on a long-running install.
+- **WAL checkpointing strategy.** No periodic auto-checkpoint configured beyond SQLite's default (every 1000 frames). For one-off cleanup after a bulk embed, `mailvec checkpoint` runs `PRAGMA wal_checkpoint(TRUNCATE)` and reports before/after sizes. Worth measuring `-wal` file growth on a long-running install before deciding whether automatic periodic checkpoints are needed.
 
 ---
 
