@@ -36,12 +36,25 @@ public sealed class ConnectionFactory
             conn.LoadExtension(_vecExtensionPath);
         }
 
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            PRAGMA foreign_keys = ON;
-            PRAGMA busy_timeout = 5000;
-            """;
-        cmd.ExecuteNonQuery();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                PRAGMA foreign_keys = ON;
+                PRAGMA busy_timeout = 5000;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        // PRAGMA journal_mode = WAL must be run via a result-reading API —
+        // ExecuteNonQuery silently no-ops it under Microsoft.Data.Sqlite, which
+        // had us shipping in DELETE mode despite 001_initial.sql's intent.
+        // Setting it per-connection is cheap (no-op once the file is in WAL)
+        // and self-heals any DB that was created before this fix landed.
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA journal_mode = WAL;";
+            _ = cmd.ExecuteScalar();
+        }
 
         return conn;
     }

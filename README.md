@@ -116,6 +116,14 @@ dotnet run --project src/Mailvec.Embedder
 
 Watch for `Embedded N messages (M chunks) in <ms>` lines. The first call is slow (model load); subsequent batches are fast. ^C when `mailvec status` shows full coverage.
 
+For a small test archive this finishes in minutes. A full archive (tens of thousands of messages) is overnight territory on Apple Silicon without a dedicated GPU — the embedder works through it in the background and you can keep using `mailvec status` / `search` against partial coverage at any time. After a bulk run, `mailvec checkpoint` truncates the SQLite WAL file, which can grow to multiple GB during long write sessions:
+
+```sh
+dotnet run --project src/Mailvec.Cli -- checkpoint
+```
+
+This is a one-shot cleanup. SQLite auto-checkpoints during normal operation, so day-to-day you don't need to think about it.
+
 ### 6. Search
 
 Same env vars, third terminal:
@@ -127,9 +135,11 @@ dotnet run --project src/Mailvec.Cli -- search --semantic "vacation plans"
 dotnet run --project src/Mailvec.Cli -- search --hybrid "tree quote"
 dotnet run --project src/Mailvec.Cli -- search "lunch AND friday" -n 10  # boolean, custom limit
 dotnet run --project src/Mailvec.Cli -- search '"exact phrase"'          # phrase
+dotnet run --project src/Mailvec.Cli -- audit-embeddings                # sanity-check vector index
+dotnet run --project src/Mailvec.Cli -- checkpoint                      # truncate the SQLite WAL
 ```
 
-`status` prints message counts, embedding coverage, and warns if the schema's recorded embedding model disagrees with config.
+`status` prints message counts, embedding coverage, and warns if the schema's recorded embedding model disagrees with config. `audit-embeddings` sweeps the vector index for zero / NaN / abnormal-norm vectors — useful right after a large reindex or an Ollama upgrade.
 
 The Phase 2 exit criterion is "semantic queries return relevant results the FTS layer would have missed" — a quality call that needs your eyes on a real archive. Useful comparison queries are paraphrases ("trip planning" vs `vacation`), synonyms (`bill` vs `invoice`), and topic-level recall (`subscription renewal`, `house repairs`).
 
@@ -140,6 +150,25 @@ rm -rf ~/mailvec-test
 unset FASTMAIL_USER FASTMAIL_APP_PASSWORD Ingest__MaildirRoot Archive__DatabasePath
 # then revoke the app password at https://app.fastmail.com/settings/security/devicekeys
 ```
+
+## Logs
+
+The three .NET services (indexer, embedder, MCP server) write rolling daily log files to:
+
+```
+~/Library/Logs/Mailvec/mailvec-<service>-<YYYYMMDD>.log
+```
+
+Daily rolling, 10 MB cap per file, 14 most recent files kept. Implementation is Serilog's File sink wired through [Mailvec.Core/Logging/SerilogSetup.cs](src/Mailvec.Core/Logging/SerilogSetup.cs); rotation happens in-process so there's nothing to cron.
+
+When you run a service via `dotnet run` in a terminal, log lines also stream to stdout for live visibility. Under launchd (production), the plists set `MAILVEC_LAUNCHD=1` to suppress that — only the rolling file gets written. To override either default during development:
+
+```sh
+export MAILVEC_LOG_DIR=/some/other/path   # change the log directory
+export MAILVEC_LAUNCHD=1                  # silence stdout, even outside launchd
+```
+
+The Claude Desktop MCPB bundle writes to the same rolling file (it's the same binary). It additionally emits to stderr, which Claude Desktop's own log capture preserves at `~/Library/Logs/Claude/mcp-server-mailvec.log` — handy when triaging extension-install issues, since that's the file Claude Desktop's UI will surface in error toasts.
 
 ## Connecting to Claude Desktop
 
@@ -178,7 +207,7 @@ The indexer and embedder run as your own processes outside the bundle — they k
 
 - The bundled binary is `osx-arm64` only (declared in `manifest.json` `compatibility.platforms`). Add `osx-x64` to `build-mcpb.sh` if you need it.
 - The binary is unsigned. macOS Gatekeeper may prompt the first time Claude Desktop spawns it; allow once and it's fine. If it gets quarantined silently, `xattr -dr com.apple.quarantine "$HOME/Library/Application Support/Claude/extensions/"` clears it.
-- All logs from the spawned MCP server go to stderr and land in `~/Library/Logs/Claude/mcp-server-mailvec.log`. First place to look if anything misbehaves.
+- The bundled MCP server writes the same Serilog rolling file as the standalone build (`~/Library/Logs/Mailvec/mailvec-mcp-<date>.log` — see [Logs](#logs)). It also emits to stderr, which Claude Desktop captures into `~/Library/Logs/Claude/mcp-server-mailvec.log`. Either is fine for triage; the Mailvec rolling file is more durable across days, the Claude one is what Anthropic Support will ask for.
 
 ## Reading attachments
 

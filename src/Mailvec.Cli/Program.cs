@@ -8,6 +8,7 @@ var root = new RootCommand("Mailvec admin CLI")
     RebuildFtsCommand.Build(),
     ReindexCommand.Build(),
     AuditEmbeddingsCommand.Build(),
+    CheckpointCommand.Build(),
     EvalCommand.Build(),
     EvalAddCommand.Build(),
     RebuildBodiesCommand.Build(),
