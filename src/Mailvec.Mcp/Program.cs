@@ -1,12 +1,12 @@
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Health;
+using Mailvec.Core.Logging;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 // Two transports share the same Core wiring:
@@ -30,10 +30,11 @@ static async Task RunStdio(string[] args)
 {
     var builder = Host.CreateApplicationBuilder(args);
 
-    // Re-route ALL log providers to stderr. The default console logger writes to
-    // stdout, which would corrupt the MCP JSON-RPC stream.
-    builder.Logging.ClearProviders();
-    builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+    // Stdio transport: stdout carries JSON-RPC frames, so SerilogSetup forces
+    // the Console sink to stderr at all levels. The Serilog file sink is the
+    // primary log; the stderr-console output is for Claude Desktop's
+    // ~/Library/Logs/Claude/mcp-server-mailvec.log capture.
+    SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "mcp", stdioMode: true);
 
     AddMailvecServices(builder.Services, builder.Configuration);
 
@@ -50,6 +51,7 @@ static async Task RunStdio(string[] args)
 static async Task RunHttp(string[] args)
 {
     var builder = WebApplication.CreateBuilder(args);
+    SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "mcp");
 
     AddMailvecServices(builder.Services, builder.Configuration);
 
