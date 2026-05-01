@@ -417,11 +417,23 @@ Solution, projects, CPM, Directory.Build.props, README, gitignore, CI stub.
 **Exit criteria:** Claude can answer "when did Bartlett last quote me for the tree work?" without being told where to look.
 
 ### Phase 4 — Operationalization
-1. launchd plists for all three services + Ollama.
+1. launchd plists for indexer + embedder (Ollama installed separately; MCP HTTP server is optional — Claude Desktop spawns its stdio binary on demand via the MCPB bundle, but the HTTP server is the only path for non-Anthropic clients, so it gets a plist if cross-vendor access is in scope).
 2. `install.sh` that sets up config, loads services, verifies health.
-3. Health endpoint on the MCP server.
+3. Health endpoint on the MCP server. ✓ `GET /health` returns a structured snapshot (DB path / message counts / last-indexed timestamp, schema vs config embedding model, embedding coverage %, Ollama reachability). HTTP 200 when all green, 503 when degraded so monitors can alert without parsing the body. Local-only by virtue of `Mcp:BindAddress=127.0.0.1`.
 4. Log rotation via launchd stdout/stderr paths.
-5. Simple status command for coverage metrics.
+5. Simple status command for coverage metrics. ✓ `mailvec status` already exists.
+
+### Phase 5 — Cross-vendor MCP access (ChatGPT, Gemini, Claude.ai)
+
+The MCPB bundle is Anthropic-specific (Claude Desktop only). Stdio works for any client that can spawn a child process locally — Claude Code can, but ChatGPT / Gemini / Claude.ai cannot, since they're cloud services. **HTTP is the only portable transport for those clients**, and they all require the same three things on top of what we have today:
+
+1. **Public reachability over HTTPS.** Cloudflare Tunnel (`cloudflared`) or Tailscale Funnel (the *Funnel* variant — exposes a tailnet service to the public internet over HTTPS with a Tailscale-issued cert; ordinary tailnet doesn't reach ChatGPT/Gemini). Either terminates TLS for us, so the MCP server can stay bound to `127.0.0.1` and the tunnel connects locally.
+2. **OAuth 2.1 (PKCE).** ChatGPT Connectors, Gemini, and Claude.ai Custom Connectors all expect MCP's standard OAuth flow. The .NET MCP SDK has authentication scaffolding; the open question is the issuer — self-hosted, Cloudflare Access, or Tailscale identity in front are all viable. Each has different implications for who can approve a new Claude/ChatGPT login (only the user vs. anyone with tunnel access).
+3. **Per-tool authorization model.** All current tools are read-only against the local DB and Maildir, so the simplest scope is "any authenticated user can call any tool." Revisit if mutating tools are added later.
+
+Practical sequencing: (a) add OAuth scaffolding to the HTTP server; (b) stand up a Cloudflare Tunnel pointed at `localhost:3333`; (c) register the resulting HTTPS URL as a connector in each target client. The MCPB bundle stays as the fast path for Claude Desktop — `Program.cs` already shares Core wiring between the two transports, so nothing about the bundle path changes.
+
+**Out of scope for v1**: federated identity, multi-user support, fine-grained per-tool scopes. This is a single-user system; the auth layer exists to keep random internet traffic out, not to model permissions.
 
 ---
 
