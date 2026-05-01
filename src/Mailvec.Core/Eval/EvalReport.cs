@@ -65,6 +65,9 @@ public sealed class EvalReportRun
             Mrr = m.MeanMrr,
             Recall = m.MeanRecall,
             QueryCount = m.Queries.Count,
+            MeanLatencyMs = m.MeanLatencyMs,
+            P50LatencyMs = m.P50LatencyMs,
+            P95LatencyMs = m.P95LatencyMs,
         },
         Queries = m.Queries.Select(q => new EvalReportQuery
         {
@@ -74,6 +77,7 @@ public sealed class EvalReportRun
             Mrr = q.Mrr,
             Recall = q.Recall,
             RanksOfExpected = q.RanksOfExpected.ToList(),
+            LatencyMs = q.LatencyMs,
         }).ToList(),
     };
 }
@@ -84,6 +88,10 @@ public sealed class EvalReportAggregate
     public double Mrr { get; set; }
     public double Recall { get; set; }
     public int QueryCount { get; set; }
+    // Latency fields default to 0 when loading historical reports written before timing was captured.
+    public double MeanLatencyMs { get; set; }
+    public double P50LatencyMs { get; set; }
+    public double P95LatencyMs { get; set; }
 }
 
 public sealed class EvalReportQuery
@@ -94,4 +102,5 @@ public sealed class EvalReportQuery
     public double Mrr { get; set; }
     public double Recall { get; set; }
     public List<int> RanksOfExpected { get; set; } = [];
+    public double LatencyMs { get; set; }
 }
