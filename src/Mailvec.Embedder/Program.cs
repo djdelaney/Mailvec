@@ -1,3 +1,4 @@
+using Mailvec.Core;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
 using Mailvec.Core.Logging;
@@ -6,6 +7,7 @@ using Mailvec.Core.Options;
 using Mailvec.Embedder.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http.Resilience;
+using Microsoft.Extensions.Options;
 
 var builder = Host.CreateApplicationBuilder(args);
 SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "embedder");
@@ -39,4 +41,16 @@ builder.Services
 builder.Services.AddHostedService<EmbeddingWorker>();
 
 var host = builder.Build();
+
+// Log resolved DB path at startup so the operator can confirm which dataset
+// (prod vs test) the service is running against. Embedder doesn't read the
+// Maildir, so only the DB is relevant.
+{
+    var archive = host.Services.GetRequiredService<IOptions<ArchiveOptions>>().Value;
+    var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Embedder");
+    logger.LogInformation(
+        "Embedder starting (database={DatabasePath})",
+        PathExpansion.Expand(archive.DatabasePath));
+}
+
 host.Run();
