@@ -63,6 +63,43 @@ You don't need Ollama running to build, run the indexer, or use keyword search �
 
 The configured model is recorded in the SQLite `metadata` table on first embed. If you change `Ollama:EmbeddingModel` later, the embedder refuses to start until you run `mailvec reindex --all` to clear the existing vectors. Mixing vector spaces silently corrupts results, so this guard is intentional.
 
+### mbsync (IMAP sync)
+
+Pulls IMAP into a local Maildir the indexer watches. Read-only — changes flow Fastmail → local, never the other way.
+
+```sh
+brew install isync                     # the binary is `mbsync`; Homebrew names the formula after the suite
+mkdir -p ~/Mail/Fastmail
+```
+
+**Stash your IMAP password in the macOS Keychain** so it's never on disk. For Fastmail, generate an app-specific password at <https://app.fastmail.com/settings/security/devicekeys> (the password is shown once and can't be retrieved later — only revoked). Add it under service name `mbsync`:
+
+```sh
+security add-generic-password -a you@fastmail.com -s mbsync -w
+```
+
+The `-a` (account) and `-s` (service) values must match the `PassCmd` line in `~/.mbsyncrc`. The `-w` flag prompts for the password without echoing.
+
+**Configure mbsync** by copying the example and replacing `you@fastmail.com` on both the `User` and `PassCmd` lines:
+
+```sh
+cp ops/mbsyncrc.example ~/.mbsyncrc
+chmod 600 ~/.mbsyncrc
+# then edit User + PassCmd in ~/.mbsyncrc
+```
+
+For non-Fastmail IMAP, swap the `Host` line; Gmail and iCloud both require an app-specific password issued from their respective account-security UIs. See `man mbsync` for fancier auth (XOAUTH2, etc.).
+
+**First sync.** Run it once manually before scheduling — a multi-year archive can take hours, and you want to see any auth or TLS errors live:
+
+```sh
+mbsync -aV       # -a = all channels, -V = verbose
+```
+
+Run inside `tmux` / `screen` for a big archive so a closed terminal doesn't kill it. Subsequent syncs are incremental and finish in seconds. The indexer (and embedder) can start against `~/Mail/Fastmail/` while mbsync is still working — they'll pick up new messages as they land.
+
+**Scheduling** is part of Phase 4. The plist at [`ops/launchd/com.mailvec.mbsync.plist`](ops/launchd/com.mailvec.mbsync.plist) runs `mbsync -a` every 5 minutes once `ops/install.sh` (currently a stub) wires it in. To install it manually now: `cp` it to `~/Library/LaunchAgents/`, replace `__LOG_DIR__` with `~/Library/Logs/Mailvec` (and `mkdir -p` that dir), then `launchctl load <plist>`.
+
 ## Trying it end-to-end
 
 Two kinds of testing: the automated unit/integration suite, and a manual walkthrough against real mail. Both bypass mbsync; mbsync is the production sync path but isn't required to exercise the rest of the pipeline.
