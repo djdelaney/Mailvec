@@ -98,6 +98,8 @@ mbsync -aV       # -a = all channels, -V = verbose
 
 Run inside `tmux` / `screen` for a big archive so a closed terminal doesn't kill it. Subsequent syncs are incremental and finish in seconds. The indexer (and embedder) can start against `~/Mail/Fastmail/` while mbsync is still working — they'll pick up new messages as they land.
 
+**Folder filtering (Fastmail labels gotcha).** Fastmail exposes labels as IMAP folders, so a message with two labels lives in two folders. With the example's `Patterns *`, mbsync downloads both copies and the indexer logs spurious `Content changed; cleared embeddings` warnings on the second one — Fastmail's IMAP serializer regenerates the multipart boundary string per folder, so the body bytes hash differently across copies despite being the same email. Final search results are correct, just at the cost of re-embedding every multi-labelled message. To avoid it, narrow `Patterns` (e.g. `Patterns INBOX`); the [example](ops/mbsyncrc.example) shows the common forms.
+
 **Scheduling** is part of Phase 4. The plist at [`ops/launchd/com.mailvec.mbsync.plist`](ops/launchd/com.mailvec.mbsync.plist) runs `mbsync -a` every 5 minutes once `ops/install.sh` (currently a stub) wires it in. To install it manually now: `cp` it to `~/Library/LaunchAgents/`, replace `__LOG_DIR__` with `~/Library/Logs/Mailvec` (and `mkdir -p` that dir), then `launchctl load <plist>`.
 
 ## Trying it end-to-end

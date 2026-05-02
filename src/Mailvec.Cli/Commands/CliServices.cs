@@ -1,3 +1,4 @@
+using Mailvec.Core;
 using Mailvec.Core.Data;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
@@ -5,6 +6,7 @@ using Mailvec.Core.Search;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Mailvec.Cli.Commands;
 
@@ -41,11 +43,21 @@ internal static class CliServices
 
         services.AddHttpClient<OllamaClient>((sp, client) =>
         {
-            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OllamaOptions>>().Value;
+            var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
             client.BaseAddress = new Uri(opts.BaseUrl);
             client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
         });
 
-        return services.BuildServiceProvider();
+        var sp = services.BuildServiceProvider();
+
+        // Print the resolved DB / Maildir paths to stderr so every CLI command
+        // surfaces which dataset (prod vs test) it ran against, without
+        // polluting stdout (search results, JSON output, etc. flow there).
+        var archive = sp.GetRequiredService<IOptions<ArchiveOptions>>().Value;
+        var ingest = sp.GetRequiredService<IOptions<IngestOptions>>().Value;
+        Console.Error.WriteLine(
+            $"[mailvec] db={PathExpansion.Expand(archive.DatabasePath)} maildir={PathExpansion.Expand(ingest.MaildirRoot)}");
+
+        return sp;
     }
 }
