@@ -21,9 +21,19 @@ Inbox      ~/Mail/Fastmail/INBOX
 Channel fastmail
 Far     :fastmail-remote:
 Near    :fastmail-local:
+# Which IMAP folders to mirror. Fastmail "labels" are exposed as IMAP folders,
+# so this is the knob for filtering them. Examples:
+#   Patterns *                    sync everything (default)
+#   Patterns INBOX                inbox only — archived/labelled mail won't sync
+#   Patterns INBOX INBOX/*        inbox plus its sub-folders
+#   Patterns * !Archive !Trash    everything except the named folders
 Patterns *
 Create  Near
 SyncState *
 # Read-only sync: changes in Fastmail flow down, never up.
 Sync    Pull
 Expunge Near
+# Example Cap each folder to the 6000 newest messages. mbsync has no date-range
+# filter; this is the closest knob and works well if you don't want to
+# pull years of archive on first sync. Remove the line to sync everything.
+#MaxMessages 6000
