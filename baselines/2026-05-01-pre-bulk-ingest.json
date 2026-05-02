@@ -1,0 +1,773 @@
+{
+  "version": 1,
+  "ranAt": "2026-05-02T00:59:44.022585+00:00",
+  "querySetPath": "/Users/danieldelaney/.local/share/mailvec/eval/queries.json",
+  "topK": 10,
+  "runs": [
+    {
+      "mode": "keyword",
+      "aggregate": {
+        "ndcg": 0.7727416616601732,
+        "mrr": 0.840625,
+        "recall": 0.8106150793650794,
+        "queryCount": 16,
+        "meanLatencyMs": 26.69745625,
+        "p50LatencyMs": 10.8138,
+        "p95LatencyMs": 94.51627500000001
+      },
+      "queries": [
+        {
+          "id": "q001",
+          "relevantCount": 7,
+          "ndcg": 0.9083745556952364,
+          "mrr": 1,
+          "recall": 0.8571428571428571,
+          "ranksOfExpected": [
+            1,
+            4,
+            2,
+            5,
+            3,
+            6,
+            0
+          ],
+          "latencyMs": 122.4921
+        },
+        {
+          "id": "q002",
+          "relevantCount": 3,
+          "ndcg": 0.7653606369886217,
+          "mrr": 1,
+          "recall": 0.6666666666666666,
+          "ranksOfExpected": [
+            2,
+            1,
+            0
+          ],
+          "latencyMs": 85.191
+        },
+        {
+          "id": "q003",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            5,
+            4
+          ],
+          "latencyMs": 18.8416
+        },
+        {
+          "id": "q004",
+          "relevantCount": 6,
+          "ndcg": 0.6625602459390022,
+          "mrr": 1,
+          "recall": 0.6666666666666666,
+          "ranksOfExpected": [
+            3,
+            6,
+            7,
+            1,
+            0,
+            0
+          ],
+          "latencyMs": 81.8262
+        },
+        {
+          "id": "q005",
+          "relevantCount": 9,
+          "ndcg": 0.9230390249121355,
+          "mrr": 1,
+          "recall": 0.8888888888888888,
+          "ranksOfExpected": [
+            7,
+            6,
+            5,
+            4,
+            1,
+            3,
+            2,
+            0,
+            10
+          ],
+          "latencyMs": 14.5627
+        },
+        {
+          "id": "q006",
+          "relevantCount": 2,
+          "ndcg": 0.6131471927654584,
+          "mrr": 1,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            1,
+            0
+          ],
+          "latencyMs": 14.9097
+        },
+        {
+          "id": "q007",
+          "relevantCount": 10,
+          "ndcg": 0.9363792118010483,
+          "mrr": 1,
+          "recall": 0.9,
+          "ranksOfExpected": [
+            0,
+            6,
+            4,
+            5,
+            1,
+            9,
+            8,
+            3,
+            2,
+            7
+          ],
+          "latencyMs": 11.5772
+        },
+        {
+          "id": "q008",
+          "relevantCount": 4,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            4,
+            2
+          ],
+          "latencyMs": 7.3169
+        },
+        {
+          "id": "q009",
+          "relevantCount": 5,
+          "ndcg": 0.4883661149442773,
+          "mrr": 0.25,
+          "recall": 0.8,
+          "ranksOfExpected": [
+            5,
+            4,
+            10,
+            7,
+            0
+          ],
+          "latencyMs": 2.6341
+        },
+        {
+          "id": "q010",
+          "relevantCount": 7,
+          "ndcg": 0.9020870746500321,
+          "mrr": 1,
+          "recall": 0.8571428571428571,
+          "ranksOfExpected": [
+            1,
+            4,
+            2,
+            3,
+            5,
+            7,
+            0
+          ],
+          "latencyMs": 10.0504
+        },
+        {
+          "id": "q011",
+          "relevantCount": 6,
+          "ndcg": 0.8090791338210652,
+          "mrr": 1,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            3,
+            5,
+            4,
+            6,
+            1,
+            0
+          ],
+          "latencyMs": 5.8306
+        },
+        {
+          "id": "q012",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            3,
+            5,
+            4
+          ],
+          "latencyMs": 6.2654
+        },
+        {
+          "id": "q013",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 4.8202
+        },
+        {
+          "id": "q014",
+          "relevantCount": 3,
+          "ndcg": 0.5051284895111403,
+          "mrr": 0.2,
+          "recall": 1,
+          "ranksOfExpected": [
+            5,
+            7,
+            6
+          ],
+          "latencyMs": 25.8272
+        },
+        {
+          "id": "q015",
+          "relevantCount": 5,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "latencyMs": 7.8545
+        },
+        {
+          "id": "q016",
+          "relevantCount": 2,
+          "ndcg": 0.8503449055347546,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            5
+          ],
+          "latencyMs": 7.1595
+        }
+      ]
+    },
+    {
+      "mode": "semantic",
+      "aggregate": {
+        "ndcg": 0.8214155337448743,
+        "mrr": 0.8354166666666667,
+        "recall": 0.888888888888889,
+        "queryCount": 16,
+        "meanLatencyMs": 107.21690625,
+        "p50LatencyMs": 57.7877,
+        "p95LatencyMs": 268.94507500000003
+      },
+      "queries": [
+        {
+          "id": "q001",
+          "relevantCount": 7,
+          "ndcg": 0.9652102434192421,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            8,
+            9,
+            1,
+            2,
+            4,
+            3,
+            7
+          ],
+          "latencyMs": 822.3409
+        },
+        {
+          "id": "q002",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3
+          ],
+          "latencyMs": 84.4798
+        },
+        {
+          "id": "q003",
+          "relevantCount": 5,
+          "ndcg": 0.9318171001351273,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            8,
+            9
+          ],
+          "latencyMs": 74.3801
+        },
+        {
+          "id": "q004",
+          "relevantCount": 6,
+          "ndcg": 0.9930783166417602,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4,
+            2,
+            3,
+            5,
+            7
+          ],
+          "latencyMs": 71.0916
+        },
+        {
+          "id": "q005",
+          "relevantCount": 9,
+          "ndcg": 0.9216514835285049,
+          "mrr": 1,
+          "recall": 0.8888888888888888,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            8,
+            6,
+            9,
+            5,
+            0
+          ],
+          "latencyMs": 63.7323
+        },
+        {
+          "id": "q006",
+          "relevantCount": 2,
+          "ndcg": 0.6131471927654584,
+          "mrr": 1,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            1,
+            0
+          ],
+          "latencyMs": 61.7784
+        },
+        {
+          "id": "q007",
+          "relevantCount": 10,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "latencyMs": 68.9599
+        },
+        {
+          "id": "q008",
+          "relevantCount": 4,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            2,
+            4
+          ],
+          "latencyMs": 62.0485
+        },
+        {
+          "id": "q009",
+          "relevantCount": 5,
+          "ndcg": 0.9374130297304558,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            4,
+            8,
+            5
+          ],
+          "latencyMs": 53.1417
+        },
+        {
+          "id": "q010",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            4,
+            3,
+            7,
+            5,
+            6
+          ],
+          "latencyMs": 49.907
+        },
+        {
+          "id": "q011",
+          "relevantCount": 6,
+          "ndcg": 0.685068865066143,
+          "mrr": 0.5,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            3,
+            2,
+            5,
+            8,
+            0,
+            4
+          ],
+          "latencyMs": 51.3903
+        },
+        {
+          "id": "q012",
+          "relevantCount": 5,
+          "ndcg": 0.6266289010472648,
+          "mrr": 0.3333333333333333,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            5,
+            6,
+            8,
+            10
+          ],
+          "latencyMs": 53.797
+        },
+        {
+          "id": "q013",
+          "relevantCount": 2,
+          "ndcg": 0.6131471927654584,
+          "mrr": 1,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            1,
+            0
+          ],
+          "latencyMs": 51.8389
+        },
+        {
+          "id": "q014",
+          "relevantCount": 3,
+          "ndcg": 0.6182885020492784,
+          "mrr": 0.3333333333333333,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            3,
+            5
+          ],
+          "latencyMs": 48.545
+        },
+        {
+          "id": "q015",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "latencyMs": 48.7812
+        },
+        {
+          "id": "q016",
+          "relevantCount": 2,
+          "ndcg": 0.23719771276929622,
+          "mrr": 0.2,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            5,
+            0
+          ],
+          "latencyMs": 49.2579
+        }
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "aggregate": {
+        "ndcg": 0.8825978557425899,
+        "mrr": 0.8541666666666667,
+        "recall": 0.9875,
+        "queryCount": 16,
+        "meanLatencyMs": 73.5019125,
+        "p50LatencyMs": 71.2151,
+        "p95LatencyMs": 91.203825
+      },
+      "queries": [
+        {
+          "id": "q001",
+          "relevantCount": 7,
+          "ndcg": 0.9950883841893561,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            6,
+            1,
+            2,
+            3,
+            5,
+            8
+          ],
+          "latencyMs": 79.3926
+        },
+        {
+          "id": "q002",
+          "relevantCount": 3,
+          "ndcg": 0.9674679834891693,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            4
+          ],
+          "latencyMs": 73.1884
+        },
+        {
+          "id": "q003",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            5,
+            4
+          ],
+          "latencyMs": 85.5453
+        },
+        {
+          "id": "q004",
+          "relevantCount": 6,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            4,
+            3,
+            1,
+            6,
+            5
+          ],
+          "latencyMs": 65.0256
+        },
+        {
+          "id": "q005",
+          "relevantCount": 9,
+          "ndcg": 0.9971876401972101,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10
+          ],
+          "latencyMs": 70.9182
+        },
+        {
+          "id": "q006",
+          "relevantCount": 2,
+          "ndcg": 0.8175295903539445,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            7
+          ],
+          "latencyMs": 90.3979
+        },
+        {
+          "id": "q007",
+          "relevantCount": 10,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            7,
+            3,
+            2,
+            4,
+            1,
+            8,
+            9,
+            6,
+            5,
+            10
+          ],
+          "latencyMs": 81.8153
+        },
+        {
+          "id": "q008",
+          "relevantCount": 4,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            4,
+            3
+          ],
+          "latencyMs": 90.9932
+        },
+        {
+          "id": "q009",
+          "relevantCount": 5,
+          "ndcg": 0.8712322899646365,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            7,
+            8,
+            10
+          ],
+          "latencyMs": 51.4819
+        },
+        {
+          "id": "q010",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "latencyMs": 64.5005
+        },
+        {
+          "id": "q011",
+          "relevantCount": 6,
+          "ndcg": 0.7982650576674577,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            3,
+            4,
+            6,
+            5,
+            7
+          ],
+          "latencyMs": 66.2443
+        },
+        {
+          "id": "q012",
+          "relevantCount": 5,
+          "ndcg": 0.9747429528567879,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            5,
+            6
+          ],
+          "latencyMs": 60.5053
+        },
+        {
+          "id": "q013",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 62.2597
+        },
+        {
+          "id": "q014",
+          "relevantCount": 3,
+          "ndcg": 0.6182885020492784,
+          "mrr": 0.3333333333333333,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            4,
+            5
+          ],
+          "latencyMs": 91.8357
+        },
+        {
+          "id": "q015",
+          "relevantCount": 5,
+          "ndcg": 0.49052808629057093,
+          "mrr": 0.3333333333333333,
+          "recall": 0.8,
+          "ranksOfExpected": [
+            3,
+            6,
+            9,
+            10,
+            0
+          ],
+          "latencyMs": 71.512
+        },
+        {
+          "id": "q016",
+          "relevantCount": 2,
+          "ndcg": 0.5912352048230277,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            7
+          ],
+          "latencyMs": 70.4147
+        }
+      ]
+    }
+  ]
+}
