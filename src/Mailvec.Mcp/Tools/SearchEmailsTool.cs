@@ -46,7 +46,12 @@ public sealed class SearchEmailsTool(
         "Use a result's id or messageId with get_email/get_thread for follow-up.")]
     public async Task<SearchEmailsResponse> SearchEmails(
         [Description("Optional free-text query. With it, results are ranked by relevance; without it, by date descending. " +
-                     "For mode=keyword this is an FTS5 expression (phrase quotes, AND/OR/NOT). For mode=semantic/hybrid it's natural language.")]
+                     "For mode=keyword this is an FTS5 expression (phrase quotes, AND/OR/NOT). For mode=semantic/hybrid it's natural language. " +
+                     "When searching for mail tied to a specific company (purchases, receipts, notifications, account alerts), " +
+                     "prefer the company's domain (e.g. `target.com`) over the brand name (`target`). The domain appears in sender " +
+                     "addresses, body links, and footer/unsubscribe text, and is far more discriminating than the brand name " +
+                     "(which collides with the common English word and pulls in unrelated mail). For 'all email FROM this company' " +
+                     "questions, scoping with `fromContains` (or `fromExact`) is even sharper than putting the domain in `query`.")]
         string? query = null,
         [Description("Search mode: 'hybrid' (default), 'keyword' (BM25 only), or 'semantic' (vector only). Ignored when query is omitted.")]
         string mode = "hybrid",
@@ -62,7 +67,9 @@ public sealed class SearchEmailsTool(
         [Description("Latest message date (inclusive), ISO 8601. Pair with `dateFrom` for explicit windows; " +
                      "omit to mean 'up to the present'.")]
         string? dateTo = null,
-        [Description("Case-insensitive substring against from_address OR from_name. Useful when only the sender's name or domain is known. Ignored if fromExact is set.")]
+        [Description("Case-insensitive substring against from_address OR from_name. Useful when only the sender's name or domain is known. " +
+                     "For mail from a specific company, prefer the domain (`target.com`) over the brand name (`target`) — the domain " +
+                     "is in the from_address and is far more discriminating. Ignored if fromExact is set.")]
         string? fromContains = null,
         [Description("Case-insensitive exact match on from_address (the email address only, not the display name). Use for 'all email from <addr>' lookups.")]
         string? fromExact = null,
