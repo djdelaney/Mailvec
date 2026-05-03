@@ -129,10 +129,14 @@ internal static class EvalCommand
         Console.WriteLine($"Eval over {queryCount} quer{(queryCount == 1 ? "y" : "ies")} (top-{topK}):");
         Console.WriteLine();
         Console.WriteLine($"  {"Mode",-10}  {"NDCG",7}  {"MRR",7}  {"Recall",7}");
-        Console.WriteLine($"  {new string('-', 10)}  {new string('-', 7)}  {new string('-', 7)}  {new string('-', 7)}");
+        Console.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 7)}  {new string('-', 7)}  {new string('-', 7)}"));
         foreach (var r in results)
         {
-            Console.WriteLine($"  {ModeName(r.Mode),-10}  {r.MeanNdcg,7:F3}  {r.MeanMrr,7:F3}  {r.MeanRecall,7:F3}");
+            Console.WriteLine(
+                $"  {Colors.ModeHeader($"{ModeName(r.Mode),-10}")}  " +
+                $"{Colors.Score(r.MeanNdcg, $"{r.MeanNdcg,7:F3}")}  " +
+                $"{Colors.Score(r.MeanMrr, $"{r.MeanMrr,7:F3}")}  " +
+                $"{Colors.Score(r.MeanRecall, $"{r.MeanRecall,7:F3}")}");
         }
     }
 
@@ -165,16 +169,27 @@ internal static class EvalCommand
 
             Console.WriteLine();
             var label = includeAll ? "all queries" : $"{rows.Count} quer{(rows.Count == 1 ? "y" : "ies")} below NDCG=1.000";
-            Console.WriteLine($"  {ModeName(mr.Mode)}: {label} (worst → best)");
+            Console.WriteLine($"  {Colors.Bold(Colors.ModeHeader(ModeName(mr.Mode)))}: {label} (worst → best)");
             Console.WriteLine($"    {"Id",-10}  {"NDCG",6}  {"MRR",6}  {"Recall",6}  Query / expected ranks");
-            Console.WriteLine($"    {new string('-', 10)}  {new string('-', 6)}  {new string('-', 6)}  {new string('-', 6)}  {new string('-', 60)}");
+            Console.WriteLine(Colors.Dim($"    {new string('-', 10)}  {new string('-', 6)}  {new string('-', 6)}  {new string('-', 6)}  {new string('-', 60)}"));
 
+            var first = true;
             foreach (var q in rows)
             {
+                // Blank line between queries — the biggest readability win when
+                // many queries each have multi-line expected/actual blocks.
+                if (!first) Console.WriteLine();
+                first = false;
+
                 var meta = queriesById.GetValueOrDefault(q.Id);
                 var queryText = meta is null ? q.Query : meta.Query;
                 var trimmed = queryText.Length > 60 ? queryText[..57] + "..." : queryText;
-                Console.WriteLine($"    {q.Id,-10}  {q.Ndcg,6:F3}  {q.Mrr,6:F3}  {q.Recall,6:F3}  {trimmed}");
+                Console.WriteLine(
+                    $"    {Colors.QueryId($"{q.Id,-10}")}  " +
+                    $"{Colors.Score(q.Ndcg, $"{q.Ndcg,6:F3}")}  " +
+                    $"{Colors.Score(q.Mrr, $"{q.Mrr,6:F3}")}  " +
+                    $"{Colors.Score(q.Recall, $"{q.Recall,6:F3}")}  " +
+                    $"{trimmed}");
 
                 if (meta is not null)
                 {
@@ -182,7 +197,7 @@ internal static class EvalCommand
                     {
                         var rank = q.RanksOfExpected[i];
                         var rankStr = rank == 0 ? $"miss (not in top-{topK})" : $"rank {rank}";
-                        var marker = rank == 0 ? "✗" : "✓";
+                        var marker = rank == 0 ? Colors.Miss() : Colors.Hit();
                         Console.WriteLine($"      {marker} expected {meta.Relevant[i].MessageId}  →  {rankStr}");
                     }
                 }
@@ -194,10 +209,11 @@ internal static class EvalCommand
                 {
                     var formatted = actualTop.Select((id, i) =>
                     {
-                        var hit = relevantSet.Contains(id) ? "✓" : " ";
-                        return $"{hit}{i + 1}.{id}";
+                        var hit = relevantSet.Contains(id);
+                        var marker = hit ? Colors.Hit() : " ";
+                        return $"{marker}{i + 1}.{id}";
                     });
-                    Console.WriteLine($"      actual top-{actualTop.Count}: {string.Join("  ", formatted)}");
+                    Console.WriteLine($"      {Colors.Dim($"actual top-{actualTop.Count}:")} {string.Join("  ", formatted)}");
                 }
             }
         }
@@ -214,10 +230,12 @@ internal static class EvalCommand
         Console.WriteLine($"Latency (ms):");
         Console.WriteLine();
         Console.WriteLine($"  {"Mode",-10}  {"mean",8}  {"p50",8}  {"p95",8}");
-        Console.WriteLine($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}");
+        Console.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
         foreach (var r in results)
         {
-            Console.WriteLine($"  {ModeName(r.Mode),-10}  {r.MeanLatencyMs,8:F1}  {r.P50LatencyMs,8:F1}  {r.P95LatencyMs,8:F1}");
+            Console.WriteLine(
+                $"  {Colors.ModeHeader($"{ModeName(r.Mode),-10}")}  " +
+                $"{r.MeanLatencyMs,8:F1}  {r.P50LatencyMs,8:F1}  {r.P95LatencyMs,8:F1}");
         }
     }
 
@@ -227,16 +245,23 @@ internal static class EvalCommand
         Console.WriteLine($"Baseline ({baseline.RanAt:u}, top-{baseline.TopK}):");
         Console.WriteLine();
         Console.WriteLine($"  {"Mode",-10}  {"ΔNDCG",8}  {"ΔMRR",8}  {"ΔRecall",8}");
-        Console.WriteLine($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}");
+        Console.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
         foreach (var cur in current)
         {
             var prior = baseline.Runs.FirstOrDefault(r => r.Mode == cur.Mode);
             if (prior is null)
             {
-                Console.WriteLine($"  {ModeName(cur.Mode),-10}  {"(new)",8}  {"(new)",8}  {"(new)",8}");
+                Console.WriteLine($"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  {"(new)",8}  {"(new)",8}  {"(new)",8}");
                 continue;
             }
-            Console.WriteLine($"  {ModeName(cur.Mode),-10}  {Delta(cur.MeanNdcg - prior.Aggregate.Ndcg),8}  {Delta(cur.MeanMrr - prior.Aggregate.Mrr),8}  {Delta(cur.MeanRecall - prior.Aggregate.Recall),8}");
+            var dN = cur.MeanNdcg - prior.Aggregate.Ndcg;
+            var dM = cur.MeanMrr - prior.Aggregate.Mrr;
+            var dR = cur.MeanRecall - prior.Aggregate.Recall;
+            Console.WriteLine(
+                $"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  " +
+                $"{Colors.DeltaSigned(dN, $"{Delta(dN),8}")}  " +
+                $"{Colors.DeltaSigned(dM, $"{Delta(dM),8}")}  " +
+                $"{Colors.DeltaSigned(dR, $"{Delta(dR),8}")}");
         }
 
         if (includeTiming)
@@ -252,23 +277,30 @@ internal static class EvalCommand
             if (anyComparable)
             {
                 Console.WriteLine();
-                Console.WriteLine($"  {"Mode",-10}  {"Δmean",8}  {"Δp50",8}  {"Δp95",8}  (ms; − = faster)");
-                Console.WriteLine($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}");
+                Console.WriteLine($"  {"Mode",-10}  {"Δmean",8}  {"Δp50",8}  {"Δp95",8}  {Colors.Dim("(ms; − = faster)")}");
+                Console.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
                 foreach (var cur in current)
                 {
                     var prior = baseline.Runs.FirstOrDefault(r => r.Mode == cur.Mode);
                     if (prior is null || prior.Aggregate.P95LatencyMs == 0)
                     {
-                        Console.WriteLine($"  {ModeName(cur.Mode),-10}  {"(no data)",8}  {"(no data)",8}  {"(no data)",8}");
+                        Console.WriteLine($"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  {"(no data)",8}  {"(no data)",8}  {"(no data)",8}");
                         continue;
                     }
-                    Console.WriteLine($"  {ModeName(cur.Mode),-10}  {DeltaMs(cur.MeanLatencyMs - prior.Aggregate.MeanLatencyMs),8}  {DeltaMs(cur.P50LatencyMs - prior.Aggregate.P50LatencyMs),8}  {DeltaMs(cur.P95LatencyMs - prior.Aggregate.P95LatencyMs),8}");
+                    var dMean = cur.MeanLatencyMs - prior.Aggregate.MeanLatencyMs;
+                    var dP50 = cur.P50LatencyMs - prior.Aggregate.P50LatencyMs;
+                    var dP95 = cur.P95LatencyMs - prior.Aggregate.P95LatencyMs;
+                    Console.WriteLine(
+                        $"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  " +
+                        $"{Colors.DeltaLatency(dMean, $"{DeltaMs(dMean),8}")}  " +
+                        $"{Colors.DeltaLatency(dP50, $"{DeltaMs(dP50),8}")}  " +
+                        $"{Colors.DeltaLatency(dP95, $"{DeltaMs(dP95),8}")}");
                 }
             }
             else
             {
                 Console.WriteLine();
-                Console.WriteLine("  (baseline has no latency data — re-run baseline with current build to enable Δlatency.)");
+                Console.WriteLine(Colors.Dim("  (baseline has no latency data — re-run baseline with current build to enable Δlatency.)"));
             }
         }
 
@@ -286,12 +318,15 @@ internal static class EvalCommand
                 .Take(10)
                 .ToList();
             if (rows.Count == 0) continue;
-            Console.WriteLine($"  {ModeName(cur.Mode)}: top per-query NDCG changes (|Δ| ≥ 0.05)");
+            Console.WriteLine($"  {Colors.Bold(Colors.ModeHeader(ModeName(cur.Mode)))}: top per-query NDCG changes (|Δ| ≥ 0.05)");
             foreach (var (q, prev) in rows)
             {
                 var d = q.Ndcg - prev!.Ndcg;
-                var arrow = d > 0 ? "↑" : "↓";
-                Console.WriteLine($"    {arrow} {q.Id,-8}  {prev.Ndcg,5:F3} → {q.Ndcg,5:F3}  ({d:+0.000;-0.000})");
+                var arrow = d > 0 ? Colors.Up() : Colors.Down();
+                Console.WriteLine(
+                    $"    {arrow} {Colors.QueryId($"{q.Id,-8}")}  " +
+                    $"{Colors.Score(prev.Ndcg, $"{prev.Ndcg,5:F3}")} → {Colors.Score(q.Ndcg, $"{q.Ndcg,5:F3}")}  " +
+                    $"({Colors.DeltaSigned(d, d.ToString("+0.000;-0.000", CultureInfo.InvariantCulture))})");
             }
         }
     }
@@ -311,10 +346,13 @@ internal static class EvalCommand
     private static void PrintSingleQuery(EvalQuery q, EvalMode mode, int topK, EvalQueryResult r)
     {
         Console.WriteLine();
-        Console.WriteLine($"== {q.Id}  [{ModeName(mode)}]  \"{q.Query}\"");
+        Console.WriteLine($"== {Colors.QueryId(q.Id)}  [{Colors.ModeHeader(ModeName(mode))}]  \"{q.Query}\"");
         if (q.Filters is not null)
-            Console.WriteLine($"   filters: {FilterSummary(q.Filters)}");
-        Console.WriteLine($"   NDCG@{topK}={r.Ndcg:F3}  MRR={r.Mrr:F3}  Recall@{topK}={r.Recall:F3}");
+            Console.WriteLine($"   {Colors.Dim("filters:")} {FilterSummary(q.Filters)}");
+        Console.WriteLine(
+            $"   NDCG@{topK}={Colors.Score(r.Ndcg, $"{r.Ndcg:F3}")}  " +
+            $"MRR={Colors.Score(r.Mrr, $"{r.Mrr:F3}")}  " +
+            $"Recall@{topK}={Colors.Score(r.Recall, $"{r.Recall:F3}")}");
         Console.WriteLine();
         Console.WriteLine($"   Expected ({q.Relevant.Count}):");
         for (var i = 0; i < q.Relevant.Count; i++)
@@ -323,14 +361,16 @@ internal static class EvalCommand
             var rank = r.RanksOfExpected[i];
             var rankStr = rank == 0 ? $"not in top-{topK}" : $"rank {rank}";
             var grade = expected.Grade == 1.0 ? "" : $"  grade={expected.Grade:F1}";
-            Console.WriteLine($"     {(rank == 0 ? "✗" : "✓")} {expected.MessageId}  ({rankStr}){grade}");
+            var marker = rank == 0 ? Colors.Miss() : Colors.Hit();
+            Console.WriteLine($"     {marker} {expected.MessageId}  ({rankStr}){grade}");
         }
         Console.WriteLine();
         Console.WriteLine($"   Top {Math.Min(topK, r.RankedMessageIds.Count)}:");
         var relevantSet = q.Relevant.Select(x => x.MessageId).ToHashSet();
         for (var i = 0; i < Math.Min(topK, r.RankedMessageIds.Count); i++)
         {
-            var marker = relevantSet.Contains(r.RankedMessageIds[i]) ? "✓" : " ";
+            var isHit = relevantSet.Contains(r.RankedMessageIds[i]);
+            var marker = isHit ? Colors.Hit() : " ";
             Console.WriteLine($"     {marker} {i + 1,2}. {r.RankedMessageIds[i]}");
         }
     }
@@ -353,4 +393,58 @@ internal static class EvalCommand
         EvalMode.Hybrid => "hybrid",
         _ => m.ToString().ToLowerInvariant(),
     };
+
+    /// <summary>
+    /// ANSI colorization for the eval output. Colors are auto-disabled when
+    /// stdout is redirected (so `mailvec eval | tee` stays clean) or when
+    /// NO_COLOR is set (https://no-color.org). All helpers wrap an
+    /// already-formatted string so column alignment in `{x,-N}` layouts
+    /// survives — ANSI codes are zero-width to terminals but counted as
+    /// chars by string.Format, so we color AFTER padding.
+    /// </summary>
+    internal static class Colors
+    {
+        private static readonly bool Enabled =
+            Environment.GetEnvironmentVariable("NO_COLOR") is null
+            && (Environment.GetEnvironmentVariable("FORCE_COLOR") is not null
+                || !Console.IsOutputRedirected);
+
+        private const string Reset = "\x1b[0m";
+        private const string BoldOn = "\x1b[1m";
+        private const string DimOn = "\x1b[2m";
+        private const string Red = "\x1b[31m";
+        private const string Green = "\x1b[32m";
+        private const string Yellow = "\x1b[33m";
+        private const string Cyan = "\x1b[36m";
+        private const string BoldCyan = "\x1b[1;36m";
+
+        private static string Wrap(string s, string codes) => Enabled ? codes + s + Reset : s;
+
+        public static string Bold(string s) => Wrap(s, BoldOn);
+        public static string Dim(string s) => Wrap(s, DimOn);
+        public static string QueryId(string s) => Wrap(s, BoldCyan);
+        public static string Hit(string s = "✓") => Wrap(s, Green);
+        public static string Miss(string s = "✗") => Wrap(s, Red);
+        public static string Up(string s = "↑") => Wrap(s, Green);
+        public static string Down(string s = "↓") => Wrap(s, Red);
+        public static string ModeHeader(string s) => Wrap(s, Cyan);
+
+        /// <summary>Color a metric value (NDCG/MRR/Recall) by quality band.</summary>
+        public static string Score(double value, string formatted) =>
+            Wrap(formatted, value >= 0.9 ? Green : value >= 0.7 ? Yellow : Red);
+
+        /// <summary>Color a delta (improvement/regression) by sign.</summary>
+        public static string DeltaSigned(double delta, string formatted)
+        {
+            if (Math.Abs(delta) < 0.0005) return Wrap(formatted, DimOn);
+            return Wrap(formatted, delta > 0 ? Green : Red);
+        }
+
+        /// <summary>Color a latency delta — positive (slower) is bad.</summary>
+        public static string DeltaLatency(double delta, string formatted)
+        {
+            if (Math.Abs(delta) < 0.05) return Wrap(formatted, DimOn);
+            return Wrap(formatted, delta > 0 ? Red : Green);
+        }
+    }
 }
