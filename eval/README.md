@@ -360,6 +360,10 @@ regardless of whether `--timing` was passed, so old baselines stay
 diff-comparable as long as they were captured with a build that has timing
 support.
 
+## Color output
+
+`mailvec eval` colorizes its terminal output: query IDs in bold cyan, NDCG/MRR/Recall scored green (≥0.9) / yellow (≥0.7) / red (<0.7), ✓/✗ markers, and ↑/↓ regression arrows. Colors are auto-disabled when stdout is redirected (so `mailvec eval | tee` and `--json` writes stay clean) or when `NO_COLOR` is set ([no-color.org](https://no-color.org)). Force colors back on with `FORCE_COLOR=1` — useful for piping through `less -R` or capturing demo output.
+
 ## Other consumers
 
 The query format is deliberately small. Anything that can read JSON can produce
