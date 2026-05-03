@@ -22,11 +22,15 @@ internal static class CliServices
             .Build();
 
         var services = new ServiceCollection();
-        services.AddLogging(b => b.AddSimpleConsole(o =>
+        services.AddLogging(b =>
         {
-            o.SingleLine = true;
-            o.TimestampFormat = "HH:mm:ss ";
-        }));
+            b.AddConfiguration(config.GetSection("Logging"));
+            b.AddSimpleConsole(o =>
+            {
+                o.SingleLine = true;
+                o.TimestampFormat = "HH:mm:ss ";
+            });
+        });
         services.Configure<ArchiveOptions>(config.GetSection(ArchiveOptions.SectionName));
         services.Configure<IngestOptions>(config.GetSection(IngestOptions.SectionName));
         services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
