@@ -6,17 +6,28 @@
     <string>com.mailvec.mcp</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/share/dotnet/dotnet</string>
+        <string>__DOTNET__</string>
         <string>__INSTALL_PREFIX__/Mailvec.Mcp.dll</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__INSTALL_PREFIX__</string>
+    <!-- See com.mailvec.indexer.plist for the rationale on env-var overrides.
+         Fastmail__AccountId is intentionally always emitted (empty when unset)
+         so toggling webmail deep-links later is a plist edit, not a redeploy. -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>MAILVEC_LAUNCHD</key>
         <string>1</string>
         <key>MAILVEC_LOG_DIR</key>
         <string>__LOG_DIR__</string>
+        <key>Archive__DatabasePath</key>
+        <string>__DB_PATH__</string>
+        <key>Ingest__MaildirRoot</key>
+        <string>__MAILDIR_ROOT__</string>
+        <key>Ollama__BaseUrl</key>
+        <string>__OLLAMA_URL__</string>
+        <key>Fastmail__AccountId</key>
+        <string>__FASTMAIL_ACCOUNT_ID__</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
