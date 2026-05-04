@@ -6,7 +6,9 @@
     <string>com.mailvec.mbsync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/mbsync</string>
+        <string>__MBSYNC__</string>
+        <string>-c</string>
+        <string>__MBSYNCRC__</string>
         <string>-a</string>
     </array>
     <key>StartInterval</key>
