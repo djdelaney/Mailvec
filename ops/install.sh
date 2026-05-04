@@ -161,6 +161,17 @@ echo
 [[ -f "$MBSYNCRC" ]]     || echo "warning: mbsync config '$MBSYNCRC' does not exist yet."
 if ! curl -fsS --max-time 2 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
     echo "warning: Ollama not reachable at $OLLAMA_URL (start it later; embedder will retry)."
+    echo "         If installed via Homebrew: brew services start ollama"
+fi
+# Reachable now ≠ reachable after reboot. brew services manages the launchd
+# agent that auto-starts Ollama at login; without it, a fresh boot leaves
+# Ollama down and the embedder/MCP /health degraded until you run it manually.
+if command -v brew >/dev/null 2>&1 \
+   && command -v ollama >/dev/null 2>&1 \
+   && [[ "$(command -v ollama)" == "$(brew --prefix)/bin/ollama" ]] \
+   && ! brew services list 2>/dev/null | awk '$1=="ollama"{print $2}' | grep -qx started; then
+    echo "warning: Homebrew-installed Ollama is not registered with brew services."
+    echo "         To make it survive reboot: brew services start ollama"
 fi
 
 # ---------------------------------------------------------------------------
