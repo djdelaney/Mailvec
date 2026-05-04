@@ -105,3 +105,6 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
         client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
     });
 }
+
+// Required for WebApplicationFactory<Program> in tests to discover the entry point.
+public partial class Program;
