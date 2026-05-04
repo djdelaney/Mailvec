@@ -389,19 +389,19 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
     /// <summary>
     /// Lazily streams unembedded, undeleted messages for the embedder. Returns
-    /// (id, body_text) tuples; messages with no body text are filtered out.
+    /// (id, body_text) tuples. Messages with no body text are still returned
+    /// so the worker can stamp them with zero chunks instead of leaving them
+    /// stuck forever (they'd be invisible to the worker but counted by status).
     /// </summary>
     public IEnumerable<(long Id, string BodyText, string? Subject, string? AttachmentNames)> EnumerateUnembedded(int batchSize = 50)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, body_text, subject, attachment_names
+            SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names
             FROM messages
             WHERE embedded_at IS NULL
               AND deleted_at IS NULL
-              AND body_text IS NOT NULL
-              AND length(body_text) > 0
             ORDER BY id
             LIMIT $limit;
             """;
@@ -425,7 +425,6 @@ public sealed class MessageRepository(ConnectionFactory connections)
         cmd.CommandText = """
             SELECT COUNT(*) FROM messages
             WHERE embedded_at IS NULL AND deleted_at IS NULL
-              AND body_text IS NOT NULL AND length(body_text) > 0
             """;
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
