@@ -16,9 +16,12 @@ dotnet test tests/Mailvec.Core.Tests --filter "FullyQualifiedName~MaildirScanner
 dotnet run --project src/Mailvec.Indexer
 dotnet run --project src/Mailvec.Mcp
 dotnet run --project src/Mailvec.Cli -- <args>
+ops/redeploy.sh [indexer|embedder|mcp ...]    # republish + kickstart launchd agents after a code change
 ```
 
 `Mailvec.slnx` (not `.sln`) is the solution file — .NET 10 emits the new XML format by default. Tooling treats it equivalently.
+
+`dotnet run --project src/Mailvec.<svc>` runs the working-tree code under your terminal — useful for one-off debugging, but **the launchd agents installed by `ops/install.sh` are separate processes** running the published binaries under `~/.local/share/mailvec/<svc>/`. After editing service code (Indexer, Embedder, Mcp, or anything in Core they reference), run `ops/redeploy.sh` to push the new binaries and restart the agents — otherwise the live services keep running the old code while `dotnet build` looks like it succeeded. Use `ops/install.sh` only when plist templates change or you want to update a config knob (maildir / db path / ollama URL).
 
 ## Build conventions
 
