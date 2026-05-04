@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 dotnet build                 # builds via Mailvec.slnx (the .NET 10 XML solution format)
 dotnet test                  # runs all xUnit projects
 dotnet test tests/Mailvec.Core.Tests --filter "FullyQualifiedName~MaildirScanner"   # single test class
+ops/coverage.sh              # runs tests with coverage; HTML at coverage/index.html, Markdown at coverage/SummaryGithub.md
 dotnet run --project src/Mailvec.Indexer
 dotnet run --project src/Mailvec.Mcp
 dotnet run --project src/Mailvec.Cli -- <args>
