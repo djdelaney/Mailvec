@@ -20,7 +20,7 @@ schema/
 ops/
   mbsyncrc.example     IMAP sync config template
   launchd/             plist templates for mbsync + 3 .NET services
-  install.sh           Phase 4 installer (stub)
+  install.sh           Phase 4 installer: publishes services, renders plists, bootstraps
   fetch-sqlite-vec.sh  one-shot: pulls vec0.dylib from upstream releases
   build-mcpb.sh        packages a .mcpb bundle into dist/ for Claude Desktop
   dev-fetch-imap.py    dev-only: pulls last N days of mail without mbsync
@@ -100,7 +100,7 @@ Run inside `tmux` / `screen` for a big archive so a closed terminal doesn't kill
 
 **Folder filtering (Fastmail labels gotcha).** Fastmail exposes labels as IMAP folders, so a message with two labels lives in two folders. With the example's `Patterns *`, mbsync downloads both copies and the indexer logs spurious `Content changed; cleared embeddings` warnings on the second one — Fastmail's IMAP serializer regenerates the multipart boundary string per folder, so the body bytes hash differently across copies despite being the same email. Final search results are correct, just at the cost of re-embedding every multi-labelled message. To avoid it, narrow `Patterns` (e.g. `Patterns INBOX`); the [example](ops/mbsyncrc.example) shows the common forms.
 
-**Scheduling** is part of Phase 4. The plist at [`ops/launchd/com.mailvec.mbsync.plist`](ops/launchd/com.mailvec.mbsync.plist) runs `mbsync -a` every 5 minutes once `ops/install.sh` (currently a stub) wires it in. To install it manually now: `cp` it to `~/Library/LaunchAgents/`, replace `__LOG_DIR__` with `~/Library/Logs/Mailvec` (and `mkdir -p` that dir), then `launchctl load <plist>`.
+**Scheduling** is wired up by [`ops/install.sh`](ops/install.sh) — see [Running unattended](#running-unattended). The mbsync plist runs `mbsync -c ~/.mbsyncrc -a` once at load and every 5 minutes thereafter.
 
 ## Trying it end-to-end
 
@@ -189,6 +189,45 @@ rm -rf ~/mailvec-test
 unset FASTMAIL_USER FASTMAIL_APP_PASSWORD Ingest__MaildirRoot Archive__DatabasePath
 # then revoke the app password at https://app.fastmail.com/settings/security/devicekeys
 ```
+
+## Running unattended
+
+Once the manual walkthrough is happy, [`ops/install.sh`](ops/install.sh) wires the four services up as launchd agents so they start at login and survive reboots.
+
+```sh
+./ops/install.sh             # install or reinstall (idempotent)
+./ops/install.sh --uninstall # bootout + remove plists; preserves binaries, DB, logs
+```
+
+It does roughly:
+
+1. Preflights for `dotnet`, `mbsync`, and the fetched `vec0.dylib`.
+2. Prompts for the four site-specific values: Maildir root, database path, Ollama base URL, mbsync config path, and an optional Fastmail account ID.
+3. `dotnet publish`-es each .NET service to `~/.local/share/mailvec/{indexer,embedder,mcp}/` (framework-dependent; uses the `dotnet` already on PATH).
+4. Renders the templates in `ops/launchd/`, substituting the prompted values and the resolved binary paths, and writes them to `~/Library/LaunchAgents/`.
+5. `launchctl bootstrap`s `com.mailvec.{mbsync,indexer,embedder,mcp}`.
+6. Polls `http://127.0.0.1:3333/health` for up to 15 s and reports the result.
+
+The four prompted values become plist `EnvironmentVariables` (e.g. `Ingest__MaildirRoot`), so changing one later is a `~/Library/LaunchAgents/com.mailvec.<svc>.plist` edit + `launchctl bootout && launchctl bootstrap`, not a republish.
+
+**Validating it's working:**
+
+```sh
+# all four agents loaded?
+for svc in mbsync indexer embedder mcp; do
+  launchctl print gui/$UID/com.mailvec.$svc | grep -E 'state|last exit' | sed "s/^/$svc /"
+done
+
+# pipeline making progress?
+dotnet run --project src/Mailvec.Cli -- status
+
+# MCP up?
+curl -s http://127.0.0.1:3333/health | jq .
+```
+
+If something looks wrong, [Logs](#logs) is the next stop.
+
+The MCPB bundle for Claude Desktop is a separate concern — install it with `./ops/build-mcpb.sh` (see [Connecting to Claude Desktop](#connecting-to-claude-desktop)). The two paths share the database; the launchd MCP exposes HTTP for Claude Code (and eventually cross-vendor clients), the bundle exposes stdio for Claude Desktop.
 
 ## Logs
 
@@ -328,15 +367,15 @@ Wires the archive up to Claude. **Exit criterion met.**
 - Hybrid search reused from Phase 2.
 - Attachment indexing: filenames are stored in the `attachments` table and surfaced through FTS5 (so a query like `"mortgage statement"` matches an email whose only mention is in `mortgage_statement_2024.pdf`). Per-attachment metadata (filename, content type, size, partIndex) is returned by `get_email`.
 
-### 🟡 Phase 4 — Operationalization
+### ✅ Phase 4 — Operationalization
 
-Makes the system survive reboots unattended. In progress.
+Makes the system survive reboots unattended. **Exit criterion met:** rebooted, all four agents (mbsync + indexer + embedder + MCP) came back without intervention; `/health` returns 200 and `mailvec status` shows the pipeline still progressing.
 
-- launchd plist *templates* exist in `ops/launchd/` for mbsync + indexer + embedder + MCP HTTP server. Not yet wired up by `install.sh`.
-- `ops/install.sh` — currently a stub. Will publish services, rewrite the `__INSTALL_PREFIX__` and `__LOG_DIR__` placeholders, load the agents, verify health.
+- ✅ launchd plist templates in [`ops/launchd/`](ops/launchd/) for mbsync + indexer + embedder + MCP HTTP server. Use placeholders (`__DOTNET__`, `__INSTALL_PREFIX__`, `__LOG_DIR__`, `__DB_PATH__`, `__MAILDIR_ROOT__`, `__OLLAMA_URL__`, `__MBSYNC__`, `__MBSYNCRC__`, `__FASTMAIL_ACCOUNT_ID__`) that `install.sh` substitutes at install time. The three .NET plists surface the user-tunable config (DB path, Maildir, Ollama URL, Fastmail) as `EnvironmentVariables` so changes don't require a republish.
+- ✅ [`ops/install.sh`](ops/install.sh) — preflights `dotnet`/`mbsync`/`vec0.dylib`, prompts for the site-specific values, `dotnet publish`-es indexer/embedder/mcp into per-service subdirs under `~/.local/share/mailvec/`, boots out any existing agents (idempotent), renders the plists, `launchctl bootstrap`s them, and polls `/health` for up to 15 s. `--uninstall` reverses all of that while preserving the published binaries, the database, and the logs. See [Running unattended](#running-unattended).
 - ✅ `/health` endpoint on the MCP server — `GET /health` returns DB / embedding / Ollama status (200 healthy, 503 degraded). HTTP-mode only; stdio sees failures via the MCP `initialize` handshake.
 - ✅ Log rotation — handled in-process by Serilog. The three .NET services write rolling daily files to `~/Library/Logs/Mailvec/mailvec-<service>-<YYYYMMDD>.log` (10 MB per-file cap, 14 files retained). Wiring lives in [src/Mailvec.Core/Logging/SerilogSetup.cs](src/Mailvec.Core/Logging/SerilogSetup.cs); the launchd plist sets `MAILVEC_LAUNCHD=1` to suppress the Console sink in production. mbsync (the only non-.NET service) writes to small launchd-captured files that don't need rotation.
-- ✅ `mailvec status` already surfaces message count, embedding coverage, schema/config model match.
+- ✅ `mailvec status` surfaces message count, embedding coverage, schema/config model match.
 
 **Exit criterion:** reboot the Mac mini; everything comes back without intervention.
 
