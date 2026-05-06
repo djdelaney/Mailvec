@@ -12,7 +12,7 @@ A local-first email archive and search system for a single IMAP account, running
 
 - **Durable local archive.** Every message in the IMAP account exists as both a Maildir file on disk and a row in a SQLite database on the Mac mini.
 - **Two search modes.** Keyword/boolean search via SQLite FTS5, and semantic search via locally-generated embeddings.
-- **AI-agent access.** An MCP server exposing search and retrieval tools. Claude Desktop is the v1 target via an MCPB bundle; Claude Code, Claude.ai, ChatGPT Connectors, and Gemini are all reachable via the HTTP transport (Phase 5 adds the HTTPS + OAuth needed for the cloud LLMs).
+- **AI-agent access.** An MCP server exposing search and retrieval tools. Claude Desktop is the v1 target via an MCPB bundle and Claude Code talks to it over local HTTP; Phase 5 extends the same transports to other locally-running agents (Gemini CLI, Codex CLI, ChatGPT desktop). Public-HTTPS / OAuth access for the cloud LLMs is in §11 Future ideas.
 - **Runs unattended.** All components run as launchd services and survive reboot without intervention.
 - **No cloud dependencies for search/storage.** IMAP sync is the only network hop; embeddings are generated locally via Ollama.
 
@@ -22,7 +22,7 @@ A local-first email archive and search system for a single IMAP account, running
 - Not bidirectional. The archive is read-only from the user's perspective; changes on the IMAP server flow down, never up.
 - Not multi-user. Single account, single machine.
 - Not real-time. Sync runs on a timer (every 5 minutes is fine). No IDLE/push.
-- No authentication on the MCP server in v1 (localhost-only binding). OAuth + HTTPS land in Phase 5 alongside cross-vendor access.
+- No authentication on the MCP server. The server stays bound to `127.0.0.1`, so the macOS user boundary is the trust boundary. OAuth + HTTPS would only be needed to expose Mailvec to cloud LLMs over a public tunnel — see §11 Future ideas.
 
 ---
 
@@ -59,8 +59,9 @@ A local-first email archive and search system for a single IMAP account, running
                                                                         ▼
                                                        ┌────────────────────────────┐
                                                        │ Claude Desktop (MCPB),     │
-                                                       │ Claude Code, Claude.ai,    │
-                                                       │ ChatGPT, Gemini (Phase 5)  │
+                                                       │ Claude Code,               │
+                                                       │ Gemini CLI, Codex CLI,     │
+                                                       │ ChatGPT desktop (Phase 5)  │
                                                        └────────────────────────────┘
 ```
 
@@ -127,7 +128,7 @@ An MCP server over HTTP, implemented with `ModelContextProtocol.AspNetCore`. Bin
 | `list_folders` | List Maildir folders with message counts. |
 | `get_attachment` | Extract one attachment by `(messageId, partIndex)` to `~/Downloads/mailvec/`, return the path. Inlines images as `ImageContentBlock` and small text-ish files as a text block. |
 
-**Transports**: HTTP (default, `127.0.0.1:3333`) for Claude Code and smoke tests; stdio (`--stdio`) packaged as an `.mcpb` bundle for Claude Desktop. Phase 5 adds HTTPS + OAuth on the HTTP transport for ChatGPT, Gemini, and Claude.ai.
+**Transports**: HTTP (default, `127.0.0.1:3333`) for Claude Code and smoke tests; stdio (`--stdio`) packaged as an `.mcpb` bundle for Claude Desktop. Phase 5 extends the same two transports to other local agents (Gemini CLI, Codex CLI, ChatGPT desktop) — no protocol changes, just per-client config and quirk capture. Public-HTTPS access for cloud LLMs is in §11 Future ideas.
 
 **Hybrid search approach (v1):**
 1. Run FTS5 query → top 50 candidates with BM25 scores.
@@ -406,17 +407,18 @@ Solution, projects, CPM, Directory.Build.props, README, gitignore, CI stub.
 
 **Exit criteria:** reboot the Mac mini; everything comes back without intervention. **Met.**
 
-### Phase 5 — Cross-vendor MCP access (ChatGPT, Gemini, Claude.ai)
+### Phase 5 — Support for non-Claude local agents (Gemini CLI, Codex / ChatGPT)
 
-The MCPB bundle is Anthropic-specific (Claude Desktop only). Stdio works for any client that can spawn a child process locally — Claude Code can, but ChatGPT / Gemini / Claude.ai cannot, since they're cloud services. **HTTP is the only portable transport for those clients**, and they all require the same three things on top of what we have today:
+The MCP server today is exercised end-to-end by Claude Desktop (stdio via the MCPB bundle) and Claude Code (HTTP on `127.0.0.1:3333`). Other locally-running agents that speak MCP — Google's Gemini CLI, OpenAI's Codex CLI, and the ChatGPT desktop app once its MCP-server registration ships — should work over the same two transports without protocol changes, but each has its own config shape, environment-variable conventions, and process-spawning quirks that need a dedicated pass (the equivalent of the Claude Desktop sanitized-env / TCC-block findings captured in CLAUDE.md Phase 3 gotchas).
 
-1. **Public reachability over HTTPS.** Cloudflare Tunnel (`cloudflared`) or Tailscale Funnel (the *Funnel* variant — exposes a tailnet service to the public internet over HTTPS with a Tailscale-issued cert; ordinary tailnet doesn't reach ChatGPT/Gemini). Either terminates TLS for us, so the MCP server can stay bound to `127.0.0.1` and the tunnel connects locally.
-2. **OAuth 2.1 (PKCE).** ChatGPT Connectors, Gemini, and Claude.ai Custom Connectors all expect MCP's standard OAuth flow. The .NET MCP SDK has authentication scaffolding; the open question is the issuer — self-hosted, Cloudflare Access, or Tailscale identity in front are all viable. Each has different implications for who can approve a new Claude/ChatGPT login (only the user vs. anyone with tunnel access).
-3. **Per-tool authorization model.** All current tools are read-only against the local DB and Maildir, so the simplest scope is "any authenticated user can call any tool." Revisit if mutating tools are added later.
+1. **Gemini CLI.** Register Mailvec via `~/.gemini/settings.json`'s `mcpServers` block, pointing at the published stdio launcher (`~/.local/bin/mailvec-mcp-stdio`) or the HTTP endpoint. Verify the same `DOTNET_ROOT` / PATH issues from Claude Desktop don't bite.
+2. **Codex CLI.** Register Mailvec under `[mcp_servers.mailvec]` in `~/.codex/config.toml`. Validate stdio framing under Codex's spawned environment.
+3. **ChatGPT desktop app.** Contingent on the local MCP-server registration UI being available in the user's release; document the path when it is.
+4. **Documentation + smoke tests.** Check per-client config snippets into `docs/clients/` and add an integration tier so each one is exercised during release prep.
 
-Practical sequencing: (a) add OAuth scaffolding to the HTTP server; (b) stand up a Cloudflare Tunnel pointed at `localhost:3333`; (c) register the resulting HTTPS URL as a connector in each target client. The MCPB bundle stays as the fast path for Claude Desktop — `Program.cs` already shares Core wiring between the two transports, so nothing about the bundle path changes.
+Concretely, no new server-side code is expected — the work is per-client configuration documentation, capturing each agent's launch-environment quirks, and a repeatable smoke recipe.
 
-**Out of scope for v1**: federated identity, multi-user support, fine-grained per-tool scopes. This is a single-user system; the auth layer exists to keep random internet traffic out, not to model permissions.
+**Exit criteria:** Mailvec answers "when did Acme last quote me?" from at least one non-Claude local agent.
 
 ---
 
@@ -446,7 +448,31 @@ Still open:
 
 ---
 
-## 11. Out of scope entirely
+## 11. Future ideas (not in current scope)
+
+These were considered, then deferred. Captured here so the reasoning isn't lost.
+
+### Cross-vendor / cloud-LLM access via public HTTPS
+
+The Anthropic / Google / OpenAI cloud clients (Claude.ai web app, Gemini in the browser, ChatGPT Connectors) cannot reach `127.0.0.1` since they're themselves cloud services. Exposing Mailvec to them would need three things on top of today's HTTP transport:
+
+1. **Public reachability.** Cloudflare Tunnel (`cloudflared`) or Tailscale **Funnel** (the public variant — ordinary tailnet doesn't reach those clients) terminates TLS so the MCP server can stay bound to `127.0.0.1` and the tunnel connects locally.
+2. **OAuth 2.1 (PKCE).** Cloud connectors expect MCP's standard OAuth flow. The .NET MCP SDK has authentication scaffolding; the open call is the issuer — self-hosted, Cloudflare Access, or Tailscale identity in front are all viable, with different implications for who can approve a new login.
+3. **Per-tool authorization.** All current tools are read-only against the local DB and Maildir, so the simplest scope is "any authenticated user can call any tool." Revisit if mutating tools are added.
+
+Deferred because the value of "Claude.ai / ChatGPT / Gemini in the browser searching my email" is real but lower than the operational cost of running OAuth + a public tunnel for a single-user system. Phase 5's local-agent path covers most of the same use cases without the auth surface or external tunnel dependency.
+
+### Tailnet-only access from another personal machine
+
+A middle ground between local-only and public — laptop on the same Tailscale tailnet hitting the Mac mini's MCP server. Tailscale ACLs gate at the network layer, so no OAuth is needed; the change is one config knob (`Mcp:BindAddress` from `127.0.0.1` to the tailnet IP) plus a launchd plist re-render. Cheap when wanted; not built today.
+
+### Multi-user / federated identity
+
+Implied by any cloud-access path. Out of scope for this single-user system.
+
+---
+
+## 12. Out of scope entirely
 
 - Sending mail
 - Modifying server-side state (marking read, moving, deleting)
