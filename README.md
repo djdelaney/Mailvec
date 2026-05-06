@@ -227,7 +227,7 @@ curl -s http://127.0.0.1:3333/health | jq .
 
 If something looks wrong, [Logs](#logs) is the next stop.
 
-The MCPB bundle for Claude Desktop is a separate concern — install it with `./ops/build-mcpb.sh` (see [Connecting to Claude Desktop](#connecting-to-claude-desktop)). The two paths share the database; the launchd MCP exposes HTTP for Claude Code (and eventually cross-vendor clients), the bundle exposes stdio for Claude Desktop.
+The MCPB bundle for Claude Desktop is a separate concern — install it with `./ops/build-mcpb.sh` (see [Connecting to Claude Desktop](#connecting-to-claude-desktop)). The two paths share the database; the launchd MCP exposes HTTP for Claude Code (and other local agents — see Phase 5), the bundle exposes stdio for Claude Desktop.
 
 ## Logs
 
@@ -379,13 +379,16 @@ Makes the system survive reboots unattended. **Exit criterion met:** rebooted, a
 
 **Exit criterion:** reboot the Mac mini; everything comes back without intervention.
 
-### ⬜ Phase 5 — Cross-vendor MCP access
+### ⬜ Phase 5 — Support for non-Claude local agents
 
-The MCPB bundle is Claude Desktop only. Stdio works for any local-spawn client (Claude Code) but not for cloud LLMs. To reach **ChatGPT Connectors, Gemini, and Claude.ai Custom Connectors**, the HTTP transport needs HTTPS + OAuth on top:
+Mailvec works end-to-end with Claude Desktop (MCPB stdio) and Claude Code (HTTP). Phase 5 extends the same two transports to other locally-running MCP-capable agents — no protocol changes, just per-client config and quirk capture (the equivalent of the Claude Desktop sanitized-env / TCC-block findings in CLAUDE.md):
 
-- Public reachability over HTTPS via Cloudflare Tunnel or Tailscale **Funnel** (the public variant — ordinary tailnet doesn't reach those clients).
-- MCP OAuth 2.1 (PKCE) — the .NET SDK has scaffolding; choosing an issuer (self-hosted, Cloudflare Access, or Tailscale identity) is the open call.
-- Single-user authorization model: any authenticated caller can use any read-only tool. Revisit if mutating tools land later.
+- **Gemini CLI** via `~/.gemini/settings.json` `mcpServers`.
+- **Codex CLI** via `~/.codex/config.toml` `[mcp_servers.mailvec]`.
+- **ChatGPT desktop** once its MCP-server registration ships in the user's release.
+- Per-client config snippets checked into `docs/clients/`, exercised in an integration tier during release prep.
+
+Public-HTTPS / OAuth access for cloud LLMs (Claude.ai web, ChatGPT Connectors, Gemini in the browser) is parked in [`mailvec-project-scope.md`](mailvec-project-scope.md) §11 Future ideas — the operational cost of a public tunnel + OAuth issuer for a single-user system is higher than the value over local-agent coverage.
 
 See [`mailvec-project-scope.md`](mailvec-project-scope.md) §8 Phase 5 for sequencing.
 
