@@ -61,7 +61,7 @@ Project map:
 - **Mailvec.Indexer** — `BackgroundService` worker. Scans Maildir, parses with MimeKit, upserts `messages`. Does *not* call Ollama.
 - **Mailvec.Embedder** — `BackgroundService` worker. Polls for `messages WHERE embedded_at IS NULL`, chunks bodies, calls Ollama, writes `chunks` + `chunk_embeddings`.
 - **Mailvec.Mcp** — AspNetCore app exposing MCP tools over HTTP on `127.0.0.1:3333`. Read-only against the database (except `get_attachment`, which reads `.eml` files out of the Maildir).
-- **Mailvec.Cli** — admin commands (status, search, reindex, rebuild-fts) hitting the same DB.
+- **Mailvec.Cli** — admin commands (status, search, reindex, rebuild-fts, purge-deleted) hitting the same DB.
 
 ## Data model invariants
 
