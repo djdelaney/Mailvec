@@ -59,6 +59,45 @@ public class ChunkRepositoryTests
         EmbeddedAt(db, target).ShouldBeNull();
     }
 
+    [Fact]
+    public void PurgeSoftDeleted_removes_chunks_and_chunk_embeddings_for_purged_messages()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long keep = messages.Upsert(Sample("keep@x"), "INBOX", "INBOX/cur", "fk", now);
+        long doomed = messages.Upsert(Sample("doomed@x"), "INBOX", "INBOX/cur", "fd", now);
+
+        chunks.ReplaceChunksForMessage(keep, [new TextChunk(0, "k", 1)], [Hot(0)], now);
+        chunks.ReplaceChunksForMessage(doomed, [new TextChunk(0, "d1", 1), new TextChunk(1, "d2", 1)], [Hot(1), Hot(2)], now);
+
+        // Pre-purge: both messages have vectors and the global table has 3 rows.
+        VectorCount(db, keep).ShouldBe(1);
+        VectorCount(db, doomed).ShouldBe(2);
+        TotalVectorCount(db).ShouldBe(3);
+
+        messages.MarkDeleted([doomed], now);
+        messages.PurgeSoftDeleted().ShouldBe(1);
+
+        // The kept message's chunks/vectors are untouched.
+        chunks.CountForMessage(keep).ShouldBe(1);
+        VectorCount(db, keep).ShouldBe(1);
+
+        // The doomed message's chunks cascaded; its vec0 rows were removed
+        // explicitly (FK cascade doesn't fire across vec0 virtual tables).
+        TotalVectorCount(db).ShouldBe(1);
+    }
+
+    private static int TotalVectorCount(TempDatabase db)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM chunk_embeddings";
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     private static int VectorCount(TempDatabase db, long messageId)
     {
         using var conn = db.Connections.Open();
