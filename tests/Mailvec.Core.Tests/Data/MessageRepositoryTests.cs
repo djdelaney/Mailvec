@@ -248,4 +248,106 @@ public class MessageRepositoryTests
 
         outcome.ContentChanged.ShouldBeFalse();
     }
+
+    [Fact]
+    public void CountSoftDeleted_only_counts_rows_with_deleted_at_set()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var keep = repo.Upsert(Sample("keep@x"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        var goneA = repo.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "f2", DateTimeOffset.UtcNow);
+        var goneB = repo.Upsert(Sample("b@x"), "INBOX", "INBOX/cur", "f3", DateTimeOffset.UtcNow);
+
+        repo.CountSoftDeleted().ShouldBe(0);
+
+        repo.MarkDeleted([goneA, goneB], DateTimeOffset.UtcNow);
+
+        repo.CountSoftDeleted().ShouldBe(2);
+        repo.CountAll().ShouldBe(1);  // CountAll excludes soft-deleted
+        _ = keep;
+    }
+
+    [Fact]
+    public void PurgeSoftDeleted_removes_only_soft_deleted_rows_and_returns_count()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var keepId = repo.Upsert(Sample("keep@x"), "INBOX", "INBOX/cur", "fk", DateTimeOffset.UtcNow);
+        var doomedId = repo.Upsert(Sample("doomed@x"), "INBOX", "INBOX/cur", "fd", DateTimeOffset.UtcNow);
+        repo.MarkDeleted([doomedId], DateTimeOffset.UtcNow);
+
+        var purged = repo.PurgeSoftDeleted();
+
+        purged.ShouldBe(1);
+        repo.GetById(keepId).ShouldNotBeNull();
+        repo.GetByMessageId("doomed@x").ShouldBeNull();
+        repo.CountSoftDeleted().ShouldBe(0);
+    }
+
+    [Fact]
+    public void PurgeSoftDeleted_is_a_noop_when_nothing_is_soft_deleted()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        repo.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        repo.Upsert(Sample("b@x"), "INBOX", "INBOX/cur", "f2", DateTimeOffset.UtcNow);
+
+        repo.PurgeSoftDeleted().ShouldBe(0);
+        repo.CountAll().ShouldBe(2);
+    }
+
+    [Fact]
+    public void PurgeSoftDeleted_cascades_to_attachments()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var attachments = new List<ParsedAttachment>
+        {
+            new(0, "doomed.pdf", "application/pdf", 100),
+        };
+        long doomedId = repo.Upsert(Sample("doomed@x", attachments: attachments), "INBOX", "INBOX/cur", "fd", DateTimeOffset.UtcNow);
+        repo.MarkDeleted([doomedId], DateTimeOffset.UtcNow);
+
+        repo.PurgeSoftDeleted().ShouldBe(1);
+
+        // Attachments are FK-cascaded; nothing should reference the gone message.
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM attachments WHERE message_id = $id";
+        cmd.Parameters.AddWithValue("$id", doomedId);
+        Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture).ShouldBe(0);
+    }
+
+    [Fact]
+    public void PurgeSoftDeleted_clears_FTS_entries_for_removed_messages()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var keepId = repo.Upsert(Sample("keep@x", subject: "alpha keepable subject"), "INBOX", "INBOX/cur", "fk", DateTimeOffset.UtcNow);
+        var doomedId = repo.Upsert(Sample("doomed@x", subject: "alpha doomed subject"), "INBOX", "INBOX/cur", "fd", DateTimeOffset.UtcNow);
+        repo.MarkDeleted([doomedId], DateTimeOffset.UtcNow);
+
+        FtsRowidsForTerm(db, "alpha").ShouldBe(new long[] { keepId, doomedId }, ignoreOrder: true);
+
+        repo.PurgeSoftDeleted().ShouldBe(1);
+
+        FtsRowidsForTerm(db, "alpha").ShouldBe(new long[] { keepId });
+    }
+
+    private static long[] FtsRowidsForTerm(TempDatabase db, string term)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT rowid FROM messages_fts WHERE messages_fts MATCH $q";
+        cmd.Parameters.AddWithValue("$q", term);
+        using var reader = cmd.ExecuteReader();
+        var ids = new List<long>();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return ids.ToArray();
+    }
 }

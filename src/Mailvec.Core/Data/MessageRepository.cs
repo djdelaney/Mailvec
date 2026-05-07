@@ -450,6 +450,59 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return affected;
     }
 
+    public int CountSoftDeleted()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE deleted_at IS NOT NULL";
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Hard-deletes every message with deleted_at IS NOT NULL, along with its
+    /// chunks, chunk_embeddings, attachments, and FTS rows. Returns the number
+    /// of message rows removed.
+    ///
+    /// Cascade strategy:
+    /// - chunks and attachments cascade on FK ON DELETE CASCADE.
+    /// - The messages_ad trigger keeps messages_fts in lockstep.
+    /// - chunk_embeddings is a vec0 virtual table that does NOT participate in
+    ///   FK cascade, so it must be cleared explicitly BEFORE the messages
+    ///   delete (otherwise the chunks rows we'd JOIN through are gone).
+    /// All three statements run in a single transaction so a partial purge
+    /// can't leave orphan vectors.
+    /// </summary>
+    public int PurgeSoftDeleted()
+    {
+        using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var delEmbeddings = conn.CreateCommand())
+        {
+            delEmbeddings.Transaction = tx;
+            delEmbeddings.CommandText = """
+                DELETE FROM chunk_embeddings
+                WHERE chunk_id IN (
+                    SELECT c.id FROM chunks c
+                    JOIN messages m ON m.id = c.message_id
+                    WHERE m.deleted_at IS NOT NULL
+                )
+                """;
+            delEmbeddings.ExecuteNonQuery();
+        }
+
+        int affected;
+        using (var delMessages = conn.CreateCommand())
+        {
+            delMessages.Transaction = tx;
+            delMessages.CommandText = "DELETE FROM messages WHERE deleted_at IS NOT NULL";
+            affected = delMessages.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+        return affected;
+    }
+
     private static Message Map(SqliteDataReader r)
     {
         return new Message
