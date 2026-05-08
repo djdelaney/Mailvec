@@ -81,6 +81,7 @@ project_for() {
 # ---------------------------------------------------------------------------
 # Publish + kickstart each service
 # ---------------------------------------------------------------------------
+NOT_LOADED=()
 for svc in "${SERVICES[@]}"; do
     label="com.mailvec.$svc"
     proj="$(project_for "$svc")"
@@ -92,9 +93,38 @@ for svc in "${SERVICES[@]}"; do
 
     echo "    kickstart $label"
     if ! launchctl kickstart -k "gui/$UID/$label" 2>/dev/null; then
-        echo "    note: $label is not loaded; run ops/install.sh to register it." >&2
+        NOT_LOADED+=("$svc")
     fi
 done
+
+# ---------------------------------------------------------------------------
+# Loud failure if any agent wasn't loaded — kickstart silently no-ops in that
+# case, so without this banner a stale environment looks like a clean redeploy
+# and the user wonders why no logs are landing.
+# ---------------------------------------------------------------------------
+if (( ${#NOT_LOADED[@]} > 0 )); then
+    echo >&2
+    echo "############################################################" >&2
+    echo "# WARNING: launchd agent(s) NOT LOADED — redeploy incomplete" >&2
+    echo "############################################################" >&2
+    echo "# The new binaries were published, but these services are" >&2
+    echo "# not registered with launchd, so nothing is running them:" >&2
+    for svc in "${NOT_LOADED[@]}"; do
+        echo "#   - com.mailvec.$svc" >&2
+    done
+    echo "#" >&2
+    echo "# Fix: bootstrap the agents (one-time per login session)." >&2
+    echo "#   ops/install.sh" >&2
+    echo "# or, without republishing:" >&2
+    for svc in "${NOT_LOADED[@]}"; do
+        echo "#   launchctl bootstrap gui/\$UID ~/Library/LaunchAgents/com.mailvec.$svc.plist" >&2
+    done
+    echo "#" >&2
+    echo "# Verify with: launchctl list | grep mailvec" >&2
+    echo "############################################################" >&2
+    echo >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Verify MCP /health if it was redeployed (other services have no endpoint)
