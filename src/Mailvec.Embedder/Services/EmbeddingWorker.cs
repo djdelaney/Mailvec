@@ -68,10 +68,12 @@ public sealed class EmbeddingWorker(
         var messageBatch = messages.EnumerateUnembedded(batchSize).ToList();
         if (messageBatch.Count == 0) return 0;
 
-        // Chunk every message in the batch up front so we can submit all chunks
-        // in fewer Ollama calls (model load overhead matters more than batch size here).
+        // Build a combined chunk list per message: body chunks (source='body')
+        // plus per-attachment chunks (source='attachment', attachment_id set).
+        // chunk_index is unique per message and runs sequentially across both
+        // sources — the schema's UNIQUE(message_id, chunk_index) requires it.
         var perMessageChunks = messageBatch
-            .Select(m => (m.Id, Chunks: chunker.Chunk(BuildEmbeddingText(m.Subject, m.BodyText, m.AttachmentNames))))
+            .Select(m => (m.Id, Chunks: BuildChunksForMessage(m)))
             .Where(x => x.Chunks.Count > 0)
             .ToList();
 
@@ -101,20 +103,84 @@ public sealed class EmbeddingWorker(
 
         var embeddedAt = DateTimeOffset.UtcNow;
         int cursor = 0;
+        var attachmentChunkCount = 0;
         foreach (var (id, msgChunks) in perMessageChunks)
         {
             var vecs = allVectors.Skip(cursor).Take(msgChunks.Count).ToArray();
             chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt);
             cursor += msgChunks.Count;
+            attachmentChunkCount += msgChunks.Count(c => c.Source == "attachment");
         }
 
         _processedThisRun += messageBatch.Count;
         logger.LogInformation(
-            "Embedded {Messages} messages ({Chunks} chunks) in {Ms}ms — {Done} done this run, {Remaining} remaining",
-            perMessageChunks.Count, allTexts.Count, sw.ElapsedMilliseconds,
+            "Embedded {Messages} messages ({Chunks} chunks, {AttachmentChunks} from attachments) in {Ms}ms — {Done} done this run, {Remaining} remaining",
+            perMessageChunks.Count, allTexts.Count, attachmentChunkCount, sw.ElapsedMilliseconds,
             _processedThisRun, messages.CountUnembedded());
 
         return messageBatch.Count;
+    }
+
+    /// <summary>
+    /// Build the per-message chunk list combining body and attachment text.
+    /// Body chunks come first (so chunk_index 0 is always body when present),
+    /// followed by each attachment's chunks in part-index order. The chunker
+    /// returns each list with its own 0-based Index — we renumber the
+    /// combined list to keep <c>UNIQUE(message_id, chunk_index)</c> intact.
+    ///
+    /// Bodies under <see cref="EmbedderOptions.MinBodyCharsForVector"/> are
+    /// dropped from the vector path: their embeddings would be dominated by
+    /// the prepended subject and produce false-positive matches against any
+    /// query sharing a subject token. The message remains searchable via the
+    /// keyword/FTS leg. Attachment chunks still emit regardless — a thin
+    /// email body wrapping a substantive PDF is exactly the case where
+    /// attachment content indexing pays off.
+    /// </summary>
+    private IReadOnlyList<TextChunk> BuildChunksForMessage(UnembeddedMessage m)
+    {
+        var combined = new List<TextChunk>();
+
+        var trimmedBodyLength = m.BodyText?.Trim().Length ?? 0;
+        var minBodyChars = Math.Max(0, embedderOptions.Value.MinBodyCharsForVector);
+        var bodyMeetsThreshold = trimmedBodyLength >= minBodyChars;
+
+        if (bodyMeetsThreshold)
+        {
+            var bodyChunks = chunker.Chunk(BuildEmbeddingText(m.Subject, m.BodyText ?? string.Empty, m.AttachmentNames));
+            foreach (var c in bodyChunks)
+            {
+                combined.Add(c with { Index = combined.Count, Source = "body", AttachmentId = null });
+            }
+        }
+
+        foreach (var att in m.Attachments)
+        {
+            var prefixed = PrefixAttachmentText(att.FileName, att.Text);
+            var attChunks = chunker.Chunk(prefixed);
+            foreach (var c in attChunks)
+            {
+                combined.Add(c with
+                {
+                    Index = combined.Count,
+                    Source = "attachment",
+                    AttachmentId = att.AttachmentId,
+                });
+            }
+        }
+
+        return combined;
+    }
+
+    /// <summary>
+    /// Prepend the attachment filename to its extracted text so a query that
+    /// matches the document name (e.g. "2024 W-2") still ranks even if the
+    /// filename token isn't repeated in the body. Mirrors the subject-prefix
+    /// trick we use for the message body.
+    /// </summary>
+    private static string PrefixAttachmentText(string? fileName, string text)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return text;
+        return $"{fileName}\n\n{text}";
     }
 
     private async Task<float[][]> EmbedInBatchesAsync(IReadOnlyList<string> inputs, int batchSize, CancellationToken ct)

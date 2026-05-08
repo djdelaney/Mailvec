@@ -13,7 +13,13 @@ public sealed record HybridHit(
     string Snippet,
     double RrfScore,
     int? Bm25Rank,
-    int? VectorRank);
+    int? VectorRank,
+    // Surfaced when the vector leg's top chunk for this message came from an
+    // attachment rather than the body, so the MCP layer can tell Claude
+    // "this email matched via its 2024-statement.pdf attachment".
+    long? MatchedAttachmentId = null,
+    int? MatchedAttachmentPartIndex = null,
+    string? MatchedAttachmentFileName = null);
 
 /// <summary>
 /// Combines keyword (BM25) and vector results with Reciprocal Rank Fusion.
@@ -76,6 +82,16 @@ public sealed class HybridSearchService(KeywordSearchService keyword, VectorSear
             row.Folder ??= h.Folder;
             row.MessageIdHeader ??= h.MessageIdHeader;
             row.Snippet ??= Truncate(h.ChunkText, 240);
+            // Vector leg knows the chunk source. Keep the *first* attachment
+            // hit we see (which is the highest-ranked vector match for this
+            // message). BM25 doesn't distinguish body vs attachment so we
+            // always trust the vector leg for this signal.
+            if (h.ChunkSource == "attachment" && row.MatchedAttachmentId is null)
+            {
+                row.MatchedAttachmentId = h.MatchedAttachmentId;
+                row.MatchedAttachmentPartIndex = h.MatchedAttachmentPartIndex;
+                row.MatchedAttachmentFileName = h.MatchedAttachmentFileName;
+            }
         }
 
         return byMessage.Values
@@ -92,7 +108,10 @@ public sealed class HybridSearchService(KeywordSearchService keyword, VectorSear
                 Snippet: r.Snippet ?? string.Empty,
                 RrfScore: r.RrfScore,
                 Bm25Rank: r.Bm25Rank,
-                VectorRank: r.VectorRank))
+                VectorRank: r.VectorRank,
+                MatchedAttachmentId: r.MatchedAttachmentId,
+                MatchedAttachmentPartIndex: r.MatchedAttachmentPartIndex,
+                MatchedAttachmentFileName: r.MatchedAttachmentFileName))
             .ToList();
     }
 
@@ -119,5 +138,8 @@ public sealed class HybridSearchService(KeywordSearchService keyword, VectorSear
         public double RrfScore;
         public int? Bm25Rank;
         public int? VectorRank;
+        public long? MatchedAttachmentId;
+        public int? MatchedAttachmentPartIndex;
+        public string? MatchedAttachmentFileName;
     }
 }

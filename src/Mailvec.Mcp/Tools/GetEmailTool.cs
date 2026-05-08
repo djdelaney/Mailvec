@@ -58,7 +58,13 @@ public sealed class GetEmailTool(
             throw new McpException($"Message {msg.Id} is soft-deleted (gone from disk).");
 
         var attachments = msg.Attachments
-            .Select(a => new AttachmentInfo(a.PartIndex, a.FileName, a.ContentType, a.SizeBytes))
+            .Select(a => new AttachmentInfo(
+                a.PartIndex,
+                a.FileName,
+                a.ContentType,
+                a.SizeBytes,
+                a.ExtractionStatus,
+                IndexedForSearch: a.ExtractionStatus == "done"))
             .ToList();
 
         var response = new GetEmailResponse(
@@ -113,4 +119,12 @@ public sealed record AttachmentInfo(
     int PartIndex,
     string? FileName,
     string? ContentType,
-    long? SizeBytes);
+    long? SizeBytes,
+    // Result of running attachment text extraction (PDF/DOCX/TXT). One of
+    // 'done', 'no_text', 'unsupported', 'oversize', 'encrypted', 'failed',
+    // or null when extraction wasn't attempted (legacy rows).
+    string? ExtractionStatus,
+    // True iff the attachment's text was extracted and embedded — i.e.,
+    // search_emails can match this email by its content. Convenience flag
+    // for Claude; equivalent to ExtractionStatus == "done".
+    bool IndexedForSearch);

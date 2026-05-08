@@ -105,6 +105,22 @@ public sealed class MaildirScanner(
     {
         try
         {
+            // Fast path: if sync_state remembers this exact path AND the file
+            // hasn't been modified since the last scan recorded it, the parse
+            // would just rebuild the same ParsedMessage we already have on
+            // disk. Skip the parse entirely (PDF / DOCX text extraction is
+            // expensive) and just refresh last_seen_at so the deletion-
+            // reconciliation pass doesn't soft-delete it. Mbsync flag rewrites
+            // bump mtime, so the optimization is robust against IMAP flag
+            // changes that don't actually mutate body content.
+            var prior = syncState.Get(filePath);
+            if (prior is { MessageId: not null }
+                && File.GetLastWriteTimeUtc(filePath) <= prior.LastSeenAt.UtcDateTime)
+            {
+                syncState.Upsert(filePath, prior.MessageId, indexedAt, prior.ContentHash);
+                return true;
+            }
+
             var parsed = parser.ParseFile(filePath);
             var relPath = MaildirPaths.RelativeFolderPath(_maildirRoot, filePath);
             var fileName = Path.GetFileName(filePath);
@@ -121,7 +137,7 @@ public sealed class MaildirScanner(
                     "Content changed for message_id={MessageId} (id={Id}); cleared embeddings.",
                     parsed.MessageId, outcome.Id);
             }
-            syncState.Upsert(filePath, parsed.MessageId, indexedAt);
+            syncState.Upsert(filePath, parsed.MessageId, indexedAt, parsed.ContentHash);
             return true;
         }
         catch (Exception ex)
