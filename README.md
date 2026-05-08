@@ -12,7 +12,7 @@ src/
   Mailvec.Indexer   BackgroundService: Maildir -> SQLite (no embeddings)
   Mailvec.Embedder  BackgroundService: SQLite rows -> Ollama embeddings
   Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB)
-  Mailvec.Cli       admin commands (status, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, eval*)
+  Mailvec.Cli       admin commands (status, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, extract-attachments, eval*)
 tests/
   Mailvec.{Core,Indexer,Mcp}.Tests
 schema/
@@ -21,16 +21,22 @@ schema/
 ops/
   mbsyncrc.example       IMAP sync config template
   launchd/               plist templates for mbsync + 3 .NET services
-  install.sh             Phase 4 installer: publishes services, renders plists, bootstraps
-  redeploy.sh            republish + kickstart launchd agents after a code change
-  stop.sh                bootout the launchd agents without uninstalling
-  fetch-sqlite-vec.sh    one-shot: pulls vec0.dylib from upstream releases
-  build-mcpb.sh          packages a .mcpb bundle into dist/ for Claude Desktop
-  publish-mcp-stdio.sh   publishes the stdio MCP binary to ~/.local/share/mailvec/
-  run-mcp.sh             dev launcher for the HTTP MCP server
-  run-mcp-stdio.sh       dev launcher for the stdio MCP server (Claude Desktop)
-  coverage.sh            runs the test suite with coverage; HTML in coverage/
-  dev-fetch-imap.py      dev-only: pulls last N days of mail without mbsync
+  install.sh                 Phase 4 installer: publishes services, renders plists, bootstraps
+  redeploy.sh                republish + kickstart launchd agents after a code change
+  stop.sh                    bootout the launchd agents without uninstalling
+  fetch-sqlite-vec.sh        one-shot: pulls vec0.dylib from upstream releases
+  build-mcpb.sh              packages a .mcpb bundle into dist/ for Claude Desktop
+  install-stdio-launcher.sh  publishes the stdio MCP binary + writes ~/.local/bin/mailvec-mcp-stdio (Phase 5)
+  publish-mcp-stdio.sh       publish-only: refreshes ~/.local/share/mailvec/mcp/ without touching the launcher
+  run-mcp.sh                 dev launcher for the HTTP MCP server
+  run-mcp-stdio.sh           dev launcher for the stdio MCP server (Claude Desktop)
+  coverage.sh                runs the test suite with coverage; HTML in coverage/
+  dev-fetch-imap.py          dev-only: pulls last N days of mail without mbsync
+docs/
+  glossary.md                FTS5 / RRF / MCP / Maildir / etc.
+  clients/                   per-client wiring snippets (Claude Desktop, Claude Code, Phase 5)
+baselines/
+  README.md                  eval-baseline workflow; commit one before any retrieval-affecting change
 runtimes/
   osx-arm64/native  sqlite-vec native binary lands here
 manifest.json       Claude Desktop MCPB manifest (binary entry + user_config)
@@ -396,7 +402,7 @@ Makes the system survive reboots unattended. **Exit criterion met:** rebooted, a
 
 Extends keyword + semantic + hybrid search to the *contents* of attached documents, not just their filenames. **Exit criterion met:** a query that only appears in the body of an attached PDF / DOCX returns the parent email, and the result identifies which attachment drove the hit.
 
-- Schema v4: `attachments.extracted_text` / `extracted_at` / `extraction_status` hold the recovered plain text; `chunks.source` ('body' | 'attachment') + `chunks.attachment_id` let search results trace back to a specific document. In-place migrations live in [`schema/migrations/004_attachment_text.sql`](schema/migrations/004_attachment_text.sql) and [`schema/migrations/005_attachment_text_fts.sql`](schema/migrations/005_attachment_text_fts.sql); the supported v3→v4 path is to drop the DB and re-ingest.
+- Schema v4: `attachments.extracted_text` / `extracted_at` / `extraction_status` hold the recovered plain text; `chunks.source` ('body' | 'attachment') + `chunks.attachment_id` let search results trace back to a specific document. In-place migrations live in [`schema/migrations/004_attachment_text.sql`](schema/migrations/004_attachment_text.sql) and [`schema/migrations/005_attachment_text_fts.sql`](schema/migrations/005_attachment_text_fts.sql); v3→v4 backfill via `mailvec extract-attachments` (re-walks `.eml` files, populates `extracted_text` in place, clears chunks for affected messages so the embedder regenerates with attachment content).
 - Pure-managed extractors: PDF via `PdfPig`, DOCX via `DocumentFormat.OpenXml`, plain text inline. No native deps, no shell-out, no OCR. Scanned PDFs come back as `extraction_status='no_text'` and are intentionally not retried.
 - The embedder stitches body + per-attachment chunks into one chunk stream per message; vector search dedups to one row per message and surfaces `matchedAttachment { partIndex, fileName }` when the winning chunk came from a document — exactly the inputs `get_attachment` needs.
 - FTS5 column `attachment_text` carries the extracted text alongside `body_text`, so keyword and hybrid searches surface document-content hits without any extra wiring.

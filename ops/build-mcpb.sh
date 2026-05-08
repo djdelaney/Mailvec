@@ -43,24 +43,36 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Patch-bump manifest.json in place. Regex-targeted at the version field only so
-# we don't reformat the rest of the file (json.dump would lose comments-as-keys
-# ordering, trailing newline conventions, etc).
+# Patch-bump manifest.json in place AND the matching <Version> in
+# Mailvec.Mcp.csproj so the assembly version that surfaces in MCP
+# initialize.serverInfo stays aligned with the bundle the user installed.
+# Regex-targeted at the version fields only so we don't reformat the rest of
+# the files (json.dump would lose key ordering / trailing newlines, and an
+# XML serializer would reflow whitespace).
 if [[ $BUMP -eq 1 ]]; then
     python3 - <<'PY'
 import pathlib, re, sys
-p = pathlib.Path("manifest.json")
-text = p.read_text()
+
+manifest = pathlib.Path("manifest.json")
+text = manifest.read_text()
 m = re.search(r'("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")', text)
 if not m:
     print("ERROR: could not find version field in manifest.json", file=sys.stderr)
     sys.exit(1)
 major, minor, patch = int(m.group(2)), int(m.group(3)), int(m.group(4))
-new = f"{major}.{minor}.{patch + 1}"
 old = f"{major}.{minor}.{patch}"
-text = text[:m.start(2)] + new + text[m.end(4):]
-p.write_text(text)
+new = f"{major}.{minor}.{patch + 1}"
+manifest.write_text(text[:m.start(2)] + new + text[m.end(4):])
 print(f"→ Bumped manifest.json: {old} → {new}")
+
+csproj = pathlib.Path("src/Mailvec.Mcp/Mailvec.Mcp.csproj")
+ctext = csproj.read_text()
+cm = re.search(r"(<Version>)(\d+\.\d+\.\d+)(</Version>)", ctext)
+if not cm:
+    print("ERROR: could not find <Version> in Mailvec.Mcp.csproj", file=sys.stderr)
+    sys.exit(1)
+csproj.write_text(ctext[:cm.start(2)] + new + ctext[cm.end(2):])
+print(f"→ Bumped Mailvec.Mcp.csproj <Version>: {cm.group(2)} → {new}")
 PY
 fi
 
