@@ -43,7 +43,9 @@ public sealed class SearchEmailsTool(
         "10-year archive, an unbounded query skews toward old mail and dilutes recent context. When in " +
         "doubt for casual 'recently'-style asks, a 12-month lower bound is a safe default. " +
         "Each result carries the internal id, RFC message_id, folder, sender, date, snippet, and (for ranked queries) score breakdown. " +
-        "Use a result's id or messageId with get_email/get_thread for follow-up.")]
+        "When a match was driven by content inside a PDF/DOCX/text attachment rather than the email body, the result includes " +
+        "`matchedAttachment` with the attachment's partIndex and filename — use those with `get_attachment` to retrieve the " +
+        "document. Use a result's id or messageId with get_email/get_thread for follow-up.")]
     public async Task<SearchEmailsResponse> SearchEmails(
         [Description("Optional free-text query. With it, results are ranked by relevance; without it, by date descending. " +
                      "For mode=keyword this is an FTS5 expression (phrase quotes, AND/OR/NOT). For mode=semantic/hybrid it's natural language. " +
@@ -208,6 +210,11 @@ public sealed record EmailHit(
     double? RrfScore = null,
     int? Bm25Rank = null,
     int? VectorRank = null,
+    // Surfaced when the top-ranked chunk for this message came from an
+    // attachment rather than the body — answers Claude's "why did this email
+    // match my query?" without a follow-up call. Pair (PartIndex, FileName)
+    // is also exactly what `get_attachment` needs to fetch the source.
+    MatchedAttachment? MatchedAttachment = null,
     // Decorated post-construction by SearchEmailsTool.WithWebmailUrl when
     // Fastmail:AccountId is configured. The factory methods below leave it null.
     string? WebmailUrl = null)
@@ -232,7 +239,10 @@ public sealed record EmailHit(
         FromName: h.FromName,
         DateSent: h.DateSent,
         Snippet: Truncate(h.ChunkText, 240),
-        VectorDistance: h.Distance);
+        VectorDistance: h.Distance,
+        MatchedAttachment: h.ChunkSource == "attachment" && h.MatchedAttachmentPartIndex is { } pi
+            ? new MatchedAttachment(pi, h.MatchedAttachmentFileName)
+            : null);
 
     public static EmailHit FromHybrid(HybridHit h) => new(
         Id: h.MessageId,
@@ -245,7 +255,10 @@ public sealed record EmailHit(
         Snippet: h.Snippet,
         RrfScore: h.RrfScore,
         Bm25Rank: h.Bm25Rank,
-        VectorRank: h.VectorRank);
+        VectorRank: h.VectorRank,
+        MatchedAttachment: h.MatchedAttachmentPartIndex is { } pi
+            ? new MatchedAttachment(pi, h.MatchedAttachmentFileName)
+            : null);
 
     /// <summary>
     /// Used for the query-less browse path, where there's no score to report
@@ -272,3 +285,10 @@ public sealed record EmailHit(
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 }
+
+/// <summary>
+/// Tells the caller a search hit matched via an email attachment, not the
+/// body. <see cref="PartIndex"/> + parent message id are the inputs to
+/// <c>get_attachment</c>, so Claude can fetch the document directly.
+/// </summary>
+public sealed record MatchedAttachment(int PartIndex, string? FileName);

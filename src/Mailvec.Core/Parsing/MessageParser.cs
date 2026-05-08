@@ -1,3 +1,4 @@
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Models;
 using MimeKit;
 
@@ -5,6 +6,20 @@ namespace Mailvec.Core.Parsing;
 
 public sealed class MessageParser
 {
+    private readonly AttachmentTextExtractor? _attachmentExtractor;
+
+    /// <summary>
+    /// Parameterless ctor for tests / contexts that don't need attachment text
+    /// extraction. Production code resolves the DI ctor below so attachments
+    /// get content-indexed alongside the message body.
+    /// </summary>
+    public MessageParser() : this(null) { }
+
+    public MessageParser(AttachmentTextExtractor? attachmentExtractor)
+    {
+        _attachmentExtractor = attachmentExtractor;
+    }
+
     public ParsedMessage ParseFile(string emlPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(emlPath);
@@ -67,7 +82,7 @@ public sealed class MessageParser
             Attachments: attachments);
     }
 
-    private static IReadOnlyList<ParsedAttachment> ExtractAttachments(MimeMessage mime)
+    private IReadOnlyList<ParsedAttachment> ExtractAttachments(MimeMessage mime)
     {
         var list = new List<ParsedAttachment>();
         int index = 0;
@@ -79,11 +94,22 @@ public sealed class MessageParser
                 ? s.Length
                 : null;
 
+            string? extractedText = null;
+            string? extractionStatus = null;
+            if (_attachmentExtractor is not null)
+            {
+                var result = _attachmentExtractor.Extract(entity, NormalizeName(fileName), contentType, size);
+                extractedText = result.Text;
+                extractionStatus = result.Status;
+            }
+
             list.Add(new ParsedAttachment(
                 PartIndex: index,
                 FileName: NormalizeName(fileName),
                 ContentType: contentType,
-                SizeBytes: size));
+                SizeBytes: size,
+                ExtractedText: extractedText,
+                ExtractionStatus: extractionStatus));
             index++;
         }
         return list;
@@ -149,4 +175,6 @@ public sealed record ParsedAttachment(
     int PartIndex,
     string? FileName,
     string? ContentType,
-    long? SizeBytes);
+    long? SizeBytes,
+    string? ExtractedText = null,
+    string? ExtractionStatus = null);

@@ -1,4 +1,5 @@
 using Mailvec.Core;
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Logging;
 using Mailvec.Core.Options;
@@ -18,6 +19,7 @@ builder.Services.AddSingleton<SchemaMigrator>();
 builder.Services.AddSingleton<MessageRepository>();
 builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<SyncStateRepository>();
+builder.Services.AddSingleton<AttachmentTextExtractor>();
 builder.Services.AddSingleton<MessageParser>();
 builder.Services.AddSingleton<MaildirScanner>();
 builder.Services.AddSingleton<MaildirWatcher>();
