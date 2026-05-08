@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Globalization;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
@@ -17,6 +18,8 @@ internal static class SearchCommand
         var hybridOpt = new Option<bool>("--hybrid") { Description = "Combine keyword + vector with reciprocal rank fusion." };
         var titlesOnlyOpt = new Option<bool>("--titles-only", "-t") { Description = "Suppress snippet/body output; show only ranking, headers, and subject." };
         var withIdOpt = new Option<bool>("--with-id", "-i") { Description = "Show each result's RFC 5322 Message-ID. Useful when sourcing IDs for `eval-add --pin-relevant`." };
+        var dateFromOpt = new Option<string?>("--date-from") { Description = "Earliest message date (inclusive), ISO 8601 (e.g. '2024-01-01' or '2024-01-01T00:00:00Z')." };
+        var dateToOpt = new Option<string?>("--date-to") { Description = "Latest message date (inclusive), ISO 8601." };
 
         var cmd = new Command("search", "Search the archive (keyword by default).")
         {
@@ -26,6 +29,8 @@ internal static class SearchCommand
             hybridOpt,
             titlesOnlyOpt,
             withIdOpt,
+            dateFromOpt,
+            dateToOpt,
         };
 
         cmd.SetAction(async parseResult =>
@@ -36,6 +41,8 @@ internal static class SearchCommand
             var hybrid = parseResult.GetValue(hybridOpt);
             var titlesOnly = parseResult.GetValue(titlesOnlyOpt);
             var withId = parseResult.GetValue(withIdOpt);
+            var dateFromRaw = parseResult.GetValue(dateFromOpt);
+            var dateToRaw = parseResult.GetValue(dateToOpt);
 
             if (semantic && hybrid)
             {
@@ -43,12 +50,33 @@ internal static class SearchCommand
                 return 2;
             }
 
-            return await Run(query, limit, semantic, hybrid, titlesOnly, withId);
+            DateTimeOffset? dateFrom, dateTo;
+            try
+            {
+                dateFrom = ParseDate(dateFromRaw, "--date-from");
+                dateTo = ParseDate(dateToRaw, "--date-to");
+            }
+            catch (FormatException ex)
+            {
+                Console.Error.WriteLine(ex.Message);
+                return 2;
+            }
+
+            var filters = new SearchFilters(DateFrom: dateFrom, DateTo: dateTo);
+            return await Run(query, limit, semantic, hybrid, titlesOnly, withId, filters);
         });
         return cmd;
     }
 
-    private static async Task<int> Run(string query, int limit, bool semantic, bool hybrid, bool titlesOnly, bool withId)
+    private static DateTimeOffset? ParseDate(string? value, string flagName)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
+            return dto;
+        throw new FormatException($"{flagName} '{value}' is not a valid ISO 8601 date.");
+    }
+
+    private static async Task<int> Run(string query, int limit, bool semantic, bool hybrid, bool titlesOnly, bool withId, SearchFilters filters)
     {
         using var sp = CliServices.Build();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
@@ -57,7 +85,7 @@ internal static class SearchCommand
         if (hybrid)
         {
             var search = sp.GetRequiredService<HybridSearchService>();
-            var hits = await search.SearchAsync(query, limit);
+            var hits = await search.SearchAsync(query, limit, filters: filters);
             PrintHybrid(hits, titlesOnly, withId, fastmail);
             return 0;
         }
@@ -65,13 +93,13 @@ internal static class SearchCommand
         if (semantic)
         {
             var search = sp.GetRequiredService<VectorSearchService>();
-            var hits = await search.SearchAsync(query, limit);
+            var hits = await search.SearchAsync(query, limit, filters: filters);
             PrintVector(hits, titlesOnly, withId, fastmail);
             return 0;
         }
 
         var keyword = sp.GetRequiredService<KeywordSearchService>();
-        PrintKeyword(keyword.Search(query, limit), titlesOnly, withId, fastmail);
+        PrintKeyword(keyword.Search(query, limit, filters), titlesOnly, withId, fastmail);
         return 0;
     }
 
