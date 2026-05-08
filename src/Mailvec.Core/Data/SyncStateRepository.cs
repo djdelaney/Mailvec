@@ -6,6 +6,32 @@ public sealed record SyncStateEntry(string MaildirFullPath, string? MessageId, D
 
 public sealed class SyncStateRepository(ConnectionFactory connections)
 {
+    /// <summary>
+    /// Returns the entry for a single Maildir file path, or null if none.
+    /// The scanner calls this to short-circuit re-parsing of files whose mtime
+    /// hasn't changed since last scan — important once the corpus has many
+    /// PDFs/DOCX, since attachment-text extraction during parse is expensive.
+    /// </summary>
+    public SyncStateEntry? Get(string maildirFullPath)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT maildir_full_path, message_id, last_seen_at, content_hash
+            FROM sync_state
+            WHERE maildir_full_path = $path
+            """;
+        cmd.Parameters.AddWithValue("$path", maildirFullPath);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+        return new SyncStateEntry(
+            MaildirFullPath: reader.GetString(0),
+            MessageId: reader.IsDBNull(1) ? null : reader.GetString(1),
+            LastSeenAt: DateTimeOffset.Parse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture),
+            ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3));
+    }
+
     public void Upsert(string maildirFullPath, string? messageId, DateTimeOffset lastSeenAt, string? contentHash = null)
     {
         using var conn = connections.Open();

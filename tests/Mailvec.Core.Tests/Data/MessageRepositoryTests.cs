@@ -48,8 +48,8 @@ public class MessageRepositoryTests
         var repo = new MessageRepository(db.Connections);
         var now = DateTimeOffset.UtcNow;
 
-        var id1 = repo.Upsert(Sample(subject: "Original"), "INBOX", "INBOX/new", "1736780100.1.host", now);
-        var id2 = repo.Upsert(Sample(subject: "Edited"), "INBOX", "INBOX/cur", "1736780100.1.host:2,S", now);
+        long id1 = repo.Upsert(Sample(subject: "Original"), "INBOX", "INBOX/new", "1736780100.1.host", now);
+        long id2 = repo.Upsert(Sample(subject: "Edited"), "INBOX", "INBOX/cur", "1736780100.1.host:2,S", now);
 
         id2.ShouldBe(id1);
         repo.CountAll().ShouldBe(1);
@@ -156,7 +156,7 @@ public class MessageRepositoryTests
     }
 
     [Fact]
-    public void Re_upsert_replaces_attachments_wholesale()
+    public void Re_upsert_replaces_attachments_wholesale_when_content_changed()
     {
         using var db = new TempDatabase();
         var repo = new MessageRepository(db.Connections);
@@ -166,13 +166,17 @@ public class MessageRepositoryTests
             new(0, "old-a.pdf", "application/pdf", 100),
             new(1, "old-b.pdf", "application/pdf", 200),
         };
-        var id = repo.Upsert(Sample(attachments: initial), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        long id = repo.Upsert(Sample(attachments: initial, contentHash: "h1"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
 
         var replacement = new List<ParsedAttachment>
         {
             new(0, "new-only.pdf", "application/pdf", 300),
         };
-        repo.Upsert(Sample(attachments: replacement), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        // Upsert with a different content_hash to model "the message body
+        // mutated upstream", which is the only realistic way an attachment
+        // list can change in production (parser hashes the body, body
+        // includes attachment parts, so attachment delta => hash delta).
+        repo.Upsert(Sample(attachments: replacement, contentHash: "h2"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
 
         var msg = repo.GetById(id).ShouldNotBeNull();
         msg.Attachments.Count.ShouldBe(1);
@@ -180,7 +184,31 @@ public class MessageRepositoryTests
     }
 
     [Fact]
-    public void Re_upsert_to_no_attachments_clears_them()
+    public void Re_upsert_with_unchanged_hash_preserves_attachments()
+    {
+        // The complement of the above: when content_hash matches the prior
+        // row, ReplaceAttachments is intentionally skipped so extracted_text
+        // (populated by the indexer's AttachmentTextExtractor pass) survives
+        // mtime-only rescans. Even though the parsed attachment list here
+        // differs, the row must keep the original attachments.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var initial = new List<ParsedAttachment>
+        {
+            new(0, "kept.pdf", "application/pdf", 100),
+        };
+        long id = repo.Upsert(Sample(attachments: initial, contentHash: "stable"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        repo.Upsert(Sample(attachments: [], contentHash: "stable"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        var msg = repo.GetById(id).ShouldNotBeNull();
+        msg.Attachments.Count.ShouldBe(1);
+        msg.Attachments[0].FileName.ShouldBe("kept.pdf");
+    }
+
+    [Fact]
+    public void Re_upsert_to_no_attachments_clears_them_when_content_changed()
     {
         using var db = new TempDatabase();
         var repo = new MessageRepository(db.Connections);
@@ -189,10 +217,10 @@ public class MessageRepositoryTests
         {
             new(0, "doc.pdf", "application/pdf", 100),
         };
-        var id = repo.Upsert(Sample(attachments: initial), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        long id = repo.Upsert(Sample(attachments: initial, contentHash: "h1"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
         repo.GetById(id).ShouldNotBeNull().HasAttachments.ShouldBeTrue();
 
-        repo.Upsert(Sample(attachments: []), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+        repo.Upsert(Sample(attachments: [], contentHash: "h2"), "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
 
         var msg = repo.GetById(id).ShouldNotBeNull();
         msg.Attachments.ShouldBeEmpty();
