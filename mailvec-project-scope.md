@@ -235,7 +235,7 @@ CREATE TABLE metadata (
 
 - **Embedding model is part of the schema.** Mixing vectors from different models silently produces garbage. The `metadata` table records which model was used; the embedder refuses to start if the config disagrees. Switching models requires `mailvec reindex --all`.
 - **`body_html` can be large.** Consider splitting into a `message_bodies` table keyed on `message_id` if the main table gets unwieldy. Optimize later if needed.
-- **Attachment filenames *are* indexed.** Phase 3 added an `attachments` table (filename, content_type, size, partIndex) plus FTS5 coverage of the filename column, so a query like `"mortgage_statement_2024.pdf"` matches the email it's attached to. Per-format **content** indexing (PDF text extraction, OCR, DOCX) is still out of scope — let downstream tools interpret extracted bytes.
+- **Attachment filenames *and* content are indexed.** Phase 3 added an `attachments` table (filename, content_type, size, partIndex) plus FTS5 coverage of the filename column, so a query like `"mortgage_statement_2024.pdf"` matches the email it's attached to. Phase 4.5 (schema v4) added per-format **content** indexing for native PDFs (PdfPig), DOCX (DocumentFormat.OpenXml), and plain text — extracted text lives in `attachments.extracted_text` and is chunked + embedded alongside the parent message body. Search results carry `matchedAttachment` so Claude can identify which document drove the match. **OCR remains out of scope** — scanned/image-only PDFs are stamped `extraction_status='no_text'` and not retried.
 - **Content-change detection.** `messages.content_hash` is the SHA-256 of `MimeMessage.Body` bytes (added in migration `003_message_body_hash.sql`). Used to invalidate embeddings when the body changes — distinct from `sync_state.content_hash`, which is keyed on Maildir path and would false-positive on rename/move. See CLAUDE.md Phase 2 gotchas for the full reasoning.
 
 ---
@@ -438,7 +438,7 @@ Resolved during the build (kept here as a paper trail):
 
 - **HTML body handling** — *resolved*. AngleSharp-based `HtmlToText` in `Mailvec.Core.Parsing`, with marketing-email noise stripping (hidden preheader text, tracking pixels, footer/unsubscribe boilerplate). MimeKit's `HtmlToText` referenced in the original doc doesn't exist. See CLAUDE.md Phase 1 gotchas.
 - **Incremental re-embedding** — *resolved*. `messages.content_hash` (SHA-256 of `MimeMessage.Body` bytes) added in migration 003. `MaildirScanner.TryIngest` clears embeddings via `ChunkRepository.ClearEmbeddingsForMessage` whenever the hash changes. Decoupled from the path-keyed `sync_state.content_hash` which would false-positive on rename/move.
-- **Attachment indexing** — *partially resolved*. Filenames are FTS5-indexed via the `attachments` table; `get_attachment` extracts bytes to disk on demand. Per-format **content** indexing (PDF text, OCR) remains out of scope — delegated to downstream tools (Claude Code's `Read`, a filesystem MCP server).
+- **Attachment indexing** — *resolved (Phase 4.5)*. Filenames are FTS5-indexed via the `attachments` table; `get_attachment` extracts bytes to disk on demand. Schema v4 adds per-format **content** indexing for native PDFs, DOCX, and plain text via `attachments.extracted_text`; extracted text is chunked + embedded so semantic queries match document content. Search responses include `matchedAttachment` (partIndex + filename) when an attachment drove the match. OCR for scanned PDFs is still out of scope — those land at `extraction_status='no_text'`.
 
 Still open:
 
