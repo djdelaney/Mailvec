@@ -31,7 +31,7 @@ public class SchemaMigratorTests
     public void Fresh_database_lands_at_latest_schema_version()
     {
         using var db = new TempDatabase();
-        ReadSchemaVersion(db).ShouldBe(4);
+        ReadSchemaVersion(db).ShouldBe(5);
     }
 
     [Fact]
@@ -69,11 +69,13 @@ public class SchemaMigratorTests
             // Run the migrator.
             new SchemaMigrator(connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
-            // Post-migration: column exists, schema walked v2 -> v3 -> v4, prior row preserved.
+            // Post-migration: column exists, schema walked v2 -> v3 -> v4 -> v5, prior row preserved.
             TableHasColumn(connections, "messages", "content_hash").ShouldBeTrue();
-            ReadSchemaVersion(connections).ShouldBe(4);
+            ReadSchemaVersion(connections).ShouldBe(5);
             TableHasColumn(connections, "attachments", "extracted_text").ShouldBeTrue();
             TableHasColumn(connections, "chunks", "source").ShouldBeTrue();
+            TableHasColumn(connections, "messages", "attachment_text").ShouldBeTrue();
+            FtsHasColumn(connections, "attachment_text").ShouldBeTrue();
 
             using var verify = connections.Open();
             using var cmd = verify.CreateCommand();
@@ -96,7 +98,7 @@ public class SchemaMigratorTests
         using var db = new TempDatabase();
         // Second call should be a no-op and not throw.
         new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
-        ReadSchemaVersion(db).ShouldBe(4);
+        ReadSchemaVersion(db).ShouldBe(5);
     }
 
     [Fact]
@@ -129,15 +131,18 @@ public class SchemaMigratorTests
 
             new SchemaMigrator(connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
-            // Post-migration: schema bumped through 002 -> 003 -> 004, all
-            // expected columns present, attachments table created, FTS table
-            // has the new column, v4 attachment-text columns exist.
-            ReadSchemaVersion(connections).ShouldBe(4);
+            // Post-migration: schema bumped through 002 -> 003 -> 004 -> 005,
+            // all expected columns present, attachments table created, FTS
+            // table has both new columns, v4 attachment-text columns exist,
+            // v5 messages.attachment_text wired through to FTS.
+            ReadSchemaVersion(connections).ShouldBe(5);
             TableHasColumn(connections, "messages", "attachment_names").ShouldBeTrue();
             TableHasColumn(connections, "messages", "content_hash").ShouldBeTrue();
             TableExists(connections, "attachments").ShouldBeTrue();
             FtsHasColumn(connections, "attachment_names").ShouldBeTrue();
+            FtsHasColumn(connections, "attachment_text").ShouldBeTrue();
             TableHasColumn(connections, "attachments", "extracted_text").ShouldBeTrue();
+            TableHasColumn(connections, "messages", "attachment_text").ShouldBeTrue();
             TableHasColumn(connections, "chunks", "source").ShouldBeTrue();
             TableHasColumn(connections, "chunks", "attachment_id").ShouldBeTrue();
 

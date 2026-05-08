@@ -75,12 +75,12 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     message_id, thread_id, maildir_path, maildir_filename, folder,
                     subject, from_address, from_name, to_addresses, cc_addresses,
                     date_sent, date_received, size_bytes, has_attachments, attachment_names,
-                    body_text, body_html, raw_headers, indexed_at, deleted_at, content_hash
+                    attachment_text, body_text, body_html, raw_headers, indexed_at, deleted_at, content_hash
                 ) VALUES (
                     $message_id, $thread_id, $maildir_path, $maildir_filename, $folder,
                     $subject, $from_address, $from_name, $to_addresses, $cc_addresses,
                     $date_sent, $date_received, $size_bytes, $has_attachments, $attachment_names,
-                    $body_text, $body_html, $raw_headers, $indexed_at, NULL, $content_hash
+                    $attachment_text, $body_text, $body_html, $raw_headers, $indexed_at, NULL, $content_hash
                 )
                 ON CONFLICT(message_id) DO UPDATE SET
                     thread_id        = excluded.thread_id,
@@ -97,6 +97,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     size_bytes       = excluded.size_bytes,
                     has_attachments  = excluded.has_attachments,
                     attachment_names = excluded.attachment_names,
+                    attachment_text  = excluded.attachment_text,
                     body_text        = excluded.body_text,
                     body_html        = excluded.body_html,
                     raw_headers      = excluded.raw_headers,
@@ -107,6 +108,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
                 """;
 
             var attachmentNames = BuildAttachmentNames(parsed.Attachments);
+            var attachmentText = BuildAttachmentText(parsed.Attachments);
 
             cmd.Parameters.AddWithValue("$message_id", parsed.MessageId);
             cmd.Parameters.AddWithValue("$thread_id", parsed.ThreadId);
@@ -123,6 +125,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.Parameters.AddWithValue("$size_bytes", parsed.SizeBytes);
             cmd.Parameters.AddWithValue("$has_attachments", parsed.HasAttachments ? 1 : 0);
             cmd.Parameters.AddWithValue("$attachment_names", (object?)attachmentNames ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$attachment_text", (object?)attachmentText ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$body_text", (object?)parsed.BodyText ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$body_html", (object?)parsed.BodyHtml ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$raw_headers", parsed.RawHeaders);
@@ -154,6 +157,24 @@ public sealed class MessageRepository(ConnectionFactory connections)
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .ToList();
         return names.Count == 0 ? null : string.Join(' ', names);
+    }
+
+    /// <summary>
+    /// Concatenate every attachment's extracted text into a single
+    /// space-joined blob that messages_fts can BM25-index. Mirrors the
+    /// <c>group_concat(extracted_text, ' ')</c> backfill in migration 005,
+    /// so a fresh insert and a v4-upgrade backfill produce the same FTS
+    /// content. Returns null when no attachment carries indexable text;
+    /// FTS5 treats NULL columns as empty, which is what we want.
+    /// </summary>
+    private static string? BuildAttachmentText(IReadOnlyList<ParsedAttachment> attachments)
+    {
+        if (attachments.Count == 0) return null;
+        var texts = attachments
+            .Where(a => !string.IsNullOrEmpty(a.ExtractedText))
+            .Select(a => a.ExtractedText!)
+            .ToList();
+        return texts.Count == 0 ? null : string.Join(' ', texts);
     }
 
     private static void ReplaceAttachments(SqliteConnection conn, SqliteTransaction tx, long messageId, IReadOnlyList<ParsedAttachment> attachments)

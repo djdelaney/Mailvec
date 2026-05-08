@@ -72,27 +72,23 @@ public sealed class EmbeddingWorker(
         // plus per-attachment chunks (source='attachment', attachment_id set).
         // chunk_index is unique per message and runs sequentially across both
         // sources — the schema's UNIQUE(message_id, chunk_index) requires it.
+        // Keep zero-chunk messages in the list (don't filter here) so the
+        // stamping loop below can mark them embedded too. Otherwise messages
+        // with body shorter than MinBodyCharsForVector and no extracted
+        // attachment text would leak: they get no embedded_at stamp, get
+        // re-fetched by EnumerateUnembedded next batch, and inflate
+        // _processedThisRun by re-counting on every appearance.
         var perMessageChunks = messageBatch
             .Select(m => (m.Id, Chunks: BuildChunksForMessage(m)))
-            .Where(x => x.Chunks.Count > 0)
             .ToList();
-
-        if (perMessageChunks.Count == 0)
-        {
-            // Mark messages with no embeddable text as embedded=now so we don't retry forever.
-            var now = DateTimeOffset.UtcNow;
-            foreach (var m in messageBatch)
-            {
-                chunks.ReplaceChunksForMessage(m.Id, [], [], now);
-            }
-            _processedThisRun += messageBatch.Count;
-            logger.LogDebug("Marked {Count} empty-body messages as embedded", messageBatch.Count);
-            return messageBatch.Count;
-        }
 
         var allTexts = perMessageChunks.SelectMany(x => x.Chunks.Select(c => c.Text)).ToList();
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var allVectors = await EmbedInBatchesAsync(allTexts, batchSize, ct).ConfigureAwait(false);
+        // Skip the embed call when nothing in the batch had chunks — all
+        // messages still get stamped via the empty-chunks path below.
+        var allVectors = allTexts.Count == 0
+            ? Array.Empty<float[]>()
+            : await EmbedInBatchesAsync(allTexts, batchSize, ct).ConfigureAwait(false);
         sw.Stop();
 
         if (allVectors.Length != allTexts.Count)
@@ -104,18 +100,27 @@ public sealed class EmbeddingWorker(
         var embeddedAt = DateTimeOffset.UtcNow;
         int cursor = 0;
         var attachmentChunkCount = 0;
+        var nonEmptyMessageCount = 0;
         foreach (var (id, msgChunks) in perMessageChunks)
         {
+            if (msgChunks.Count == 0)
+            {
+                // Stamp empty-chunk messages (short body AND no extractable
+                // attachment) so EnumerateUnembedded stops returning them.
+                chunks.ReplaceChunksForMessage(id, [], [], embeddedAt);
+                continue;
+            }
             var vecs = allVectors.Skip(cursor).Take(msgChunks.Count).ToArray();
             chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt);
             cursor += msgChunks.Count;
             attachmentChunkCount += msgChunks.Count(c => c.Source == "attachment");
+            nonEmptyMessageCount++;
         }
 
         _processedThisRun += messageBatch.Count;
         logger.LogInformation(
             "Embedded {Messages} messages ({Chunks} chunks, {AttachmentChunks} from attachments) in {Ms}ms — {Done} done this run, {Remaining} remaining",
-            perMessageChunks.Count, allTexts.Count, attachmentChunkCount, sw.ElapsedMilliseconds,
+            nonEmptyMessageCount, allTexts.Count, attachmentChunkCount, sw.ElapsedMilliseconds,
             _processedThisRun, messages.CountUnembedded());
 
         return messageBatch.Count;
