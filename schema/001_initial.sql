@@ -13,6 +13,14 @@ PRAGMA foreign_keys = ON;
 -- splits on whitespace AND punctuation, so any separator we picked would
 -- tokenize identically. The attachments table below is the source of truth
 -- for per-attachment metadata; never parse this column back into a list.
+--
+-- attachment_text is the same idea applied to extracted document content:
+-- a denormalized space-joined concatenation of attachments.extracted_text for
+-- every attachment whose extraction_status='done'. Fed into messages_fts so
+-- BM25 keyword search can match terms from PDF / DOCX bodies (otherwise a
+-- message with body_text="Sent from my iPhone" + a PFAS-quote PDF attachment
+-- is keyword-invisible). attachments.extracted_text remains the source of
+-- truth — never parse this column back into a per-attachment list.
 CREATE TABLE messages (
     id                INTEGER PRIMARY KEY,
     message_id        TEXT UNIQUE NOT NULL,
@@ -30,6 +38,7 @@ CREATE TABLE messages (
     size_bytes        INTEGER,
     has_attachments   INTEGER DEFAULT 0,
     attachment_names  TEXT,
+    attachment_text   TEXT,
     body_text         TEXT,
     body_html         TEXT,
     raw_headers       TEXT,
@@ -48,28 +57,30 @@ CREATE INDEX idx_messages_folder    ON messages(folder);
 CREATE INDEX idx_messages_date_sent ON messages(date_sent);
 CREATE INDEX idx_messages_to_embed  ON messages(embedded_at) WHERE embedded_at IS NULL;
 
--- Full-text index over messages.
+-- Full-text index over messages. Six columns; column ordering is API-relevant
+-- because BM25 weights and snippet() column indices reference these positions
+-- (KeywordSearchService passes -1 to let FTS5 pick the best-matching column).
 CREATE VIRTUAL TABLE messages_fts USING fts5(
-    subject, from_name, from_address, body_text, attachment_names,
+    subject, from_name, from_address, body_text, attachment_names, attachment_text,
     content='messages', content_rowid='id',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, attachment_names)
-    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text, new.attachment_names);
+    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, attachment_names, attachment_text)
+    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text, new.attachment_names, new.attachment_text);
 END;
 
 CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text, attachment_names)
-    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text, old.attachment_names);
+    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text, attachment_names, attachment_text)
+    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text, old.attachment_names, old.attachment_text);
 END;
 
 CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text, attachment_names)
-    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text, old.attachment_names);
-    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, attachment_names)
-    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text, new.attachment_names);
+    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text, attachment_names, attachment_text)
+    VALUES ('delete', old.id, old.subject, old.from_name, old.from_address, old.body_text, old.attachment_names, old.attachment_text);
+    INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, attachment_names, attachment_text)
+    VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text, new.attachment_names, new.attachment_text);
 END;
 
 -- Per-attachment metadata. Replaced wholesale on every message upsert that
@@ -137,6 +148,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '4'),
+    ('schema_version',       '5'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');
