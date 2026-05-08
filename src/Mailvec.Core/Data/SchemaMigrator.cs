@@ -10,7 +10,12 @@ public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<Schema
     // existing DBs at an older version walk migrations forward one at a time.
     // Keep 001_initial.sql's seed value of schema_version in lockstep with
     // this constant for fresh installs.
-    private const int LatestSchemaVersion = 3;
+    // v4 adds attachment text extraction columns (attachments.extracted_text /
+    // extracted_at / extraction_status) and chunk-source tracking
+    // (chunks.source / chunks.attachment_id). There is no in-place migration
+    // from v3 — re-extraction would mean re-walking every Maildir file anyway,
+    // so the upgrade path is "drop the DB and let the indexer rebuild".
+    private const int LatestSchemaVersion = 4;
 
     public void EnsureUpToDate()
     {

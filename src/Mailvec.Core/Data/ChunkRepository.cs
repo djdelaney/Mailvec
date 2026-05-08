@@ -149,14 +149,16 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO chunks(message_id, chunk_index, chunk_text, token_count)
-            VALUES ($mid, $idx, $text, $tok)
+            INSERT INTO chunks(message_id, chunk_index, chunk_text, token_count, source, attachment_id)
+            VALUES ($mid, $idx, $text, $tok, $src, $aid)
             RETURNING id;
             """;
         cmd.Parameters.AddWithValue("$mid", messageId);
         cmd.Parameters.AddWithValue("$idx", chunk.Index);
         cmd.Parameters.AddWithValue("$text", chunk.Text);
         cmd.Parameters.AddWithValue("$tok", chunk.EstimatedTokenCount);
+        cmd.Parameters.AddWithValue("$src", chunk.Source);
+        cmd.Parameters.AddWithValue("$aid", (object?)chunk.AttachmentId ?? DBNull.Value);
         return Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 

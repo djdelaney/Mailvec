@@ -15,6 +15,8 @@ internal static class BoilerplateFilter
     [
         // Copyright lines: "© 2026 ..." / "(c) 2026 ..." / "Copyright 2026 ..."
         new(@"^\s*(©|\(c\)|copyright)\s*\d{4}", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        // Trademark + copyright lines: "TM and © 2026 Apple Inc.", "® and © ..."
+        new(@"^\s*(®|™|tm)\s*(and\s*)?(©|\(c\))\s*\d{4}", RegexOptions.IgnoreCase | RegexOptions.Compiled),
         new(@"^\s*all rights reserved\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
 
         // "View in browser" / "Read on the web" / "View this email online"
@@ -38,6 +40,38 @@ internal static class BoilerplateFilter
 
         // Privacy / terms link rows (only when they're the entire line)
         new(@"^\s*(privacy policy|terms of (service|use)|cookie policy)\s*[|·•\-]?\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+
+        // Bullet/dot-separated short link rows.
+        // Marketing emails often render footer-link strips as plain text once
+        // HtmlToText drops their <a> wrappers — e.g. "Apple Account • Terms of
+        // Sale • Privacy Policy" or "Help · Settings · Unsubscribe". Match
+        // lines composed entirely of 2-4 short token groups separated by
+        // bullet-like glyphs and nothing else.
+        new(@"^\s*[A-Za-z][\w &]{0,29}(\s*[•·|]\s*[A-Za-z][\w &]{0,29}){1,4}\s*$", RegexOptions.Compiled),
+
+        // Trailing-arrow nav links from receipt/account templates ("Purchase
+        // History ›", "Report a Problem ›", "View Your Account Information ›").
+        // Capped to 60 chars so we don't catch a real sentence that happens
+        // to end with the same glyph.
+        new(@"^\s*[\w][\w &./-]{1,58}\s*[›>]\s*$", RegexOptions.Compiled),
+
+        // Apple receipt template — refund / cancellation / billing-question
+        // boilerplate. Each pattern matches the line opener; the rest of the
+        // line goes with it. Phrasing is specific enough not to false-positive
+        // on real correspondence.
+        new(@"^\s*if you have any questions about your (bill|order|subscription|payment|account)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"^\s*you may contact .{1,40} for a (full |partial )?refund", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"^\s*partial refunds are available", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"^\s*you can turn off (renewal|automatic|email)\s+(receipts?|payments?|emails?)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"^\s*turn off (renewal|automatic|email)\s+(receipts?|payments?|emails?)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"^\s*get help with (subscriptions|orders|purchases|your account|billing)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+        new(@"^\s*view your receipts? anytime\b", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+
+        // Lines containing leftover template placeholders ("@@supportUrl@@",
+        // "{{cancellation_link}}"). These are template-engine bugs from the
+        // sender — never useful content, occasionally appear inside otherwise-
+        // legitimate sentences (which is why we match anywhere on the line).
+        new(@"@@\w+@@|\{\{\w+\}\}", RegexOptions.Compiled),
     ];
 
     public static string Apply(string s)

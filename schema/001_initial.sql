@@ -38,8 +38,8 @@ CREATE TABLE messages (
     deleted_at        TEXT,
     -- Hash of the parsed message body (see Mailvec.Core.Parsing.MessageBodyHasher).
     -- Populated by the indexer on every parse so we can detect when an upstream
-    -- body mutation should invalidate existing embeddings. NULL until first scan
-    -- under v3. Migration: schema/migrations/003_message_body_hash.sql.
+    -- body mutation should invalidate existing embeddings. NULL means "fresh
+    -- insert with no prior row" (treated as unchanged for embedding purposes).
     content_hash      TEXT
 );
 
@@ -72,35 +72,47 @@ CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
     VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text, new.attachment_names);
 END;
 
--- Per-attachment metadata. Replaced wholesale on every message upsert — no
--- partial state. part_index is the order within mime.Attachments and is what
--- a future get_attachment(id, partIndex) MCP tool would key on. Filename can
--- be NULL (some MIME parts have no Content-Disposition filename / Content-Type
--- name); content_type and size_bytes are populated when MimeKit can determine
--- them.
+-- Per-attachment metadata. Replaced wholesale on every message upsert that
+-- detects body content changes; preserved across no-op rescans so extracted
+-- text isn't thrown away. part_index is the order within mime.Attachments and
+-- is what get_attachment(id, partIndex) keys on. extracted_text holds the
+-- plain text recovered from PDF/DOCX/TXT bodies; extraction_status records
+-- whether extraction was attempted and how it ended ('done', 'unsupported',
+-- 'oversize', 'no_text', 'failed', or NULL = not yet attempted).
 CREATE TABLE attachments (
-    id            INTEGER PRIMARY KEY,
-    message_id    INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    part_index    INTEGER NOT NULL,
-    filename      TEXT,
-    content_type  TEXT,
-    size_bytes    INTEGER,
+    id                 INTEGER PRIMARY KEY,
+    message_id         INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    part_index         INTEGER NOT NULL,
+    filename           TEXT,
+    content_type       TEXT,
+    size_bytes         INTEGER,
+    extracted_text     TEXT,
+    extracted_at       TEXT,
+    extraction_status  TEXT,
     UNIQUE(message_id, part_index)
 );
 
 CREATE INDEX idx_attachments_message ON attachments(message_id);
 
--- Per-message text chunks fed to the embedder.
+-- Per-message text chunks fed to the embedder. `source` is 'body' or
+-- 'attachment'; for 'attachment' rows, attachment_id points at the source
+-- attachment so search results can identify which document matched. We
+-- still namespace by message_id so the existing dedup-per-message
+-- window function in VectorSearchService keeps working — one search row
+-- per email regardless of whether the match came from body or attachment.
 CREATE TABLE chunks (
-    id           INTEGER PRIMARY KEY,
-    message_id   INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    chunk_index  INTEGER NOT NULL,
-    chunk_text   TEXT NOT NULL,
-    token_count  INTEGER,
+    id            INTEGER PRIMARY KEY,
+    message_id    INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    chunk_index   INTEGER NOT NULL,
+    chunk_text    TEXT NOT NULL,
+    token_count   INTEGER,
+    source        TEXT NOT NULL DEFAULT 'body',
+    attachment_id INTEGER REFERENCES attachments(id) ON DELETE CASCADE,
     UNIQUE(message_id, chunk_index)
 );
 
-CREATE INDEX idx_chunks_message ON chunks(message_id);
+CREATE INDEX idx_chunks_message    ON chunks(message_id);
+CREATE INDEX idx_chunks_attachment ON chunks(attachment_id) WHERE attachment_id IS NOT NULL;
 
 -- Vector index. Dimension MUST match Ollama:EmbeddingDimensions in config.
 -- mxbai-embed-large = 1024; nomic-embed-text = 768. Mixing models silently
@@ -125,6 +137,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '3'),
+    ('schema_version',       '4'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');
