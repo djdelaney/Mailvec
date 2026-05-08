@@ -31,7 +31,11 @@ public sealed class KeywordSearchService(ConnectionFactory connections)
                 m.from_address,
                 m.from_name,
                 m.date_sent,
-                snippet(messages_fts, 3, '[', ']', ' … ', 12) AS snippet,
+                -- column = -1 lets FTS5 pick the best-matching column to
+                -- snippet from, so a hit driven by attachment_text returns a
+                -- snippet of the PDF/DOCX content rather than an empty
+                -- body_text excerpt.
+                snippet(messages_fts, -1, '[', ']', ' … ', 12) AS snippet,
                 bm25(messages_fts) AS score
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.rowid

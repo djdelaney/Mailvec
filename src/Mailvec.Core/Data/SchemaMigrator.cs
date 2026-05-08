@@ -15,7 +15,11 @@ public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<Schema
     // (chunks.source / chunks.attachment_id). There is no in-place migration
     // from v3 — re-extraction would mean re-walking every Maildir file anyway,
     // so the upgrade path is "drop the DB and let the indexer rebuild".
-    private const int LatestSchemaVersion = 4;
+    // v5 wires extracted attachment text into messages_fts via a denormalized
+    // messages.attachment_text column. The 005 migration backfills from
+    // attachments.extracted_text in pure SQL, so v4 -> v5 is a fully in-place
+    // upgrade (no .eml re-walk required).
+    private const int LatestSchemaVersion = 5;
 
     public void EnsureUpToDate()
     {
