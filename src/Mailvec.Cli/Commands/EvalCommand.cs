@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Diagnostics;
 using System.Globalization;
 using Mailvec.Core.Data;
 using Mailvec.Core.Eval;
@@ -77,12 +78,36 @@ internal static class EvalCommand
                 return 0;
             }
 
+            // Progress goes to stderr so it doesn't pollute stdout (table output,
+            // pipes to `tee`, redirected JSON dumps, etc). On a TTY we overwrite
+            // a single line with `\r`; when redirected, we print one line per
+            // query so log files stay readable.
+            var progressTty = !Console.IsErrorRedirected;
             var modeResults = new List<EvalModeResult>(modes.Count);
+            Console.Error.WriteLine($"Running {set.Queries.Count} quer{(set.Queries.Count == 1 ? "y" : "ies")} × {modes.Count} mode{(modes.Count == 1 ? "" : "s")}...");
             foreach (var mode in modes)
             {
-                var result = await runner.RunAsync(set, mode, topK, ct);
+                Console.Error.WriteLine($"  {ModeName(mode)}:");
+                var modeStart = Stopwatch.GetTimestamp();
+                var result = await runner.RunAsync(set, mode, topK, (i, total, queryId) =>
+                {
+                    var line = $"    [{i + 1}/{total}] {queryId}";
+                    if (progressTty)
+                    {
+                        // \r + clear-to-end-of-line, so longer ids don't leave trailing chars.
+                        Console.Error.Write($"\r\x1b[2K{line}");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(line);
+                    }
+                }, ct);
+                if (progressTty) Console.Error.Write("\r\x1b[2K");
+                var elapsed = Stopwatch.GetElapsedTime(modeStart);
+                Console.Error.WriteLine($"    done ({result.Queries.Count} quer{(result.Queries.Count == 1 ? "y" : "ies")} in {elapsed.TotalSeconds:F1}s)");
                 modeResults.Add(result);
             }
+            Console.Error.WriteLine();
 
             PrintAggregate(modeResults, topK, set.Queries.Count);
 
