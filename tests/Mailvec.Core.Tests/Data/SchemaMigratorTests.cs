@@ -31,7 +31,7 @@ public class SchemaMigratorTests
     public void Fresh_database_lands_at_latest_schema_version()
     {
         using var db = new TempDatabase();
-        ReadSchemaVersion(db).ShouldBe(3);
+        ReadSchemaVersion(db).ShouldBe(4);
     }
 
     [Fact]
@@ -69,9 +69,11 @@ public class SchemaMigratorTests
             // Run the migrator.
             new SchemaMigrator(connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
-            // Post-migration: column exists, schema bumped, prior row preserved.
+            // Post-migration: column exists, schema walked v2 -> v3 -> v4, prior row preserved.
             TableHasColumn(connections, "messages", "content_hash").ShouldBeTrue();
-            ReadSchemaVersion(connections).ShouldBe(3);
+            ReadSchemaVersion(connections).ShouldBe(4);
+            TableHasColumn(connections, "attachments", "extracted_text").ShouldBeTrue();
+            TableHasColumn(connections, "chunks", "source").ShouldBeTrue();
 
             using var verify = connections.Open();
             using var cmd = verify.CreateCommand();
@@ -94,7 +96,7 @@ public class SchemaMigratorTests
         using var db = new TempDatabase();
         // Second call should be a no-op and not throw.
         new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
-        ReadSchemaVersion(db).ShouldBe(3);
+        ReadSchemaVersion(db).ShouldBe(4);
     }
 
     [Fact]
@@ -127,13 +129,17 @@ public class SchemaMigratorTests
 
             new SchemaMigrator(connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
-            // Post-migration: schema bumped, both new columns present,
-            // attachments table created, FTS table has the new column.
-            ReadSchemaVersion(connections).ShouldBe(3);
+            // Post-migration: schema bumped through 002 -> 003 -> 004, all
+            // expected columns present, attachments table created, FTS table
+            // has the new column, v4 attachment-text columns exist.
+            ReadSchemaVersion(connections).ShouldBe(4);
             TableHasColumn(connections, "messages", "attachment_names").ShouldBeTrue();
             TableHasColumn(connections, "messages", "content_hash").ShouldBeTrue();
             TableExists(connections, "attachments").ShouldBeTrue();
             FtsHasColumn(connections, "attachment_names").ShouldBeTrue();
+            TableHasColumn(connections, "attachments", "extracted_text").ShouldBeTrue();
+            TableHasColumn(connections, "chunks", "source").ShouldBeTrue();
+            TableHasColumn(connections, "chunks", "attachment_id").ShouldBeTrue();
 
             // The pre-existing row survives and is still searchable via FTS,
             // i.e. the rebuild repopulated the index from messages.
@@ -224,6 +230,17 @@ public class SchemaMigratorTests
                 VALUES (new.id, new.subject, new.from_name, new.from_address, new.body_text);
             END
             """,
+            // v1 had a chunks table (sans source/attachment_id, added in 004).
+            """
+            CREATE TABLE chunks (
+                id           INTEGER PRIMARY KEY,
+                message_id   INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                chunk_index  INTEGER NOT NULL,
+                chunk_text   TEXT NOT NULL,
+                token_count  INTEGER,
+                UNIQUE(message_id, chunk_index)
+            )
+            """,
             "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
             "INSERT INTO metadata(key, value) VALUES ('schema_version', '1')",
         };
@@ -289,6 +306,30 @@ public class SchemaMigratorTests
                 indexed_at TEXT NOT NULL,
                 embedded_at TEXT,
                 deleted_at TEXT
+            )
+            """,
+            // v2 introduced the attachments table — needs to exist on the
+            // seed for downstream migrations (004) to ALTER it.
+            """
+            CREATE TABLE attachments (
+                id            INTEGER PRIMARY KEY,
+                message_id    INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                part_index    INTEGER NOT NULL,
+                filename      TEXT,
+                content_type  TEXT,
+                size_bytes    INTEGER,
+                UNIQUE(message_id, part_index)
+            )
+            """,
+            // v2 also has the chunks table so 004's ALTER TABLE chunks runs.
+            """
+            CREATE TABLE chunks (
+                id           INTEGER PRIMARY KEY,
+                message_id   INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                chunk_index  INTEGER NOT NULL,
+                chunk_text   TEXT NOT NULL,
+                token_count  INTEGER,
+                UNIQUE(message_id, chunk_index)
             )
             """,
             "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",

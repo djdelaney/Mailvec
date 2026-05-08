@@ -1,3 +1,4 @@
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
 using Mailvec.Core.Models;
@@ -89,6 +90,51 @@ public class VectorSearchServiceTests
 
         hits.Count.ShouldBe(1);
         hits[0].MessageIdHeader.ShouldBe("keep@x");
+    }
+
+    [Fact]
+    public void Surfaces_matched_attachment_when_top_chunk_came_from_attachment()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var now = DateTimeOffset.UtcNow;
+
+        var withAttachment = M("att@x", "Subject", "thin body") with
+        {
+            Attachments = [new Mailvec.Core.Parsing.ParsedAttachment(
+                PartIndex: 0,
+                FileName: "report.pdf",
+                ContentType: "application/pdf",
+                SizeBytes: 1234,
+                ExtractedText: "extracted PDF content",
+                ExtractionStatus: AttachmentTextExtractor.StatusDone)]
+        };
+        long id = messages.Upsert(withAttachment, "INBOX", "INBOX/cur", "f1", now);
+
+        // Look up the persisted attachment id so we can pair the chunk with it.
+        var msg = messages.GetById(id).ShouldNotBeNull();
+        var attId = msg.Attachments.Single().Id;
+
+        // Body chunk hot on dim 0; attachment chunk hot on dim 1. Query
+        // closest to dim 1 should return the attachment-chunk match and
+        // expose the attachment metadata on the hit.
+        chunks.ReplaceChunksForMessage(id,
+            [
+                new TextChunk(0, "body", 1, Source: "body", AttachmentId: null),
+                new TextChunk(1, "extracted", 1, Source: "attachment", AttachmentId: attId),
+            ],
+            [OneHot(1024, hotIndex: 0), OneHot(1024, hotIndex: 1)],
+            now);
+
+        var hits = search.SearchByVector(OneHot(1024, hotIndex: 1), limit: 5, k: 100);
+
+        hits.Count.ShouldBe(1);
+        hits[0].ChunkSource.ShouldBe("attachment");
+        hits[0].MatchedAttachmentId.ShouldBe(attId);
+        hits[0].MatchedAttachmentPartIndex.ShouldBe(0);
+        hits[0].MatchedAttachmentFileName.ShouldBe("report.pdf");
     }
 
     [Fact]

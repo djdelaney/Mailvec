@@ -13,9 +13,18 @@ namespace Mailvec.Core.Data;
 /// existing single-value usage; callers that care about content invalidation
 /// destructure or read <see cref="ContentChanged"/> explicitly.
 /// </summary>
-public readonly record struct UpsertOutcome(long Id, bool ContentChanged)
+public readonly record struct UpsertOutcome(long Id, bool ContentChanged, bool IsNewInsert)
 {
     public static implicit operator long(UpsertOutcome o) => o.Id;
+
+    /// <summary>
+    /// True iff <see cref="MessageRepository.Upsert"/> reset the attachments
+    /// table for this message (either it was a new insert, or the body's
+    /// content_hash changed). The indexer uses this to know whether
+    /// attachment-text extraction needs to re-run; when neither flag is set,
+    /// existing extracted_text rows are preserved verbatim.
+    /// </summary>
+    public bool AttachmentsReset => IsNewInsert || ContentChanged;
 }
 
 public sealed class MessageRepository(ConnectionFactory connections)
@@ -55,6 +64,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             priorHash = raw is string s ? s : null;
         }
         var contentChanged = priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);
+        var isNewInsert = priorHash is null;
 
         long id;
         using (var cmd = conn.CreateCommand())
@@ -124,9 +134,16 @@ public sealed class MessageRepository(ConnectionFactory connections)
             id = Convert.ToInt64(idObj, System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        ReplaceAttachments(conn, tx, id, parsed.Attachments);
+        // Only rewrite the attachments table when the row is new or the body
+        // content changed. On a no-op rescan we'd otherwise wipe and reinsert
+        // the same metadata, which would also throw away extracted_text and
+        // force the embedder to re-extract every attachment on every scan.
+        if (isNewInsert || contentChanged)
+        {
+            ReplaceAttachments(conn, tx, id, parsed.Attachments);
+        }
         tx.Commit();
-        return new UpsertOutcome(id, contentChanged);
+        return new UpsertOutcome(id, contentChanged, isNewInsert);
     }
 
     private static string? BuildAttachmentNames(IReadOnlyList<ParsedAttachment> attachments)
@@ -154,22 +171,35 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using var ins = conn.CreateCommand();
         ins.Transaction = tx;
         ins.CommandText = """
-            INSERT INTO attachments(message_id, part_index, filename, content_type, size_bytes)
-            VALUES ($mid, $idx, $name, $ct, $size);
+            INSERT INTO attachments(
+                message_id, part_index, filename, content_type, size_bytes,
+                extracted_text, extracted_at, extraction_status)
+            VALUES ($mid, $idx, $name, $ct, $size, $text, $at, $status);
             """;
         var pMid = ins.Parameters.Add("$mid", SqliteType.Integer);
         var pIdx = ins.Parameters.Add("$idx", SqliteType.Integer);
         var pName = ins.Parameters.Add("$name", SqliteType.Text);
         var pCt = ins.Parameters.Add("$ct", SqliteType.Text);
         var pSize = ins.Parameters.Add("$size", SqliteType.Integer);
+        var pText = ins.Parameters.Add("$text", SqliteType.Text);
+        var pAt = ins.Parameters.Add("$at", SqliteType.Text);
+        var pStatus = ins.Parameters.Add("$status", SqliteType.Text);
         pMid.Value = messageId;
 
+        var stamp = DateTimeOffset.UtcNow.ToString("O");
         foreach (var a in attachments)
         {
             pIdx.Value = a.PartIndex;
             pName.Value = (object?)a.FileName ?? DBNull.Value;
             pCt.Value = (object?)a.ContentType ?? DBNull.Value;
             pSize.Value = (object?)a.SizeBytes ?? DBNull.Value;
+            pText.Value = (object?)a.ExtractedText ?? DBNull.Value;
+            pStatus.Value = (object?)a.ExtractionStatus ?? DBNull.Value;
+            // Stamp extracted_at whenever extraction was attempted (any non-null
+            // status). Null status means the parser ran without an extractor —
+            // leave the timestamp NULL so a future scan with the extractor
+            // wired in can detect "never tried" and run.
+            pAt.Value = a.ExtractionStatus is null ? DBNull.Value : (object)stamp;
             ins.ExecuteNonQuery();
         }
     }
@@ -178,7 +208,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT part_index, filename, content_type, size_bytes
+            SELECT id, part_index, filename, content_type, size_bytes,
+                   extracted_text, extracted_at, extraction_status
             FROM attachments
             WHERE message_id = $mid
             ORDER BY part_index;
@@ -190,10 +221,14 @@ public sealed class MessageRepository(ConnectionFactory connections)
         while (reader.Read())
         {
             list.Add(new Attachment(
-                PartIndex: reader.GetInt32(0),
-                FileName: reader.IsDBNull(1) ? null : reader.GetString(1),
-                ContentType: reader.IsDBNull(2) ? null : reader.GetString(2),
-                SizeBytes: reader.IsDBNull(3) ? null : reader.GetInt64(3)));
+                PartIndex: reader.GetInt32(1),
+                FileName: reader.IsDBNull(2) ? null : reader.GetString(2),
+                ContentType: reader.IsDBNull(3) ? null : reader.GetString(3),
+                SizeBytes: reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                Id: reader.GetInt64(0),
+                ExtractedText: reader.IsDBNull(5) ? null : reader.GetString(5),
+                ExtractedAt: reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), System.Globalization.CultureInfo.InvariantCulture),
+                ExtractionStatus: reader.IsDBNull(7) ? null : reader.GetString(7)));
         }
         return list;
     }
@@ -388,34 +423,77 @@ public sealed class MessageRepository(ConnectionFactory connections)
     }
 
     /// <summary>
-    /// Lazily streams unembedded, undeleted messages for the embedder. Returns
-    /// (id, body_text) tuples. Messages with no body text are still returned
-    /// so the worker can stamp them with zero chunks instead of leaving them
-    /// stuck forever (they'd be invisible to the worker but counted by status).
+    /// Lazily streams unembedded, undeleted messages plus their extracted
+    /// attachment text for the embedder. Messages with no body text are still
+    /// returned so the worker can stamp them with zero chunks instead of
+    /// leaving them stuck forever. Each <see cref="UnembeddedMessage"/>
+    /// carries a list of attachment payloads (id + filename + extracted text)
+    /// for attachments where extraction status is 'done'; the embedder chunks
+    /// those separately with <c>source='attachment'</c> so search hits can
+    /// be traced back to the document that matched.
     /// </summary>
-    public IEnumerable<(long Id, string BodyText, string? Subject, string? AttachmentNames)> EnumerateUnembedded(int batchSize = 50)
+    public IEnumerable<UnembeddedMessage> EnumerateUnembedded(int batchSize = 50)
     {
         using var conn = connections.Open();
+
+        // Fetch the message rows first, then load attachment payloads in a
+        // second query per message. Two-step is simpler than a single GROUP_CONCAT
+        // and avoids the per-row cost on the (common) bodies-only path.
+        var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames)>();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names
+                FROM messages
+                WHERE embedded_at IS NULL
+                  AND deleted_at IS NULL
+                ORDER BY id
+                LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$limit", batchSize);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3)));
+            }
+        }
+
+        foreach (var row in rows)
+        {
+            var attachmentTexts = LoadAttachmentTexts(conn, row.Id);
+            yield return new UnembeddedMessage(row.Id, row.BodyText, row.Subject, row.AttachmentNames, attachmentTexts);
+        }
+    }
+
+    private static IReadOnlyList<AttachmentEmbeddingPayload> LoadAttachmentTexts(SqliteConnection conn, long messageId)
+    {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names
-            FROM messages
-            WHERE embedded_at IS NULL
-              AND deleted_at IS NULL
-            ORDER BY id
-            LIMIT $limit;
+            SELECT id, part_index, filename, extracted_text
+            FROM attachments
+            WHERE message_id = $mid
+              AND extracted_text IS NOT NULL
+              AND LENGTH(extracted_text) > 0
+            ORDER BY part_index;
             """;
-        cmd.Parameters.AddWithValue("$limit", batchSize);
+        cmd.Parameters.AddWithValue("$mid", messageId);
 
+        var list = new List<AttachmentEmbeddingPayload>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            yield return (
-                reader.GetInt64(0),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3));
+            list.Add(new AttachmentEmbeddingPayload(
+                AttachmentId: reader.GetInt64(0),
+                PartIndex: reader.GetInt32(1),
+                FileName: reader.IsDBNull(2) ? null : reader.GetString(2),
+                Text: reader.GetString(3)));
         }
+        return list;
     }
 
     public int CountUnembedded()
@@ -549,3 +627,20 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return JsonSerializer.Deserialize<List<EmailAddress>>(json, JsonOpts) ?? [];
     }
 }
+
+/// <summary>
+/// One row's worth of work for the embedder: the message body plus any
+/// attachment text payloads ready to be chunked and embedded.
+/// </summary>
+public sealed record UnembeddedMessage(
+    long Id,
+    string BodyText,
+    string? Subject,
+    string? AttachmentNames,
+    IReadOnlyList<AttachmentEmbeddingPayload> Attachments);
+
+public sealed record AttachmentEmbeddingPayload(
+    long AttachmentId,
+    int PartIndex,
+    string? FileName,
+    string Text);

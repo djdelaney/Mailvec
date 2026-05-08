@@ -3,7 +3,16 @@ using Microsoft.Extensions.Options;
 
 namespace Mailvec.Core.Embedding;
 
-public sealed record TextChunk(int Index, string Text, int EstimatedTokenCount);
+public sealed record TextChunk(
+    int Index,
+    string Text,
+    int EstimatedTokenCount,
+    // 'body' or 'attachment'. Defaults to 'body' so existing callers
+    // (and tests) don't need updating; the embedder sets 'attachment'
+    // for chunks derived from attachments.extracted_text and pairs them
+    // with the source attachment's id.
+    string Source = "body",
+    long? AttachmentId = null);
 
 /// <summary>
 /// Splits a message body into overlapping chunks sized for the embedding

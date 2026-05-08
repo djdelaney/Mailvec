@@ -205,6 +205,36 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    public void Rescan_skips_unchanged_files_via_mtime_fast_path()
+    {
+        // After an initial scan, files whose mtime hasn't changed should not
+        // be re-parsed on the next scan. The fast path guards against
+        // re-running attachment text extraction (PdfPig / OpenXml) every
+        // 5 minutes against the entire archive — once the corpus is large,
+        // re-parsing every file is the dominant cost. We verify by mutating
+        // body_text directly in the DB after the first scan; if the second
+        // scan re-parsed the file it would overwrite our edit, so the
+        // edit surviving proves the parse was skipped.
+        WriteEml("INBOX", "cur", "stable.host:2,S", "original body", "stable@x");
+        _scanner.ScanAll();
+        var msg = _messages.GetByMessageId("stable@x").ShouldNotBeNull();
+
+        using (var conn = _connections.Open())
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE messages SET body_text = 'sentinel' WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", msg.Id);
+            cmd.ExecuteNonQuery();
+        }
+
+        // Same file, same mtime -> fast path -> no re-parse.
+        _scanner.ScanAll();
+
+        var afterRescan = _messages.GetById(msg.Id).ShouldNotBeNull();
+        afterRescan.BodyText.ShouldBe("sentinel");
+    }
+
+    [Fact]
     public void Mbsync_new_to_cur_rename_does_not_create_a_duplicate()
     {
         var path = WriteEml("INBOX", "new", "x.host", "first pass", "rename@x");

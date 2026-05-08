@@ -17,7 +17,15 @@ public sealed record VectorHit(
     long ChunkId,
     int ChunkIndex,
     string ChunkText,
-    double Distance);
+    double Distance,
+    // 'body' or 'attachment' — the source of the matching chunk. Lets MCP
+    // callers (Claude) know whether the relevance came from the email body
+    // or from a document attached to the email, and surface the attachment
+    // filename so the user can ask follow-up questions about it directly.
+    string ChunkSource = "body",
+    long? MatchedAttachmentId = null,
+    int? MatchedAttachmentPartIndex = null,
+    string? MatchedAttachmentFileName = null);
 
 public sealed class VectorSearchService(ConnectionFactory connections, OllamaClient ollama)
 {
@@ -73,18 +81,25 @@ public sealed class VectorSearchService(ConnectionFactory connections, OllamaCli
                     c.id        AS chunk_id,
                     c.chunk_index,
                     c.chunk_text,
+                    c.source    AS chunk_source,
+                    c.attachment_id,
+                    a.part_index AS att_part_index,
+                    a.filename   AS att_filename,
                     n.distance,
                     ROW_NUMBER() OVER (PARTITION BY m.id ORDER BY n.distance) AS rn
                 FROM neighbours n
-                JOIN chunks c   ON c.id = n.chunk_id
-                JOIN messages m ON m.id = c.message_id
+                JOIN chunks c        ON c.id = n.chunk_id
+                JOIN messages m      ON m.id = c.message_id
+                LEFT JOIN attachments a ON a.id = c.attachment_id
                 WHERE m.deleted_at IS NULL
             """);
         SearchFilterSql.Append(sql, cmd, filters);
         sql.Append("""
 
             )
-            SELECT message_id, message_id_hdr, folder, subject, from_address, from_name, date_sent, chunk_id, chunk_index, chunk_text, distance
+            SELECT message_id, message_id_hdr, folder, subject, from_address, from_name, date_sent,
+                   chunk_id, chunk_index, chunk_text, distance,
+                   chunk_source, attachment_id, att_part_index, att_filename
             FROM joined
             WHERE rn = 1
             ORDER BY distance
@@ -110,7 +125,11 @@ public sealed class VectorSearchService(ConnectionFactory connections, OllamaCli
                 ChunkId: reader.GetInt64(7),
                 ChunkIndex: reader.GetInt32(8),
                 ChunkText: reader.GetString(9),
-                Distance: reader.GetDouble(10)));
+                Distance: reader.GetDouble(10),
+                ChunkSource: reader.IsDBNull(11) ? "body" : reader.GetString(11),
+                MatchedAttachmentId: reader.IsDBNull(12) ? null : reader.GetInt64(12),
+                MatchedAttachmentPartIndex: reader.IsDBNull(13) ? null : reader.GetInt32(13),
+                MatchedAttachmentFileName: reader.IsDBNull(14) ? null : reader.GetString(14)));
         }
         return hits;
     }
