@@ -411,10 +411,12 @@ Solution, projects, CPM, Directory.Build.props, README, gitignore, CI stub.
 
 The MCP server today is exercised end-to-end by Claude Desktop (stdio via the MCPB bundle) and Claude Code (HTTP on `127.0.0.1:3333`). Other locally-running agents that speak MCP — Google's Gemini CLI, OpenAI's Codex CLI, and the ChatGPT desktop app once its MCP-server registration ships — should work over the same two transports without protocol changes, but each has its own config shape, environment-variable conventions, and process-spawning quirks that need a dedicated pass (the equivalent of the Claude Desktop sanitized-env / TCC-block findings captured in CLAUDE.md Phase 3 gotchas).
 
-1. **Gemini CLI.** Register Mailvec via `~/.gemini/settings.json`'s `mcpServers` block, pointing at the published stdio launcher (`~/.local/bin/mailvec-mcp-stdio`) or the HTTP endpoint. Verify the same `DOTNET_ROOT` / PATH issues from Claude Desktop don't bite.
-2. **Codex CLI.** Register Mailvec under `[mcp_servers.mailvec]` in `~/.codex/config.toml`. Validate stdio framing under Codex's spawned environment.
+All three stdio clients point at the same generic launcher: `~/.local/bin/mailvec-mcp-stdio`, written by `ops/install-stdio-launcher.sh`. The launcher centralizes the env workarounds (DOTNET_ROOT, sanitized PATH, default config values) so each client's config block reduces to "command = the launcher, args = [], env = whatever you want to override". `docs/clients/` carries the per-client snippets — `claude-desktop.md` and `claude-code.md` are templates; the three Phase 5 entries fill in around them.
+
+1. **Gemini CLI.** Register Mailvec via `~/.gemini/settings.json`'s `mcpServers` block, pointing at `~/.local/bin/mailvec-mcp-stdio`. The launcher already handles `DOTNET_ROOT` / PATH; the Phase 5 task is to verify there are no *additional* spawning quirks beyond the Claude Desktop set captured in CLAUDE.md.
+2. **Codex CLI.** Register Mailvec under `[mcp_servers.mailvec]` in `~/.codex/config.toml`, again pointing at the launcher. Validate stdio framing under Codex's spawned environment.
 3. **ChatGPT desktop app.** Contingent on the local MCP-server registration UI being available in the user's release; document the path when it is.
-4. **Documentation + smoke tests.** Check per-client config snippets into `docs/clients/` and add an integration tier so each one is exercised during release prep.
+4. **Documentation + smoke tests.** Add three more docs under `docs/clients/` (one per agent) following the `claude-desktop.md` template. Add an integration tier exercised during release prep.
 
 Concretely, no new server-side code is expected — the work is per-client configuration documentation, capturing each agent's launch-environment quirks, and a repeatable smoke recipe.
 
