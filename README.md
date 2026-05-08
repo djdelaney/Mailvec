@@ -12,18 +12,25 @@ src/
   Mailvec.Indexer   BackgroundService: Maildir -> SQLite (no embeddings)
   Mailvec.Embedder  BackgroundService: SQLite rows -> Ollama embeddings
   Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB)
-  Mailvec.Cli       admin commands (status, search, get, reindex, rebuild-fts, purge-deleted)
+  Mailvec.Cli       admin commands (status, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, eval*)
 tests/
   Mailvec.{Core,Indexer,Mcp}.Tests
 schema/
   001_initial.sql   tables, FTS5 triggers, vec0 vector index
+  migrations/       in-place upgrade scripts for older DBs (002–005)
 ops/
-  mbsyncrc.example     IMAP sync config template
-  launchd/             plist templates for mbsync + 3 .NET services
-  install.sh           Phase 4 installer: publishes services, renders plists, bootstraps
-  fetch-sqlite-vec.sh  one-shot: pulls vec0.dylib from upstream releases
-  build-mcpb.sh        packages a .mcpb bundle into dist/ for Claude Desktop
-  dev-fetch-imap.py    dev-only: pulls last N days of mail without mbsync
+  mbsyncrc.example       IMAP sync config template
+  launchd/               plist templates for mbsync + 3 .NET services
+  install.sh             Phase 4 installer: publishes services, renders plists, bootstraps
+  redeploy.sh            republish + kickstart launchd agents after a code change
+  stop.sh                bootout the launchd agents without uninstalling
+  fetch-sqlite-vec.sh    one-shot: pulls vec0.dylib from upstream releases
+  build-mcpb.sh          packages a .mcpb bundle into dist/ for Claude Desktop
+  publish-mcp-stdio.sh   publishes the stdio MCP binary to ~/.local/share/mailvec/
+  run-mcp.sh             dev launcher for the HTTP MCP server
+  run-mcp-stdio.sh       dev launcher for the stdio MCP server (Claude Desktop)
+  coverage.sh            runs the test suite with coverage; HTML in coverage/
+  dev-fetch-imap.py      dev-only: pulls last N days of mail without mbsync
 runtimes/
   osx-arm64/native  sqlite-vec native binary lands here
 manifest.json       Claude Desktop MCPB manifest (binary entry + user_config)
@@ -112,7 +119,7 @@ Two kinds of testing: the automated unit/integration suite, and a manual walkthr
 dotnet test
 ```
 
-~100 tests across `Mailvec.Core.Tests` and `Mailvec.Indexer.Tests` — parser fixtures, schema migrations, repositories, FTS5 search, vector search (with hand-injected vectors), RRF fusion, the Ollama HTTP client (stubbed), chunking, attachment extraction, path expansion. No live Ollama or IMAP needed. (`Mailvec.Mcp.Tests` exists as a project but has no cases yet — the MCP layer is exercised through Core and via manual smoke tests.)
+~220 tests across `Mailvec.Core.Tests`, `Mailvec.Mcp.Tests`, and `Mailvec.Indexer.Tests` — parser fixtures, schema migrations, repositories, FTS5 search, vector search (with hand-injected vectors), RRF fusion, the Ollama HTTP client (stubbed), chunking, attachment extraction (PDF/DOCX/text), path expansion, and per-MCP-tool coverage (`search_emails`, `get_email`, `get_thread`, `list_folders`, `get_attachment`) plus the HTTP transport. No live Ollama or IMAP needed.
 
 ### 2. Get a Fastmail app password
 
@@ -371,7 +378,7 @@ Wires the archive up to Claude. **Exit criterion met.**
   - **stdio** (`--stdio` flag) for Claude Desktop, packaged as an `.mcpb` bundle (see [Connecting to Claude Desktop](#connecting-to-claude-desktop)).
 - Tools: `search_emails` (keyword / semantic / hybrid with folder/date/sender filters), `get_email`, `get_thread`, `list_folders`, `get_attachment`. The original 6-tool design merged to 4 search/fetch tools — `recent_emails` is `search_emails` with `query` omitted, and `find_by_sender` is `search_emails` with `fromExact` — plus `get_attachment` added later for attachment delivery (see [Reading attachments](#reading-attachments)).
 - Hybrid search reused from Phase 2.
-- Attachment indexing: filenames are stored in the `attachments` table and surfaced through FTS5 (so a query like `"mortgage statement"` matches an email whose only mention is in `mortgage_statement_2024.pdf`). Per-attachment metadata (filename, content type, size, partIndex) is returned by `get_email`.
+- Attachment **filename** indexing: filenames are stored in the `attachments` table and surfaced through FTS5 (so a query like `"mortgage statement"` matches an email whose only mention is in `mortgage_statement_2024.pdf`). Per-attachment metadata (filename, content type, size, partIndex) is returned by `get_email`. Attachment **content** indexing landed in Phase 4.5 below.
 
 ### ✅ Phase 4 — Operationalization
 
@@ -384,6 +391,15 @@ Makes the system survive reboots unattended. **Exit criterion met:** rebooted, a
 - ✅ `mailvec status` surfaces message count, embedding coverage, schema/config model match.
 
 **Exit criterion:** reboot the Mac mini; everything comes back without intervention.
+
+### ✅ Phase 4.5 — Attachment content indexing
+
+Extends keyword + semantic + hybrid search to the *contents* of attached documents, not just their filenames. **Exit criterion met:** a query that only appears in the body of an attached PDF / DOCX returns the parent email, and the result identifies which attachment drove the hit.
+
+- Schema v4: `attachments.extracted_text` / `extracted_at` / `extraction_status` hold the recovered plain text; `chunks.source` ('body' | 'attachment') + `chunks.attachment_id` let search results trace back to a specific document. In-place migrations live in [`schema/migrations/004_attachment_text.sql`](schema/migrations/004_attachment_text.sql) and [`schema/migrations/005_attachment_text_fts.sql`](schema/migrations/005_attachment_text_fts.sql); the supported v3→v4 path is to drop the DB and re-ingest.
+- Pure-managed extractors: PDF via `PdfPig`, DOCX via `DocumentFormat.OpenXml`, plain text inline. No native deps, no shell-out, no OCR. Scanned PDFs come back as `extraction_status='no_text'` and are intentionally not retried.
+- The embedder stitches body + per-attachment chunks into one chunk stream per message; vector search dedups to one row per message and surfaces `matchedAttachment { partIndex, fileName }` when the winning chunk came from a document — exactly the inputs `get_attachment` needs.
+- FTS5 column `attachment_text` carries the extracted text alongside `body_text`, so keyword and hybrid searches surface document-content hits without any extra wiring.
 
 ### ⬜ Phase 5 — Support for non-Claude local agents
 
@@ -400,4 +416,4 @@ See [`mailvec-project-scope.md`](mailvec-project-scope.md) §8 Phase 5 for seque
 
 ### Out of scope (per design doc §11)
 
-Sending mail, modifying Fastmail state, multi-account support, calendar/contacts/files, web UI, real-time push. Attachment **filenames** are indexed (FTS5) and attachments themselves are extractable to disk via `get_attachment`; per-format **content** indexing (PDF text, DOCX text, OCR for image-only PDFs) is still out of scope — let downstream tools (Claude Code's `Read`, a filesystem MCP, your existing PDF skills) interpret the bytes.
+Sending mail, modifying Fastmail state, multi-account support, calendar/contacts/files, web UI, real-time push. Attachment **filenames** are indexed (FTS5), attachments themselves are extractable to disk via `get_attachment`, and PDF / DOCX / plain-text **content** is extracted at index time and fed into both FTS5 and the vector index (Phase 4.5). OCR for image-only PDFs and content extraction for other formats (spreadsheets, presentations, archives) remain out of scope — let downstream tools (Claude Code's `Read`, a filesystem MCP, your existing PDF skills) interpret the bytes once `get_attachment` has dropped them on disk.
