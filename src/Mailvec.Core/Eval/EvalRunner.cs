@@ -61,12 +61,15 @@ public sealed class EvalRunner(
         EvalQuerySet set,
         EvalMode mode,
         int topK,
+        Action<int, int, string>? onQueryStart = null,
         CancellationToken ct = default)
     {
         var results = new List<EvalQueryResult>(set.Queries.Count);
-        foreach (var q in set.Queries)
+        for (var i = 0; i < set.Queries.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
+            var q = set.Queries[i];
+            onQueryStart?.Invoke(i, set.Queries.Count, q.Id);
             results.Add(await RunOneAsync(q, mode, topK, ct).ConfigureAwait(false));
         }
         return new EvalModeResult(mode, topK, results);
