@@ -1,4 +1,5 @@
 using Mailvec.Core;
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
@@ -35,6 +36,10 @@ internal static class CliServices
         services.Configure<IngestOptions>(config.GetSection(IngestOptions.SectionName));
         services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
         services.Configure<FastmailOptions>(config.GetSection(FastmailOptions.SectionName));
+        // IndexerOptions carries AttachmentMaxBytes; only `extract-attachments`
+        // currently reads it from the CLI side, but binding it here is cheap
+        // and keeps the section name resolvable for future commands.
+        services.Configure<IndexerOptions>(config.GetSection(IndexerOptions.SectionName));
 
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
@@ -44,6 +49,11 @@ internal static class CliServices
         services.AddSingleton<KeywordSearchService>();
         services.AddSingleton<VectorSearchService>();
         services.AddSingleton<HybridSearchService>();
+        // The extractor is shared between the indexer (during ingest) and the
+        // CLI's `extract-attachments` backfill command. Pure CPU work, no I/O
+        // beyond what's handed in via MimeKit, so it's safe to wire here even
+        // for commands that don't use it.
+        services.AddSingleton<AttachmentTextExtractor>();
 
         services.AddHttpClient<OllamaClient>((sp, client) =>
         {

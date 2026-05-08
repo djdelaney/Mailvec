@@ -1,3 +1,4 @@
+using System.Reflection;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Health;
@@ -8,6 +9,7 @@ using Mailvec.Core.Search;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using ModelContextProtocol.Protocol;
 
 // Two transports share the same Core wiring:
 //   --stdio  → Generic Host + StdioServerTransport (for Claude Desktop, since
@@ -39,7 +41,7 @@ static async Task RunStdio(string[] args)
     AddMailvecServices(builder.Services, builder.Configuration);
 
     builder.Services
-        .AddMcpServer()
+        .AddMcpServer(ConfigureServerInfo)
         .WithStdioServerTransport()
         .WithToolsFromAssembly();
 
@@ -56,7 +58,7 @@ static async Task RunHttp(string[] args)
     AddMailvecServices(builder.Services, builder.Configuration);
 
     builder.Services
-        .AddMcpServer()
+        .AddMcpServer(ConfigureServerInfo)
         .WithHttpTransport()
         .WithToolsFromAssembly();
 
@@ -104,6 +106,30 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
         client.BaseAddress = new Uri(opts.BaseUrl);
         client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
     });
+}
+
+// Surfaced to clients in the `initialize` response as `serverInfo`. The `name`
+// is the protocol identifier (lowercase, stable — Phase 5 clients key off it
+// in their config blocks); the `title` is the human-readable label some
+// clients show in connector pickers; the `version` is read from the assembly
+// (Mailvec.Mcp.csproj <Version>, kept in sync with manifest.json by
+// ops/build-mcpb.sh --bump).
+//
+// Why this matters: once Gemini CLI / Codex CLI / ChatGPT desktop start
+// pointing at this server (Phase 5), being able to call `initialize` and see
+// "I'm talking to mailvec 0.1.15" is the cheapest possible diagnostic when a
+// tool call returns something unexpected ("did the user upgrade? am I on the
+// build that has the new field?"). Without this, the server name defaults to
+// the assembly filename, which is uninformative.
+static void ConfigureServerInfo(ModelContextProtocol.Server.McpServerOptions opts)
+{
+    var asmVersion = Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
+    opts.ServerInfo = new Implementation
+    {
+        Name = "mailvec",
+        Title = "Mailvec",
+        Version = asmVersion,
+    };
 }
 
 // Required for WebApplicationFactory<Program> in tests to discover the entry point.
