@@ -22,6 +22,7 @@ dotnet run --project src/Mailvec.Indexer
 dotnet run --project src/Mailvec.Mcp
 dotnet run --project src/Mailvec.Cli -- <args>
 ops/redeploy.sh [indexer|embedder|mcp ...]    # republish + kickstart launchd agents after a code change
+ops/stop.sh                                   # bootout the launchd agents without uninstalling
 ```
 
 `Mailvec.slnx` (not `.sln`) is the solution file — .NET 10 emits the new XML format by default.
@@ -61,7 +62,7 @@ Project map:
 - **Mailvec.Indexer** — `BackgroundService` worker. Scans Maildir, parses with MimeKit, upserts `messages`. Does *not* call Ollama.
 - **Mailvec.Embedder** — `BackgroundService` worker. Polls for `messages WHERE embedded_at IS NULL`, chunks bodies, calls Ollama, writes `chunks` + `chunk_embeddings`.
 - **Mailvec.Mcp** — AspNetCore app exposing MCP tools over HTTP on `127.0.0.1:3333`. Read-only against the database (except `get_attachment`, which reads `.eml` files out of the Maildir).
-- **Mailvec.Cli** — admin commands (status, search, reindex, rebuild-fts, purge-deleted) hitting the same DB.
+- **Mailvec.Cli** — admin commands (status, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, plus the `eval` / `eval-add` / `eval-import` family for retrieval-quality benchmarking) hitting the same DB.
 
 ## Data model invariants
 
@@ -82,9 +83,9 @@ Fetched as a prebuilt `vec0.dylib` by `ops/fetch-sqlite-vec.sh` and loaded at ru
 
 ## Current status
 
-Phases 1–4 complete plus the Phase 4.5 attachment-content indexing layer. The indexer ingests + extracts attachment text (PDF / DOCX / plain text), the embedder embeds body and per-attachment chunks separately, keyword/semantic/hybrid search all work and surface `matchedAttachment` when a hit was driven by document content, and the MCP server exposes four tools — `search_emails`, `get_email`, `get_thread`, `list_folders` — over both Streamable HTTP (`127.0.0.1:3333`, default) and stdio (`--stdio` flag). Claude Desktop integration ships as an MCPB bundle built by `ops/build-mcpb.sh`. Phase 4 is reboot-validated. Phase 5 (non-Claude local agents — Gemini CLI, Codex CLI, ChatGPT desktop) not yet started; it's local-agent expansion, not cloud access — see scope doc §11 for the cloud-access framing.
+Phases 1–4 complete plus the Phase 4.5 attachment-content indexing layer. The indexer ingests + extracts attachment text (PDF / DOCX / plain text), the embedder embeds body and per-attachment chunks separately, keyword/semantic/hybrid search all work and surface `matchedAttachment` when a hit was driven by document content, and the MCP server exposes five tools — `search_emails`, `get_email`, `get_thread`, `list_folders`, `get_attachment` — over both Streamable HTTP (`127.0.0.1:3333`, default) and stdio (`--stdio` flag). Claude Desktop integration ships as an MCPB bundle built by `ops/build-mcpb.sh`. Phase 4 is reboot-validated. Phase 5 (non-Claude local agents — Gemini CLI, Codex CLI, ChatGPT desktop) not yet started; it's local-agent expansion, not cloud access — see scope doc §11 for the cloud-access framing.
 
-The doc's original 6-tool list got merged to 4: `recent_emails` is `search_emails` with `query` omitted (date-sorted browse path via `MessageRepository.BrowseByFilters`), and `find_by_sender` is `search_emails` with `fromExact: "..."` (exact-match alternative to the existing `fromContains` substring filter).
+The doc's original 6-tool list got merged to 4 search/fetch tools: `recent_emails` is `search_emails` with `query` omitted (date-sorted browse path via `MessageRepository.BrowseByFilters`), and `find_by_sender` is `search_emails` with `fromExact: "..."` (exact-match alternative to the existing `fromContains` substring filter). `get_attachment` was added later to deliver attachment bytes — see the `get_attachment` section below.
 
 ## MCPB bundle (code-relevant gotchas)
 
