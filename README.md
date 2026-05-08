@@ -12,7 +12,7 @@ src/
   Mailvec.Indexer   BackgroundService: Maildir -> SQLite (no embeddings)
   Mailvec.Embedder  BackgroundService: SQLite rows -> Ollama embeddings
   Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB)
-  Mailvec.Cli       admin commands (status, search, reindex, rebuild-fts, purge-deleted)
+  Mailvec.Cli       admin commands (status, search, get, reindex, rebuild-fts, purge-deleted)
 tests/
   Mailvec.{Core,Indexer,Mcp}.Tests
 schema/
@@ -174,13 +174,17 @@ dotnet run --project src/Mailvec.Cli -- search --semantic "vacation plans"
 dotnet run --project src/Mailvec.Cli -- search --hybrid "tree quote"
 dotnet run --project src/Mailvec.Cli -- search "lunch AND friday" -n 10  # boolean, custom limit
 dotnet run --project src/Mailvec.Cli -- search '"exact phrase"'          # phrase
+dotnet run --project src/Mailvec.Cli -- search "invoice" --date-from 2025-01-01 --date-to 2025-03-31   # date window
+dotnet run --project src/Mailvec.Cli -- search --hybrid "tree quote" --date-from 2024-06-01            # date filter works on all modes
+dotnet run --project src/Mailvec.Cli -- get 52226                       # fetch one message by internal id
+dotnet run --project src/Mailvec.Cli -- get '<abc@example.com>' --body  # fetch by RFC Message-ID, full body
 dotnet run --project src/Mailvec.Cli -- audit-embeddings                # sanity-check vector index
 dotnet run --project src/Mailvec.Cli -- checkpoint                      # truncate the SQLite WAL
 dotnet run --project src/Mailvec.Cli -- purge-deleted --dry-run         # preview hard-delete of soft-deleted rows
 dotnet run --project src/Mailvec.Cli -- purge-deleted -y                # actually purge them (irreversible)
 ```
 
-`status` prints message counts, embedding coverage, and warns if the schema's recorded embedding model disagrees with config. `audit-embeddings` sweeps the vector index for zero / NaN / abnormal-norm vectors — useful right after a large reindex or an Ollama upgrade. `purge-deleted` hard-deletes rows that the indexer marked `deleted_at IS NOT NULL` (and their chunks/vectors/attachments/FTS entries) — soft-deletes accumulate as you remove folders from mbsync but stay in the file until purged.
+`status` prints message counts, embedding coverage, and warns if the schema's recorded embedding model disagrees with config. `--date-from` / `--date-to` accept ISO 8601 (`YYYY-MM-DD` or full RFC 3339) and apply to all three search modes; bounds are inclusive and an unset bound means "open" (so `--date-from` alone scopes to "since"). `get <id>` fetches a single message — pass either an internal SQLite id (numeric) or an RFC 5322 Message-ID (anything else); useful for following up on a `search -i` hit or eyeballing a specific message Claude flagged. `audit-embeddings` sweeps the vector index for zero / NaN / abnormal-norm vectors — useful right after a large reindex or an Ollama upgrade. `purge-deleted` hard-deletes rows that the indexer marked `deleted_at IS NOT NULL` (and their chunks/vectors/attachments/FTS entries) — soft-deletes accumulate as you remove folders from mbsync but stay in the file until purged.
 
 The Phase 2 exit criterion is "semantic queries return relevant results the FTS layer would have missed" — a quality call that needs your eyes on a real archive. Useful comparison queries are paraphrases ("trip planning" vs `vacation`), synonyms (`bill` vs `invoice`), and topic-level recall (`subscription renewal`, `house repairs`).
 
