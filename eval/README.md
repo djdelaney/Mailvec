@@ -7,7 +7,9 @@ about X" → expected message-ids, and the `mailvec eval` command runs that set
 through keyword / semantic / hybrid and reports NDCG@10, MRR, and Recall@10.
 
 The query file stays **out of the repo**. By default it lives at
-`~/.local/share/mailvec/eval/queries.json`. The sample in this directory
+`~/Library/Application Support/Mailvec/eval/queries.json` — alongside the
+SQLite database, since the labels reference Message-IDs that only mean
+something against that specific archive. The sample in this directory
 (`queries.sample.json`) shows the format and is the only thing that's checked
 in.
 
@@ -15,7 +17,7 @@ in.
 
 ```sh
 # 1. Add a query interactively. Runs the search, you mark relevant results by
-#    rank, the labeled query is appended to ~/.local/share/mailvec/eval/queries.json.
+#    rank, the labeled query is appended to ~/Library/Application Support/Mailvec/eval/queries.json.
 mailvec eval-add "lease renewal landlord" --mode hybrid
 
 # 2. Run the full set across all three modes, see aggregate metrics.
@@ -128,8 +130,8 @@ mailvec eval-add "..." --id "lease-renewal-david"
 mailvec eval-add "..." --queries ~/work/mailvec-eval/finance-queries.json
 ```
 
-The default location is `~/.local/share/mailvec/eval/queries.json`. The directory
-is created on first save.
+The default location is `~/Library/Application Support/Mailvec/eval/queries.json`
+(next to `archive.sqlite`). The directory is created on first save.
 
 ### Pinning known-relevant Message-IDs
 
@@ -374,6 +376,6 @@ of result-ids and a grade map — drop-in usable from another evaluator.
 The default location precedence is:
 
 1. `--queries <path>` flag, if set.
-2. `~/.local/share/mailvec/eval/queries.json` otherwise.
+2. `~/Library/Application Support/Mailvec/eval/queries.json` otherwise.
 
 Tilde expansion uses `Mailvec.Core.PathExpansion` (handles `~`, `${HOME}`, `$HOME`).
