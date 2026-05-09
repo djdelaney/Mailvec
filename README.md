@@ -12,7 +12,7 @@ src/
   Mailvec.Indexer   BackgroundService: Maildir -> SQLite (no embeddings)
   Mailvec.Embedder  BackgroundService: SQLite rows -> Ollama embeddings
   Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB)
-  Mailvec.Cli       admin commands (status, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, extract-attachments, eval*)
+  Mailvec.Cli       admin commands (status, doctor, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, extract-attachments, eval*)
 tests/
   Mailvec.{Core,Indexer,Mcp}.Tests
 schema/
@@ -232,17 +232,18 @@ The four prompted values become plist `EnvironmentVariables` (e.g. `Ingest__Mail
 **Validating it's working:**
 
 ```sh
-# all four agents loaded?
+# one-stop preflight: DB, schema, vec0, Maildir, Ollama, launchd, MCP /health
+dotnet run --project src/Mailvec.Cli -- doctor
+
+# (or hit individual checks directly)
 for svc in mbsync indexer embedder mcp; do
   launchctl print gui/$UID/com.mailvec.$svc | grep -E 'state|last exit' | sed "s/^/$svc /"
 done
-
-# pipeline making progress?
 dotnet run --project src/Mailvec.Cli -- status
-
-# MCP up?
 curl -s http://127.0.0.1:3333/health | jq .
 ```
+
+`doctor` rolls all of the above into one checklist. Pass `--no-net` to skip the Ollama and MCP-HTTP probes (offline diagnosis); pass `--json` for a machine-readable dump suitable for pasting into a bug report. Returns exit 1 if any check fails so it composes with shell pipelines and CI.
 
 If something looks wrong, [Logs](#logs) is the next stop.
 
