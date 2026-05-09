@@ -4,6 +4,7 @@ using Mailvec.Cli.Commands;
 var root = new RootCommand("Mailvec admin CLI")
 {
     StatusCommand.Build(),
+    DoctorCommand.Build(),
     SearchCommand.Build(),
     GetCommand.Build(),
     RebuildFtsCommand.Build(),
