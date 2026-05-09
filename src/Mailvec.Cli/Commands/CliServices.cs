@@ -1,6 +1,7 @@
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Health;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
@@ -40,6 +41,11 @@ internal static class CliServices
         // currently reads it from the CLI side, but binding it here is cheap
         // and keeps the section name resolvable for future commands.
         services.Configure<IndexerOptions>(config.GetSection(IndexerOptions.SectionName));
+        // McpOptions is bound so `mailvec doctor` can probe the running HTTP
+        // server's /health at the configured BindAddress:Port — same address
+        // the launchd plist uses, so checking from the CLI matches what
+        // external monitors would see.
+        services.Configure<McpOptions>(config.GetSection(McpOptions.SectionName));
 
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
@@ -54,6 +60,10 @@ internal static class CliServices
         // beyond what's handed in via MimeKit, so it's safe to wire here even
         // for commands that don't use it.
         services.AddSingleton<AttachmentTextExtractor>();
+        // HealthService computes the same DB / embedding / Ollama snapshot the
+        // MCP /health endpoint returns. `mailvec doctor` reuses it so the CLI
+        // and HTTP views can never disagree about what "healthy" means.
+        services.AddSingleton<HealthService>();
 
         services.AddHttpClient<OllamaClient>((sp, client) =>
         {

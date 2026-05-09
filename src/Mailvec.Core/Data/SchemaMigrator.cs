@@ -19,7 +19,19 @@ public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<Schema
     // messages.attachment_text column. The 005 migration backfills from
     // attachments.extracted_text in pure SQL, so v4 -> v5 is a fully in-place
     // upgrade (no .eml re-walk required).
-    private const int LatestSchemaVersion = 5;
+    public const int LatestSchemaVersion = 5;
+
+    /// <summary>
+    /// Read the schema version stored in the metadata table, without applying
+    /// migrations. Returns 0 for a fresh / nonexistent DB. Used by `mailvec
+    /// doctor` to surface "DB is at v3, binary expects v5" without having to
+    /// open a connection that triggers migration as a side effect.
+    /// </summary>
+    public int GetCurrentVersion()
+    {
+        using var conn = connections.Open();
+        return ReadSchemaVersion(conn);
+    }
 
     public void EnsureUpToDate()
     {
