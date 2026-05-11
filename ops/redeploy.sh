@@ -155,6 +155,21 @@ if [[ " ${SERVICES[*]} " == *" mcp "* ]]; then
     esac
 fi
 
+# ---------------------------------------------------------------------------
+# Full preflight via `mailvec doctor`
+# ---------------------------------------------------------------------------
+# /health above is MCP-only and only ran if MCP was in the redeploy set.
+# Doctor verifies the indexer, embedder, mbsync launchd state plus schema /
+# vec0 / Maildir / Ollama — catches dead-on-arrival agents that don't have
+# an HTTP endpoint to probe.
+echo
+echo "Running mailvec doctor preflight..."
+if ! dotnet run --project "$REPO_ROOT/src/Mailvec.Cli" --no-launch-profile -v quiet -- doctor; then
+    echo >&2
+    echo "doctor reported one or more failures — see output above." >&2
+    exit 1
+fi
+
 echo
 echo "Done. Tail logs with:"
 for svc in "${SERVICES[@]}"; do
