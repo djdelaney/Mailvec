@@ -277,6 +277,21 @@ else
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# 9. Full preflight via `mailvec doctor`
+# ---------------------------------------------------------------------------
+# /health above is MCP-only. Doctor covers the whole stack: DB, schema, vec0,
+# Maildir, launchd state for all four agents (indexer / embedder / mbsync /
+# mcp), mbsync presence, Ollama, and re-probes MCP /health for consistency.
+# Catches dead-on-arrival agents that don't have an HTTP endpoint to probe.
+echo
+echo "Running mailvec doctor preflight..."
+if ! dotnet run --project "$REPO_ROOT/src/Mailvec.Cli" --no-launch-profile -v quiet -- doctor; then
+    echo >&2
+    echo "doctor reported one or more failures — see output above." >&2
+    exit 1
+fi
+
 echo
 echo "Installed agents:"
 for label in "${LABELS[@]}"; do
