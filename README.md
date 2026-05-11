@@ -268,6 +268,10 @@ export MAILVEC_LAUNCHD=1                  # silence stdout, even outside launchd
 
 The Claude Desktop MCPB bundle writes to the same rolling file (it's the same binary). It additionally emits to stderr, which Claude Desktop's own log capture preserves at `~/Library/Logs/Claude/mcp-server-mailvec.log` — handy when triaging extension-install issues, since that's the file Claude Desktop's UI will surface in error toasts.
 
+## Security model
+
+Single-user, single-Mac. The macOS user account is the trust boundary; inside it any local process can call any tool, outside it Mailvec is unreachable. The MCP HTTP server binds `127.0.0.1`, all five tools are read-only against the database, and `get_attachment`'s only filesystem write is a sanitized + path-contained drop into `~/Downloads/mailvec/`. There's no authentication, no rate limiting, and `Mcp:LogToolCalls=false` by default — turning it on writes query strings into the rolling log files. Full discussion (what's accepted, what's out of scope, why Phase 5 doesn't change the model) lives in [`mailvec-project-scope.md`](mailvec-project-scope.md) §10 Security model. Read it before changing the bind address, adding a mutating tool, or pointing the server at anything other than loopback.
+
 ## Connecting to Claude Desktop
 
 The MCP server is shipped as an [MCPB bundle](https://blog.modelcontextprotocol.io/posts/2025-11-20-adopting-mcpb/) — a single `.mcpb` file that Claude Desktop installs with one drag-and-drop. The bundle contains a self-contained .NET binary plus the `vec0.dylib`, so the user doesn't need a .NET SDK installed.
@@ -417,10 +421,10 @@ Mailvec works end-to-end with Claude Desktop (MCPB stdio) and Claude Code (HTTP)
 - **ChatGPT desktop** once its MCP-server registration ships in the user's release.
 - Per-client config snippets checked into `docs/clients/`, exercised in an integration tier during release prep.
 
-Public-HTTPS / OAuth access for cloud LLMs (Claude.ai web, ChatGPT Connectors, Gemini in the browser) is parked in [`mailvec-project-scope.md`](mailvec-project-scope.md) §11 Future ideas — the operational cost of a public tunnel + OAuth issuer for a single-user system is higher than the value over local-agent coverage.
+Public-HTTPS / OAuth access for cloud LLMs (Claude.ai web, ChatGPT Connectors, Gemini in the browser) is parked in [`mailvec-project-scope.md`](mailvec-project-scope.md) §12 Future ideas — the operational cost of a public tunnel + OAuth issuer for a single-user system is higher than the value over local-agent coverage.
 
 See [`mailvec-project-scope.md`](mailvec-project-scope.md) §8 Phase 5 for sequencing.
 
-### Out of scope (per design doc §11)
+### Out of scope (per design doc §13)
 
 Sending mail, modifying Fastmail state, multi-account support, calendar/contacts/files, web UI, real-time push. Attachment **filenames** are indexed (FTS5), attachments themselves are extractable to disk via `get_attachment`, and PDF / DOCX / plain-text **content** is extracted at index time and fed into both FTS5 and the vector index (Phase 4.5). OCR for image-only PDFs and content extraction for other formats (spreadsheets, presentations, archives) remain out of scope — let downstream tools (Claude Code's `Read`, a filesystem MCP, your existing PDF skills) interpret the bytes once `get_attachment` has dropped them on disk.
