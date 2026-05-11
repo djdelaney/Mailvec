@@ -1,6 +1,7 @@
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Eval;
 using Mailvec.Core.Health;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
@@ -55,6 +56,10 @@ internal static class CliServices
         services.AddSingleton<KeywordSearchService>();
         services.AddSingleton<VectorSearchService>();
         services.AddSingleton<HybridSearchService>();
+        // Ranking seam for `mailvec eval` — production wires the three sealed
+        // search services; the test suite substitutes a fake to unit-test
+        // EvalRunner's orchestration without a DB.
+        services.AddSingleton<IEvalRankingSource, DbEvalRankingSource>();
         // The extractor is shared between the indexer (during ingest) and the
         // CLI's `extract-attachments` backfill command. Pure CPU work, no I/O
         // beyond what's handed in via MimeKit, so it's safe to wire here even

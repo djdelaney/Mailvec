@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Mailvec.Core.Search;
 
 namespace Mailvec.Core.Eval;
 
@@ -48,14 +47,13 @@ public sealed record EvalModeResult(
 }
 
 /// <summary>
-/// Runs an <see cref="EvalQuerySet"/> through one of the three search
-/// services and collects per-query metrics. Stays out of Console — the
-/// CLI layer handles formatting.
+/// Runs an <see cref="EvalQuerySet"/> through an <see cref="IEvalRankingSource"/>
+/// and collects per-query metrics. The ranking source is the seam: production
+/// wires <see cref="DbEvalRankingSource"/> (the three sealed search services);
+/// tests substitute a fake to unit-test the orchestration without a DB.
+/// Stays out of Console — the CLI layer handles formatting.
 /// </summary>
-public sealed class EvalRunner(
-    KeywordSearchService keyword,
-    VectorSearchService vector,
-    HybridSearchService hybrid)
+public sealed class EvalRunner(IEvalRankingSource ranking)
 {
     public async Task<EvalModeResult> RunAsync(
         EvalQuerySet set,
@@ -86,7 +84,7 @@ public sealed class EvalRunner(
         // Time only the actual ranking call. Filter/grade bookkeeping below is
         // CPU-only and would distort sub-100ms measurements.
         var t0 = Stopwatch.GetTimestamp();
-        var ranked = await RankAsync(query.Query, mode, topK, filters, ct).ConfigureAwait(false);
+        var ranked = await ranking.RankAsync(query.Query, mode, topK, filters, ct).ConfigureAwait(false);
         var latencyMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
 
         var grades = new Dictionary<string, double>(query.Relevant.Count, StringComparer.Ordinal);
@@ -118,34 +116,5 @@ public sealed class EvalRunner(
             Mrr: EvalMetrics.MrrAtK(ranked, relevantSet, topK),
             Recall: EvalMetrics.RecallAtK(ranked, relevantSet, topK),
             LatencyMs: latencyMs);
-    }
-
-    private async Task<IReadOnlyList<string>> RankAsync(
-        string query, EvalMode mode, int topK, SearchFilters? filters, CancellationToken ct)
-    {
-        switch (mode)
-        {
-            case EvalMode.Keyword:
-            {
-                var hits = keyword.Search(query, topK, filters);
-                return hits.Select(h => h.MessageIdHeader).ToList();
-            }
-            case EvalMode.Semantic:
-            {
-                // Mirror HybridSearchService's k-inflation when filters are present:
-                // vec0 KNN runs before the filter join, so a small k + restrictive
-                // filter can return an empty post-filter set.
-                var k = (filters is null || filters.IsEmpty) ? Math.Max(100, topK * 5) : Math.Max(500, topK * 50);
-                var hits = await vector.SearchAsync(query, topK, k: k, filters, ct).ConfigureAwait(false);
-                return hits.Select(h => h.MessageIdHeader).ToList();
-            }
-            case EvalMode.Hybrid:
-            {
-                var hits = await hybrid.SearchAsync(query, topK, filters: filters, ct: ct).ConfigureAwait(false);
-                return hits.Select(h => h.MessageIdHeader).ToList();
-            }
-            default:
-                throw new ArgumentOutOfRangeException(nameof(mode), mode, null);
-        }
     }
 }
