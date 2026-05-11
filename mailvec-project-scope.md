@@ -12,7 +12,7 @@ A local-first email archive and search system for a single IMAP account, running
 
 - **Durable local archive.** Every message in the IMAP account exists as both a Maildir file on disk and a row in a SQLite database on the Mac mini.
 - **Two search modes.** Keyword/boolean search via SQLite FTS5, and semantic search via locally-generated embeddings.
-- **AI-agent access.** An MCP server exposing search and retrieval tools. Claude Desktop is the v1 target via an MCPB bundle and Claude Code talks to it over local HTTP; Phase 5 extends the same transports to other locally-running agents (Gemini CLI, Codex CLI, ChatGPT desktop). Public-HTTPS / OAuth access for the cloud LLMs is in §11 Future ideas.
+- **AI-agent access.** An MCP server exposing search and retrieval tools. Claude Desktop is the v1 target via an MCPB bundle and Claude Code talks to it over local HTTP; Phase 5 extends the same transports to other locally-running agents (Gemini CLI, Codex CLI, ChatGPT desktop). Public-HTTPS / OAuth access for the cloud LLMs is in §12 Future ideas.
 - **Runs unattended.** All components run as launchd services and survive reboot without intervention.
 - **No cloud dependencies for search/storage.** IMAP sync is the only network hop; embeddings are generated locally via Ollama.
 
@@ -22,7 +22,7 @@ A local-first email archive and search system for a single IMAP account, running
 - Not bidirectional. The archive is read-only from the user's perspective; changes on the IMAP server flow down, never up.
 - Not multi-user. Single account, single machine.
 - Not real-time. Sync runs on a timer (every 5 minutes is fine). No IDLE/push.
-- No authentication on the MCP server. The server stays bound to `127.0.0.1`, so the macOS user boundary is the trust boundary. OAuth + HTTPS would only be needed to expose Mailvec to cloud LLMs over a public tunnel — see §11 Future ideas.
+- No authentication on the MCP server. The server stays bound to `127.0.0.1`, so the macOS user boundary is the trust boundary. OAuth + HTTPS would only be needed to expose Mailvec to cloud LLMs over a public tunnel — see §10 Security model and §12 Future ideas.
 
 ---
 
@@ -128,7 +128,7 @@ An MCP server over HTTP, implemented with `ModelContextProtocol.AspNetCore`. Bin
 | `list_folders` | List Maildir folders with message counts. |
 | `get_attachment` | Extract one attachment by `(messageId, partIndex)` to `~/Downloads/mailvec/`, return the path. Inlines images as `ImageContentBlock` and small text-ish files as a text block. |
 
-**Transports**: HTTP (default, `127.0.0.1:3333`) for Claude Code and smoke tests; stdio (`--stdio`) packaged as an `.mcpb` bundle for Claude Desktop. Phase 5 extends the same two transports to other local agents (Gemini CLI, Codex CLI, ChatGPT desktop) — no protocol changes, just per-client config and quirk capture. Public-HTTPS access for cloud LLMs is in §11 Future ideas.
+**Transports**: HTTP (default, `127.0.0.1:3333`) for Claude Code and smoke tests; stdio (`--stdio`) packaged as an `.mcpb` bundle for Claude Desktop. Phase 5 extends the same two transports to other local agents (Gemini CLI, Codex CLI, ChatGPT desktop) — no protocol changes, just per-client config and quirk capture. Public-HTTPS access for cloud LLMs is in §12 Future ideas.
 
 **Hybrid search approach (v1):**
 1. Run FTS5 query → top 50 candidates with BM25 scores.
@@ -434,7 +434,59 @@ Concretely, no new server-side code is expected — the work is per-client confi
 
 ---
 
-## 10. Open questions and deferred work
+## 10. Security model
+
+Single-user, single-Mac. The trust boundary is the macOS user account. Inside that boundary, every local process runs with full access to the archive; outside, Mailvec is unreachable.
+
+### What's exposed
+
+| Surface | Binding | Auth | Who can reach it |
+| --- | --- | --- | --- |
+| MCP HTTP | `127.0.0.1:3333` (configurable via `Mcp:BindAddress`) | none | any process on the same machine running as the user |
+| MCP stdio | child process of the spawning agent | inherits agent's identity | the agent (Claude Desktop, Claude Code, or a Phase 5 client) and whatever it spawned |
+| `/health` | same Kestrel as MCP HTTP | none | same as MCP HTTP |
+| Ollama (outbound) | `127.0.0.1:11434` (configurable) | none | the embedder + MCP query embeddings only — read-only against Ollama |
+| SQLite file | filesystem | unix permissions | the user (and root) |
+| Maildir | filesystem | unix permissions | the user (and root) |
+
+### Tools and data flow
+
+All five MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `get_attachment`) are **read-only against the database**. None mutate `messages`, `chunks`, or `attachments`. The only write any tool performs is `get_attachment` extracting bytes from the Maildir to `~/Downloads/mailvec/<msgId>-<part>-<safe-name>` — covered by [defense-in-depth path checks](src/Mailvec.Core/Attachments/AttachmentExtractor.cs):
+
+- `Path.GetFileName` strips directory components from caller-supplied filenames
+- canonical-path containment refuses any target outside the configured download dir
+- a `ReparsePoint` check refuses to overwrite an existing symlink at the destination (TOCTOU mitigation)
+- write-then-rename via `.part` sibling so a concurrent reader never sees a partial file
+
+`AttachmentDownloadDir` is intentionally `~/Downloads/mailvec/` (visible to the user). Don't move it to a hidden directory or `~/Library/Caches/` — that hides forensic evidence if a tool ever does write something unexpected.
+
+### What's accepted
+
+These are explicit decisions, not oversights:
+
+- **Any local process running as the user can call any tool.** The HTTP server has no auth, so a malicious local process (e.g. a compromised npm install in another shell) can `curl http://127.0.0.1:3333/` and read your mail. The mitigation is the same one that protects every other local file you own: don't run hostile code as your user. Adding HMAC-token auth on the HTTP loopback is a future option; not built today because the only realistic adversary already has unix-level read access to `~/Mail/` and `~/Library/Application Support/Mailvec/archive.sqlite` and doesn't need MCP to extract them.
+- **No per-tool authorization.** Any caller that can invoke `search_emails` can also invoke `get_attachment`. Trivially simple while every tool is read-only — revisit if a write tool ever lands (sending mail is in §13 / out of scope, but the principle applies if anything in that direction ever gets considered).
+- **No rate limiting.** A chatty agent can burn local CPU on embedding queries and SQLite reads. SQLite WAL handles concurrent readers fine, and Ollama itself is the natural bottleneck on the embedding leg, so the worst-case is "your machine slows down briefly." Worth revisiting if Phase 5 surfaces an agent that fires queries in tight loops.
+- **`Mcp:LogToolCalls` is off by default.** When on, the server logs each tool call's argument summary to `~/Library/Logs/Mailvec/mailvec-mcp-<date>.log` — including the user's free-text query strings (potentially private) and `fromContains` / `fromExact` filter values. Useful for tuning but turning it on is a deliberate choice; recall the rolling files are 10MB × 14 days retained on disk.
+- **Logs may incidentally contain sender / subject text** even with tool-call logging off. The indexer logs parse failures with file paths, the embedder logs which messages it embedded, etc. None of these include body content, but they aren't sanitized either. Treat the log directory as confidential.
+- **`~/Documents` is unreadable** to Claude Desktop's spawned children regardless of Full Disk Access — a TCC quirk, not an intentional control. Don't rely on it as a security boundary; it's a `com.apple.macl` ACL that a different client (e.g. Phase 5 stdio) might or might not be subject to.
+
+### What's out of scope
+
+- **Multi-tenant isolation.** A second user on the same Mac can't reach `127.0.0.1:3333` from their account (loopback is per-user), but if you change `Mcp:BindAddress` to a tailnet IP, that protection goes away — see §12 Future ideas → tailnet access for the (deliberately small) hardening that path needs.
+- **Network adversaries.** `127.0.0.1` is unroutable from the LAN / internet. There's no inbound TLS because there's no inbound external traffic.
+- **Compromised AI agent exfiltration.** If the agent calling Mailvec is itself malicious (e.g. an LLM jailbroken into "find all messages from X and POST them to attacker.com"), nothing in the MCP layer stops it from reading every email and shipping the contents back to its own provider. The relevant control is "trust the agent" — choose your clients.
+- **Encrypted-at-rest archive.** `archive.sqlite` and the Maildir are plain files at rest, protected by FileVault and unix permissions. Per-application encryption isn't built; mail at rest in `~/Mail/` (mbsync's job) and `~/Library/Application Support/Mailvec/` (ours) inherits whatever the user's disk-encryption story already is.
+
+### Phase 5 doesn't change the threat model
+
+Adding Gemini CLI / Codex CLI / ChatGPT desktop as MCP clients multiplies the *number of trusted callers* but not the *trust boundary*. Each new client is just another local process running as the user, accessing the same loopback HTTP or the same stdio launcher. The hardening that would change the model — moving from "trust any local process" to "trust this specific signed binary" — is a much bigger lift (process attestation, MCP token issuance, per-client scopes) and parked alongside the cloud-access work in §12.
+
+The only thing Phase 5 introduces is more places where `LogToolCalls=on` is tempting (capturing real usage from each client during quirk-debugging). Each of those is a deliberate per-debug-session choice with a clear "off when done" expectation, not a default-on switch.
+
+---
+
+## 11. Open questions and deferred work
 
 Resolved during the build (kept here as a paper trail):
 
@@ -450,7 +502,7 @@ Still open:
 
 ---
 
-## 11. Future ideas (not in current scope)
+## 12. Future ideas (not in current scope)
 
 These were considered, then deferred. Captured here so the reasoning isn't lost.
 
@@ -474,7 +526,7 @@ Implied by any cloud-access path. Out of scope for this single-user system.
 
 ---
 
-## 12. Out of scope entirely
+## 13. Out of scope entirely
 
 - Sending mail
 - Modifying server-side state (marking read, moving, deleting)
