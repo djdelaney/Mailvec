@@ -305,7 +305,7 @@ Mailvec/
 ├── tests/
 │   ├── Mailvec.Core.Tests/
 │   ├── Mailvec.Indexer.Tests/
-│   └── Mailvec.Mcp.Tests/              # project exists; cases TBD
+│   └── Mailvec.Mcp.Tests/
 ├── ops/
 │   ├── mbsyncrc.example
 │   ├── launchd/
