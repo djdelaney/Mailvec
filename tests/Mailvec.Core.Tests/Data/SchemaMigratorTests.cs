@@ -31,7 +31,7 @@ public class SchemaMigratorTests
     public void Fresh_database_lands_at_latest_schema_version()
     {
         using var db = new TempDatabase();
-        ReadSchemaVersion(db).ShouldBe(5);
+        ReadSchemaVersion(db).ShouldBe(SchemaMigrator.LatestSchemaVersion);
     }
 
     [Fact]
@@ -69,9 +69,9 @@ public class SchemaMigratorTests
             // Run the migrator.
             new SchemaMigrator(connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
-            // Post-migration: column exists, schema walked v2 -> v3 -> v4 -> v5, prior row preserved.
+            // Post-migration: column exists, schema walked v2 forward to latest, prior row preserved.
             TableHasColumn(connections, "messages", "content_hash").ShouldBeTrue();
-            ReadSchemaVersion(connections).ShouldBe(5);
+            ReadSchemaVersion(connections).ShouldBe(SchemaMigrator.LatestSchemaVersion);
             TableHasColumn(connections, "attachments", "extracted_text").ShouldBeTrue();
             TableHasColumn(connections, "chunks", "source").ShouldBeTrue();
             TableHasColumn(connections, "messages", "attachment_text").ShouldBeTrue();
@@ -98,7 +98,7 @@ public class SchemaMigratorTests
         using var db = new TempDatabase();
         // Second call should be a no-op and not throw.
         new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
-        ReadSchemaVersion(db).ShouldBe(5);
+        ReadSchemaVersion(db).ShouldBe(SchemaMigrator.LatestSchemaVersion);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class SchemaMigratorTests
             // all expected columns present, attachments table created, FTS
             // table has both new columns, v4 attachment-text columns exist,
             // v5 messages.attachment_text wired through to FTS.
-            ReadSchemaVersion(connections).ShouldBe(5);
+            ReadSchemaVersion(connections).ShouldBe(SchemaMigrator.LatestSchemaVersion);
             TableHasColumn(connections, "messages", "attachment_names").ShouldBeTrue();
             TableHasColumn(connections, "messages", "content_hash").ShouldBeTrue();
             TableExists(connections, "attachments").ShouldBeTrue();

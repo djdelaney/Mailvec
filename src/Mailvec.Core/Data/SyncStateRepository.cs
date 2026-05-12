@@ -11,11 +11,16 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     /// The scanner calls this to short-circuit re-parsing of files whose mtime
     /// hasn't changed since last scan — important once the corpus has many
     /// PDFs/DOCX, since attachment-text extraction during parse is expensive.
+    ///
+    /// Caller-owned connection + transaction: the scanner runs this once per
+    /// file (~82K per scan on real corpora), so threading the connection
+    /// avoids the per-Open extension-load + PRAGMA overhead that dominated
+    /// indexer CPU when this used its own connection internally.
     /// </summary>
-    public SyncStateEntry? Get(string maildirFullPath)
+    public SyncStateEntry? Get(SqliteConnection conn, SqliteTransaction tx, string maildirFullPath)
     {
-        using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             SELECT maildir_full_path, message_id, last_seen_at, content_hash
             FROM sync_state
@@ -32,10 +37,10 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
             ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3));
     }
 
-    public void Upsert(string maildirFullPath, string? messageId, DateTimeOffset lastSeenAt, string? contentHash = null)
+    public void Upsert(SqliteConnection conn, SqliteTransaction tx, string maildirFullPath, string? messageId, DateTimeOffset lastSeenAt, string? contentHash = null)
     {
-        using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO sync_state (maildir_full_path, message_id, last_seen_at, content_hash)
             VALUES ($path, $mid, $seen, $hash)
