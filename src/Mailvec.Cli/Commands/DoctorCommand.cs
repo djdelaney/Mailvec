@@ -175,6 +175,31 @@ internal static class DoctorCommand
             {
                 checks.Add(DoctorCheck.Fail("Pipeline", $"could not compute health snapshot: {ex.GetType().Name}: {ex.Message}", "pipeline"));
             }
+
+            // Orphan vec0 rows. Cheap COUNT against the same DB, so we run it
+            // alongside the health snapshot. A non-zero count means the
+            // embedder will hit UNIQUE-constraint failures on the next rowid
+            // collision — surface it loudly because the symptom (messages
+            // stuck unembedded forever, retry every poll interval) is otherwise
+            // invisible from `status`.
+            try
+            {
+                var orphans = sp.GetRequiredService<ChunkRepository>().CountOrphanEmbeddings();
+                if (orphans == 0)
+                {
+                    checks.Add(DoctorCheck.Ok("Orphan vectors", "none", "pipeline"));
+                }
+                else
+                {
+                    checks.Add(DoctorCheck.Warn("Orphan vectors",
+                        $"{orphans:N0} chunk_embeddings row(s) point to deleted chunks. The embedder will fail with UNIQUE-constraint errors when a new chunk's rowid collides. Run `mailvec repair` to clear them.",
+                        "pipeline"));
+                }
+            }
+            catch (Exception ex)
+            {
+                checks.Add(DoctorCheck.Fail("Orphan vectors", $"could not query: {ex.GetType().Name}: {ex.Message}", "pipeline"));
+            }
         }
 
         // ---------------------------------------------------------------

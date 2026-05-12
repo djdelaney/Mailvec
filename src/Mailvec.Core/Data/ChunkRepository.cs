@@ -39,6 +39,35 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Count chunk_embeddings rows whose chunk_id no longer exists in chunks.
+    /// These accumulate from historical code paths that assumed FK CASCADE
+    /// fired across the vec0 virtual table (it doesn't). When a new chunk is
+    /// inserted and SQLite assigns it a rowid (MAX(id)+1, since chunks uses
+    /// INTEGER PRIMARY KEY without AUTOINCREMENT) that collides with one of
+    /// these orphans, the embedder fails with `UNIQUE constraint failed on
+    /// chunk_embeddings primary key` and the message gets stuck unembedded.
+    /// </summary>
+    public int CountOrphanEmbeddings()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM chunk_embeddings WHERE chunk_id NOT IN (SELECT id FROM chunks)";
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Delete chunk_embeddings rows whose chunk_id no longer exists in chunks.
+    /// See <see cref="CountOrphanEmbeddings"/> for why these exist. Idempotent.
+    /// </summary>
+    public int DeleteOrphanEmbeddings()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM chunk_embeddings WHERE chunk_id NOT IN (SELECT id FROM chunks)";
+        return cmd.ExecuteNonQuery();
+    }
+
     /// <summary>Resets embedded_at and removes existing chunks/vectors so the embedder will re-process.</summary>
     public int ClearEmbeddings(string? folderFilter = null)
     {
