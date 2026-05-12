@@ -52,10 +52,13 @@ CREATE TABLE messages (
     content_hash      TEXT
 );
 
-CREATE INDEX idx_messages_thread    ON messages(thread_id);
-CREATE INDEX idx_messages_folder    ON messages(folder);
-CREATE INDEX idx_messages_date_sent ON messages(date_sent);
-CREATE INDEX idx_messages_to_embed  ON messages(embedded_at) WHERE embedded_at IS NULL;
+CREATE INDEX idx_messages_thread     ON messages(thread_id);
+CREATE INDEX idx_messages_folder     ON messages(folder);
+CREATE INDEX idx_messages_date_sent  ON messages(date_sent);
+CREATE INDEX idx_messages_to_embed   ON messages(embedded_at) WHERE embedded_at IS NULL;
+-- Used by HealthService.ReadCounts for cheap MAX(indexed_at) lookups; without
+-- it /health takes ~7 s on a real-sized archive (full table scan).
+CREATE INDEX idx_messages_indexed_at ON messages(indexed_at);
 
 -- Full-text index over messages. Six columns; column ordering is API-relevant
 -- because BM25 weights and snippet() column indices reference these positions
@@ -148,6 +151,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '5'),
+    ('schema_version',       '6'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');

@@ -19,7 +19,10 @@ public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<Schema
     // messages.attachment_text column. The 005 migration backfills from
     // attachments.extracted_text in pure SQL, so v4 -> v5 is a fully in-place
     // upgrade (no .eml re-walk required).
-    public const int LatestSchemaVersion = 5;
+    // v6 adds an index on messages.indexed_at so HealthService can resolve
+    // MAX(indexed_at) in O(log n) instead of full-scanning the table — fixes
+    // multi-second /health latency on real-sized archives.
+    public const int LatestSchemaVersion = 6;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying

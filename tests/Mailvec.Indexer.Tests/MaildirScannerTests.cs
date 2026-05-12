@@ -47,6 +47,7 @@ public class MaildirScannerTests : IDisposable
             _messages,
             _chunks,
             _syncState,
+            _connections,
             NullLogger<MaildirScanner>.Instance);
     }
 
