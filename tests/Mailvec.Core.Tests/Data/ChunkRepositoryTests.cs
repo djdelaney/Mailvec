@@ -90,6 +90,74 @@ public class ChunkRepositoryTests
         TotalVectorCount(db).ShouldBe(1);
     }
 
+    [Fact]
+    public void CountOrphanEmbeddings_returns_zero_when_every_embedding_has_a_chunk()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+        chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "a", 1), new TextChunk(1, "b", 1)], [Hot(0), Hot(1)], now);
+
+        chunks.CountOrphanEmbeddings().ShouldBe(0);
+    }
+
+    [Fact]
+    public void DeleteOrphanEmbeddings_removes_only_unattached_rows()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long alive = messages.Upsert(Sample("alive@x"), "INBOX", "INBOX/cur", "fa", now);
+        long doomed = messages.Upsert(Sample("doomed@x"), "INBOX", "INBOX/cur", "fd", now);
+
+        chunks.ReplaceChunksForMessage(alive, [new TextChunk(0, "a", 1)], [Hot(0)], now);
+        chunks.ReplaceChunksForMessage(doomed, [new TextChunk(0, "d1", 1), new TextChunk(1, "d2", 1)], [Hot(1), Hot(2)], now);
+
+        // Reproduce the historical leak: delete the chunks rows directly,
+        // leaving the chunk_embeddings rows behind. (Production code paths
+        // delete embeddings first, but earlier versions of this codebase
+        // assumed FK CASCADE fired across vec0 and left orphans behind.)
+        using (var conn = db.Connections.Open())
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM chunks WHERE message_id = $mid";
+            cmd.Parameters.AddWithValue("$mid", doomed);
+            cmd.ExecuteNonQuery();
+        }
+
+        chunks.CountOrphanEmbeddings().ShouldBe(2);
+        TotalVectorCount(db).ShouldBe(3);
+
+        chunks.DeleteOrphanEmbeddings().ShouldBe(2);
+
+        chunks.CountOrphanEmbeddings().ShouldBe(0);
+        TotalVectorCount(db).ShouldBe(1);
+        VectorCount(db, alive).ShouldBe(1);
+    }
+
+    [Fact]
+    public void DeleteOrphanEmbeddings_is_idempotent_when_there_are_no_orphans()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+        chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "a", 1)], [Hot(0)], now);
+
+        chunks.DeleteOrphanEmbeddings().ShouldBe(0);
+
+        // Real data untouched.
+        chunks.CountForMessage(id).ShouldBe(1);
+        VectorCount(db, id).ShouldBe(1);
+    }
+
     private static int TotalVectorCount(TempDatabase db)
     {
         using var conn = db.Connections.Open();

@@ -1,0 +1,13 @@
+-- v5 -> v6: index indexed_at for cheap MAX(indexed_at) lookups.
+--
+-- HealthService.ReadCounts runs `SELECT MAX(indexed_at) FROM messages` as
+-- part of every /health request. Without an index SQLite full-scans the
+-- table — on a 4 GB / 77K-message archive that's ~7 s of disk reads,
+-- which blew past doctor's 3 s HTTP timeout and made every health probe
+-- a 19-44 s wall (the COUNT(*) WHERE clauses next to it all return in
+-- under 50 ms because they use idx_messages_to_embed / autoindex).
+--
+-- The values are timestamp strings; the index is small (one row per
+-- message), monotonically appended, and lets SQLite resolve MAX in
+-- O(log n) by reading just the last index entry.
+CREATE INDEX IF NOT EXISTS idx_messages_indexed_at ON messages(indexed_at);

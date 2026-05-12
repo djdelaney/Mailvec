@@ -2,6 +2,7 @@ using Mailvec.Core;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -13,9 +14,17 @@ public sealed class MaildirScanner(
     MessageRepository messages,
     ChunkRepository chunks,
     SyncStateRepository syncState,
+    ConnectionFactory connectionFactory,
     ILogger<MaildirScanner> logger)
 {
     private readonly string _maildirRoot = PathExpansion.Expand(ingestOptions.Value.MaildirRoot);
+
+    // How many fast-path sync_state writes accumulate before we commit. Smaller
+    // batches mean more fsyncs (slower scan) but tighter windows for the
+    // embedder's separate connection to grab the write lock; 1000 is well
+    // under the empirical scan rate, so even a slow embedder poll lands
+    // inside an inter-batch gap within ~milliseconds.
+    private const int BatchSize = 1000;
 
     public sealed record ScanResult(int Seen, int Upserted, int FailedToParse, int SoftDeleted);
 
@@ -37,31 +46,50 @@ public sealed class MaildirScanner(
         var upserted = 0;
         var failed = 0;
 
-        foreach (var folderDir in EnumerateMaildirFolders(_maildirRoot))
+        // One connection + a rolling transaction for the whole file walk.
+        // The previous design opened a fresh connection for every Get/Upsert
+        // (~165K Open()s per scan on an 82K-message corpus); each Open
+        // reloaded vec0 and ran the PRAGMA setup, which was the dominant
+        // indexer CPU sink during steady-state scans. The rolling tx commits
+        // every BatchSize fast-path writes so the embedder's separate
+        // connection still gets regular write-lock windows.
+        using var conn = connectionFactory.Open();
+        using var ctx = new ScanContext(conn, BatchSize);
+
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var folderName = MaildirPaths.FolderNameFor(_maildirRoot, folderDir);
-            foreach (var subdir in new[] { "new", "cur" })
+            foreach (var folderDir in EnumerateMaildirFolders(_maildirRoot))
             {
-                var sub = Path.Combine(folderDir, subdir);
-                if (!Directory.Exists(sub)) continue;
+                cancellationToken.ThrowIfCancellationRequested();
 
-                foreach (var file in Directory.EnumerateFiles(sub))
+                var folderName = MaildirPaths.FolderNameFor(_maildirRoot, folderDir);
+                foreach (var subdir in new[] { "new", "cur" })
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    seen++;
+                    var sub = Path.Combine(folderDir, subdir);
+                    if (!Directory.Exists(sub)) continue;
 
-                    if (TryIngest(file, folderName, scanStart))
+                    foreach (var file in Directory.EnumerateFiles(sub))
                     {
-                        upserted++;
-                    }
-                    else
-                    {
-                        failed++;
+                        cancellationToken.ThrowIfCancellationRequested();
+                        seen++;
+
+                        if (TryIngest(ctx, file, folderName, scanStart))
+                        {
+                            upserted++;
+                        }
+                        else
+                        {
+                            failed++;
+                        }
                     }
                 }
             }
+            ctx.Flush();
+        }
+        catch
+        {
+            ctx.Abandon();
+            throw;
         }
 
         var stale = syncState.StaleEntries(olderThan: scanStart);
@@ -101,7 +129,7 @@ public sealed class MaildirScanner(
         return new ScanResult(seen, upserted, failed, softDeleted);
     }
 
-    private bool TryIngest(string filePath, string folderName, DateTimeOffset indexedAt)
+    private bool TryIngest(ScanContext ctx, string filePath, string folderName, DateTimeOffset indexedAt)
     {
         try
         {
@@ -113,13 +141,20 @@ public sealed class MaildirScanner(
             // reconciliation pass doesn't soft-delete it. Mbsync flag rewrites
             // bump mtime, so the optimization is robust against IMAP flag
             // changes that don't actually mutate body content.
-            var prior = syncState.Get(filePath);
+            var prior = syncState.Get(ctx.Connection, ctx.Transaction, filePath);
             if (prior is { MessageId: not null }
                 && File.GetLastWriteTimeUtc(filePath) <= prior.LastSeenAt.UtcDateTime)
             {
-                syncState.Upsert(filePath, prior.MessageId, indexedAt, prior.ContentHash);
+                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash);
+                ctx.NoteWrite();
                 return true;
             }
+
+            // Parse path: messages.Upsert opens its own connection. Release
+            // our held write lock first by committing any batched fast-path
+            // writes — otherwise its tx will block on busy_timeout against
+            // ours (single-writer in WAL mode).
+            ctx.Flush();
 
             var parsed = parser.ParseFile(filePath);
             var relPath = MaildirPaths.RelativeFolderPath(_maildirRoot, filePath);
@@ -137,14 +172,20 @@ public sealed class MaildirScanner(
                     "Content changed for message_id={MessageId} (id={Id}); cleared embeddings.",
                     parsed.MessageId, outcome.Id);
             }
-            syncState.Upsert(filePath, parsed.MessageId, indexedAt, parsed.ContentHash);
+            syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash);
+            ctx.NoteWrite();
             return true;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to parse {Path}", filePath);
             // Refresh sync_state with no message_id so we don't treat the file as deleted next pass.
-            try { syncState.Upsert(filePath, messageId: null, indexedAt); } catch { /* ignore */ }
+            try
+            {
+                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, messageId: null, indexedAt);
+                ctx.NoteWrite();
+            }
+            catch { /* ignore */ }
             return false;
         }
     }
@@ -175,6 +216,67 @@ public sealed class MaildirScanner(
                 stack.Push(sub);
             }
         }
+    }
+}
+
+/// <summary>
+/// Scoped helper that owns the scanner's single connection and a rolling
+/// transaction. Each fast-path sync_state write is recorded via
+/// <see cref="NoteWrite"/>; once <see cref="_batchSize"/> writes have accumulated,
+/// the tx auto-commits and a fresh one is begun. The parse path calls
+/// <see cref="Flush"/> before invoking repositories on their own connections
+/// (e.g. MessageRepository.Upsert) to avoid blocking on the write lock.
+///
+/// Uses BEGIN DEFERRED (Microsoft.Data.Sqlite default), so an empty tx
+/// holds no lock — Flush() is a no-op when nothing has been written and
+/// the next access lazily begins a fresh tx.
+/// </summary>
+internal sealed class ScanContext : IDisposable
+{
+    private readonly SqliteConnection _connection;
+    private readonly int _batchSize;
+    private SqliteTransaction? _tx;
+    private int _writesInTx;
+
+    public ScanContext(SqliteConnection connection, int batchSize)
+    {
+        _connection = connection;
+        _batchSize = batchSize;
+    }
+
+    public SqliteConnection Connection => _connection;
+
+    public SqliteTransaction Transaction => _tx ??= _connection.BeginTransaction();
+
+    public void NoteWrite()
+    {
+        if (++_writesInTx >= _batchSize) Flush();
+    }
+
+    public void Flush()
+    {
+        if (_tx is null) return;
+        _tx.Commit();
+        _tx.Dispose();
+        _tx = null;
+        _writesInTx = 0;
+    }
+
+    public void Abandon()
+    {
+        if (_tx is null) return;
+        try { _tx.Rollback(); } catch { /* connection may already be closed */ }
+        _tx.Dispose();
+        _tx = null;
+        _writesInTx = 0;
+    }
+
+    public void Dispose()
+    {
+        // Defensive: if Flush() ran in the happy path this is a no-op.
+        // If we got here via an unhandled exception (caller forgot to call
+        // Abandon), roll back so the connection is returned to the pool clean.
+        Abandon();
     }
 }
 
