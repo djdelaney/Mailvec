@@ -65,10 +65,21 @@ prompt_with_default() {
 }
 
 bootout_label() {
-    # Idempotent: bootout returns nonzero (typically 113 or 36) when the
-    # service isn't loaded. We treat that as fine.
+    # bootout's exit code is unreliable (typically 113 or 36 when not loaded,
+    # which we ignore) AND the unload itself is asynchronous — the call can
+    # return before launchd has finished tearing the service down. Without a
+    # poll, a fast subsequent `bootstrap` hits "5: Input/output error" because
+    # the old instance is still registered in the domain.
     local label="$1"
     launchctl bootout "gui/$UID/$label" >/dev/null 2>&1 || true
+    local deadline=$(( $(date +%s) + 5 ))
+    while launchctl print "gui/$UID/$label" >/dev/null 2>&1; do
+        if (( $(date +%s) >= deadline )); then
+            echo "warning: $label still loaded after 5s; bootstrap may fail" >&2
+            return 0
+        fi
+        sleep 0.2
+    done
 }
 
 uninstall() {
