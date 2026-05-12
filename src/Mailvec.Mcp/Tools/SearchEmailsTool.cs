@@ -55,7 +55,13 @@ public sealed class SearchEmailsTool(
                      "(which collides with the common English word and pulls in unrelated mail). For 'all email FROM this company' " +
                      "questions, scoping with `fromContains` (or `fromExact`) is even sharper than putting the domain in `query`.")]
         string? query = null,
-        [Description("Search mode: 'hybrid' (default), 'keyword' (BM25 only), or 'semantic' (vector only). Ignored when query is omitted.")]
+        [Description("Search mode. Strongly prefer 'hybrid' (default): it fuses BM25 keyword ranking with vector similarity " +
+                     "via reciprocal rank fusion, and on this archive matches or beats either leg alone for almost every query. " +
+                     "Only drop to 'semantic' (vector only) when the user's query is purely conceptual AND contains no proper " +
+                     "nouns, company/people names, domains, invoice/order numbers, URLs, or other exact-match tokens — pure " +
+                     "vector loses the BM25 signal that catches those. Only use 'keyword' (BM25 only) when you have a precise " +
+                     "FTS5 expression (phrase quotes, AND/OR/NOT) and want to bypass semantic ranking entirely. Ignored when " +
+                     "query is omitted.")]
         string mode = "hybrid",
         [Description("Max number of results to return. Server caps this at the configured SearchMaxLimit.")]
         int? limit = null,
