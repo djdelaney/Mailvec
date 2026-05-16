@@ -18,7 +18,7 @@ struct GeneralTab: View {
                 Toggle("Sync failures", isOn: $prefs.notifySyncFailures)
                 Toggle("Ollama unreachable", isOn: $prefs.notifyOllamaDown)
             } header: { Text("Notifications") } footer: {
-                RowHint(text: "Banners surface only when something needs your attention. None are shown for routine sync activity. The global hotkey ⌘⇧M opens the search popover.")
+                RowHint(text: "Banners surface only when something needs your attention. None are shown for routine sync activity.")
             }
         }
     }
