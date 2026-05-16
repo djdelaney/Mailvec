@@ -5,6 +5,7 @@ import SwiftUI
 struct AdvancedTab: View {
     @EnvironmentObject var prefs: PreferencesModel
     @State private var showResetAlert = false
+    @State private var showPurgeAlert = false
 
     var body: some View {
         Form {
@@ -40,9 +41,20 @@ struct AdvancedTab: View {
                 MaintRow(label: "Audit embeddings",
                          hint: "Sweep the vector index for zero, NaN, or abnormal-norm vectors.",
                          action: "Audit…") { runCli(["audit-embeddings"]) }
+                // Purge is the only destructive maintenance row — the
+                // others read the DB or rebuild derived state. Route it
+                // through a SwiftUI confirmationDialog instead of straight
+                // into Terminal (matching the Reset and Reindex patterns).
+                // Button is disabled at zero so we don't ask the user to
+                // confirm a no-op; CLI handles that case too but bouncing
+                // out to Terminal for a "no soft-deleted messages" line is
+                // worse UX than just dimming the row.
                 MaintRow(label: "Purge soft-deleted",
-                         hint: "\(prefs.system.softDeletedCount) tombstoned messages. Hard-deletes rows + chunks + vectors + attachments.",
-                         action: "Preview…") { runCli(["purge-deleted", "--dry-run"]) }
+                         hint: purgeHint,
+                         action: "Purge…",
+                         enabled: prefs.system.softDeletedCount > 0) {
+                    showPurgeAlert = true
+                }
             } header: { Text("Maintenance") } footer: {
                 RowHint(text: "All of these have CLI equivalents under `mailvec`. Exposed here for convenience.")
             }
@@ -99,6 +111,34 @@ struct AdvancedTab: View {
         } message: {
             Text("This only affects Mailvec Tray preferences. The Mailvec archive, embeddings, and launchd agents are untouched.")
         }
+        .confirmationDialog("Purge \(prefs.system.softDeletedCount.formatted()) soft-deleted message\(prefs.system.softDeletedCount == 1 ? "" : "s")?",
+                            isPresented: $showPurgeAlert,
+                            titleVisibility: .visible) {
+            Button("Purge (irreversible)", role: .destructive) {
+                // --yes skips the CLI's interactive y/N prompt — we
+                // already gathered consent via the SwiftUI dialog. The
+                // Terminal window stays open so the user sees the CLI's
+                // hint about WAL checkpoint + VACUUM to actually reclaim
+                // disk space; that step is intentionally left manual
+                // because VACUUM needs the indexer/embedder/mcp services
+                // stopped to take an exclusive lock.
+                runCli(["purge-deleted", "--yes"])
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Hard-deletes the tombstoned messages along with their chunks, vectors, attachments, and FTS entries. SQLite reuses the freed pages on subsequent inserts but won't shrink the database file — see the post-purge CLI output for the VACUUM steps if you need to reclaim disk space.")
+        }
+    }
+
+    /// Hint shown under the "Purge soft-deleted" row. Worded differently
+    /// depending on whether there's anything to purge so the disabled
+    /// state doesn't look broken.
+    private var purgeHint: String {
+        let n = prefs.system.softDeletedCount
+        if n == 0 {
+            return "Nothing to purge — no tombstoned messages."
+        }
+        return "\(n.formatted()) tombstoned message\(n == 1 ? "" : "s"). Hard-deletes rows + chunks + vectors + attachments."
     }
 
     /// Spawn Terminal with `mailvec <args>` — keeps streaming output visible
@@ -136,14 +176,17 @@ private struct MaintRow: View {
     let label: String
     let hint: String
     let action: String
+    var enabled: Bool = true
     let onTap: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text(label)
+                Text(label).foregroundStyle(enabled ? .primary : .secondary)
                 Spacer()
-                Button(action, action: onTap).controlSize(.small)
+                Button(action, action: onTap)
+                    .controlSize(.small)
+                    .disabled(!enabled)
             }
             Text(hint).font(.system(size: 11)).foregroundStyle(.secondary)
         }
