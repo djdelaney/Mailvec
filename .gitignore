@@ -64,7 +64,12 @@ appsettings.Local.json
 *.sqlite-shm
 /Mail/
 runtimes/osx-arm64/native/*.dylib
+runtimes/osx-arm64/native/VERSION
+runtimes/osx-x64/native/*.dylib
+runtimes/osx-x64/native/VERSION
 /dist/
+# Tray app build artifacts (ops/build-tray.sh output).
+/build/
 *.mcpb
 .DS_Store
 

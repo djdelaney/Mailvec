@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Operator/release docs (read on demand, not loaded into context):
 - `ops/UPGRADING.md` — bumping NuGet packages, the .NET SDK, sqlite-vec, SQLite, Ollama floor.
 - `ops/mcpb-release.md` — building and shipping the MCPB bundle.
+- `src/Mailvec.Tray/project.yml` — XcodeGen spec for the menu-bar tray app; regenerate the `.xcodeproj` with `xcodegen generate` whenever files are added/renamed.
 
 ## Common commands
 
@@ -21,8 +22,11 @@ ops/coverage.sh              # runs tests with coverage; HTML at coverage/index.
 dotnet run --project src/Mailvec.Indexer
 dotnet run --project src/Mailvec.Mcp
 dotnet run --project src/Mailvec.Cli -- <args>
-ops/redeploy.sh [indexer|embedder|mcp ...]    # republish + kickstart launchd agents after a code change
-ops/stop.sh                                   # bootout the launchd agents without uninstalling
+ops/redeploy.sh [indexer|embedder|mcp|cli ...]   # republish + kickstart launchd agents after a code change
+ops/stop.sh                                      # bootout the launchd agents without uninstalling
+ops/install-all.sh [--no-tray|--no-fetch]        # single-command bootstrap for a new machine
+ops/install-tray.sh                              # build + copy to /Applications + launch (calls build-tray.sh)
+ops/build-tray.sh                                # XcodeGen → xcodebuild archive → build/Mailvec.Tray.app
 ```
 
 `Mailvec.slnx` (not `.sln`) is the solution file — .NET 10 emits the new XML format by default.
@@ -37,7 +41,7 @@ ops/stop.sh                                   # bootout the launchd agents witho
 
 ## Architecture
 
-Four independent processes, communicating only through the filesystem (Maildir) and the SQLite database. Each can be restarted or replaced without affecting the others — keep this isolation when extending.
+Four .NET services + a SwiftUI tray app, communicating only through the filesystem (Maildir) and the SQLite database. The four .NET processes are independent — each can be restarted or replaced without affecting the others; keep this isolation when extending. The tray is a thin GUI client that talks to the MCP server's plain-REST `/tray/*` surface.
 
 ```
 Fastmail (or any IMAP)
@@ -50,19 +54,21 @@ mbsync ──► ~/Mail/<account>/  (Maildir)
                            │ writes messages + FTS5
                            ▼
                     archive.sqlite  ◄── reads ── Mailvec.Mcp ──► Claude (over MCP/HTTP)
-                           ▲
-                           │ writes chunks + vectors
-                           │
-        Mailvec.Embedder  ──► Ollama (localhost:11434)
+                           ▲                       │
+                           │ writes chunks         │ /tray/* (REST)
+                           │ + vectors             ▼
+        Mailvec.Embedder  ──► Ollama         Mailvec.Tray (SwiftUI menu-bar app)
+                              (localhost:11434)
 ```
 
 Project map:
 
-- **Mailvec.Core** — shared library. Domain models, SQLite access (with `sqlite-vec` extension loading), Ollama HTTP client, hybrid (FTS+vector RRF) search logic, and `Options/` POCOs (`ArchiveOptions`, `IngestOptions`, `OllamaOptions`, `IndexerOptions`, `EmbedderOptions`, `McpOptions`). All four executables reference Core.
+- **Mailvec.Core** — shared library. Domain models, SQLite access (with `sqlite-vec` extension loading), Ollama HTTP client, hybrid (FTS+vector RRF) search logic, `Tray/` services (status / system / search / launchd inspector / sampling ring buffer), and `Options/` POCOs (`ArchiveOptions`, `IngestOptions`, `OllamaOptions`, `IndexerOptions`, `EmbedderOptions`, `McpOptions`). All four .NET executables reference Core.
 - **Mailvec.Indexer** — `BackgroundService` worker. Scans Maildir, parses with MimeKit, upserts `messages`. Does *not* call Ollama.
 - **Mailvec.Embedder** — `BackgroundService` worker. Polls for `messages WHERE embedded_at IS NULL`, chunks bodies, calls Ollama, writes `chunks` + `chunk_embeddings`.
-- **Mailvec.Mcp** — AspNetCore app exposing MCP tools over HTTP on `127.0.0.1:3333`. Read-only against the database (except `get_attachment`, which reads `.eml` files out of the Maildir).
+- **Mailvec.Mcp** — AspNetCore app exposing MCP tools over HTTP on `127.0.0.1:3333`. Read-only against the database (except `get_attachment`, which reads `.eml` files out of the Maildir). Also serves plain-REST `/tray/*` endpoints for the tray app and `/health` for monitors.
 - **Mailvec.Cli** — admin commands (status, doctor, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, extract-attachments, plus the `eval` / `eval-add` / `eval-import` family for retrieval-quality benchmarking) hitting the same DB.
+- **Mailvec.Tray** — SwiftUI menu-bar app (macOS 14+). A `MenuBarExtra` with a dashboard, search popover (⌘⇧M), and Settings window. Polls `/tray/status` every 5s; never touches the SQLite database directly. See `## Tray app` below.
 
 ## Data model invariants
 
@@ -188,3 +194,31 @@ Release/build steps live in `ops/mcpb-release.md`. The gotchas below stay here b
 - **Images and small text-ish files are also inlined as native MCP blocks.** `image/*` → `ImageContentBlock` so Claude vision works in one round trip without a filesystem MCP. `text/*` + a few application MIMEs (json, xml, yaml) under `Mcp:AttachmentInlineTextMaxBytes` → an extra `TextContentBlock` with strict UTF-8 decoding (`UTF8Encoding(throwOnInvalidBytes: true)` so a CSV that claims `text/*` but isn't valid UTF-8 just omits the inline text). The file lands on disk in both cases regardless.
 - **`Blob` / `Data` setters take `ReadOnlyMemory<byte>` of the *base64 string's UTF-8 encoding*** (matters for `ImageContentBlock.Data`). Use `Encoding.UTF8.GetBytes(Convert.ToBase64String(rawBytes))`. Don't pass raw bytes (the SDK won't base64-encode for you) and don't pass a `string` (won't compile).
 - **Re-extraction is idempotent.** If the target file already exists with matching size, we skip the rewrite and set `WasReused: true`. Hashing would be more rigorous but Maildir parsing is the dominant cost; size is a good-enough fingerprint.
+
+## mailvec CLI shim
+
+`ops/install.sh` publishes the CLI to `~/.local/share/mailvec/cli/` (alongside the three .NET services) and drops a shim at `~/.local/bin/mailvec` that execs `dotnet ~/.local/share/mailvec/cli/Mailvec.Cli.dll`. The shim sets `DOTNET_ROOT` + `PATH` so it works under Claude Desktop's sanitised-PATH child processes too.
+
+- **Why a shim, not a symlink to the .dll**: .NET requires `dotnet <dll>`, not direct invocation. The shim hides that detail.
+- **Why a shim, not `/usr/local/bin/mailvec`**: writing to `/usr/local/bin` needs sudo or a Homebrew tap. `~/.local/bin/mailvec` is sudo-free and the tray UI's [`CliRunner.swift`](src/Mailvec.Tray/Sources/CliRunner.swift) prefers it anyway.
+- **Re-run `ops/install.sh` (or `ops/redeploy.sh cli`) after CLI source changes** — the shim is generated at install time and points at a published .dll, not the working-tree source. `dotnet build` alone won't update it.
+- **Eight tray buttons depend on this**: Dashboard's Doctor, Embedding's Audit/Reindex, Advanced's Doctor/RebuildFTS/Checkpoint/Audit/Purge. All route through `CliRunner.runInTerminal(...)`.
+
+## Tray app
+
+- **Plain REST, not MCP framing.** The tray talks to `/tray/status`, `/tray/system`, `/tray/search`, `/tray/control`, `/tray/folders`, `/tray/attachment` on the same Kestrel host (`127.0.0.1:3333`) as MCP. These endpoints are deliberately *not* MCP tools — they need session-less access, fields MCP tools don't return (services, progress, sparkline), and a flatter shape than the LLM-facing tools. Registered before `MapMcp()` in [Program.cs::RunHttp](src/Mailvec.Mcp/Program.cs); routes live in [TrayEndpoints.cs](src/Mailvec.Mcp/Tray/TrayEndpoints.cs).
+- **Wire-format contract.** The C# records in [TrayModels.cs](src/Mailvec.Core/Tray/TrayModels.cs) and the Swift structs in [Models.swift](src/Mailvec.Tray/Sources/Models.swift) are paired one-for-one. Field names use camelCase via the default System.Text.Json options. Rename either side without the other and Swift silently decodes null — there's no compile-time check across the language boundary. Bump field names in lockstep.
+- **In-memory ring buffer lives in the MCP process, not the embedder.** [TrayEventRecorder](src/Mailvec.Core/Tray/TrayEventRecorder.cs) is a `BackgroundService` registered only in the MCP server. It samples the DB once a minute and keeps a 30-bucket deltas array. *Why not in the embedder*: the embedder runs in a separate process; sharing heap would require IPC, and sampling the DB the MCP server already reads is simpler. Cold-start has 30 zero buckets; refills over the next half-hour. If you ever need true per-event granularity, add a small `events` table — don't try to read the embedder's memory.
+- **`launchctl print` parsing is brittle but stable enough.** [LaunchdInspector](src/Mailvec.Core/Tray/LaunchdInspector.cs) shells out to `launchctl print gui/<uid>/<label>` and parses `state`, `pid`, `last exit code`, `runs` out of the text. Apple's XPC C API for this is private; every macOS menu-bar app does the same. The parser is unit-tested in [LaunchdInspectorTests.cs](tests/Mailvec.Core.Tests/Tray/LaunchdInspectorTests.cs) — if a future macOS changes the output, the parser regresses there first.
+- **Pause/Resume acts on indexer + embedder together, never mbsync.** [`TrayModel.pauseServices`](src/Mailvec.Tray/Sources/TrayModel.swift) calls `bootout` on both .NET services so the user can stop ingestion + embedding without halting mail delivery. mbsync stays on its timer; pausing it would mean editing the plist's `StartInterval` and reloading, which the tray doesn't do.
+- **No App Sandbox.** The tray reads `~/Library/Logs/Mailvec/`, shells out to `launchctl`, and uses AppleScript to spawn Terminal for `mailvec doctor` / `reindex`. App Sandbox would block all three. Hardened Runtime is on; the user installs the .app explicitly, so this is acceptable for a local-only tool.
+- **XcodeGen, not a checked-in `.xcodeproj`.** [`project.yml`](src/Mailvec.Tray/project.yml) is the source of truth; the generated `.xcodeproj` is gitignored. Anyone touching the tray runs `xcodegen generate` first (or just `ops/build-tray.sh`, which does it for you). Don't commit the `.xcodeproj` even temporarily — it's a binary-ish pbxproj that doesn't diff.
+- **HotKey (https://github.com/soffes/HotKey) is the only SPM dep.** Modern SwiftUI `KeyboardShortcut` only fires while a window is key; menu-bar accessory apps need Carbon's `RegisterEventHotKey` for global capture. HotKey is a 200-line wrapper.
+- **Date decoding is custom, not `.iso8601`.** The .NET server emits `DateTimeOffset.ToString("O")` with fractional seconds (e.g. `2026-05-14T19:03:42.909205+00:00`). Foundation's `.iso8601` strategy doesn't accept fractional seconds. [`MailvecClient`](src/Mailvec.Tray/Sources/MailvecClient.swift) uses a custom strategy with two `ISO8601DateFormatter` instances (with + without fractional seconds) for tolerance.
+- **`Section("Title") { content } footer: { ... }` is NOT valid SwiftUI.** The matching Section initializer requires `Section { content } header: { Text("Title") } footer: { ... }`. The handoff used the shorter form; every site got rewritten. If you add a new section with both a title and a footer, use the long form.
+- **Preferences is a `WindowGroup`, not the SwiftUI `Settings` scene.** The `Settings` scene requires the app's activation policy to be `.regular` to surface — for `LSUIElement` accessory apps that means bouncing between `.accessory` and `.regular` every time the user opens Prefs, which after 3-4 cycles reliably corrupts `NSStatusItem` state and leaves the menu-bar icon visible but unresponsive to clicks. [`MailvecTrayApp`](src/Mailvec.Tray/Sources/MailvecTrayApp.swift) uses `WindowGroup(id: "preferences")` opened via `\.openWindow` instead — works from `.accessory` mode permanently with no policy flips. Don't switch back to `Settings`.
+- **Local notifications need at least ad-hoc signing.** `UNUserNotificationCenter.requestAuthorization` rejects fully-unsigned bundles with `UNErrorDomain Code=1` (notifications not allowed) and doesn't register the bundle with Notification Center at all. [`ops/build-tray.sh`](ops/build-tray.sh) sets `CODE_SIGN_IDENTITY="-"` + `CODE_SIGN_STYLE=Manual` to force ad-hoc signing — no Developer Team needed but the signature must exist. Verify with `codesign -dv /Applications/Mailvec.Tray.app` (look for `Signature=adhoc`).
+- **Claude Desktop's MCPB install dir changed names.** Older builds use `~/Library/Application Support/Claude/Connectors/`, current builds use `~/Library/Application Support/Claude/Claude Extensions/`. [`TraySystemService.McpbInstalled`](src/Mailvec.Core/Tray/TraySystemService.cs) checks both, preferring the new name. If a future version renames again, add the new path to that array.
+- **`/tray/system` parses three external sources of truth that the .NET process doesn't otherwise read.** Code lives in [TraySystemService.cs](src/Mailvec.Core/Tray/TraySystemService.cs): (1) `~/.mbsyncrc` for `Host` + `User` directives, (2) `~/Library/LaunchAgents/com.mailvec.mbsync.plist`'s `StartInterval` to display the schedule, (3) a `VERSION` sidecar next to `vec0.dylib` (written by [`ops/fetch-sqlite-vec.sh`](ops/fetch-sqlite-vec.sh)) for the sqlite-vec version. None of these are watched — they're re-read on every `/tray/system` request. Editing the plist and re-running `ops/install.sh` is enough for the schedule to update in the UI on the next poll.
+- **App icon ships as an `Assets.xcassets/AppIcon.appiconset`.** The bundle's icon file (Notification Center banner, Finder icon, Cmd-Tab) is built from the 128px source at [`assets/mailvec-128.png`](assets/mailvec-128.png) via `sips` resizing in `xcodebuild`'s asset-catalog compiler. Asset catalog **must** be listed under `sources:` in [`project.yml`](src/Mailvec.Tray/project.yml), not `resources:` — the latter copies the directory verbatim instead of compiling it into the `Assets.car` macOS reads from. Don't undo this.
+- **The `mailvec` CLI shim path is duplicated across three tray callsites.** [`CliRunner.swift`](src/Mailvec.Tray/Sources/CliRunner.swift) is the single helper that resolves `~/.local/bin/mailvec` (preferred) → `/usr/local/bin/mailvec` (fallback) and spawns Terminal via AppleScript. Don't re-roll the lookup in new buttons — call `CliRunner.runInTerminal(["doctor"])` etc. and the resolver stays in one place.

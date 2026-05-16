@@ -27,4 +27,10 @@ curl -fsSL "${URL}" -o "${TMPDIR}/${ASSET}"
 tar -xzf "${TMPDIR}/${ASSET}" -C "${TMPDIR}"
 
 mv "${TMPDIR}/vec0.dylib" "${REPO_ROOT}/${DEST_DIR}/vec0.dylib"
+# Sidecar file that TraySystemService.TryReadVecVersion reads to render
+# the "sqlite-vec extension" row in the Advanced prefs tab. The dylib
+# can't be introspected for its version (it's loaded via SQLite's
+# extension API, before any internal version function is callable), so
+# we cooperate at install time and persist it here.
+echo "v${VERSION}" > "${REPO_ROOT}/${DEST_DIR}/VERSION"
 echo "Installed: ${DEST_DIR}/vec0.dylib (sqlite-vec ${VERSION})"

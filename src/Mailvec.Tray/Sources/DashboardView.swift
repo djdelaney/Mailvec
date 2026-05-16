@@ -1,0 +1,513 @@
+// DashboardView.swift
+import AppKit
+import SwiftUI
+
+struct DashboardView: View {
+    @EnvironmentObject var model: TrayModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HeaderBand()
+            DashboardSearchField(placeholder:
+                "Search \(model.health?.embedded ?? 0) indexed emails…")
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+                .onTapGesture { model.pane = .search }
+
+            if let h = model.health {
+                BodyForState(health: h)
+            } else {
+                LoadingRow()
+            }
+
+            FooterActions()
+        }
+        .background(Brand.popoverBg)
+        .frame(maxHeight: 720)
+    }
+}
+
+// MARK: Header band
+
+private struct HeaderBand: View {
+    @EnvironmentObject var model: TrayModel
+
+    /// Watermark falls back to a system symbol when `mailvec.mv` isn't in the
+    /// asset catalog. Once the SF Symbol is imported the cast resolves the
+    /// branded version automatically.
+    private var brandWatermark: Image {
+        NSImage(named: "mailvec.mv") != nil
+            ? Image("mailvec.mv").renderingMode(.template)
+            : Image(systemName: "tray.full.fill")
+    }
+    /// Coloured inline icon used next to the "Mailvec" wordmark.
+    private var brandColorIcon: Image {
+        NSImage(named: "mailvec.mv-color") != nil
+            ? Image("mailvec.mv-color")
+            : Image(systemName: "tray.full.fill")
+    }
+
+    var body: some View {
+        let h = model.health
+        ZStack(alignment: .topTrailing) {
+            // Decorative watermark — falls back to a system symbol when the
+            // custom mailvec.mv asset isn't in the bundle.
+            brandWatermark
+                .resizable().scaledToFit()
+                .frame(width: 120, height: 120)
+                .foregroundStyle(.white.opacity(0.06))
+                .offset(x: 16, y: -22)
+                .allowsHitTesting(false)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 9) {
+                    brandColorIcon
+                        .resizable().scaledToFit().frame(width: 18)
+                    Text("Mailvec").font(.system(size: 14, weight: .bold))
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Spacer()
+                    StatusPill(severity: h?.severity ?? .ok)
+                }
+                HStack(spacing: 14) {
+                    CoverageRing(
+                        progress: h?.embedCoverage ?? 0,
+                        severity: h?.severity ?? .ok
+                    )
+                    .frame(width: 72, height: 72)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(h?.messages.formatted() ?? "—")
+                                .font(.system(size: 28, weight: .bold))
+                                .monospacedDigit()
+                                .kerning(-0.6)
+                            Text("messages")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        HStack(spacing: 12) {
+                            MiniStat(label: "chunks",  value: h?.chunks.formatted() ?? "—")
+                            MiniStat(label: "indexed", value: h?.lastIndexedAt.map(relative) ?? "—")
+                            MiniStat(label: "db",      value: h.map { fmtBytes($0.dbSizeBytes) } ?? "—")
+                        }
+                    }
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .foregroundStyle(Brand.bandText)
+        }
+        .background(
+            LinearGradient(
+                colors: [Brand.bandTop, Brand.bandBottom],
+                startPoint: .top, endPoint: .bottom)
+        )
+    }
+}
+
+private struct MiniStat: View {
+    let label: String; let value: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.system(size: 9.5, weight: .semibold))
+                .textCase(.uppercase).tracking(0.5)
+                .foregroundStyle(.white.opacity(0.5))
+            Text(value).font(.system(size: 12, weight: .semibold))
+                .monospacedDigit()
+        }
+    }
+}
+
+// MARK: Body
+
+private struct BodyForState: View {
+    let health: TrayHealth
+    var body: some View {
+        VStack(spacing: 10) {
+            switch health.severity {
+            case .error:   ErrorBanner(health: health)
+            case .syncing: ProgressCard(health: health)
+            default:       ThroughputCard(health: health)
+            }
+            ServicesGrid(services: health.services, ollama: health.ollama)
+            RecentActivity(events: Array(health.recentEvents.prefix(4)))
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
+    }
+}
+
+private struct ProgressCard: View {
+    let health: TrayHealth
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Embedding · \(health.embedded.formatted())/\(health.embedTotal.formatted())")
+                    .font(.system(size: 11.5, weight: .semibold))
+                Spacer()
+                if let p = health.progress {
+                    Text("\(p.ratePerMinute)/min · \(p.etaMinutes)m left")
+                        .font(.system(size: 11)).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ProgressView(value: health.embedCoverage)
+                .progressViewStyle(.linear)
+                .tint(Brand.accent)
+            Sparkline(data: health.sparkline, accent: Brand.accent)
+                .frame(height: 30)
+        }
+        .padding(10)
+        .background(Brand.cardBg, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.hairline))
+    }
+}
+
+private struct ThroughputCard: View {
+    let health: TrayHealth
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                // Window matches TrayEventRecorder's 30 one-minute buckets.
+                // Bumping BucketCount would mean updating this label.
+                Text("Throughput · last \(health.sparkline.count)m")
+                    .font(.system(size: 11.5, weight: .semibold))
+                Spacer()
+                Text(activitySummary)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Sparkline(data: health.sparkline, accent: Brand.accent)
+                .frame(height: 30)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Brand.cardBg, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.hairline))
+    }
+
+    /// Derives "idle · last burst Nm ago" / "active · Nn/min" from the
+    /// embeddings-per-minute sparkline. Index 0 is oldest, last index is
+    /// the bucket that just ended.
+    private var activitySummary: String {
+        let buckets = health.sparkline
+        guard !buckets.isEmpty else { return "idle" }
+        let current = buckets.last ?? 0
+        if current > 0 {
+            return "active · \(current)/min"
+        }
+        // Find the most recent non-zero bucket walking backwards.
+        for i in (0..<buckets.count - 1).reversed() where buckets[i] > 0 {
+            let minutesAgo = (buckets.count - 1) - i
+            return "idle · last burst \(minutesAgo)m ago"
+        }
+        return "idle · no recent activity"
+    }
+}
+
+private struct ErrorBanner: View {
+    @EnvironmentObject var model: TrayModel
+    let health: TrayHealth
+    var body: some View {
+        let problem = ErrorBanner.diagnose(health)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.white, .red).font(.system(size: 16))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(problem.title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(problem.body)
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 6) {
+                if let primary = problem.primaryAction {
+                    Button(primary.label) { primary.run() }
+                        .buttonStyle(.borderedProminent).tint(Brand.accent)
+                }
+                Button("View logs") { openLogs(for: problem.kind) }
+                if let retry = problem.retryService {
+                    Button("Retry now") {
+                        Task {
+                            _ = try? await MailvecClient.shared.control(
+                                service: retry, action: "kickstart")
+                            await model.refresh()
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        // The trailing Spacers inside each HStack push their content to the
+        // leading edge, but without `frame(maxWidth: .infinity)` SwiftUI's
+        // VStack still hugs the content. Forcing infinity width here makes
+        // the banner span the full card area like the other dashboard cards.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.red.opacity(0.32)))
+    }
+
+    /// Classify the actual failure so the banner text matches reality.
+    /// Priority order: model mismatch (most serious — silent corruption
+    /// territory) → Ollama unreachable → first failing service.
+    static func diagnose(_ h: TrayHealth) -> Problem {
+        if !h.ollama.ok {
+            return Problem(
+                kind: .ollama,
+                title: "Ollama is unreachable",
+                body: "Embeddings are paused until Ollama responds at \(h.ollama.detail).",
+                primaryAction: Action(label: "Start Ollama", run: startOllama),
+                retryService: "embedder")
+        }
+        if let failed = h.services.first(where: { $0.severity == .error }) {
+            return Problem(
+                kind: .service(failed.id),
+                title: "\(failed.id) is in trouble",
+                body: failed.detail,
+                primaryAction: nil,
+                retryService: failed.id)
+        }
+        // Fall-through — should be rare since severity classification
+        // upstream only flags .error when one of the above is true.
+        return Problem(kind: .unknown,
+                       title: "Attention needed",
+                       body: "Mailvec is reporting a degraded state.",
+                       primaryAction: nil,
+                       retryService: nil)
+    }
+
+    private func openLogs(for kind: Problem.Kind) {
+        let logDir = ("~/Library/Logs/Mailvec/" as NSString).expandingTildeInPath
+        // Pick the most relevant log if we know the service; otherwise just
+        // open the Mailvec logs folder.
+        let stamp: String = {
+            let f = DateFormatter(); f.dateFormat = "yyyyMMdd"; return f.string(from: Date())
+        }()
+        let candidate: String? = {
+            switch kind {
+            case .ollama:                return "\(logDir)mailvec-embedder-\(stamp).log"
+            case .service("embedder"):   return "\(logDir)mailvec-embedder-\(stamp).log"
+            case .service("indexer"):    return "\(logDir)mailvec-indexer-\(stamp).log"
+            case .service("mcp"):        return "\(logDir)mailvec-mcp-\(stamp).log"
+            case .service("mbsync"):     return "\(logDir)mailvec-mbsync.err.log"
+            default:                     return nil
+            }
+        }()
+        if let path = candidate, FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        } else {
+            NSWorkspace.shared.open(URL(fileURLWithPath: logDir))
+        }
+    }
+
+    /// Best-effort: try the Ollama.app first (installed by `brew install --cask ollama`),
+    /// fall back to spawning `ollama serve` if the CLI is on PATH.
+    private static func startOllama() {
+        if NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.electron.ollama") != nil
+           || FileManager.default.fileExists(atPath: "/Applications/Ollama.app") {
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Ollama.app"))
+            return
+        }
+        // Spawn `ollama serve` detached. We don't await; the embedder will
+        // retry and pick it up on the next poll.
+        let candidates = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]
+        guard let bin = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            return
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: bin)
+        p.arguments = ["serve"]
+        try? p.run()
+    }
+
+    struct Problem {
+        enum Kind: Equatable { case ollama, service(String), unknown }
+        let kind: Kind
+        let title: String
+        let body: String
+        let primaryAction: Action?
+        let retryService: String?
+    }
+
+    struct Action {
+        let label: String
+        let run: () -> Void
+    }
+}
+
+private struct ServicesGrid: View {
+    let services: [ServiceStatus]; let ollama: OllamaStatus
+    var body: some View {
+        let all = services + [ServiceStatus(
+            id: "ollama", detail: ollama.detail, ok: ollama.ok,
+            busy: false, severity: ollama.severity)]
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5),
+                  spacing: 6) {
+            ForEach(all) { ServiceTile(service: $0) }
+        }
+    }
+}
+
+private struct RecentActivity: View {
+    let events: [TimelineEvent]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Recent activity").sectionHeader().padding(.bottom, 2)
+            ForEach(events) { TimelineRow(event: $0) }
+        }
+    }
+}
+
+private struct FooterActions: View {
+    @EnvironmentObject var model: TrayModel
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        HStack(spacing: 4) {
+            // Pause/Resume act on indexer + embedder together. mbsync's timer
+            // is left alone so new mail still arrives — only ingestion +
+            // embedding pause. Show "Pause" when both are running (the steady
+            // state, including idle), "Resume" when either is stopped — the
+            // earlier check on severity == .syncing meant the button only
+            // ever read "Pause" during an active embed run, which was
+            // misleading 99% of the time.
+            let running = areCoreServicesRunning()
+            if running {
+                FooterButton(icon: "pause.fill", label: "Pause") { model.pauseServices() }
+            } else {
+                FooterButton(icon: "play.fill", label: "Resume",
+                             accent: model.health?.severity == .error) { model.resumeServices() }
+            }
+            FooterButton(icon: "stethoscope",    label: "Doctor") { runDoctor() }
+            FooterButton(icon: "folder",         label: "Reveal") { model.revealMaildir() }
+            Spacer()
+            // Opening Settings from an LSUIElement (menu-bar accessory) app
+            // is the most finicky bit of SwiftUI on macOS. Neither
+            // `NSApp.sendAction("showSettingsWindow:")` nor `SettingsLink`
+            // reliably surfaces the window because the app has no Dock icon
+            // to activate from. The workaround is:
+            //   1. Bump the activation policy to .regular temporarily so the
+            //      Settings window is allowed to come forward.
+            //   2. Activate the app explicitly.
+            //   3. Call the openSettings environment action.
+            // We don't revert to .accessory afterwards — that would re-hide
+            // the Settings window we just opened. The Dock icon appears
+            // briefly while Settings is open; it's the conventional macOS
+            // behaviour for menu-bar apps with a real Preferences window.
+            FooterButton(icon: "gearshape") {
+                TrayLog.info("preferences opened")
+                // `openWindow` on the "preferences" WindowGroup is the
+                // canonical macOS 14+ pattern for menu-bar accessory apps.
+                // Combined with NSApp.activate(), it surfaces the window
+                // reliably without flipping activation policy — which
+                // previously corrupted NSStatusItem state after several
+                // open/close cycles and left the tray icon unresponsive.
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "preferences")
+            }
+            FooterButton(icon: "power") { NSApp.terminate(nil) }
+        }
+        .padding(8)
+        .background(.black.opacity(0.015))
+        .overlay(Rectangle().frame(height: 0.5)
+            .foregroundStyle(Brand.hairline), alignment: .top)
+    }
+
+    /// True when both indexer and embedder report ok. We only care about
+    /// those two — mbsync is timer-driven (its "ok" state is "not running"
+    /// between scheduled runs, so it's a misleading signal) and the mcp
+    /// service is what's serving this query in the first place.
+    private func areCoreServicesRunning() -> Bool {
+        guard let services = model.health?.services else { return false }
+        let want = Set(["indexer", "embedder"])
+        let relevant = services.filter { want.contains($0.id) }
+        return relevant.count == want.count && relevant.allSatisfy { $0.ok }
+    }
+
+    /// Opens Terminal with `mailvec doctor`. Doctor emits a multi-screen
+    /// report that's not worth re-rendering inside the popover.
+    private func runDoctor() {
+        CliRunner.runInTerminal(["doctor"])
+    }
+}
+
+private struct FooterButton: View {
+    let icon: String; var label: String? = nil; var accent: Bool = false
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                if let label { Text(label) }
+            }
+            .font(.system(size: 12, weight: accent ? .semibold : .regular))
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(accent ? Brand.accentDeep : .primary)
+    }
+}
+
+// MARK: helpers
+
+private func relative(_ date: Date) -> String {
+    let f = RelativeDateTimeFormatter(); f.unitsStyle = .abbreviated
+    return f.localizedString(for: date, relativeTo: Date())
+}
+private func fmtBytes(_ b: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: b, countStyle: .file)
+}
+
+private struct LoadingRow: View {
+    @EnvironmentObject var model: TrayModel
+    var body: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+            if let err = model.lastError {
+                Text(err)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(40)
+    }
+}
+
+/// Placeholder field used at the bottom of the dashboard — tapping it
+/// flips the popover to .search.
+struct DashboardSearchField: View {
+    let placeholder: String
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(Brand.accent)
+            Text(placeholder).foregroundStyle(.secondary)
+            Spacer()
+            HStack(spacing: 3) {
+                KbdCap("⌘"); KbdCap("⇧"); KbdCap("M")
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Brand.cardBg, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.hairline))
+    }
+}
+
+struct KbdCap: View {
+    let key: String
+    init(_ key: String) { self.key = key }
+    var body: some View {
+        Text(key)
+            .font(.system(size: 10.5, design: .monospaced))
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .foregroundStyle(.secondary)
+            .background(.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 4))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.10)))
+    }
+}

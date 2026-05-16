@@ -11,8 +11,14 @@
         <string>__MBSYNCRC__</string>
         <string>-a</string>
     </array>
+    <!-- 600s (10 min) instead of 300s. mbsync runs occasionally take longer
+         than 5 minutes when pulling a backlog, and a too-tight schedule
+         causes the next run to hit flock() on .mbsyncstate and exit with
+         "channel is locked". 92% of runs were succeeding at 300s, but the
+         8% lock failures were producing noisy tray banners. 10 min still
+         gives near-real-time mail delivery on a personal mailbox. -->
     <key>StartInterval</key>
-    <integer>300</integer>
+    <integer>600</integer>
     <key>RunAtLoad</key>
     <true/>
     <!-- mbsync is the only non-.NET service, so Serilog doesn't apply. Its

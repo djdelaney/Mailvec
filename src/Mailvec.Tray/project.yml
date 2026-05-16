@@ -1,0 +1,78 @@
+# XcodeGen project spec for Mailvec.Tray.
+#
+# Why XcodeGen: a hand-maintained .xcodeproj/project.pbxproj is fragile —
+# every file add changes a binary-ish text format that doesn't merge. With
+# this YAML the project regenerates deterministically; the .xcodeproj itself
+# is gitignored.
+#
+# Generate with:
+#   brew install xcodegen
+#   cd src/Mailvec.Tray && xcodegen generate
+#
+# Then open Mailvec.Tray.xcodeproj in Xcode. The bundled ops/build-tray.sh
+# automates the generate+archive pipeline.
+
+name: Mailvec.Tray
+
+options:
+  bundleIdPrefix: com.mailvec
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    PRODUCT_BUNDLE_IDENTIFIER: com.mailvec.tray
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Automatic
+    # No App Sandbox: we shell out to launchctl and read ~/Library/Logs.
+    # Sandboxing breaks both. The app is local-only and the user installs it
+    # explicitly, so this is acceptable.
+    ENABLE_APP_SANDBOX: NO
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_LSUIElement: YES   # accessory app, no Dock icon
+    INFOPLIST_KEY_NSHumanReadableCopyright: "© Mailvec"
+    INFOPLIST_KEY_NSAppleEventsUsageDescription: "Mailvec uses Apple Events to open Terminal for diagnostic commands."
+    # Points the asset-catalog compiler at Resources/Assets.xcassets/AppIcon.appiconset.
+    # Notification Center reads this for the banner icon, the Finder uses it
+    # for the .app, and the Notification permissions prompt shows it.
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+packages:
+  HotKey:
+    url: https://github.com/soffes/HotKey
+    from: "0.2.0"
+
+targets:
+  Mailvec.Tray:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      # Asset catalog explicitly listed as a source (it's a "package
+      # directory" with .xcassets extension that Xcode treats as a build
+      # input, not a copy-resource). `resources:` was missing it on the
+      # initial xcodegen pass because the directory was empty at the time.
+      - path: Resources/Assets.xcassets
+    dependencies:
+      - package: HotKey
+    info:
+      path: Info.plist
+      properties:
+        LSUIElement: YES
+        LSMinimumSystemVersion: "14.0"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Apple Events permission required for AppleScript-driven Terminal
+        # spawning (Doctor / Reindex buttons). macOS prompts on first use.
+        NSAppleEventsUsageDescription: "Mailvec uses Apple Events to open Terminal for diagnostic commands."
+    entitlements:
+      path: Mailvec.Tray.entitlements
+      properties:
+        com.apple.security.automation.apple-events: true

@@ -22,9 +22,21 @@
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
   </ItemGroup>
+  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-arm64/native/VERSION') ">
+    <None Include="$(MailvecRepoRoot)runtimes/osx-arm64/native/VERSION"
+          Link="runtimes/osx-arm64/native/VERSION"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
   <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-x64/native/vec0.dylib') ">
     <None Include="$(MailvecRepoRoot)runtimes/osx-x64/native/vec0.dylib"
           Link="runtimes/osx-x64/native/vec0.dylib"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
+  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-x64/native/VERSION') ">
+    <None Include="$(MailvecRepoRoot)runtimes/osx-x64/native/VERSION"
+          Link="runtimes/osx-x64/native/VERSION"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
   </ItemGroup>

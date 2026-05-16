@@ -8,11 +8,12 @@ Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server wo
 
 ```
 src/
-  Mailvec.Core      shared types, SQLite + Ollama clients, hybrid search
+  Mailvec.Core      shared types, SQLite + Ollama clients, hybrid search, /tray/* services
   Mailvec.Indexer   BackgroundService: Maildir -> SQLite (no embeddings)
   Mailvec.Embedder  BackgroundService: SQLite rows -> Ollama embeddings
-  Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB)
+  Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB) + /tray/* REST
   Mailvec.Cli       admin commands (status, doctor, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, extract-attachments, eval*)
+  Mailvec.Tray      SwiftUI menu-bar app — dashboard, search popover (⌘⇧M), preferences
 tests/
   Mailvec.{Core,Indexer,Mcp}.Tests
 schema/
@@ -21,10 +22,13 @@ schema/
 ops/
   mbsyncrc.example       IMAP sync config template
   launchd/               plist templates for mbsync + 3 .NET services
-  install.sh                 Phase 4 installer: publishes services, renders plists, bootstraps
+  install-all.sh             single-command bootstrap: fetch + install services + install tray
+  install.sh                 Phase 4 installer: publishes services + CLI, renders plists, bootstraps
+  install-tray.sh            builds tray .app via build-tray.sh, copies to /Applications, launches
+  build-tray.sh              XcodeGen + xcodebuild archive (ad-hoc signed)
   redeploy.sh                republish + kickstart launchd agents after a code change
   stop.sh                    bootout the launchd agents without uninstalling
-  fetch-sqlite-vec.sh        one-shot: pulls vec0.dylib from upstream releases
+  fetch-sqlite-vec.sh        one-shot: pulls vec0.dylib + VERSION sidecar from upstream releases
   build-mcpb.sh              packages a .mcpb bundle into dist/ for Claude Desktop
   install-stdio-launcher.sh  publishes the stdio MCP binary + writes ~/.local/bin/mailvec-mcp-stdio (Phase 5)
   publish-mcp-stdio.sh       publish-only: refreshes ~/.local/share/mailvec/mcp/ without touching the launcher
@@ -248,6 +252,34 @@ curl -s http://127.0.0.1:3333/health | jq .
 If something looks wrong, [Logs](#logs) is the next stop.
 
 The MCPB bundle for Claude Desktop is a separate concern — install it with `./ops/build-mcpb.sh` (see [Connecting to Claude Desktop](#connecting-to-claude-desktop)). The two paths share the database; the launchd MCP exposes HTTP for Claude Code (and other local agents — see Phase 5), the bundle exposes stdio for Claude Desktop.
+
+For a fresh-machine bootstrap you can run all three install steps in one shot:
+
+```sh
+./ops/install-all.sh           # fetch vec0.dylib + install services + install tray
+./ops/install-all.sh --no-tray # services only (no Xcode/xcodegen needed)
+```
+
+This just orchestrates the three scripts below; useful when re-imaging a machine. Prereqs (.NET SDK, Xcode, xcodegen, mbsync, Ollama, configured `~/.mbsyncrc`) are not handled by it — they each need user-specific config and are walked through above.
+
+## Tray app (menu-bar UI)
+
+Optional. A SwiftUI menu-bar app at [`src/Mailvec.Tray/`](src/Mailvec.Tray/) that surfaces a status dashboard, a ⌘⇧M search popover, and a Preferences window. It's a thin client over the same `127.0.0.1:3333` MCP server the launchd agents run — talks to a dedicated `/tray/*` REST surface (`/tray/status`, `/tray/system`, `/tray/search`, `/tray/control`, `/tray/folders`, `/tray/email/{id}`, `/tray/attachment`) so it never depends on the LLM-facing MCP framing.
+
+```sh
+brew install xcodegen           # required (XcodeGen generates the .xcodeproj from project.yml)
+./ops/install-tray.sh           # builds + signs ad-hoc + installs to /Applications + launches
+```
+
+What it gives you:
+
+- **Dashboard** with live message / chunk / DB-size counters, embedding-coverage ring, service-state tiles (mbsync / indexer / embedder / mcp / ollama), a 30-minute throughput sparkline, and a recent-activity timeline.
+- **Search popover** (⌘⇧M) with hybrid / keyword / semantic chips, folder + date filters, inline message-body preview, and one-click "Open in Fastmail".
+- **Preferences** for launch-at-login, notifications (Ollama-unreachable / sync-failure / archive-complete banners), Fastmail webmail-link config, and a set of CLI-equivalent buttons (Doctor, Rebuild FTS5, Checkpoint WAL, Audit embeddings, Purge soft-deleted, Reindex all). Long-running commands open in Terminal so you see streaming output.
+
+Build chain: [`project.yml`](src/Mailvec.Tray/project.yml) (XcodeGen spec — checked in) → `.xcodeproj` (regenerated each build, gitignored) → `xcodebuild archive` with ad-hoc signing → `build/Mailvec.Tray.app`. The ad-hoc signature matters — macOS rejects `UNUserNotificationCenter.requestAuthorization` for fully-unsigned bundles, so notifications need at least `codesign -s -`. No Apple Developer Program account required.
+
+The CLI buttons spawn `~/.local/bin/mailvec` (installed by `ops/install.sh` — a small shim that execs `dotnet ~/.local/share/mailvec/cli/Mailvec.Cli.dll`). After CLI source changes, re-run `ops/redeploy.sh cli` to refresh.
 
 ## Logs
 
