@@ -1,6 +1,7 @@
 // MailvecTrayApp.swift
 import AppKit
 import HotKey
+import ServiceManagement
 import SwiftUI
 
 /// Minimal AppDelegate that just enforces accessory mode at launch. We no
@@ -16,6 +17,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // appears once at first launch rather than at the awkward moment a
         // sync first fails. macOS dedupes the prompt across app installs.
         Task { @MainActor in TrayNotifications.requestAuthorizationIfNeeded() }
+        // Reconcile launch-at-login state with macOS. The Preferences UI
+        // binds the toggle to @AppStorage("launchAtLogin") (default true),
+        // but SMAppService.mainApp.register() only runs inside `.onChange`
+        // — which never fires for a user who installs the app and leaves
+        // the toggle alone. Without this reconciliation, fresh installs
+        // show "Launch at login" as ON in Preferences while the system
+        // has no record of the app as a login item, and the tray fails
+        // to auto-start after reboot. Self-heals on every launch in case
+        // macOS revokes the entry (e.g. user disables it in System
+        // Settings → General → Login Items).
+        Task { @MainActor in reconcileLaunchAtLogin() }
+    }
+
+    private func reconcileLaunchAtLogin() {
+        let stored = UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? true
+        let status = SMAppService.mainApp.status
+        do {
+            switch (stored, status) {
+            case (true, .notRegistered), (true, .notFound):
+                try SMAppService.mainApp.register()
+                TrayLog.info("launch-at-login", "registered (was \(status))")
+            case (false, .enabled):
+                Task { try? await SMAppService.mainApp.unregister() }
+                TrayLog.info("launch-at-login", "unregistered (stored=false)")
+            default:
+                // Already in sync, or in a transient state (.requiresApproval)
+                // that the user must resolve in System Settings.
+                break
+            }
+        } catch {
+            TrayLog.error("launch-at-login", "reconcile failed: \(error.localizedDescription)")
+        }
     }
 }
 
