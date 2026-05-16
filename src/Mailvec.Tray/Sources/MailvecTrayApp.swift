@@ -4,30 +4,58 @@ import HotKey
 import ServiceManagement
 import SwiftUI
 
-/// Minimal AppDelegate that just enforces accessory mode at launch. We no
-/// longer flip activation policy to .regular to open Preferences — that
-/// pattern reliably opened the window but caused NSStatusItem to get stuck
-/// after several open/close cycles, leaving the menu bar icon visible but
-/// unresponsive. Preferences is now a regular WindowGroup opened via
-/// `\.openWindow`, which works without any activation-policy churn.
+/// AppDelegate is where all launch-time work happens. `applicationDidFinish-
+/// Launching` is the only hook macOS guarantees to fire once at app start
+/// regardless of whether the user has clicked the menu-bar icon yet — and
+/// the popover content's `.onAppear` doesn't fire until first open, while
+/// `.task` on the MenuBarExtra label doesn't fire reliably for the icon
+/// view. Putting prewarm + hotkey registration here means status polling,
+/// folder prefetch, and ⌘⇧M all work from boot.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Strong reference to the global hotkey. HotKey wraps Carbon's
+    /// `RegisterEventHotKey`; if this property is released the OS-level
+    /// registration is torn down and ⌘⇧M stops working.
+    private var hotkey: HotKey?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        // Request notification authorization upfront so the OS prompt
-        // appears once at first launch rather than at the awkward moment a
-        // sync first fails. macOS dedupes the prompt across app installs.
-        Task { @MainActor in TrayNotifications.requestAuthorizationIfNeeded() }
-        // Reconcile launch-at-login state with macOS. The Preferences UI
-        // binds the toggle to @AppStorage("launchAtLogin") (default true),
-        // but SMAppService.mainApp.register() only runs inside `.onChange`
-        // — which never fires for a user who installs the app and leaves
-        // the toggle alone. Without this reconciliation, fresh installs
-        // show "Launch at login" as ON in Preferences while the system
-        // has no record of the app as a login item, and the tray fails
-        // to auto-start after reboot. Self-heals on every launch in case
-        // macOS revokes the entry (e.g. user disables it in System
-        // Settings → General → Login Items).
-        Task { @MainActor in reconcileLaunchAtLogin() }
+
+        Task { @MainActor in
+            // Request notification authorization upfront so the OS prompt
+            // appears once at first launch rather than at the awkward
+            // moment a sync first fails. macOS dedupes the prompt across
+            // app installs.
+            TrayNotifications.requestAuthorizationIfNeeded()
+
+            // Reconcile launch-at-login state with macOS. The Preferences
+            // UI binds the toggle to @AppStorage("launchAtLogin") (default
+            // true), but SMAppService.mainApp.register() only runs inside
+            // `.onChange` — which never fires for a user who installs the
+            // app and leaves the toggle alone. Without this reconciliation,
+            // fresh installs show "Launch at login" as ON in Preferences
+            // while the system has no record of the app as a login item,
+            // and the tray fails to auto-start after reboot. Self-heals on
+            // every launch in case macOS revokes the entry (e.g. user
+            // disables it in System Settings → General → Login Items).
+            self.reconcileLaunchAtLogin()
+
+            // Pre-warm: start polling and load folder + system info so
+            // the dashboard has data the moment the user clicks the icon,
+            // the search popover's folder filter is populated, and the
+            // webmail provider (Fastmail / Gmail / …) is known before any
+            // "Open in …" button renders. All three calls are idempotent
+            // (poller-nil guard + availableFolders-empty guard +
+            // imapHost-nil guard).
+            TrayLog.info("prewarm", "starting poller + folder fetch + system fetch")
+            TrayModel.shared.start()
+            async let folders: () = TrayModel.shared.loadFolders()
+            async let system: () = TrayModel.shared.loadSystemInfo()
+            _ = await (folders, system)
+        }
+
+        // Register ⌘⇧M synchronously so the hotkey works the moment the
+        // app finishes launching, before any popover has been opened.
+        registerHotkey()
     }
 
     private func reconcileLaunchAtLogin() {
@@ -42,23 +70,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { try? await SMAppService.mainApp.unregister() }
                 TrayLog.info("launch-at-login", "unregistered (stored=false)")
             default:
-                // Already in sync, or in a transient state (.requiresApproval)
-                // that the user must resolve in System Settings.
+                // Already in sync, or in a transient state
+                // (.requiresApproval) that the user must resolve in
+                // System Settings.
                 break
             }
         } catch {
             TrayLog.error("launch-at-login", "reconcile failed: \(error.localizedDescription)")
         }
     }
+
+    /// Registers ⌘⇧M as a global hotkey. The HotKey package
+    /// (https://github.com/soffes/HotKey) wraps Carbon's RegisterEventHotKey
+    /// — the modern SwiftUI KeyboardShortcut API only fires while a window
+    /// is key, which isn't useful for a menu-bar accessory.
+    private func registerHotkey() {
+        guard hotkey == nil else { return }
+        let hk = HotKey(key: .m, modifiers: [.command, .shift])
+        hk.keyDownHandler = {
+            TrayLog.debug("hotkey fired", "⌘⇧M")
+            DispatchQueue.main.async {
+                TrayModel.shared.pane = .search
+                TrayModel.shared.pendingSearchFocus = true
+            }
+        }
+        hotkey = hk
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        TrayLog.info("hotkey registered", "⌘⇧M · tray v\(version)")
+    }
 }
 
 @main
 struct MailvecTrayApp: App {
-    @StateObject private var model = TrayModel()
-    @State private var hotkey: HotKey?
+    // Bind the SwiftUI scene to the same TrayModel singleton the
+    // AppDelegate prewarms. @StateObject(wrappedValue:) hands the existing
+    // instance to SwiftUI rather than constructing a new one.
+    @StateObject private var model: TrayModel
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
+        _model = StateObject(wrappedValue: TrayModel.shared)
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         TrayLog.info("app launch", "Mailvec.Tray v\(version)")
     }
@@ -83,29 +134,9 @@ struct MailvecTrayApp: App {
             // a regular Scene, so Color.primary / .secondary stay tied to
             // the system appearance and end up unreadable in Dark Mode.
             .environment(\.colorScheme, .light)
-            .onAppear {
-                TrayLog.info("popover opened")
-            }
+            .onAppear { TrayLog.info("popover opened") }
         } label: {
             MenuBarIcon(severity: model.health?.severity ?? .ok)
-                // Pre-warm at app launch. The menu-bar label is rendered
-                // as soon as the app finishes launching — well before the
-                // user clicks the icon — so .task here fires on cold
-                // start. Doing the prewarm from the popover content's
-                // .onAppear (the prior location) was too late: the user
-                // saw a loading spinner on first open while /tray/status
-                // and /tray/folders made their first round-trip.
-                //
-                // All three calls are idempotent (start()'s poller guard,
-                // loadFolders()'s availableFolders.isEmpty guard,
-                // registerHotkey()'s hotkey==nil guard), so this also
-                // safely re-runs if SwiftUI ever re-attaches the label.
-                .task {
-                    TrayLog.info("prewarm", "starting poller + folder fetch")
-                    model.start()
-                    registerHotkey()
-                    await model.loadFolders()
-                }
         }
         .menuBarExtraStyle(.window)
 
@@ -123,24 +154,5 @@ struct MailvecTrayApp: App {
         }
         .windowResizability(.contentSize)
         .commandsRemoved()
-    }
-
-    /// Registers ⌘⇧M as a global hotkey. The HotKey package
-    /// (https://github.com/soffes/HotKey) wraps Carbon's RegisterEventHotKey
-    /// — the modern SwiftUI KeyboardShortcut API only fires while a window
-    /// is key, which isn't useful for a menu-bar accessory.
-    private func registerHotkey() {
-        guard hotkey == nil else { return }
-        let hk = HotKey(key: .m, modifiers: [.command, .shift])
-        hk.keyDownHandler = {
-            TrayLog.debug("hotkey fired", "⌘⇧M")
-            DispatchQueue.main.async {
-                model.pane = .search
-                model.pendingSearchFocus = true
-            }
-        }
-        hotkey = hk
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        TrayLog.info("hotkey registered", "⌘⇧M · tray v\(version)")
     }
 }
