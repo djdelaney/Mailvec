@@ -13,23 +13,31 @@ struct SearchAndMCPTab: View {
             // single query. Result-limit is hardcoded to 20 in TrayModel
             // — anything larger crowded the popover and anything smaller
             // hid relevant hits.
-            Section {
-                LabeledContent("Account ID") {
-                    TextField("", text: $prefs.fastmailAccountId,
-                              prompt: Text("u1234abcd"))
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(width: 140)
-                        .textFieldStyle(.roundedBorder)
+            // Only surface the Fastmail-specific webmail-link config when
+            // the user is actually on Fastmail. Detection happens from
+            // /tray/system's imapHost — see WebmailProvider.detect. For
+            // any other IMAP host (or before /tray/system has loaded), we
+            // hide the section entirely rather than ask the user to
+            // configure settings that don't apply.
+            if WebmailProvider.detect(imapHost: prefs.system.imapHost) == .fastmail {
+                Section {
+                    LabeledContent("Account ID") {
+                        TextField("", text: $prefs.fastmailAccountId,
+                                  prompt: Text("u1234abcd"))
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(width: 140)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledContent("Open in") {
+                        TextField("", text: $prefs.fastmailWebUrl,
+                                  prompt: Text("https://app.fastmail.com"))
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(width: 240)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                } header: { Text("Fastmail webmail links") } footer: {
+                    RowHint(text: "The tray builds Open-in-Fastmail links client-side from these. Account ID is the ?u=… query param visible on any URL at app.fastmail.com — optional, but without it Fastmail redirects to your default account on first open.")
                 }
-                LabeledContent("Open in") {
-                    TextField("", text: $prefs.fastmailWebUrl,
-                              prompt: Text("https://app.fastmail.com"))
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(width: 240)
-                        .textFieldStyle(.roundedBorder)
-                }
-            } header: { Text("Fastmail webmail links") } footer: {
-                RowHint(text: "The tray builds Open-in-Fastmail links client-side from these. Account ID is the ?u=… query param visible on any URL at app.fastmail.com — optional, but without it Fastmail redirects to your default account on first open.")
             }
 
             Section {
