@@ -5,6 +5,12 @@ import SwiftUI
 
 @MainActor
 final class TrayModel: ObservableObject {
+    /// Process-wide singleton so the `AppDelegate` (which runs the
+    /// launch-time prewarm + hotkey registration before SwiftUI evaluates
+    /// any view body) and the SwiftUI scene share the same instance.
+    /// Bound into `MailvecTrayApp` via `@StateObject(wrappedValue: .shared)`.
+    static let shared = TrayModel()
+
     @Published var health: TrayHealth?
     @Published var lastError: String?
     @Published var searchQuery: String = ""
@@ -30,6 +36,19 @@ final class TrayModel: ObservableObject {
     @Published var availableFolders: [FolderRow] = []
     private let dateRangeKey = "mailvec.dateRange"
     private let folderFilterKey = "mailvec.folderFilter"
+
+    /// IMAP host reported by /tray/system, used to detect which webmail
+    /// provider (Fastmail, Gmail, etc.) the user is on so we can render
+    /// "Open in <provider>" buttons correctly and hide them when no
+    /// webmail URL scheme is known. Loaded once at app launch by the
+    /// AppDelegate prewarm; nil until the first /tray/system response.
+    @Published private(set) var imapHost: String?
+
+    /// Derived from imapHost — `.unknown` until /tray/system replies, then
+    /// whatever provider `WebmailProvider.detect` matches.
+    var webmailProvider: WebmailProvider {
+        WebmailProvider.detect(imapHost: imapHost)
+    }
 
     enum Pane: Equatable { case dashboard, search }
     @Published var pane: Pane = .dashboard
@@ -65,6 +84,17 @@ final class TrayModel: ObservableObject {
         guard availableFolders.isEmpty else { return }
         if let resp = try? await MailvecClient.shared.folders() {
             availableFolders = resp.folders.sorted { $0.messageCount > $1.messageCount }
+        }
+    }
+
+    /// Fetches /tray/system once at app launch so `webmailProvider` is
+    /// populated before any view renders an "Open in …" button. Cheap
+    /// (single round-trip on loopback) but only needed once — Mailvec
+    /// doesn't change providers at runtime. Idempotent.
+    func loadSystemInfo() async {
+        guard imapHost == nil else { return }
+        if let sys = try? await MailvecClient.shared.system() {
+            imapHost = sys.imapHost
         }
     }
 
@@ -226,13 +256,17 @@ final class TrayModel: ObservableObject {
         }
     }
 
-    func openHitInFastmail(_ hit: SearchHit) {
+    /// Opens the hit in the detected webmail provider (Fastmail today).
+    /// No-op for providers we don't have a URL scheme for — UI callers
+    /// hide the affordance in that case so this only fires when we're
+    /// confident the link works.
+    func openHitInWebmail(_ hit: SearchHit) {
         // Build the URL client-side rather than depending on the server's
         // `webmailUrl` field — the server returns null whenever the
         // Fastmail__AccountId env var isn't set in the launchd plist, and
         // we'd rather work for everyone, account-id or not. See
-        // FastmailLink.swift for the URL shape.
-        FastmailLink.open(messageId: hit.messageId)
+        // WebmailLink.swift for the URL shape per provider.
+        WebmailLink.open(provider: webmailProvider, messageId: hit.messageId)
     }
 
     // MARK: - Keyboard navigation
@@ -268,9 +302,12 @@ final class TrayModel: ObservableObject {
         return prev.id
     }
 
-    func openSelectedInFastmail() {
+    /// Opens the currently-highlighted hit in the detected webmail
+    /// provider. No-op if no row is highlighted or the provider is
+    /// unknown.
+    func openSelectedInWebmail() {
         guard let id = searchSelection,
               let hit = searchHits.first(where: { $0.id == id }) else { return }
-        openHitInFastmail(hit)
+        openHitInWebmail(hit)
     }
 }

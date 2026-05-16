@@ -13,11 +13,13 @@ struct SearchView: View {
                 .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
                 .onSubmit {
                     // Enter commits the query to recents AND opens the
-                    // selected hit (if any) in Fastmail — matches the
-                    // footer hint "↩ Open in Fastmail" / "↩ Open".
+                    // selected hit (if any) in the detected webmail
+                    // provider. The provider is autodetected from the
+                    // IMAP host; if unknown the openSelectedInWebmail()
+                    // call is a no-op and the search just gets committed.
                     Task {
                         await model.commitSearch()
-                        await MainActor.run { model.openSelectedInFastmail() }
+                        await MainActor.run { model.openSelectedInWebmail() }
                     }
                 }
                 .onChange(of: model.searchQuery) { _, _ in
@@ -467,18 +469,24 @@ private struct ExpandedPreview: View {
                 }
             }
 
-            // Action strip — only Open in Fastmail remains. Preview / Copy
-            // link / Actions were never implemented and only existed in the
-            // handoff design's mockup.
-            HStack(spacing: 6) {
-                Button("Open in Fastmail") {
-                    FastmailLink.open(messageId: hit.messageId)
+            // Action strip — only the webmail open-link remains. Preview
+            // / Copy link / Actions were never implemented and only
+            // existed in the handoff design's mockup. The button is
+            // hidden entirely when the webmail provider is unknown (no
+            // URL scheme available), since "Open in (unknown)" is worse
+            // UX than no button.
+            if let providerName = model.webmailProvider.displayName {
+                HStack(spacing: 6) {
+                    Button("Open in \(providerName)") {
+                        WebmailLink.open(provider: model.webmailProvider,
+                                         messageId: hit.messageId)
+                    }
+                    .buttonStyle(.borderedProminent).tint(Brand.accent)
+                    .controlSize(.small)
+                    Spacer()
                 }
-                .buttonStyle(.borderedProminent).tint(Brand.accent)
-                .controlSize(.small)
-                Spacer()
+                .padding(.horizontal, 10).padding(.vertical, 6)
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
         }
         .background(Brand.cardBg, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.hairline))
@@ -518,7 +526,7 @@ private struct ExpandedPreview: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(10)
         } else if detail?.hasHtml == true {
-            Text("This message is HTML-only — open in Fastmail to view.")
+            Text(htmlOnlyMessage)
                 .font(.system(size: 11)).italic()
                 .foregroundStyle(.secondary)
                 .padding(10)
@@ -539,6 +547,15 @@ private struct ExpandedPreview: View {
             loadError = error.localizedDescription
         }
         loading = false
+    }
+
+    /// Provider-aware fallback message for HTML-only emails. Falls back
+    /// to a generic phrasing when the webmail provider is unknown.
+    private var htmlOnlyMessage: String {
+        if let name = model.webmailProvider.displayName {
+            return "This message is HTML-only — open in \(name) to view."
+        }
+        return "This message is HTML-only and can't be previewed inline."
     }
 }
 
@@ -648,11 +665,20 @@ private struct AttachmentChip: View {
 // MARK: Footer
 
 private struct SearchFooter: View {
+    @EnvironmentObject var model: TrayModel
     let hasSelection: Bool
     var body: some View {
         HStack(spacing: 12) {
             FooterHint(key: "↑↓", label: "Move")
-            FooterHint(key: "↩",  label: "Open in Fastmail", primary: hasSelection)
+            // Hide the Enter hint entirely when the webmail provider is
+            // unknown — pressing Enter is still a no-op on the action but
+            // commits the search to recents, so the absence of the hint
+            // is the honest signal that there's no follow-up action.
+            if let providerName = model.webmailProvider.displayName {
+                FooterHint(key: "↩",
+                           label: "Open in \(providerName)",
+                           primary: hasSelection)
+            }
             Spacer()
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
