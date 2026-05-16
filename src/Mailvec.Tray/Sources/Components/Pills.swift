@@ -2,16 +2,10 @@
 import SwiftUI
 
 struct ModeChip: View {
-    let label: String; let active: Bool; let accent: Bool
+    let label: String
+    let active: Bool
     var body: some View {
-        // All three modes (Hybrid / Keyword / Semantic) use the brand orange
-        // when active — the earlier design split orange-for-hybrid vs
-        // blue-for-the-others to signal "hybrid is the recommended default",
-        // but the blue read as an inconsistent accent in an otherwise orange
-        // brand palette. The `accent` parameter is kept for API stability
-        // even though it no longer changes the visual.
-        _ = accent
-        return Text(label)
+        Text(label)
             .font(.system(size: 10.5, weight: active ? .semibold : .medium))
             .padding(.horizontal, 8).padding(.vertical, 3)
             .foregroundStyle(active ? .white : .primary)
@@ -95,20 +89,12 @@ struct HelperTip: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "info.circle").font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            Text(attributed)
+            Text("Hybrid search blends BM25 keyword and semantic similarity (RRF, k=60). Narrow results with the folder and date pickers above.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(.black.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.hairline))
-    }
-    private var attributed: AttributedString {
-        var s = AttributedString("Hybrid search blends BM25 keyword and semantic similarity (RRF, k=60). Filters compose: ")
-        var code = AttributedString("from:anna invoice 2025")
-        code.font = .system(size: 10.5, design: .monospaced)
-        s.append(code)
-        s.append(AttributedString("."))
-        return s
     }
 }

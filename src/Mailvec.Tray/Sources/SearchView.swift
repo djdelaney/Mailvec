@@ -109,7 +109,7 @@ private struct SlimHeader: View {
         if model.searchQuery.isEmpty {
             return "Search \(model.health?.embedded ?? 0) indexed messages"
         }
-        return "\(model.searchHits.count) hits · hybrid · \(model.health?.embedded ?? 0) indexed"
+        return "\(model.searchHits.count) hits · \(model.mode.label.lowercased()) · \(model.health?.embedded ?? 0) indexed"
     }
 }
 
@@ -141,7 +141,7 @@ private struct FilterRow: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(SearchMode.allCases) { m in
-                ModeChip(label: m.label, active: m == model.mode, accent: m == .hybrid)
+                ModeChip(label: m.label, active: m == model.mode)
                     .onTapGesture { model.mode = m }
             }
             Divider().frame(height: 14).padding(.horizontal, 4)
@@ -223,7 +223,6 @@ private struct FilterChipContent: View {
 
 private struct EmptyState: View {
     @EnvironmentObject var model: TrayModel
-    @State private var folders: [FolderRow] = []
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
@@ -239,8 +238,13 @@ private struct EmptyState: View {
                 Text("Folders").sectionHeader().padding(.horizontal, 14)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2),
                           spacing: 4) {
-                    ForEach(folders.prefix(8)) { f in
-                        FolderTile(name: f.folder, count: f.messageCount)
+                    ForEach(model.availableFolders.prefix(8)) { f in
+                        Button {
+                            model.folderFilter = f.folder
+                        } label: {
+                            FolderTile(name: f.folder, count: f.messageCount)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -249,11 +253,12 @@ private struct EmptyState: View {
                     .padding(.horizontal, 12).padding(.bottom, 12)
             }
         }
-        .task {
-            if let resp = try? await MailvecClient.shared.folders() {
-                folders = resp.folders.sorted { $0.messageCount > $1.messageCount }
-            }
-        }
+        // model.availableFolders is pre-warmed by MailvecTrayApp's
+        // launch-time .task. The .task here is a fallback in case the
+        // prewarm hasn't completed yet (very cold start, server slow
+        // to respond) — loadFolders is idempotent so this only fires
+        // a request if the list is still empty.
+        .task { await model.loadFolders() }
     }
 }
 
@@ -289,17 +294,25 @@ private struct ResultsList: View {
             ScrollView {
                 LazyVStack(spacing: 1) {
                     ForEach(model.searchHits) { hit in
-                        ResultRow(hit: hit, selected: hit.id == model.searchSelection)
-                            .id(hit.id)
+                        ResultRow(
+                            hit: hit,
+                            selected: hit.id == model.searchSelection,
+                            expanded: hit.id == model.expandedHit
+                        )
+                        .id(hit.id)
                     }
                 }
                 .padding(.horizontal, 6).padding(.vertical, 2)
             }
+            // Bring the highlighted row into view, but skip the animation:
+            // ↑/↓ auto-repeat fires every ~30ms, so a 150ms ease-out
+            // animation queues up and the scroller appears to "drift"
+            // continuously even after the key is released. Direct
+            // scrollTo() (no withAnimation) snaps to the new position so
+            // each press is independent.
             .onChange(of: model.searchSelection) { _, newValue in
                 guard let id = newValue else { return }
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(id, anchor: .center)
-                }
+                proxy.scrollTo(id, anchor: .center)
             }
         }
     }
@@ -309,6 +322,7 @@ private struct ResultRow: View {
     @EnvironmentObject var model: TrayModel
     let hit: SearchHit
     let selected: Bool
+    let expanded: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -318,12 +332,15 @@ private struct ResultRow: View {
             // a non-empty subview, which was the source of the "most of the
             // click area doesn't work" complaint. `.contentShape(Rectangle())`
             // ensures the Button covers the whole frame.
+            //
+            // Click semantics: a click always moves the keyboard cursor to
+            // this row (so subsequent ↑/↓/Enter target it) and toggles the
+            // inline preview. The preview is decoupled from arrow-key
+            // navigation on purpose — auto-expanding on every cursor move
+            // made the layout reflow and the scroller chase its own tail.
             Button {
-                if selected {
-                    model.searchSelection = nil
-                } else {
-                    model.searchSelection = hit.id
-                }
+                model.searchSelection = hit.id
+                model.expandedHit = expanded ? nil : hit.id
             } label: {
                 HStack(alignment: .top, spacing: 8) {
                     ScoreBar(score: hit.score)
@@ -339,8 +356,8 @@ private struct ResultRow: View {
                         HStack {
                             Text(hit.displaySubject).font(.system(size: 12))
                                 .foregroundStyle(.secondary).lineLimit(1)
-                            if hit.matchedAttachment != nil {
-                                AttachmentChip()
+                            if let att = hit.matchedAttachment {
+                                AttachmentChip(fileName: att.fileName)
                             }
                         }
                         HighlightedSnippet(snippet: hit.snippet)
@@ -353,7 +370,7 @@ private struct ResultRow: View {
             }
             .buttonStyle(.plain)
 
-            if selected {
+            if expanded {
                 ExpandedPreview(hit: hit)
                     .padding(.horizontal, 6).padding(.bottom, 8)
             }
@@ -610,8 +627,9 @@ private func scoreString(hit: SearchHit) -> String {
 }
 
 private struct AttachmentChip: View {
+    let fileName: String?
     var body: some View {
-        Text("pdf")
+        Text(label)
             .font(.system(size: 9.5, design: .monospaced))
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Brand.accent.opacity(0.10),
@@ -619,6 +637,11 @@ private struct AttachmentChip: View {
             .overlay(RoundedRectangle(cornerRadius: 4)
                 .stroke(Brand.accent.opacity(0.25)))
             .foregroundStyle(Brand.accentDeep)
+    }
+    private var label: String {
+        guard let fileName, !fileName.isEmpty else { return "file" }
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        return ext.isEmpty ? "file" : ext
     }
 }
 

@@ -9,7 +9,14 @@ final class TrayModel: ObservableObject {
     @Published var lastError: String?
     @Published var searchQuery: String = ""
     @Published var searchHits: [SearchHit] = []
+    /// Keyboard cursor / highlight target — moved by ↑/↓ and used by
+    /// Enter-opens-in-Fastmail. Decoupled from `expandedHit` so arrow-key
+    /// navigation doesn't expand each row's inline preview (which would
+    /// cascade layout changes and make the scroller chase itself).
     @Published var searchSelection: Int?
+    /// Which hit's inline preview is currently shown. Set only by an
+    /// explicit click on a row — arrow-key navigation never touches this.
+    @Published var expandedHit: Int?
     @Published var mode: SearchMode = .hybrid
 
     // Filters. Persisted to UserDefaults so the user's "last 30 days +
@@ -164,11 +171,17 @@ final class TrayModel: ObservableObject {
             // Don't auto-expand the first hit — the user explicitly picks
             // a row to preview. If the previously-selected id is still in
             // the new result set (e.g. they tweaked a filter), keep it
-            // selected; otherwise clear.
+            // selected; otherwise clear. Same goes for the expanded hit.
             if let current = searchSelection, !searchHits.contains(where: { $0.id == current }) {
                 searchSelection = nil
             }
-            if searchHits.isEmpty { searchSelection = nil }
+            if let expanded = expandedHit, !searchHits.contains(where: { $0.id == expanded }) {
+                expandedHit = nil
+            }
+            if searchHits.isEmpty {
+                searchSelection = nil
+                expandedHit = nil
+            }
             if commit { rememberSearch(trimmed) }
         } catch {
             lastError = error.localizedDescription

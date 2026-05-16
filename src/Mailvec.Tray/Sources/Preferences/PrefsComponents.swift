@@ -90,8 +90,6 @@ struct StatusBadge: View {
 
 struct PathField: View {
     let path: String
-    var allowChoose: Bool = false
-    var onChoose: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 6) {
@@ -108,12 +106,8 @@ struct PathField: View {
                 .overlay(RoundedRectangle(cornerRadius: 5)
                     .stroke(Color(nsColor: .separatorColor)))
 
-            if allowChoose {
-                Button("Choose…") { onChoose?() }.controlSize(.small)
-            } else {
-                Button { reveal() } label: { Image(systemName: "magnifyingglass") }
-                    .help("Reveal in Finder").buttonStyle(.borderless)
-            }
+            Button { reveal() } label: { Image(systemName: "magnifyingglass") }
+                .help("Reveal in Finder").buttonStyle(.borderless)
         }
     }
 
