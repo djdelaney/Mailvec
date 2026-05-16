@@ -25,7 +25,7 @@ trap 'echo "redeploy.sh: failed at line $LINENO" >&2' ERR
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="$HOME/.local/share/mailvec"
 LOG_DIR="$HOME/Library/Logs/Mailvec"
-ALL_SERVICES=(indexer embedder mcp)
+ALL_SERVICES=(indexer embedder mcp cli)
 MCP_HEALTH_URL="http://127.0.0.1:3333/health"
 HEALTH_TIMEOUT=15
 
@@ -64,7 +64,7 @@ if [[ $# -eq 0 ]]; then
 else
     for arg in "$@"; do
         case "$arg" in
-            indexer|embedder|mcp) SERVICES+=("$arg") ;;
+            indexer|embedder|mcp|cli) SERVICES+=("$arg") ;;
             *) echo "redeploy.sh: unknown service '$arg' (expected one of: ${ALL_SERVICES[*]})" >&2; exit 1 ;;
         esac
     done
@@ -75,6 +75,7 @@ project_for() {
         indexer)  echo "src/Mailvec.Indexer/Mailvec.Indexer.csproj" ;;
         embedder) echo "src/Mailvec.Embedder/Mailvec.Embedder.csproj" ;;
         mcp)      echo "src/Mailvec.Mcp/Mailvec.Mcp.csproj" ;;
+        cli)      echo "src/Mailvec.Cli/Mailvec.Cli.csproj" ;;
     esac
 }
 
@@ -83,7 +84,6 @@ project_for() {
 # ---------------------------------------------------------------------------
 NOT_LOADED=()
 for svc in "${SERVICES[@]}"; do
-    label="com.mailvec.$svc"
     proj="$(project_for "$svc")"
     out="$PREFIX/$svc"
 
@@ -91,6 +91,13 @@ for svc in "${SERVICES[@]}"; do
     echo "    publish -> $out"
     dotnet publish "$REPO_ROOT/$proj" -c Release -o "$out" --nologo -v quiet
 
+    # CLI has no launchd agent — it's invoked on demand from the tray UI
+    # and the user's shell via ~/.local/bin/mailvec. Skip the kickstart.
+    if [[ "$svc" == "cli" ]]; then
+        continue
+    fi
+
+    label="com.mailvec.$svc"
     echo "    kickstart $label"
     if ! launchctl kickstart -k "gui/$UID/$label" 2>/dev/null; then
         NOT_LOADED+=("$svc")
