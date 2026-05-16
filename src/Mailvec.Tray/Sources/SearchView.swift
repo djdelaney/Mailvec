@@ -68,18 +68,8 @@ struct SearchView: View {
         .background(Brand.popoverBg)
         .frame(maxHeight: 820)
         .onAppear { fieldFocused = true }
-        // The hotkey handler in MailvecTrayApp flips pendingSearchFocus; we
-        // watch it here and bring the TextField back into focus even if the
-        // popover was already open.
-        .onChange(of: model.pendingSearchFocus) { _, want in
-            if want {
-                fieldFocused = true
-                model.pendingSearchFocus = false
-            }
-        }
         .onExitCommand { model.pane = .dashboard }
     }
-
 }
 
 private struct SlimHeader: View {

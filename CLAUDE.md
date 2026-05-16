@@ -71,7 +71,7 @@ Project map:
 - **Mailvec.Embedder** — `BackgroundService` worker. Polls for `messages WHERE embedded_at IS NULL`, chunks bodies, calls Ollama, writes `chunks` + `chunk_embeddings`.
 - **Mailvec.Mcp** — AspNetCore app exposing MCP tools over HTTP on `127.0.0.1:3333`. Read-only against the database (except `get_attachment`, which reads `.eml` files out of the Maildir). Also serves plain-REST `/tray/*` endpoints for the tray app and `/health` for monitors.
 - **Mailvec.Cli** — admin commands (status, doctor, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, extract-attachments, plus the `eval` / `eval-add` / `eval-import` family for retrieval-quality benchmarking) hitting the same DB.
-- **Mailvec.Tray** — SwiftUI menu-bar app (macOS 14+). A `MenuBarExtra` with a dashboard, search popover (⌘⇧M), and Settings window. Polls `/tray/status` every 5s; never touches the SQLite database directly. See [`docs/contributing/tray.md`](docs/contributing/tray.md).
+- **Mailvec.Tray** — SwiftUI menu-bar app (macOS 14+). A `MenuBarExtra` with a dashboard, inline search popover, and Settings window. Polls `/tray/status` every 5s; never touches the SQLite database directly. See [`docs/contributing/tray.md`](docs/contributing/tray.md).
 
 ## Configuration
 

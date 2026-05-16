@@ -1,6 +1,5 @@
 // MailvecTrayApp.swift
 import AppKit
-import HotKey
 import ServiceManagement
 import SwiftUI
 
@@ -9,14 +8,18 @@ import SwiftUI
 /// regardless of whether the user has clicked the menu-bar icon yet — and
 /// the popover content's `.onAppear` doesn't fire until first open, while
 /// `.task` on the MenuBarExtra label doesn't fire reliably for the icon
-/// view. Putting prewarm + hotkey registration here means status polling,
-/// folder prefetch, and ⌘⇧M all work from boot.
+/// view. Putting prewarm here means status polling and folder/system
+/// prefetch all run from boot.
+///
+/// There used to be a global ⌘⇧M hotkey here (via the HotKey SPM package)
+/// that opened the search popover. The Carbon hotkey registration worked
+/// fine, but SwiftUI's `MenuBarExtra` doesn't expose a public API to open
+/// its popover programmatically — the KVC reflection workaround
+/// (NSStatusBarWindow → statusItem → performClick) wasn't stable across
+/// SwiftUI versions, so the hotkey would set TrayModel state without
+/// surfacing any UI. Removed cleanly rather than ship a non-working
+/// feature; reinstate when SwiftUI grows an isMenuPresented binding.
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Strong reference to the global hotkey. HotKey wraps Carbon's
-    /// `RegisterEventHotKey`; if this property is released the OS-level
-    /// registration is torn down and ⌘⇧M stops working.
-    private var hotkey: HotKey?
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
@@ -52,10 +55,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             async let system: () = TrayModel.shared.loadSystemInfo()
             _ = await (folders, system)
         }
-
-        // Register ⌘⇧M synchronously so the hotkey works the moment the
-        // app finishes launching, before any popover has been opened.
-        registerHotkey()
     }
 
     private func reconcileLaunchAtLogin() {
@@ -80,59 +79,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Registers ⌘⇧M as a global hotkey. The HotKey package
-    /// (https://github.com/soffes/HotKey) wraps Carbon's RegisterEventHotKey
-    /// — the modern SwiftUI KeyboardShortcut API only fires while a window
-    /// is key, which isn't useful for a menu-bar accessory.
-    private func registerHotkey() {
-        guard hotkey == nil else { return }
-        let hk = HotKey(key: .m, modifiers: [.command, .shift])
-        hk.keyDownHandler = {
-            TrayLog.debug("hotkey fired", "⌘⇧M")
-            DispatchQueue.main.async {
-                // Switch the popover pane to search BEFORE opening — the
-                // popover reads model.pane in its body, so by the time
-                // SwiftUI mounts the content the SearchView is already
-                // selected. pendingSearchFocus handles the case where the
-                // popover is already open and the user re-fires ⌘⇧M to
-                // re-focus the text field.
-                TrayModel.shared.pane = .search
-                TrayModel.shared.pendingSearchFocus = true
-                AppDelegate.openMenuBarPopover()
-            }
-        }
-        hotkey = hk
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        TrayLog.info("hotkey registered", "⌘⇧M · tray v\(version)")
-    }
-
-    /// Programmatically toggles the MenuBarExtra popover open.
-    ///
-    /// SwiftUI's `MenuBarExtra` doesn't expose a public API for this — the
-    /// only way to open the popover is for the user to click the menu-bar
-    /// icon. Without this workaround the global hotkey could update
-    /// `TrayModel.shared` all it wanted, but with the popover closed the
-    /// user would see nothing happen and conclude the hotkey was broken.
-    ///
-    /// The workaround: SwiftUI manages the menu-bar item via a private
-    /// `NSStatusBarWindow` subclass in `NSApp.windows`. That window has a
-    /// `statusItem` property holding the actual NSStatusItem. Reading it
-    /// via KVC and calling `performClick(nil)` on the button is the
-    /// canonical pattern documented across Apple Developer Forums and the
-    /// MenuBarExtraAccess SPM package. Stable from macOS 13 onward — if a
-    /// future SwiftUI version changes the internals, we degrade gracefully:
-    /// the popover just stops opening from the hotkey and the user can
-    /// still click the icon manually.
-    static func openMenuBarPopover() {
-        for window in NSApp.windows where String(describing: type(of: window)).contains("NSStatusBarWindow") {
-            if let item = window.value(forKey: "statusItem") as? NSStatusItem,
-               let button = item.button {
-                button.performClick(nil)
-                return
-            }
-        }
-        TrayLog.warn("hotkey", "couldn't locate NSStatusBarWindow to open popover")
-    }
 }
 
 @main

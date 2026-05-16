@@ -7,7 +7,7 @@ src/
   Mailvec.Embedder  BackgroundService: SQLite rows -> Ollama embeddings
   Mailvec.Mcp       AspNetCore MCP server (HTTP on :3333, or stdio for MCPB) + /tray/* REST
   Mailvec.Cli       admin commands (status, doctor, search, get, reindex, rebuild-fts, rebuild-bodies, purge-deleted, checkpoint, audit-embeddings, extract-attachments, eval*)
-  Mailvec.Tray      SwiftUI menu-bar app — dashboard, search popover (⌘⇧M), preferences
+  Mailvec.Tray      SwiftUI menu-bar app — dashboard, search popover, preferences
 tests/
   Mailvec.{Core,Indexer,Mcp}.Tests
 schema/

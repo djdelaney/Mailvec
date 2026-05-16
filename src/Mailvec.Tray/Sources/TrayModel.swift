@@ -58,9 +58,6 @@ final class TrayModel: ObservableObject {
     private let recentsKey = "mailvec.recentSearches"
     private let recentsMax = 10
 
-    /// Set true by SearchView's hotkey wiring so the TextField grabs focus.
-    @Published var pendingSearchFocus: Bool = false
-
     private var poller: Task<Void, Never>?
 
     init() {

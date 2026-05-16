@@ -489,25 +489,9 @@ struct DashboardSearchField: View {
             Image(systemName: "magnifyingglass").foregroundStyle(Brand.accent)
             Text(placeholder).foregroundStyle(.secondary)
             Spacer()
-            HStack(spacing: 3) {
-                KbdCap("⌘"); KbdCap("⇧"); KbdCap("M")
-            }
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
         .background(Brand.cardBg, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.hairline))
-    }
-}
-
-struct KbdCap: View {
-    let key: String
-    init(_ key: String) { self.key = key }
-    var body: some View {
-        Text(key)
-            .font(.system(size: 10.5, design: .monospaced))
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .foregroundStyle(.secondary)
-            .background(.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(.black.opacity(0.10)))
     }
 }
