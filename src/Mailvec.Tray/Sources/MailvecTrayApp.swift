@@ -85,11 +85,27 @@ struct MailvecTrayApp: App {
             .environment(\.colorScheme, .light)
             .onAppear {
                 TrayLog.info("popover opened")
-                model.start()
-                registerHotkey()
             }
         } label: {
             MenuBarIcon(severity: model.health?.severity ?? .ok)
+                // Pre-warm at app launch. The menu-bar label is rendered
+                // as soon as the app finishes launching — well before the
+                // user clicks the icon — so .task here fires on cold
+                // start. Doing the prewarm from the popover content's
+                // .onAppear (the prior location) was too late: the user
+                // saw a loading spinner on first open while /tray/status
+                // and /tray/folders made their first round-trip.
+                //
+                // All three calls are idempotent (start()'s poller guard,
+                // loadFolders()'s availableFolders.isEmpty guard,
+                // registerHotkey()'s hotkey==nil guard), so this also
+                // safely re-runs if SwiftUI ever re-attaches the label.
+                .task {
+                    TrayLog.info("prewarm", "starting poller + folder fetch")
+                    model.start()
+                    registerHotkey()
+                    await model.loadFolders()
+                }
         }
         .menuBarExtraStyle(.window)
 

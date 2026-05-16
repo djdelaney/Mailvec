@@ -11,7 +11,6 @@ final class PreferencesModel: ObservableObject {
 
     @AppStorage("fastmailAccountId")   var fastmailAccountId: String = ""
     @AppStorage("fastmailWebUrl")      var fastmailWebUrl: String = "https://app.fastmail.com"
-    @AppStorage("logToolCalls")        var logToolCalls: Bool = false
 
     @Published var system = SystemSnapshot.placeholder
     @Published var loadError: String?
@@ -46,12 +45,11 @@ final class PreferencesModel: ObservableObject {
             "launchAtLogin",
             "notifyEmbedDone", "notifySyncFailures", "notifyOllamaDown",
             "fastmailAccountId", "fastmailWebUrl",
-            "logToolCalls",
             "mailvec.recentSearches",
             // Stale keys from removed prefs — included so a fresh Reset
             // also wipes any leftover values written by older versions.
             "showOnLaunch", "hotkey", "iconStyle", "syncOnWake",
-            "defaultMode", "resultLimit",
+            "defaultMode", "resultLimit", "logToolCalls",
         ]
         keys.forEach { defaults.removeObject(forKey: $0) }
     }
@@ -125,12 +123,18 @@ struct SystemSnapshot: Equatable {
             softDeletedCount: t.softDeletedCount)
     }
 
+    // Shown for the brief window between Preferences-tab open and the
+    // first /tray/system response. Rule: fields that vary per install or
+    // provider (Maildir root, IMAP host/user) get a neutral em-dash;
+    // Mailvec-universal defaults (DB path, Ollama endpoint, model, MCP
+    // bind, mbsyncrc convention) keep their real values so the placeholder
+    // is informative without presuming Fastmail or any particular account.
     static let placeholder = SystemSnapshot(
-        maildirRoot: "~/Mail/Fastmail",
+        maildirRoot: "—",
         mbsyncrcPath: "~/.mbsyncrc",
-        mbsyncSchedule: "5 minutes",
-        imapHost: "imap.fastmail.com",
-        imapUser: "you@fastmail.com",
+        mbsyncSchedule: "—",
+        imapHost: "—",
+        imapUser: "—",
         lastSyncRelative: "loading…",
         lastSyncDetail: "fetching from /tray/system",
         nextSyncRelative: "—",
