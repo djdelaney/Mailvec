@@ -6,8 +6,11 @@ using Mailvec.Core.Logging;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
+using Mailvec.Core.Tray;
+using Mailvec.Mcp.Tray;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 
@@ -76,6 +79,9 @@ static async Task RunHttp(string[] args)
             ? Results.Ok(report)
             : Results.Json(report, statusCode: StatusCodes.Status503ServiceUnavailable);
     });
+    // /tray/* serves the SwiftUI menu-bar app — plain REST, not MCP-framed.
+    // See TrayEndpoints.cs.
+    app.MapTrayEndpoints();
     app.MapMcp();
     await app.RunAsync().ConfigureAwait(false);
 }
@@ -99,6 +105,15 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<AttachmentExtractor>();
     services.AddSingleton<HealthService>();
     services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
+    // Tray-facing services (consumed by the REST /tray/* endpoints).
+    // TrayEventRecorder is a BackgroundService — it samples the DB once a
+    // minute and keeps a 30-bucket ring buffer of embeddings/min.
+    services.AddSingleton<LaunchdInspector>();
+    services.AddSingleton<TrayEventRecorder>();
+    services.AddHostedService(sp => sp.GetRequiredService<TrayEventRecorder>());
+    services.AddSingleton<TrayStatusService>();
+    services.AddSingleton<TraySystemService>();
+    services.AddSingleton<TraySearchService>();
 
     services.AddHttpClient<OllamaClient>((sp, client) =>
     {

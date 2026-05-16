@@ -125,7 +125,16 @@ internal static class DoctorCommand
         // (default `./runtimes/osx-arm64/native/vec0.dylib`); look at it
         // both from CWD and from AppContext.BaseDirectory since either is a
         // valid working dir for a published binary.
-        var vecPath = PathExpansion.Expand(archive.SqliteVecExtensionPath);
+        //
+        // Only expand when the configured path starts with `~` — calling
+        // PathExpansion.Expand on a `./...` value would prematurely
+        // resolve it against the user's CWD via Path.GetFullPath and break
+        // every downstream fallback (Path.Combine short-circuits on
+        // absolute paths). Mirrors ConnectionFactory.ResolveVecExtension.
+        var configuredVecPath = archive.SqliteVecExtensionPath ?? string.Empty;
+        var vecPath = configuredVecPath.StartsWith('~')
+            ? PathExpansion.Expand(configuredVecPath)
+            : configuredVecPath;
         var vecResolved = ResolveExtensionPath(vecPath);
         if (vecResolved is not null)
         {
@@ -509,11 +518,14 @@ internal static class DoctorCommand
 
     private static async Task<DoctorCheck> ProbeMcpHealthAsync(string url, CancellationToken ct)
     {
-        // Short timeout because we'd rather show "unreachable" fast than
-        // hang the whole report on a single dead service. 3s is enough for
-        // a healthy local MCP to respond well under and short enough that
-        // a misconfigured firewall doesn't dominate the user's wait.
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        // 10s timeout. The /health endpoint legitimately takes 4–6s on the
+        // first call after a redeploy: Ollama ping (up to 2s internal cap),
+        // several SQL aggregates against a multi-GB archive, and .NET JIT
+        // for the endpoint code path on cold start. A 3s ceiling was
+        // flagging every post-redeploy doctor run as "no response" even
+        // though the server was healthy — see the comment trail in
+        // CLAUDE.md → "MCP API stability" if you're tempted to shrink it.
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         try
         {
             var response = await http.GetAsync(url, ct).ConfigureAwait(false);
@@ -536,7 +548,7 @@ internal static class DoctorCommand
         }
         catch (TaskCanceledException)
         {
-            return DoctorCheck.Warn("MCP /health", $"no response within 3s ({url}).", "mcp");
+            return DoctorCheck.Warn("MCP /health", $"no response within 10s ({url}).", "mcp");
         }
     }
 
