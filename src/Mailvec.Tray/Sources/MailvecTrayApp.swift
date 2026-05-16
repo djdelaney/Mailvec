@@ -90,13 +90,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hk.keyDownHandler = {
             TrayLog.debug("hotkey fired", "⌘⇧M")
             DispatchQueue.main.async {
+                // Switch the popover pane to search BEFORE opening — the
+                // popover reads model.pane in its body, so by the time
+                // SwiftUI mounts the content the SearchView is already
+                // selected. pendingSearchFocus handles the case where the
+                // popover is already open and the user re-fires ⌘⇧M to
+                // re-focus the text field.
                 TrayModel.shared.pane = .search
                 TrayModel.shared.pendingSearchFocus = true
+                AppDelegate.openMenuBarPopover()
             }
         }
         hotkey = hk
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         TrayLog.info("hotkey registered", "⌘⇧M · tray v\(version)")
+    }
+
+    /// Programmatically toggles the MenuBarExtra popover open.
+    ///
+    /// SwiftUI's `MenuBarExtra` doesn't expose a public API for this — the
+    /// only way to open the popover is for the user to click the menu-bar
+    /// icon. Without this workaround the global hotkey could update
+    /// `TrayModel.shared` all it wanted, but with the popover closed the
+    /// user would see nothing happen and conclude the hotkey was broken.
+    ///
+    /// The workaround: SwiftUI manages the menu-bar item via a private
+    /// `NSStatusBarWindow` subclass in `NSApp.windows`. That window has a
+    /// `statusItem` property holding the actual NSStatusItem. Reading it
+    /// via KVC and calling `performClick(nil)` on the button is the
+    /// canonical pattern documented across Apple Developer Forums and the
+    /// MenuBarExtraAccess SPM package. Stable from macOS 13 onward — if a
+    /// future SwiftUI version changes the internals, we degrade gracefully:
+    /// the popover just stops opening from the hotkey and the user can
+    /// still click the icon manually.
+    static func openMenuBarPopover() {
+        for window in NSApp.windows where String(describing: type(of: window)).contains("NSStatusBarWindow") {
+            if let item = window.value(forKey: "statusItem") as? NSStatusItem,
+               let button = item.button {
+                button.performClick(nil)
+                return
+            }
+        }
+        TrayLog.warn("hotkey", "couldn't locate NSStatusBarWindow to open popover")
     }
 }
 
