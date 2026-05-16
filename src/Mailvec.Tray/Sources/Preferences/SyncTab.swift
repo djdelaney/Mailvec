@@ -40,12 +40,10 @@ struct SyncTab: View {
 
             Section {
                 LabeledContent("Maildir root") {
-                    // allowChoose=false until we wire path-rewriting through
-                    // the indexer plist. Read-only display + reveal in Finder.
-                    PathField(path: prefs.system.maildirRoot, allowChoose: false)
+                    PathField(path: prefs.system.maildirRoot)
                 }
                 LabeledContent("mbsync config") {
-                    PathField(path: prefs.system.mbsyncrcPath, allowChoose: false)
+                    PathField(path: prefs.system.mbsyncrcPath)
                 }
             } header: { Text("Local files") } footer: {
                 RowHint(text: "Paths set at install time via ops/install.sh. Re-run the installer to change them.")

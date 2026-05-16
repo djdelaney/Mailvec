@@ -18,7 +18,7 @@ struct CoverageRing: View {
                 Text(progress, format: .percent.precision(.fractionLength(0)))
                     .font(.system(size: 16, weight: .bold)).monospacedDigit()
                     .kerning(-0.4)
-                Text("INDEXED")
+                Text("EMBEDDED")
                     .font(.system(size: 9, weight: .semibold)).tracking(0.5)
                     .foregroundStyle(.white.opacity(0.55))
             }

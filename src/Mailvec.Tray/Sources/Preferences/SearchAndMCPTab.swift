@@ -34,30 +34,13 @@ struct SearchAndMCPTab: View {
 
             Section {
                 LabeledContent("HTTP transport") {
-                    HStack(spacing: 6) {
-                        StatusBadge(tone: prefs.system.mcpHttpEnabled ? .ok : .error,
-                                    label: prefs.system.mcpHttpEnabled ? "running" : "stopped")
-                        Toggle("", isOn: .constant(prefs.system.mcpHttpEnabled))
-                            .labelsHidden()
-                            .disabled(true)
-                            .help("Managed by the launchd agent com.mailvec.mcp. Use ops/stop.sh / ops/redeploy.sh to control it.")
-                    }
+                    StatusBadge(tone: prefs.system.mcpHttpEnabled ? .ok : .error,
+                                label: prefs.system.mcpHttpEnabled ? "running" : "stopped")
                 }
                 LabeledContent("Bind address") {
-                    HStack(spacing: 6) {
-                        TextField("", text: .constant(prefs.system.mcpBindAddress))
-                            .font(.system(size: 12, design: .monospaced))
-                            .frame(width: 120)
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(true)
-                        Text(":").foregroundStyle(.secondary)
-                        TextField("", value: .constant(prefs.system.mcpPort),
-                                  format: .number.grouping(.never))
-                            .font(.system(size: 12, design: .monospaced))
-                            .frame(width: 60)
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(true)
-                    }
+                    Text("\(prefs.system.mcpBindAddress):\(prefs.system.mcpPort)")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
                 LabeledContent("Claude Desktop bundle") {
                     HStack(spacing: 6) {
@@ -83,17 +66,13 @@ struct SearchAndMCPTab: View {
                         }.controlSize(.small)
                     }
                 }
-                Toggle("Log tool calls", isOn: $prefs.logToolCalls)
-                    .disabled(true)
-                    .help("Configured via Mcp:LogToolCalls in appsettings.json.")
             } header: { Text("MCP server") } footer: {
-                RowHint(text: "Bind address and port live in the MCP server's appsettings.json. Default 127.0.0.1:3333 is the trust boundary.")
+                RowHint(text: "Transport, bind address, and port are managed by the launchd agent com.mailvec.mcp. To change them, edit src/Mailvec.Mcp/appsettings.json and run ops/redeploy.sh mcp. Default 127.0.0.1:3333 is the trust boundary.")
             }
 
             Section {
                 LabeledContent("Download directory") {
-                    PathField(path: prefs.system.attachmentDownloadDir,
-                              allowChoose: false)
+                    PathField(path: prefs.system.attachmentDownloadDir)
                 }
             } header: { Text("Attachments") } footer: {
                 RowHint(text: "Where get_attachment extracts files. Configured via Mcp:AttachmentDownloadDir in appsettings.json.")
