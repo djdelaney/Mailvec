@@ -20,11 +20,23 @@ enum CliRunner {
     /// Opens Terminal and runs `mailvec <args>` interactively. Best UX for
     /// long-running destructive operations (Reindex / Rebuild FTS5) where
     /// the user wants to see progress and confirm completion.
+    ///
+    /// `do script` alone leaves Terminal wherever it was in the window
+    /// stack — for menu-bar accessory apps that means the spawned window
+    /// often opens *behind* whatever the user was focused on, and the
+    /// destructive-action workflow silently appears to do nothing. The
+    /// explicit `activate` brings Terminal forward; tested with Terminal
+    /// already running, not running, and with multiple windows open.
     static func runInTerminal(_ args: [String]) {
         let cmd = ([resolvedBinary()] + args)
             .map { "\"\($0.replacingOccurrences(of: "\"", with: "\\\""))\"" }
             .joined(separator: " ")
-        let script = "tell application \"Terminal\" to do script \(asAppleScriptString(cmd))"
+        let script = """
+        tell application "Terminal"
+            do script \(asAppleScriptString(cmd))
+            activate
+        end tell
+        """
         var err: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&err)
         if let err {
