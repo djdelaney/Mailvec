@@ -13,13 +13,14 @@ struct SearchAndMCPTab: View {
             // single query. Result-limit is hardcoded to 20 in TrayModel
             // — anything larger crowded the popover and anything smaller
             // hid relevant hits.
-            // Only surface the Fastmail-specific webmail-link config when
-            // the user is actually on Fastmail. Detection happens from
-            // /tray/system's imapHost — see WebmailProvider.detect. For
-            // any other IMAP host (or before /tray/system has loaded), we
-            // hide the section entirely rather than ask the user to
+            // Only surface the provider-specific webmail-link config when
+            // the user is actually on that provider. Detection happens
+            // from /tray/system's imapHost — see WebmailProvider.detect.
+            // For unrecognised IMAP hosts (or before /tray/system has
+            // loaded), we hide both sections rather than ask the user to
             // configure settings that don't apply.
-            if WebmailProvider.detect(imapHost: prefs.system.imapHost) == .fastmail {
+            let provider = WebmailProvider.detect(imapHost: prefs.system.imapHost)
+            if provider == .fastmail {
                 Section {
                     LabeledContent("Account ID") {
                         TextField("", text: $prefs.fastmailAccountId,
@@ -37,6 +38,18 @@ struct SearchAndMCPTab: View {
                     }
                 } header: { Text("Fastmail webmail links") } footer: {
                     RowHint(text: "The tray builds Open-in-Fastmail links client-side from these. Account ID is the ?u=… query param visible on any URL at app.fastmail.com — optional, but without it Fastmail redirects to your default account on first open.")
+                }
+            } else if provider == .gmail {
+                Section {
+                    LabeledContent("Account index") {
+                        TextField("", text: $prefs.gmailAccountIndex,
+                                  prompt: Text("0"))
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(width: 60)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                } header: { Text("Gmail webmail links") } footer: {
+                    RowHint(text: "The tray opens Gmail's `rfc822msgid:` search to deep-link a message. If you have multiple Google accounts logged in simultaneously, Gmail indexes them by position — primary is 0, the next is 1, etc. Visible in any mail.google.com/mail/u/N/… URL.")
                 }
             }
 
