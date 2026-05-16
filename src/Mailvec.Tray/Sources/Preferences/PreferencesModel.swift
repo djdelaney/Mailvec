@@ -11,6 +11,7 @@ final class PreferencesModel: ObservableObject {
 
     @AppStorage("fastmailAccountId")   var fastmailAccountId: String = ""
     @AppStorage("fastmailWebUrl")      var fastmailWebUrl: String = "https://app.fastmail.com"
+    @AppStorage("gmailAccountIndex")   var gmailAccountIndex: String = "0"
 
     @Published var system = SystemSnapshot.placeholder
     @Published var loadError: String?
@@ -39,17 +40,22 @@ final class PreferencesModel: ObservableObject {
 
     /// Wipes every UserDefaults key the tray app owns. The Mailvec archive
     /// + embeddings are not touched. Called by AdvancedTab's danger-zone.
+    ///
+    /// Keep this list in sync with the actual @AppStorage / UserDefaults
+    /// keys the tray reads — if you add a new persisted preference,
+    /// remember to add it here too or "Reset" silently leaves it behind.
     func resetAllSettings() {
         let defaults = UserDefaults.standard
         let keys = [
+            // Preferences
             "launchAtLogin",
             "notifyEmbedDone", "notifySyncFailures", "notifyOllamaDown",
             "fastmailAccountId", "fastmailWebUrl",
+            "gmailAccountIndex",
+            // Search popover state (TrayModel)
             "mailvec.recentSearches",
-            // Stale keys from removed prefs — included so a fresh Reset
-            // also wipes any leftover values written by older versions.
-            "showOnLaunch", "hotkey", "iconStyle", "syncOnWake",
-            "defaultMode", "resultLimit", "logToolCalls",
+            "mailvec.dateRange",
+            "mailvec.folderFilter",
         ]
         keys.forEach { defaults.removeObject(forKey: $0) }
     }

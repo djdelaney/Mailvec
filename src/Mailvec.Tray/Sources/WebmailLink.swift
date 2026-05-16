@@ -17,12 +17,15 @@ import Foundation
 
 enum WebmailProvider: Equatable {
     case fastmail
+    case gmail
     case unknown
 
-    /// Map an IMAP host to a webmail provider. Case-insensitive. The
-    /// Fastmail check covers both their current `imap.fastmail.com` and
-    /// the legacy `imap.messagingengine.com` host that older accounts
-    /// still resolve to.
+    /// Map an IMAP host to a webmail provider. Case-insensitive.
+    /// - Fastmail check covers both their current `imap.fastmail.com`
+    ///   and the legacy `imap.messagingengine.com` host that older
+    ///   accounts still resolve to.
+    /// - Gmail check matches `imap.gmail.com` (the standard endpoint for
+    ///   both gmail.com personal accounts and Google Workspace tenants).
     static func detect(imapHost: String?) -> WebmailProvider {
         guard let host = imapHost?.lowercased(), !host.isEmpty, host != "—" else {
             return .unknown
@@ -30,15 +33,19 @@ enum WebmailProvider: Equatable {
         if host.contains("fastmail.com") || host.contains("messagingengine.com") {
             return .fastmail
         }
+        if host.contains("gmail.com") || host.contains("googlemail.com") {
+            return .gmail
+        }
         return .unknown
     }
 
     /// User-facing label used in button titles ("Open in Fastmail",
-    /// "↩ Open in Fastmail"). nil for unknown providers — callers hide
-    /// the affordance entirely rather than showing "Open in (unknown)".
+    /// "↩ Open in Gmail"). nil for unknown providers — callers hide the
+    /// affordance entirely rather than showing "Open in (unknown)".
     var displayName: String? {
         switch self {
         case .fastmail: return "Fastmail"
+        case .gmail:    return "Gmail"
         case .unknown:  return nil
         }
     }
@@ -52,6 +59,7 @@ enum WebmailLink {
         guard !messageId.isEmpty else { return nil }
         switch provider {
         case .fastmail: return fastmailURL(messageId: messageId)
+        case .gmail:    return gmailURL(messageId: messageId)
         case .unknown:  return nil
         }
     }
@@ -79,6 +87,23 @@ enum WebmailLink {
             components += "?u=\(encId)"
         }
         return URL(string: components)
+    }
+
+    /// Construct a `mail.google.com/mail/u/<N>/#search/rfc822msgid:<id>` URL.
+    /// Gmail indexes simultaneously-logged-in accounts by position; the
+    /// `u/N` segment picks which one. Pulled from @AppStorage; defaults
+    /// to 0 (primary). The angle brackets on RFC Message-IDs (e.g.
+    /// `<abc@example.com>`) are stripped before encoding — Gmail's search
+    /// parser doesn't recognise the bracketed form.
+    private static func gmailURL(messageId: String) -> URL? {
+        var id = messageId
+        if id.hasPrefix("<") { id.removeFirst() }
+        if id.hasSuffix(">") { id.removeLast() }
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let rawIdx = (UserDefaults.standard.string(forKey: "gmailAccountIndex") ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        let idx = Int(rawIdx) ?? 0
+        return URL(string: "https://mail.google.com/mail/u/\(idx)/#search/rfc822msgid:\(encoded)")
     }
 }
 
