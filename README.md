@@ -7,7 +7,7 @@ Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server wo
 <table>
   <tr>
     <td align="center"><img src="assets/screenshots/tray-dashboard.png" alt="Tray dashboard" width="320"/><br/><em>Tray dashboard</em></td>
-    <td align="center"><img src="assets/screenshots/search-popover.png" alt="Search popover" width="320"/><br/><em>⌘⇧M search popover</em></td>
+    <td align="center"><img src="assets/screenshots/search-popover.png" alt="Search popover" width="320"/><br/><em>Inline search popover</em></td>
     <td align="center"><img src="assets/screenshots/claude-desktop-answer.png" alt="Claude Desktop answering from the archive" width="320"/><br/><em>Claude Desktop using Mailvec</em></td>
   </tr>
 </table>
@@ -16,7 +16,7 @@ Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server wo
 
 - **A local searchable archive** of your IMAP account on disk — keyword (FTS5/BM25), semantic (sqlite-vec, mxbai-embed-large), and hybrid (RRF fusion) search.
 - **An MCP server** Claude Desktop, Claude Code, and other local agents can call to search your mail, fetch threads, and extract attachments.
-- **A menu-bar app** for live status, ⌘⇧M global-hotkey search, and one-click ops tasks. Optional — the whole pipeline works headless.
+- **A menu-bar app** for live status, inline search, and one-click ops tasks. Optional — the whole pipeline works headless.
 
 ## Architecture
 

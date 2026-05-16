@@ -44,11 +44,6 @@ settings:
     # for the .app, and the Notification permissions prompt shows it.
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
-packages:
-  HotKey:
-    url: https://github.com/soffes/HotKey
-    from: "0.2.0"
-
 targets:
   Mailvec.Tray:
     type: application
@@ -60,8 +55,6 @@ targets:
       # input, not a copy-resource). `resources:` was missing it on the
       # initial xcodegen pass because the directory was empty at the time.
       - path: Resources/Assets.xcassets
-    dependencies:
-      - package: HotKey
     info:
       path: Info.plist
       properties:
