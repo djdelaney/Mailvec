@@ -28,7 +28,12 @@ public sealed class GetThreadTool(
         "Fetch all messages in a thread (chronological, oldest first). " +
         "Pass either `id` or `messageId` for any message that's part of the thread; the tool will resolve the thread via thread_id. " +
         "Default returns subject/from/date/snippet for each message — set includeBodies=true to include full body text " +
-        "(token-heavy on long threads, so prefer the default and follow up with get_email on specific messages).")]
+        "(token-heavy on long threads, so prefer the default and follow up with get_email on specific messages). " +
+        "Each entry includes a `webmailUrl` field (populated when the user has configured their webmail account id) — " +
+        "a deep-link straight to that specific message in their webmail. When you cite or quote a specific message from " +
+        "the thread in your response, render its `webmailUrl` as a clickable Markdown link (e.g. `[subject](webmailUrl)`) " +
+        "so the user can one-click through to read the original. Skip the link only when `webmailUrl` is null or when the " +
+        "user has explicitly asked for terse output.")]
     public GetThreadResponse GetThread(
         [Description("Internal SQLite id of any message in the thread. Mutually exclusive with messageId.")]
         long? id = null,

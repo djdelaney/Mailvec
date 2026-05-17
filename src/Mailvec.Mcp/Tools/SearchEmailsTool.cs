@@ -45,7 +45,12 @@ public sealed class SearchEmailsTool(
         "Each result carries the internal id, RFC message_id, folder, sender, date, snippet, and (for ranked queries) score breakdown. " +
         "When a match was driven by content inside a PDF/DOCX/text attachment rather than the email body, the result includes " +
         "`matchedAttachment` with the attachment's partIndex and filename — use those with `get_attachment` to retrieve the " +
-        "document. Use a result's id or messageId with get_email/get_thread for follow-up.")]
+        "document. Use a result's id or messageId with get_email/get_thread for follow-up. " +
+        "Each result also includes a `webmailUrl` field (populated when the user has configured their webmail account id) — " +
+        "a deep-link straight to that specific message in their webmail. When you cite or quote a specific message in your " +
+        "response to the user, render its `webmailUrl` as a clickable Markdown link (e.g. `[subject](webmailUrl)`) so the " +
+        "user can one-click through to read the original. Skip the link only when `webmailUrl` is null or when the user has " +
+        "explicitly asked for terse output.")]
     public async Task<SearchEmailsResponse> SearchEmails(
         [Description("Optional free-text query. With it, results are ranked by relevance; without it, by date descending. " +
                      "For mode=keyword this is an FTS5 expression (phrase quotes, AND/OR/NOT). For mode=semantic/hybrid it's natural language. " +
