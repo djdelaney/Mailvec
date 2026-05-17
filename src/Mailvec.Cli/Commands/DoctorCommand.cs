@@ -246,6 +246,12 @@ internal static class DoctorCommand
                 "tools"));
         }
 
+        // mbsync exits 0 even when its sync fails (channel lock, DNS,
+        // socket errors), so the launchctl-reported exit code above is
+        // not enough on its own. Tail the stderr log and surface anything
+        // recent here — same source the tray's mbsync tile reads from.
+        checks.Add(InspectMbsyncStderr());
+
         // ---------------------------------------------------------------
         // MCP HTTP /health — confirms the launchd agent is actually serving
         // ---------------------------------------------------------------
@@ -484,6 +490,40 @@ internal static class DoctorCommand
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Reports the most recent error written to
+    /// <c>~/Library/Logs/Mailvec/mailvec-mbsync.err.log</c>, if any fall
+    /// inside the freshness window. Uses the same MbsyncErrorTail the
+    /// tray reads from so the doctor checklist and the tray's mbsync tile
+    /// can't disagree about what's wrong.
+    /// </summary>
+    private static DoctorCheck InspectMbsyncStderr()
+    {
+        var err = new Mailvec.Core.Tray.MbsyncErrorTail().CheckRecent();
+        if (err is null)
+        {
+            return DoctorCheck.Ok("mbsync stderr", "no recent errors", "services");
+        }
+
+        var hint = err.Kind switch
+        {
+            Mailvec.Core.Tray.MbsyncErrorKind.Locked  => " Remove the stale .mbsyncstate.lock and kickstart com.mailvec.mbsync.",
+            Mailvec.Core.Tray.MbsyncErrorKind.Dns     => " Check network connectivity / DNS — usually transient.",
+            Mailvec.Core.Tray.MbsyncErrorKind.Network => " Usually transient; will retry on next schedule.",
+            Mailvec.Core.Tray.MbsyncErrorKind.Auth    => " Rotate the Fastmail / IMAP app password and update the keychain entry.",
+            _                                          => string.Empty,
+        };
+        var detail = $"recent error: {Truncate(err.Message, 120)}.{hint} Full log: ~/Library/Logs/Mailvec/mailvec-mbsync.err.log";
+
+        // Lock is escalated because every subsequent scheduled run will
+        // also fail until the lock is cleared. The rest are usually
+        // transient — flag them so they're visible but don't fail the
+        // overall check.
+        return err.Kind == Mailvec.Core.Tray.MbsyncErrorKind.Locked
+            ? DoctorCheck.Fail("mbsync stderr", detail, "services")
+            : DoctorCheck.Warn("mbsync stderr", detail, "services");
     }
 
     private static DoctorCheck InspectLaunchd(string label, IReadOnlyDictionary<string, LaunchctlEntry>? listing)
