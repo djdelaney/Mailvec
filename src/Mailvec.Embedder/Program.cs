@@ -10,6 +10,8 @@ using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Extensions.Options;
 
 var builder = Host.CreateApplicationBuilder(args);
+// Single source of truth for DB / Ollama config. See SharedConfig.
+builder.Configuration.AddMailvecSharedConfig();
 SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "embedder");
 
 builder.Services.Configure<ArchiveOptions>(builder.Configuration.GetSection(ArchiveOptions.SectionName));

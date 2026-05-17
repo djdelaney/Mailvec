@@ -6,22 +6,31 @@ Search and get-email tool results can include a `webmailUrl` that opens the mess
 
 Section `Fastmail` — bound by the MCP server and CLI:
 
-- `Fastmail:AccountId` (env: `Fastmail__AccountId`) — JMAP account id, format `u` followed by 8 hex chars. Find yours by logging into <https://app.fastmail.com> and copying the `?u=...` query param off any URL in the address bar.
-- `Fastmail:WebUrl` (env: `Fastmail__WebUrl`) — defaults to `https://app.fastmail.com`. Override only for self-hosted Fastmail-API-compatible deployments.
+- `Fastmail:AccountId` — JMAP account id, format `u` followed by 8 hex chars. Find yours by logging into <https://app.fastmail.com> and copying the `?u=...` query param off any URL in the address bar.
+- `Fastmail:WebUrl` — defaults to `https://app.fastmail.com`. Override only for self-hosted Fastmail-API-compatible deployments.
 
-## Enabling for the CLI / HTTP MCP server
+## Where to set it
 
-Drop the value into `appsettings.Local.json` next to the executable, or export the env var:
+Single source of truth for every Mailvec binary (launchd-installed services, CLI, and the MCPB-bundled MCP that Claude Desktop runs):
 
-```sh
-export Fastmail__AccountId=u1234abcd
-dotnet run --project src/Mailvec.Mcp           # HTTP transport
-dotnet run --project src/Mailvec.Cli -- search "ramen"
+```
+~/Library/Application Support/Mailvec/appsettings.Local.json
 ```
 
-## Enabling for the Claude Desktop MCPB bundle
+`ops/install.sh` writes this file as part of the installer flow — it prompts you for the account id during install and re-uses any value it finds already there or in a legacy plist on reinstall. To change it later, edit the file directly:
 
-The install dialog has a **Fastmail account id (optional)** field — paste your `u…` id and you're done. Leaving it blank disables webmail links, which is the default. The value persists across future `--bump` upgrades as long as you toggle the extension off (vs uninstall) before re-installing. To change it later: Settings → Extensions → Mailvec → Configure.
+```jsonc
+{
+  "Archive":  { "DatabasePath": "~/Library/Application Support/Mailvec/archive.sqlite" },
+  "Ingest":   { "MaildirRoot":  "~/Mail/Fastmail" },
+  "Ollama":   { "BaseUrl":      "http://localhost:11434" },
+  "Fastmail": { "AccountId":    "u1234abcd" }
+}
+```
+
+then restart the affected services (`ops/redeploy.sh mcp` or `launchctl kickstart -k gui/$(id -u)/com.mailvec.mcp`). Claude Desktop's bundled MCP picks up the change on its next launch.
+
+Env vars still win as a one-off override (`Fastmail__AccountId=u1234abcd dotnet run --project src/Mailvec.Cli -- search ramen`), useful for development without editing the shared file.
 
 ## Future upgrade path
 
