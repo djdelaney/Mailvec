@@ -11,7 +11,9 @@
 #
 #   command:  ~/.local/bin/mailvec-mcp-stdio
 #   args:     [] (the launcher already passes --stdio)
-#   env:      Archive__DatabasePath=..., Ingest__MaildirRoot=..., Ollama__BaseUrl=...
+#   env:      (none required — user config comes from
+#             ~/Library/Application Support/Mailvec/appsettings.Local.json,
+#             written by ops/install.sh and read by every Mailvec binary)
 #
 # This script:
 #   1. Publishes Mailvec.Mcp framework-dependent to ~/.local/share/mailvec/mcp/
@@ -56,10 +58,11 @@ cat > "$LAUNCHER_PATH" <<'LAUNCHER'
 #   • Stdout is the JSON-RPC channel — never write to it from this script.
 #   • All diagnostic output goes to stderr; the client may capture it to its
 #     own log (Claude Desktop: ~/Library/Logs/Claude/mcp-server-mailvec.log).
-#   • Env vars passed by the spawning client win; this script only sets
-#     defaults for vars the client didn't supply. So an agent that hard-codes
-#     Archive__DatabasePath in its config gets that path; one that doesn't
-#     falls back to the default we bake in here.
+#   • User config (DB / Maildir / Ollama / Fastmail) is read from the
+#     shared ~/Library/Application Support/Mailvec/appsettings.Local.json
+#     written by ops/install.sh — same file the launchd-installed services
+#     and the CLI use. An agent that hard-codes its own env vars still wins
+#     (env > shared file in the precedence chain).
 #
 # Smoke test (paste into a terminal):
 #   ~/.local/bin/mailvec-mcp-stdio </dev/null
@@ -77,15 +80,12 @@ set -euo pipefail
 export DOTNET_ROOT="${DOTNET_ROOT:-/usr/local/share/dotnet}"
 export PATH="$DOTNET_ROOT:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
-# Sensible config defaults for clients that don't override. The server reads
-# Archive__DatabasePath / Ingest__MaildirRoot / Ollama__BaseUrl from env first
-# (via Microsoft.Extensions.Configuration), falling back to appsettings.json
-# next to the binary. Setting these here means a barebones client config
-# (just the launcher path) still works against the standard install layout.
-: "${Archive__DatabasePath:=$HOME/Library/Application Support/Mailvec/archive.sqlite}"
-: "${Ingest__MaildirRoot:=$HOME/Mail/Fastmail}"
-: "${Ollama__BaseUrl:=http://localhost:11434}"
-export Archive__DatabasePath Ingest__MaildirRoot Ollama__BaseUrl
+# User config (DB path, Maildir, Ollama URL, Fastmail account id) is read
+# from ~/Library/Application Support/Mailvec/appsettings.Local.json by the
+# binary itself — no env-var defaults here. ops/install.sh writes that file
+# (run it once and the values apply to every Mailvec binary, including this
+# launcher's target). Clients that want to override anything can still set
+# env vars in their MCP config; env vars win over the shared file.
 
 PUBLISH_DIR="$HOME/.local/share/mailvec/mcp"
 DLL="$PUBLISH_DIR/Mailvec.Mcp.dll"

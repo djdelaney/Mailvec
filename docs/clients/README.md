@@ -13,7 +13,7 @@ Pick the transport your agent supports, then follow the per-client snippet below
 ops/install-stdio-launcher.sh
 ```
 
-This publishes `~/.local/share/mailvec/mcp/Mailvec.Mcp.dll` and writes a launcher at `~/.local/bin/mailvec-mcp-stdio`. The launcher bakes in the env workarounds (sanitized PATH, missing `DOTNET_ROOT`) that bite when an agent spawns it as a child, and applies sensible defaults for `Archive__DatabasePath` / `Ingest__MaildirRoot` / `Ollama__BaseUrl` if the agent doesn't override them.
+This publishes `~/.local/share/mailvec/mcp/Mailvec.Mcp.dll` and writes a launcher at `~/.local/bin/mailvec-mcp-stdio`. The launcher bakes in the env workarounds (sanitized PATH, missing `DOTNET_ROOT`) that bite when an agent spawns it as a child. User config (DB path, Maildir root, Ollama URL, Fastmail account id) comes from the shared `~/Library/Application Support/Mailvec/appsettings.Local.json` written by `ops/install.sh` — the launcher doesn't set those env vars itself, so a client doesn't need to either.
 
 Smoke-test it before pasting the path into a config:
 

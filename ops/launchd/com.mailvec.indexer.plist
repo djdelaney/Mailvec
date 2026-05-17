@@ -11,19 +11,17 @@
     </array>
     <key>WorkingDirectory</key>
     <string>__INSTALL_PREFIX__</string>
-    <!-- Archive__DatabasePath and Ingest__MaildirRoot are surfaced as env vars
-         (rather than left to the published appsettings.json) so a config
-         change after install is a plist edit + reload, not a republish. -->
+    <!-- Settings that vary per install (DB path, Maildir root, Ollama URL,
+         Fastmail account id) live in the shared file at
+         ~/Library/Application Support/Mailvec/appsettings.Local.json — the
+         single source of truth read by every Mailvec binary. ops/install.sh
+         writes it. Only env vars genuinely launchd-specific stay here. -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>MAILVEC_LAUNCHD</key>
         <string>1</string>
         <key>MAILVEC_LOG_DIR</key>
         <string>__LOG_DIR__</string>
-        <key>Archive__DatabasePath</key>
-        <string>__DB_PATH__</string>
-        <key>Ingest__MaildirRoot</key>
-        <string>__MAILDIR_ROOT__</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
