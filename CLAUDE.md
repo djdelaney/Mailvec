@@ -77,6 +77,8 @@ Project map:
 
 Each runnable service has its own `appsettings.json` containing only the sections it needs. Configuration POCOs live in `Mailvec.Core/Options/` and are bound in each service's `Program.cs`. Local overrides go in `appsettings.Local.json` (gitignored).
 
+**Single source of truth for user-specific settings** lives at `~/Library/Application Support/Mailvec/appsettings.Local.json`, written by `ops/install.sh` and read by every Mailvec binary via `SharedConfig.AddMailvecSharedConfig()` ([SharedConfig.cs](src/Mailvec.Core/Options/SharedConfig.cs)). Holds the four settings that used to be duplicated across the launchd plist's `EnvironmentVariables` and the MCPB manifest's `user_config`: `Archive:DatabasePath`, `Ingest:MaildirRoot`, `Ollama:BaseUrl`, `Fastmail:AccountId`. **Precedence**: per-binary appsettings → shared file → env vars (highest). Env-var wins means the MCPB bundle's `Mcp__LogToolCalls` (passed in by Claude Desktop's user_config UI) still overrides, and a developer can one-off `Ingest__MaildirRoot=...` in their shell for testing without editing the file.
+
 `ArchiveOptions` (`DatabasePath`, `SqliteVecExtensionPath`) is bound by all four executables (consumed by `ConnectionFactory`). `IngestOptions` (`MaildirRoot`) is bound by the Indexer (scans the Maildir), the CLI (prints the path in `mailvec status`), and the MCP server (`get_attachment` reads attachment bytes out of Maildir source files). The Embedder is the only executable that never reads the filesystem.
 
 Both indexer and CLI read environment variables with no prefix, so `Ingest__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.

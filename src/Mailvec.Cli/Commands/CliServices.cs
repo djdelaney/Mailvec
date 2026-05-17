@@ -21,6 +21,11 @@ internal static class CliServices
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: false)
             .AddJsonFile("appsettings.Local.json", optional: true)
+            // Shared file sits between binary-local config and env vars so
+            // ops/install.sh has a single place to write user-specific
+            // values (DB path, Maildir, Ollama URL, Fastmail account id)
+            // and env vars still win for ad-hoc overrides. See SharedConfig.
+            .AddMailvecSharedConfig()
             .AddEnvironmentVariables()
             .Build();
 

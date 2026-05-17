@@ -17,9 +17,12 @@
 # - Per-service publish dirs (indexer/, embedder/, mcp/) keep the published
 #   deps for each project from stomping each other. publish-mcp-stdio.sh
 #   uses the same mcp/ subdir.
-# - Three config knobs (maildir, db path, ollama url) are surfaced as plist
-#   env vars rather than baked into appsettings.json so changing them later
-#   is a plist edit + reload, not a republish.
+# - User config (DB path, Maildir root, Ollama URL, Fastmail account id)
+#   lives in a single shared file at
+#   ~/Library/Application Support/Mailvec/appsettings.Local.json. Both the
+#   launchd-installed services AND the MCPB-bundled MCP read from it. On
+#   reinstall we migrate values out of any pre-existing launchd plist so
+#   no one re-enters the same settings in two places.
 set -euo pipefail
 
 trap 'echo "install.sh: failed at line $LINENO" >&2' ERR
@@ -62,6 +65,45 @@ prompt_with_default() {
     read -r -p "$message [$default]: " reply
     reply="${reply:-$default}"
     printf -v "$var" '%s' "$reply"
+}
+
+# Read a value from the shared appsettings file if it exists.
+# Args: <Section> <Key>. Prints the value or empty string.
+read_shared_config() {
+    local section="$1" key="$2"
+    local path="$HOME/Library/Application Support/Mailvec/appsettings.Local.json"
+    [[ -f "$path" ]] || return 0
+    python3 - "$path" "$section" "$key" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+    val = data.get(sys.argv[2], {}).get(sys.argv[3], "")
+    print(val)
+except Exception:
+    pass
+PY
+}
+
+# Read an env-var value from an existing launchd plist's EnvironmentVariables
+# dict. Used to migrate forward from the pre-shared-config layout where these
+# keys lived in the plist. Args: <plist-name> <env-var-name>.
+read_plist_env() {
+    local plist="$LAUNCH_AGENTS/$1.plist" var="$2"
+    [[ -f "$plist" ]] || return 0
+    /usr/bin/plutil -extract "EnvironmentVariables.$var" raw -o - "$plist" 2>/dev/null || true
+}
+
+# Resolve the default for a prompt by trying (in order): shared file, legacy
+# plist, then the hard-coded fallback. Args: <Section> <Key> <plist-name>
+# <plist-env-var> <hardcoded-default>.
+detect_default() {
+    local v
+    v="$(read_shared_config "$1" "$2")"
+    [[ -n "$v" ]] && { printf '%s' "$v"; return; }
+    v="$(read_plist_env "$3" "$4")"
+    [[ -n "$v" ]] && { printf '%s' "$v"; return; }
+    printf '%s' "$5"
 }
 
 bootout_label() {
@@ -142,11 +184,20 @@ echo "================="
 echo "Press Enter to accept defaults."
 echo
 
-prompt_with_default "Maildir root" "$HOME/Mail/Fastmail" MAILDIR_ROOT
-prompt_with_default "Database path" "$HOME/Library/Application Support/Mailvec/archive.sqlite" DB_PATH
-prompt_with_default "Ollama base URL" "http://localhost:11434" OLLAMA_URL
+# Defaults are detected in priority order: shared file → legacy plist env var → hard-coded.
+# This means reinstalling on a machine that already has the values configured
+# (either via the new shared file or the older per-plist env vars) doesn't make
+# you re-type them — hit Enter to accept what we found.
+DEFAULT_MAILDIR="$(detect_default Ingest MaildirRoot com.mailvec.indexer Ingest__MaildirRoot "$HOME/Mail/Fastmail")"
+DEFAULT_DB="$(detect_default Archive DatabasePath com.mailvec.indexer Archive__DatabasePath "$HOME/Library/Application Support/Mailvec/archive.sqlite")"
+DEFAULT_OLLAMA="$(detect_default Ollama BaseUrl com.mailvec.embedder Ollama__BaseUrl "http://localhost:11434")"
+DEFAULT_FASTMAIL="$(detect_default Fastmail AccountId com.mailvec.mcp Fastmail__AccountId "")"
+
+prompt_with_default "Maildir root" "$DEFAULT_MAILDIR" MAILDIR_ROOT
+prompt_with_default "Database path" "$DEFAULT_DB" DB_PATH
+prompt_with_default "Ollama base URL" "$DEFAULT_OLLAMA" OLLAMA_URL
 prompt_with_default "mbsync config" "$HOME/.mbsyncrc" MBSYNCRC
-prompt_with_default "Fastmail account ID (optional, blank to skip)" "" FASTMAIL_ACCOUNT_ID
+prompt_with_default "Fastmail account ID (optional, blank to skip)" "$DEFAULT_FASTMAIL" FASTMAIL_ACCOUNT_ID
 
 MAILDIR_ROOT="$(expand_tilde "$MAILDIR_ROOT")"
 DB_PATH="$(expand_tilde "$DB_PATH")"
@@ -251,6 +302,9 @@ done
 echo "Rendering plists..."
 render_plist() {
     # render_plist <template-name> [extra-sed-arg...]
+    # User config (DB / Maildir / Ollama / Fastmail) used to be substituted
+    # in here too. It's now written to the shared appsettings.Local.json
+    # below and the plists don't carry those keys at all.
     local name="$1"; shift
     local src="$TEMPLATE_DIR/$name.plist"
     local dst="$LAUNCH_AGENTS/$name.plist"
@@ -259,10 +313,6 @@ render_plist() {
         -e "s|__MBSYNC__|$MBSYNC_BIN|g" \
         -e "s|__MBSYNCRC__|$MBSYNCRC|g" \
         -e "s|__LOG_DIR__|$LOG_DIR|g" \
-        -e "s|__DB_PATH__|$DB_PATH|g" \
-        -e "s|__MAILDIR_ROOT__|$MAILDIR_ROOT|g" \
-        -e "s|__OLLAMA_URL__|$OLLAMA_URL|g" \
-        -e "s|__FASTMAIL_ACCOUNT_ID__|$FASTMAIL_ACCOUNT_ID|g" \
         "$@" \
         "$src" > "$dst"
 }
@@ -271,6 +321,30 @@ render_plist com.mailvec.mbsync
 for svc in "${SERVICES[@]}"; do
     render_plist "com.mailvec.$svc" -e "s|__INSTALL_PREFIX__|$PREFIX/$svc|g"
 done
+
+# Write the shared appsettings.Local.json. This is the single source of
+# truth for user-specific config — read by the launchd-installed indexer /
+# embedder / mcp services, the CLI, AND the MCPB-bundled MCP that Claude
+# Desktop runs. Created with parents if missing; existing files get
+# overwritten with the just-prompted values.
+SHARED_CONFIG="$HOME/Library/Application Support/Mailvec/appsettings.Local.json"
+mkdir -p "$(dirname "$SHARED_CONFIG")"
+# python3 produces correctly-escaped JSON — safer than building the file
+# with shell quoting when paths might contain spaces or special chars.
+python3 - "$SHARED_CONFIG" "$DB_PATH" "$MAILDIR_ROOT" "$OLLAMA_URL" "$FASTMAIL_ACCOUNT_ID" <<'PY'
+import json, sys
+out_path, db, maildir, ollama, fastmail = sys.argv[1:6]
+doc = {
+    "Archive":  {"DatabasePath": db},
+    "Ingest":   {"MaildirRoot":  maildir},
+    "Ollama":   {"BaseUrl":      ollama},
+    "Fastmail": {"AccountId":    fastmail},
+}
+with open(out_path, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY
+echo "Wrote shared config: $SHARED_CONFIG"
 
 # ---------------------------------------------------------------------------
 # 7. Bootstrap

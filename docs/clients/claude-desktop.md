@@ -2,20 +2,21 @@
 
 **Transport**: stdio, via the MCPB bundle (NOT the generic stdio launcher).
 
-Claude Desktop's Custom Connectors UI accepts an MCPB bundle directly, which packages a self-contained binary, the `vec0.dylib`, and the user-config schema in one file. The MCPB path is preferred over `~/.local/bin/mailvec-mcp-stdio` here because:
+Claude Desktop's Custom Connectors UI accepts an MCPB bundle directly, which packages a self-contained binary and the `vec0.dylib` in one file. The MCPB path is preferred over `~/.local/bin/mailvec-mcp-stdio` here because:
 
-- The bundle prompts for `Archive__DatabasePath` / `Ingest__MaildirRoot` / `Ollama__BaseUrl` / `Fastmail__AccountId` through Claude Desktop's install dialog rather than asking the user to edit a JSON config.
+- The bundle is self-contained — bakes in the .NET runtime and `vec0.dylib`, so it works on a fresh machine without a separate Mailvec install on PATH.
 - The bundle's binary lives at `~/Library/Application Support/Claude/extensions/<id>/`, which is a non-TCC location — Claude Desktop's spawned children can't read `~/Documents`, so a launcher there would silently fail.
 
 ## Install
 
 ```sh
 ops/fetch-sqlite-vec.sh   # one-time, downloads vec0.dylib
+ops/install.sh            # writes shared user-config; required before MCPB
 ops/build-mcpb.sh         # produces dist/mailvec-<version>.mcpb
 open dist/mailvec-*.mcpb  # hands it to Claude Desktop
 ```
 
-Fill in the install dialog. The defaults match the standard layout (`~/Library/Application Support/Mailvec/archive.sqlite`, `~/Mail/Fastmail`, `http://localhost:11434`, no Fastmail webmail link).
+`ops/install.sh` writes `~/Library/Application Support/Mailvec/appsettings.Local.json` with your DB path, Maildir root, Ollama endpoint, and Fastmail account id. The bundled MCP reads from the same file, so the only setting in Claude Desktop's install dialog is the **Log tool calls** debug toggle — everything else flows from the shared config and reinstalling the bundle never asks you to re-enter your account id.
 
 ## Update to a new build
 
@@ -23,7 +24,7 @@ Fill in the install dialog. The defaults match the standard layout (`~/Library/A
 ops/build-mcpb.sh --bump   # patch-bumps manifest.json AND Mailvec.Mcp.csproj <Version>, builds, opens
 ```
 
-In Claude Desktop: Settings → Extensions → Mailvec → toggle off, accept the install prompt, quit and relaunch. Toggling off (vs uninstalling) preserves the user_config values across the upgrade. Claude Desktop ignores re-installs of the same version, so the bump is what makes the new binary actually take effect.
+In Claude Desktop: Settings → Extensions → Mailvec → toggle off, accept the install prompt, quit and relaunch. Claude Desktop ignores re-installs of the same version, so the bump is what makes the new binary actually take effect. User config lives in the shared `appsettings.Local.json`, not in Claude Desktop's per-extension storage, so the upgrade carries forward whether you toggle off or uninstall.
 
 ## Logs
 

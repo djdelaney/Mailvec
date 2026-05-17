@@ -35,6 +35,12 @@ static async Task RunStdio(string[] args)
 {
     var builder = Host.CreateApplicationBuilder(args);
 
+    // Single source of truth shared with the launchd-installed services and
+    // the CLI. See SharedConfig. Inserted before env vars so MCPB's
+    // Mcp__LogToolCalls (passed in by Claude Desktop's user_config UI)
+    // still wins.
+    builder.Configuration.AddMailvecSharedConfig();
+
     // Stdio transport: stdout carries JSON-RPC frames, so SerilogSetup forces
     // the Console sink to stderr at all levels. The Serilog file sink is the
     // primary log; the stderr-console output is for Claude Desktop's
@@ -56,6 +62,8 @@ static async Task RunStdio(string[] args)
 static async Task RunHttp(string[] args)
 {
     var builder = WebApplication.CreateBuilder(args);
+    // Same shared file the stdio path and the other services read from.
+    builder.Configuration.AddMailvecSharedConfig();
     SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "mcp");
 
     AddMailvecServices(builder.Services, builder.Configuration);

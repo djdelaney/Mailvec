@@ -8,6 +8,10 @@ using Mailvec.Indexer.Services;
 using Microsoft.Extensions.Options;
 
 var builder = Host.CreateApplicationBuilder(args);
+// Single source of truth for DB / Maildir / Ollama config. Inserted
+// before env vars so an ad-hoc `Ingest__MaildirRoot=...` override still
+// works during development. See SharedConfig for the file path.
+builder.Configuration.AddMailvecSharedConfig();
 SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "indexer");
 
 builder.Services.Configure<ArchiveOptions>(builder.Configuration.GetSection(ArchiveOptions.SectionName));
