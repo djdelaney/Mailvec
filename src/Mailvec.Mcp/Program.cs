@@ -111,6 +111,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<LaunchdInspector>();
     services.AddSingleton<TrayEventRecorder>();
     services.AddHostedService(sp => sp.GetRequiredService<TrayEventRecorder>());
+    services.AddSingleton<MbsyncErrorTail>();
     services.AddSingleton<TrayStatusService>();
     services.AddSingleton<TraySystemService>();
     services.AddSingleton<TraySearchService>();

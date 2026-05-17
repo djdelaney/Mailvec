@@ -26,6 +26,7 @@ public sealed class TrayStatusService(
     LaunchdInspector launchd,
     ConnectionFactory connections,
     MetadataRepository metadata,
+    MbsyncErrorTail mbsyncErrors,
     IOptions<ArchiveOptions> archiveOpts,
     ILogger<TrayStatusService> logger)
 {
@@ -40,7 +41,13 @@ public sealed class TrayStatusService(
         var dbBytes = TryGetDbBytes(archiveOpts.Value.DatabasePath);
         var schemaVersion = metadata.Get("schema_version") ?? "unknown";
 
-        var (services, mbsyncInfo) = BuildServices(launchdMap, healthReport);
+        // mbsync exits 0 even when it can't sync (channel locks, DNS,
+        // socket errors), so the launchd-exit-code path below would happily
+        // keep the tile green. Re-read the stderr log first and let
+        // BuildServices override the mbsync entry if there's a recent
+        // error worth showing to the user.
+        var mbsyncErr = mbsyncErrors.CheckRecent();
+        var (services, mbsyncInfo) = BuildServices(launchdMap, healthReport, mbsyncErr);
         var ollama = new TrayOllamaStatus(
             Ok: healthReport.Ollama.Reachable,
             Detail: healthReport.Ollama.Reachable
@@ -77,7 +84,8 @@ public sealed class TrayStatusService(
     private static (IReadOnlyList<TrayServiceStatus> Services, (DateTimeOffset? LastSyncAt, int Runs) MbsyncInfo)
         BuildServices(
             IReadOnlyDictionary<string, LaunchdServiceInfo> launchdMap,
-            HealthReport healthReport)
+            HealthReport healthReport,
+            MbsyncError? mbsyncErr)
     {
         var services = new List<TrayServiceStatus>(4);
         DateTimeOffset? mbsyncLastSync = null;
@@ -98,12 +106,46 @@ public sealed class TrayStatusService(
                 // exit 0, that's the *healthy* state between runs. We don't
                 // have a precise last-completion time without parsing log files,
                 // so we leave LastSyncAt null when there's no other signal.
+
+                // Stderr override: if mbsync wrote an error inside the
+                // freshness window, that's the truth — launchd's exit
+                // code is meaningless because mbsync returns 0 on lock /
+                // socket failures. Locks need user action (warn), the
+                // rest are usually transient (also warn).
+                if (mbsyncErr is not null)
+                {
+                    (ok, busy, severity, detail) = ApplyMbsyncErrorOverride(mbsyncErr);
+                }
             }
 
             services.Add(new TrayServiceStatus(id, detail, ok, busy, severity));
         }
 
         return (services, (mbsyncLastSync, mbsyncRuns));
+    }
+
+    /// <summary>
+    /// Translates a freshly-detected mbsync stderr error into a service-tile
+    /// override. We use warn (yellow tile, no error banner) rather than
+    /// error (red, banner) for everything except the lock case — single
+    /// failed runs are common and self-recover. The lock case is escalated
+    /// because it doesn't self-recover.
+    /// </summary>
+    private static (bool Ok, bool Busy, string Severity, string Detail) ApplyMbsyncErrorOverride(MbsyncError err)
+    {
+        var detail = err.Kind switch
+        {
+            MbsyncErrorKind.Locked  => "stuck on .mbsyncstate.lock — see logs",
+            MbsyncErrorKind.Dns     => "DNS lookup failed",
+            MbsyncErrorKind.Network => "network error",
+            MbsyncErrorKind.Auth    => "auth failed — refresh app password",
+            _                       => "recent error — see logs",
+        };
+        // Locked is the only kind that needs the user to intervene. The
+        // others are typically transient — warn but don't escalate so the
+        // dashboard's error banner doesn't blare for a single missed run.
+        var severity = err.Kind == MbsyncErrorKind.Locked ? "error" : "warn";
+        return (Ok: false, Busy: false, Severity: severity, Detail: detail);
     }
 
     private static (bool Ok, bool Busy, string Severity, string Detail) ClassifyService(
