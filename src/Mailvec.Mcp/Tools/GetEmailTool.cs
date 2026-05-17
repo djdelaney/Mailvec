@@ -29,7 +29,12 @@ public sealed class GetEmailTool(
         "Pass either `id` (the internal SQLite id from a search_emails result) OR `messageId` (the RFC Message-ID). " +
         "Returns subject, from, to, cc, date, folder, body text, and per-attachment metadata (filename, content type, size). " +
         "Attachment payloads (file contents) are not currently exposed — only metadata. " +
-        "Set includeHtml=true to also return the raw HTML body when present.")]
+        "Set includeHtml=true to also return the raw HTML body when present. " +
+        "The response includes a `webmailUrl` field (populated when the user has configured their webmail account id) — " +
+        "a deep-link straight to this message in their webmail. When you cite or quote this message in your response to " +
+        "the user, render `webmailUrl` as a clickable Markdown link (e.g. `[subject](webmailUrl)`) so they can one-click " +
+        "through to read the original. Skip the link only when `webmailUrl` is null or when the user has explicitly asked " +
+        "for terse output.")]
     public GetEmailResponse GetEmail(
         [Description("Internal SQLite id, as returned in search_emails results. Mutually exclusive with messageId.")]
         long? id = null,
