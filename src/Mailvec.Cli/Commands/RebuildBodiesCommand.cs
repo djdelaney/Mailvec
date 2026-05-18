@@ -32,6 +32,12 @@ internal static class RebuildBodiesCommand
     private static int Run(bool reembed)
     {
         using var sp = CliServices.Build();
+        return Execute(sp, reembed, Console.Out, Console.Error);
+    }
+
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int Execute(IServiceProvider sp, bool reembed, TextWriter @out, TextWriter err)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
 
@@ -44,11 +50,11 @@ internal static class RebuildBodiesCommand
 
         if (total == 0)
         {
-            Console.WriteLine("No messages with body_html. Nothing to do.");
+            @out.WriteLine("No messages with body_html. Nothing to do.");
             return 0;
         }
 
-        Console.WriteLine($"Re-deriving body_text for {total:N0} messages...");
+        @out.WriteLine($"Re-deriving body_text for {total:N0} messages...");
 
         // Fetch all (id, subject, body_html) into memory first. Subject is
         // needed by ReplyTrimmer to distinguish replies from forwards. The
@@ -95,7 +101,7 @@ internal static class RebuildBodiesCommand
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine($"  id={id}: convert failed ({ex.GetType().Name}: {ex.Message})");
+                    err.WriteLine($"  id={id}: convert failed ({ex.GetType().Name}: {ex.Message})");
                     errors++;
                     continue;
                 }
@@ -105,23 +111,23 @@ internal static class RebuildBodiesCommand
                 update.ExecuteNonQuery();
                 updated++;
 
-                if (updated % 500 == 0) Console.WriteLine($"  ... {updated:N0}/{total:N0}");
+                if (updated % 500 == 0) @out.WriteLine($"  ... {updated:N0}/{total:N0}");
             }
             tx.Commit();
         }
 
-        Console.WriteLine($"Updated body_text on {updated:N0} messages ({errors:N0} errors).");
+        @out.WriteLine($"Updated body_text on {updated:N0} messages ({errors:N0} errors).");
 
         if (reembed)
         {
             var chunks = sp.GetRequiredService<ChunkRepository>();
             var cleared = chunks.ClearEmbeddings(folderFilter: null);
-            Console.WriteLine($"Cleared embeddings on {cleared:N0} messages. Run the embedder to regenerate.");
+            @out.WriteLine($"Cleared embeddings on {cleared:N0} messages. Run the embedder to regenerate.");
         }
         else
         {
-            Console.WriteLine("FTS5 is updated automatically via triggers. Embeddings still reflect the OLD body_text.");
-            Console.WriteLine("Run `mailvec reindex --all` (or rerun with --reembed) when you're ready to refresh vectors.");
+            @out.WriteLine("FTS5 is updated automatically via triggers. Embeddings still reflect the OLD body_text.");
+            @out.WriteLine("Run `mailvec reindex --all` (or rerun with --reembed) when you're ready to refresh vectors.");
         }
         return errors == 0 ? 0 : 1;
     }

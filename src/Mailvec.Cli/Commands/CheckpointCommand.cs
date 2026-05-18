@@ -32,6 +32,12 @@ internal static class CheckpointCommand
     private static int Run()
     {
         using var sp = CliServices.Build();
+        return Execute(sp, Console.Out);
+    }
+
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int Execute(IServiceProvider sp, TextWriter @out)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
 
         var dbPath = PathExpansion.Expand(sp.GetRequiredService<IOptions<ArchiveOptions>>().Value.DatabasePath);
@@ -49,11 +55,11 @@ internal static class CheckpointCommand
             var mode = modeCmd.ExecuteScalar() as string ?? "";
             if (!mode.Equals("wal", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine($"Database:    {dbPath}");
-                Console.WriteLine($"Journal:     {mode} (not WAL — checkpoint is a no-op)");
-                Console.WriteLine();
-                Console.WriteLine("Nothing to checkpoint. The DB will switch to WAL on next ConnectionFactory.Open;");
-                Console.WriteLine("re-run this command after that to confirm.");
+                @out.WriteLine($"Database:    {dbPath}");
+                @out.WriteLine($"Journal:     {mode} (not WAL — checkpoint is a no-op)");
+                @out.WriteLine();
+                @out.WriteLine("Nothing to checkpoint. The DB will switch to WAL on next ConnectionFactory.Open;");
+                @out.WriteLine("re-run this command after that to confirm.");
                 return 0;
             }
         }
@@ -68,21 +74,21 @@ internal static class CheckpointCommand
 
         var sizeAfter = WalSize(walPath);
 
-        Console.WriteLine($"Database:      {dbPath}");
-        Console.WriteLine($"WAL before:    {Format(sizeBefore)}");
-        Console.WriteLine($"WAL after:     {Format(sizeAfter)}");
-        Console.WriteLine($"Frames synced: {checkpointed:N0}");
+        @out.WriteLine($"Database:      {dbPath}");
+        @out.WriteLine($"WAL before:    {Format(sizeBefore)}");
+        @out.WriteLine($"WAL after:     {Format(sizeAfter)}");
+        @out.WriteLine($"Frames synced: {checkpointed:N0}");
         if (busy != 0)
         {
-            Console.WriteLine();
-            Console.WriteLine("⚠  Could not truncate (busy=1). A reader was holding the DB; pages were flushed");
-            Console.WriteLine("   into main but the -wal file kept its allocation. Stop the indexer / embedder /");
-            Console.WriteLine("   MCP server and re-run if you want the file shrunk to zero.");
+            @out.WriteLine();
+            @out.WriteLine("⚠  Could not truncate (busy=1). A reader was holding the DB; pages were flushed");
+            @out.WriteLine("   into main but the -wal file kept its allocation. Stop the indexer / embedder /");
+            @out.WriteLine("   MCP server and re-run if you want the file shrunk to zero.");
             return 1;
         }
         if (logFrames != 0)
         {
-            Console.WriteLine($"WAL frames remaining: {logFrames:N0} (TRUNCATE may have been deferred).");
+            @out.WriteLine($"WAL frames remaining: {logFrames:N0} (TRUNCATE may have been deferred).");
         }
         return 0;
     }

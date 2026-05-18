@@ -158,6 +158,138 @@ public class ChunkRepositoryTests
         VectorCount(db, id).ShouldBe(1);
     }
 
+    [Fact]
+    public void ReplaceChunksForMessage_throws_when_chunk_and_vector_counts_disagree()
+    {
+        // The guard prevents silent vector-space corruption: if the embedder
+        // ever produced a different number of vectors than chunks, we'd write
+        // mismatched (chunk_id, embedding) pairs.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", DateTimeOffset.UtcNow);
+
+        Should.Throw<ArgumentException>(() => chunks.ReplaceChunksForMessage(
+            id,
+            [new TextChunk(0, "alpha", 1), new TextChunk(1, "beta", 1)],
+            [Hot(0)],
+            DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public void ReplaceChunksForMessage_with_no_chunks_clears_existing_state_and_stamps_embedded_at()
+    {
+        // Empty-body messages take this path so the embedder can mark them
+        // embedded with zero chunks (otherwise EnumerateUnembedded loops on
+        // them forever).
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+        chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "old", 1)], [Hot(0)], now);
+        chunks.CountForMessage(id).ShouldBe(1);
+
+        chunks.ReplaceChunksForMessage(id, [], [], now);
+
+        chunks.CountForMessage(id).ShouldBe(0);
+        VectorCount(db, id).ShouldBe(0);
+        EmbeddedAt(db, id).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void ClearEmbeddings_without_folder_filter_clears_every_message()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long inbox = messages.Upsert(Sample("inbox@x"), "INBOX", "INBOX/cur", "fi", now);
+        long archive = messages.Upsert(Sample("arch@x"), "Archive.2024", "Archive.2024/cur", "fa", now);
+
+        chunks.ReplaceChunksForMessage(inbox, [new TextChunk(0, "i", 1)], [Hot(0)], now);
+        chunks.ReplaceChunksForMessage(archive, [new TextChunk(0, "a", 1)], [Hot(1)], now);
+
+        // affected = messages whose embedded_at was reset.
+        var affected = chunks.ClearEmbeddings();
+        affected.ShouldBe(2);
+
+        TotalVectorCount(db).ShouldBe(0);
+        chunks.CountForMessage(inbox).ShouldBe(0);
+        chunks.CountForMessage(archive).ShouldBe(0);
+        EmbeddedAt(db, inbox).ShouldBeNull();
+        EmbeddedAt(db, archive).ShouldBeNull();
+    }
+
+    [Fact]
+    public void ClearEmbeddings_with_folder_filter_only_clears_that_folder()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long inbox = messages.Upsert(Sample("inbox@x"), "INBOX", "INBOX/cur", "fi", now);
+        long archive = messages.Upsert(Sample("arch@x"), "Archive.2024", "Archive.2024/cur", "fa", now);
+
+        chunks.ReplaceChunksForMessage(inbox, [new TextChunk(0, "i", 1)], [Hot(0)], now);
+        chunks.ReplaceChunksForMessage(archive, [new TextChunk(0, "a", 1)], [Hot(1)], now);
+
+        var affected = chunks.ClearEmbeddings(folderFilter: "INBOX");
+        affected.ShouldBe(1);
+
+        // Only INBOX cleared.
+        chunks.CountForMessage(inbox).ShouldBe(0);
+        VectorCount(db, inbox).ShouldBe(0);
+        EmbeddedAt(db, inbox).ShouldBeNull();
+
+        // Archive preserved.
+        chunks.CountForMessage(archive).ShouldBe(1);
+        VectorCount(db, archive).ShouldBe(1);
+        EmbeddedAt(db, archive).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void ClearEmbeddings_with_unknown_folder_is_a_noop()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long inbox = messages.Upsert(Sample("inbox@x"), "INBOX", "INBOX/cur", "fi", now);
+        chunks.ReplaceChunksForMessage(inbox, [new TextChunk(0, "i", 1)], [Hot(0)], now);
+
+        chunks.ClearEmbeddings("does-not-exist").ShouldBe(0);
+
+        chunks.CountForMessage(inbox).ShouldBe(1);
+        VectorCount(db, inbox).ShouldBe(1);
+        EmbeddedAt(db, inbox).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void ClearEmbeddingsForMessage_on_message_with_no_chunks_is_a_noop()
+    {
+        // Exercises the `ids.Count == 0` branch in DeleteChunks — a message
+        // that's never been embedded but is being targeted by a content-hash
+        // change. The UPDATE still runs (embedded_at was already NULL → 1
+        // row touched, no observable change).
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", DateTimeOffset.UtcNow);
+        chunks.CountForMessage(id).ShouldBe(0);
+
+        Should.NotThrow(() => chunks.ClearEmbeddingsForMessage(id));
+
+        chunks.CountForMessage(id).ShouldBe(0);
+        EmbeddedAt(db, id).ShouldBeNull();
+    }
+
     private static int TotalVectorCount(TempDatabase db)
     {
         using var conn = db.Connections.Open();

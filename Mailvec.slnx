@@ -7,6 +7,7 @@
     <Project Path="src/Mailvec.Mcp/Mailvec.Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Mailvec.Cli.Tests/Mailvec.Cli.Tests.csproj" />
     <Project Path="tests/Mailvec.Core.Tests/Mailvec.Core.Tests.csproj" />
     <Project Path="tests/Mailvec.Embedder.Tests/Mailvec.Embedder.Tests.csproj" />
     <Project Path="tests/Mailvec.Indexer.Tests/Mailvec.Indexer.Tests.csproj" />

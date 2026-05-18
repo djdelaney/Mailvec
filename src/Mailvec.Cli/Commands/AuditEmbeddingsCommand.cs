@@ -35,6 +35,12 @@ internal static class AuditEmbeddingsCommand
     private static int Run(int sample, double normLow, double normHigh)
     {
         using var sp = CliServices.Build();
+        return Execute(sp, sample, normLow, normHigh, Console.Out);
+    }
+
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int Execute(IServiceProvider sp, int sample, double normLow, double normHigh, TextWriter @out)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
 
@@ -99,36 +105,36 @@ internal static class AuditEmbeddingsCommand
             }
         }
 
-        Console.WriteLine($"Scanned {total:N0} embedding row(s).");
-        Console.WriteLine();
-        Console.WriteLine($"  All-zero vectors:    {zero:N0}");
-        Console.WriteLine($"  NaN/Inf vectors:     {nan:N0}");
-        Console.WriteLine($"  Norm < {normLow:F2}:        {lowNorm:N0}");
-        Console.WriteLine($"  Norm > {normHigh:F2}:        {highNorm:N0}");
-        Console.WriteLine();
+        @out.WriteLine($"Scanned {total:N0} embedding row(s).");
+        @out.WriteLine();
+        @out.WriteLine($"  All-zero vectors:    {zero:N0}");
+        @out.WriteLine($"  NaN/Inf vectors:     {nan:N0}");
+        @out.WriteLine($"  Norm < {normLow:F2}:        {lowNorm:N0}");
+        @out.WriteLine($"  Norm > {normHigh:F2}:        {highNorm:N0}");
+        @out.WriteLine();
 
-        PrintSamples("All-zero", zeroSamples);
-        PrintSamples("NaN/Inf", nanSamples);
-        PrintSamples($"Norm < {normLow:F2}", lowSamples);
-        PrintSamples($"Norm > {normHigh:F2}", highSamples);
+        PrintSamples(@out, "All-zero", zeroSamples);
+        PrintSamples(@out, "NaN/Inf", nanSamples);
+        PrintSamples(@out, $"Norm < {normLow:F2}", lowSamples);
+        PrintSamples(@out, $"Norm > {normHigh:F2}", highSamples);
 
         if (zero == 0 && nan == 0 && lowNorm == 0 && highNorm == 0)
         {
-            Console.WriteLine("No suspicious vectors found.");
+            @out.WriteLine("No suspicious vectors found.");
         }
         return 0;
     }
 
-    private static void PrintSamples(string label, List<RowInfo> samples)
+    private static void PrintSamples(TextWriter @out, string label, List<RowInfo> samples)
     {
         if (samples.Count == 0) return;
-        Console.WriteLine($"--- {label} samples ---");
+        @out.WriteLine($"--- {label} samples ---");
         foreach (var s in samples)
         {
             var norm = double.IsNaN(s.Norm) ? "  NaN " : s.Norm.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
-            Console.WriteLine($"  chunk_id={s.ChunkId}  msg_id={s.MessageId}  idx={s.ChunkIndex}  norm={norm}  subject={s.Subject ?? "(none)"}");
+            @out.WriteLine($"  chunk_id={s.ChunkId}  msg_id={s.MessageId}  idx={s.ChunkIndex}  norm={norm}  subject={s.Subject ?? "(none)"}");
         }
-        Console.WriteLine();
+        @out.WriteLine();
     }
 
     private sealed record RowInfo(long ChunkId, long MessageId, int ChunkIndex, string? Subject, double Norm);

@@ -174,4 +174,101 @@ public class GetAttachmentToolTests : IDisposable
         var summary = second.Content[0].ShouldBeOfType<TextContentBlock>();
         summary.Text.ShouldContain("Already saved");
     }
+
+    [Fact]
+    public void Looking_up_by_messageId_works_identically_to_lookup_by_id()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        StagePdfMessage(repo);
+
+        var result = Build(db).GetAttachment(partIndex: 0, messageId: "attach-001@example.com");
+
+        result.Content.ShouldNotBeEmpty();
+        result.Content[0].ShouldBeOfType<TextContentBlock>().Text.ShouldContain("quote.pdf");
+    }
+
+    private const string CsvMessage = """
+        Message-ID: <csv-001@example.com>
+        From: carol@example.com
+        To: alice@example.com
+        Subject: Spreadsheet attached
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="outer"
+
+        --outer
+        Content-Type: text/plain; charset=utf-8
+
+        See attached.
+        --outer
+        Content-Type: text/csv; name="data.csv"
+        Content-Disposition: attachment; filename="data.csv"
+
+        col_a,col_b
+        1,2
+        3,4
+
+        --outer--
+        """;
+
+    [Fact]
+    public void Text_attachment_under_inline_threshold_is_returned_as_extra_text_block()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var path = Path.Combine(_maildirRoot, "INBOX", "cur", "2.eml");
+        File.WriteAllText(path, CsvMessage);
+        repo.Upsert(
+            Helpers.Sample("csv-001@example.com", attachments: [new ParsedAttachment(0, "data.csv", "text/csv", 30L)]),
+            "INBOX", "INBOX/cur", "2.eml", DateTimeOffset.UtcNow);
+
+        var result = Build(db).GetAttachment(partIndex: 0, id: 1);
+
+        // Summary + decoded UTF-8 contents = 2 blocks.
+        result.Content.Count.ShouldBeGreaterThanOrEqualTo(2);
+        var inline = result.Content[1].ShouldBeOfType<TextContentBlock>();
+        inline.Text.ShouldContain("col_a,col_b");
+    }
+
+    // 1x1 transparent PNG (smallest valid PNG); base64 is round-trippable.
+    private const string PngMessage = """
+        Message-ID: <png-001@example.com>
+        From: carol@example.com
+        To: alice@example.com
+        Subject: Image attached
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="outer"
+
+        --outer
+        Content-Type: text/plain; charset=utf-8
+
+        See attached.
+        --outer
+        Content-Type: image/png; name="pixel.png"
+        Content-Disposition: attachment; filename="pixel.png"
+        Content-Transfer-Encoding: base64
+
+        iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=
+        --outer--
+        """;
+
+    [Fact]
+    public void Image_attachment_is_returned_inline_as_ImageContentBlock_with_base64_data()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var path = Path.Combine(_maildirRoot, "INBOX", "cur", "3.eml");
+        File.WriteAllText(path, PngMessage);
+        repo.Upsert(
+            Helpers.Sample("png-001@example.com", attachments: [new ParsedAttachment(0, "pixel.png", "image/png", 70L)]),
+            "INBOX", "INBOX/cur", "3.eml", DateTimeOffset.UtcNow);
+
+        var result = Build(db).GetAttachment(partIndex: 0, id: 1);
+
+        // Summary + ImageContentBlock = 2+ blocks.
+        result.Content.Count.ShouldBeGreaterThanOrEqualTo(2);
+        var image = result.Content.OfType<ImageContentBlock>().ShouldHaveSingleItem();
+        image.MimeType.ShouldBe("image/png");
+        image.Data.Length.ShouldBeGreaterThan(0);
+    }
 }
