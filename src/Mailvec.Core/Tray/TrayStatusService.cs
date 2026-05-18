@@ -81,7 +81,7 @@ public sealed class TrayStatusService(
             Sparkline: sparkline);
     }
 
-    private static (IReadOnlyList<TrayServiceStatus> Services, (DateTimeOffset? LastSyncAt, int Runs) MbsyncInfo)
+    internal static (IReadOnlyList<TrayServiceStatus> Services, (DateTimeOffset? LastSyncAt, int Runs) MbsyncInfo)
         BuildServices(
             IReadOnlyDictionary<string, LaunchdServiceInfo> launchdMap,
             HealthReport healthReport,
@@ -131,7 +131,7 @@ public sealed class TrayStatusService(
     /// failed runs are common and self-recover. The lock case is escalated
     /// because it doesn't self-recover.
     /// </summary>
-    private static (bool Ok, bool Busy, string Severity, string Detail) ApplyMbsyncErrorOverride(MbsyncError err)
+    internal static (bool Ok, bool Busy, string Severity, string Detail) ApplyMbsyncErrorOverride(MbsyncError err)
     {
         var detail = err.Kind switch
         {
@@ -148,7 +148,7 @@ public sealed class TrayStatusService(
         return (Ok: false, Busy: false, Severity: severity, Detail: detail);
     }
 
-    private static (bool Ok, bool Busy, string Severity, string Detail) ClassifyService(
+    internal static (bool Ok, bool Busy, string Severity, string Detail) ClassifyService(
         string id,
         LaunchdServiceInfo info,
         HealthReport healthReport)
@@ -191,7 +191,7 @@ public sealed class TrayStatusService(
         return (false, false, "warn", $"last run failed (exit {info.LastExitCode})");
     }
 
-    private static TrayEmbedProgress? BuildProgress(HealthReport h, int ratePerMin)
+    internal static TrayEmbedProgress? BuildProgress(HealthReport h, int ratePerMin)
     {
         var live = h.Database.MessagesTotal - h.Database.MessagesDeleted;
         var done = h.Embeddings.MessagesEmbedded;
@@ -201,7 +201,7 @@ public sealed class TrayStatusService(
         return new TrayEmbedProgress(done, live, ratePerMin, eta);
     }
 
-    private static string ClassifySeverity(
+    internal static string ClassifySeverity(
         HealthReport h,
         IReadOnlyList<TrayServiceStatus> services,
         TrayOllamaStatus ollama,

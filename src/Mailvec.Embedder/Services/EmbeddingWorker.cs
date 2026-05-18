@@ -63,7 +63,7 @@ public sealed class EmbeddingWorker(
         logger.LogInformation("EmbeddingWorker stopping");
     }
 
-    private async Task<int> ProcessOneBatchAsync(int batchSize, CancellationToken ct)
+    internal async Task<int> ProcessOneBatchAsync(int batchSize, CancellationToken ct)
     {
         var messageBatch = messages.EnumerateUnembedded(batchSize).ToList();
         if (messageBatch.Count == 0) return 0;
@@ -141,7 +141,7 @@ public sealed class EmbeddingWorker(
     /// email body wrapping a substantive PDF is exactly the case where
     /// attachment content indexing pays off.
     /// </summary>
-    private IReadOnlyList<TextChunk> BuildChunksForMessage(UnembeddedMessage m)
+    internal IReadOnlyList<TextChunk> BuildChunksForMessage(UnembeddedMessage m)
     {
         var combined = new List<TextChunk>();
 
@@ -226,7 +226,7 @@ public sealed class EmbeddingWorker(
     /// produces meaningless similarity scores; the user must run `mailvec
     /// reindex` to switch models.
     /// </summary>
-    private void VerifyEmbeddingModelMatchesSchema()
+    internal void VerifyEmbeddingModelMatchesSchema()
     {
         var configuredModel = ollamaOptions.Value.EmbeddingModel;
         var configuredDim = ollamaOptions.Value.EmbeddingDimensions;
