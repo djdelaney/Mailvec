@@ -109,7 +109,7 @@ public sealed class TraySystemService(
         }
     }
 
-    private static string Relative(LaunchdServiceInfo info)
+    internal static string Relative(LaunchdServiceInfo info)
     {
         // We don't have a true last-completion timestamp; the closest signal is
         // "service is loaded with N runs". Display Runs so the user has *some*
@@ -120,14 +120,14 @@ public sealed class TraySystemService(
         return $"after {info.Runs} runs";
     }
 
-    private static string Detail(LaunchdServiceInfo info)
+    internal static string Detail(LaunchdServiceInfo info)
     {
         if (info.State == "running") return "mbsync currently syncing";
         var exit = info.LastExitCode is { } ec ? $"last exit {ec}" : "no exit recorded";
         return $"{exit} · {info.Runs} runs since load";
     }
 
-    private static string ByteString(long bytes)
+    internal static string ByteString(long bytes)
     {
         if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):F1} GB";
         if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
@@ -184,7 +184,7 @@ public sealed class TraySystemService(
     /// `#` line comments. Multiple IMAPAccount blocks would each have their
     /// own — we surface the first.
     /// </summary>
-    private static (string? Host, string? User) ParseMbsyncrc(string path)
+    internal static (string? Host, string? User) ParseMbsyncrc(string path)
     {
         try
         {
@@ -239,7 +239,7 @@ public sealed class TraySystemService(
         }
     }
 
-    private static string FormatSchedule(int seconds)
+    internal static string FormatSchedule(int seconds)
     {
         if (seconds <= 0) return "unknown";
         if (seconds % 3600 == 0)
@@ -296,7 +296,7 @@ public sealed class TraySystemService(
         return false;
     }
 
-    private static string? ExtractJsonString(string json, string key)
+    internal static string? ExtractJsonString(string json, string key)
     {
         var needle = $"\"{key}\"";
         var i = json.IndexOf(needle, StringComparison.Ordinal);
