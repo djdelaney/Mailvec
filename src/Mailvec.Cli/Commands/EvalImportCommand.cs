@@ -192,7 +192,7 @@ internal static class EvalImportCommand
         }
     }
 
-    private static string HumanizeAge(TimeSpan age)
+    internal static string HumanizeAge(TimeSpan age)
     {
         if (age.TotalSeconds < 60) return $"{(int)age.TotalSeconds}s ago";
         if (age.TotalMinutes < 60) return $"{(int)age.TotalMinutes}m ago";
@@ -228,7 +228,7 @@ internal static class EvalImportCommand
                 ? dto
                 : null;
 
-    private static EvalMode ParseMode(string? s) => (s ?? "hybrid").ToLowerInvariant() switch
+    internal static EvalMode ParseMode(string? s) => (s ?? "hybrid").ToLowerInvariant() switch
     {
         "keyword" or "fts" => EvalMode.Keyword,
         "semantic" or "vector" => EvalMode.Semantic,

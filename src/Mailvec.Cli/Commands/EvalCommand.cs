@@ -140,7 +140,7 @@ internal static class EvalCommand
         return cmd;
     }
 
-    private static IReadOnlyList<EvalMode>? ParseModes(string s) => s.ToLowerInvariant() switch
+    internal static IReadOnlyList<EvalMode>? ParseModes(string s) => s.ToLowerInvariant() switch
     {
         "all" => [EvalMode.Keyword, EvalMode.Semantic, EvalMode.Hybrid],
         "keyword" or "k" or "fts" => [EvalMode.Keyword],
@@ -356,13 +356,13 @@ internal static class EvalCommand
         }
     }
 
-    private static string Delta(double d)
+    internal static string Delta(double d)
     {
         if (Math.Abs(d) < 0.0005) return "  =0.000";
         return d.ToString("+0.000;-0.000", CultureInfo.InvariantCulture);
     }
 
-    private static string DeltaMs(double d)
+    internal static string DeltaMs(double d)
     {
         if (Math.Abs(d) < 0.05) return "  =0.0";
         return d.ToString("+0.0;-0.0", CultureInfo.InvariantCulture);
@@ -400,7 +400,7 @@ internal static class EvalCommand
         }
     }
 
-    private static string FilterSummary(EvalQueryFilters f)
+    internal static string FilterSummary(EvalQueryFilters f)
     {
         var parts = new List<string>();
         if (f.Folder is not null) parts.Add($"folder={f.Folder}");
@@ -411,7 +411,7 @@ internal static class EvalCommand
         return string.Join(", ", parts);
     }
 
-    private static string ModeName(EvalMode m) => m switch
+    internal static string ModeName(EvalMode m) => m switch
     {
         EvalMode.Keyword => "keyword",
         EvalMode.Semantic => "semantic",

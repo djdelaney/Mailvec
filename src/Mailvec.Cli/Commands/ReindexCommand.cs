@@ -21,25 +21,32 @@ internal static class ReindexCommand
         {
             var all = parse.GetValue(allOpt);
             var folder = parse.GetValue(folderOpt);
-            if (!all && folder is null)
-            {
-                Console.Error.WriteLine("Specify --all or --folder=<name>.");
-                return 2;
-            }
-            return Run(all ? null : folder);
+            return ValidateAndRun(all, folder, Console.Out, Console.Error);
         });
         return cmd;
     }
 
-    private static int Run(string? folder)
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int ValidateAndRun(bool all, string? folder, TextWriter @out, TextWriter err)
     {
+        if (!all && folder is null)
+        {
+            err.WriteLine("Specify --all or --folder=<name>.");
+            return 2;
+        }
         using var sp = CliServices.Build();
+        return Execute(sp, all ? null : folder, @out);
+    }
+
+    /// <summary>Test seam that lets tests inject a pre-built provider.</summary>
+    internal static int Execute(IServiceProvider sp, string? folder, TextWriter @out)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var chunks = sp.GetRequiredService<ChunkRepository>();
 
         var affected = chunks.ClearEmbeddings(folderFilter: folder);
         var scope = folder is null ? "all messages" : $"folder '{folder}'";
-        Console.WriteLine($"Cleared embeddings on {affected} messages ({scope}). The embedder will re-process them on its next poll.");
+        @out.WriteLine($"Cleared embeddings on {affected} messages ({scope}). The embedder will re-process them on its next poll.");
         return 0;
     }
 }
