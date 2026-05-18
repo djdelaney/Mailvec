@@ -111,4 +111,4 @@ Single-user, single-Mac. The macOS user account is the trust boundary; inside it
 
 ## Status
 
-End-to-end working with Claude Desktop (MCPB stdio) and Claude Code (HTTP); Phase 5 (other local agents — Gemini CLI, Codex CLI, ChatGPT desktop) in progress. See [CHANGELOG.md](CHANGELOG.md) for the phase-by-phase history.
+End-to-end working with Claude Desktop (MCPB stdio) and Claude Code (HTTP); Phase 5 (other local agents — Gemini CLI, Codex CLI, ChatGPT desktop) not yet started. See [CHANGELOG.md](CHANGELOG.md) for the phase-by-phase history.

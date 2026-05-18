@@ -89,8 +89,9 @@ Fetched as a prebuilt `vec0.dylib` by `ops/fetch-sqlite-vec.sh` and loaded at ru
 
 ## Schema & data invariants
 
-`schema/001_initial.sql` is the full schema (v4 baseline). These invariants are enforced at runtime and silent-corruption-prone if bypassed.
+`schema/001_initial.sql` is the full schema (v6 baseline). These invariants are enforced at runtime and silent-corruption-prone if bypassed.
 
+- **`messages.attachment_text` is a denormalized space-join of `attachments.extracted_text`** (status='done'), built by `MessageRepository.BuildAttachmentText` and written in the same transaction as `attachment_names`. It feeds the 6th `messages_fts` column so keyword search hits attachment bodies; if a write path updates `attachments.extracted_text` without rebuilding `messages.attachment_text`, FTS silently drifts and dual-signal RRF fusion stops boosting documents that should match both the BM25 and vector legs.
 - **The embedding model is part of the schema.** `chunk_embeddings` declares a fixed dimension (`FLOAT[1024]` for `mxbai-embed-large`). `OllamaClient` validates returned vector lengths against `Ollama:EmbeddingDimensions`; `EmbeddingWorker` refuses to start if `metadata.embedding_model` disagrees with config. Switching models requires a full reindex. **Never bypass this check** — mixing vector spaces silently corrupts similarity scores in ways that look plausible.
 - **FTS5 sync is trigger-driven.** `messages_ai`/`messages_ad`/`messages_au` keep `messages_fts` in lockstep with `messages`. Don't bypass the triggers with raw inserts into `messages_fts`.
 - **`vec0` must load before the schema applies**, because `001_initial.sql` declares `chunk_embeddings` as a `vec0(...)` virtual table. `ConnectionFactory` loads the extension on every `Open()`. The dylib is copied into each project's `bin/.../runtimes/<rid>/native/` by `Directory.Build.props` (with an `Exists` guard).
@@ -99,7 +100,7 @@ Fetched as a prebuilt `vec0.dylib` by `ops/fetch-sqlite-vec.sh` and loaded at ru
 - **`PRAGMA journal_mode = WAL` must be applied via `ExecuteScalar`, not `ExecuteNonQuery`.** Microsoft.Data.Sqlite silently no-ops result-returning pragmas under `ExecuteNonQuery`, so the WAL pragma in `001_initial.sql` was *not actually setting WAL mode* — DBs were running in plain rollback-journal `delete` mode. Confirmed by reading header bytes 18-19 (`01 01` for journal, `02 02` for WAL). Fix lives in `ConnectionFactory.Open()`: a per-connection `PRAGMA journal_mode = WAL;` via `ExecuteScalar`, idempotent and self-healing for any DB created before the fix landed. Don't move this back into the migration script.
 - **`Microsoft.Data.Sqlite.ExecuteNonQuery` silently stops at the first `CREATE TRIGGER ... BEGIN ... END;`.** The internal trigger semicolons confuse its statement iterator. `SqlScriptSplitter` tokenises scripts itself (BEGIN/END depth-tracking) and executes one statement at a time. Don't go back to `ExecuteNonQuery`-on-the-whole-script.
 
-Attachment text (schema v4):
+Attachment text:
 
 - **`attachments.extracted_text` / `extracted_at` / `extraction_status`** hold the recovered plain text. `chunks.source` ('body' | 'attachment') + `chunks.attachment_id` let search results trace back to a specific document.
 - **`extraction_status` is a stable enum** declared as constants on `AttachmentTextExtractor`: `done`, `no_text`, `unsupported`, `oversize`, `encrypted`, `failed`. Persist these values verbatim — they're surfaced through `get_email`'s `AttachmentInfo.ExtractionStatus` so Claude can tell the user "I couldn't read this PDF because it was encrypted".
