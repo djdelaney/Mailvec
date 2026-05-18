@@ -624,7 +624,7 @@ internal static class DoctorCommand
         return null;
     }
 
-    private static string FormatSize(long bytes)
+    internal static string FormatSize(long bytes)
     {
         if (bytes < 1024) return $"{bytes} B";
         if (bytes < 1024L * 1024) return $"{bytes / 1024.0:0.0} KB";
@@ -632,7 +632,7 @@ internal static class DoctorCommand
         return $"{bytes / (1024.0 * 1024 * 1024):0.00} GB";
     }
 
-    private static string HumanizeAge(TimeSpan age)
+    internal static string HumanizeAge(TimeSpan age)
     {
         if (age.TotalSeconds < 60) return $"{age.TotalSeconds:0}s";
         if (age.TotalMinutes < 60) return $"{age.TotalMinutes:0}m";
@@ -642,7 +642,7 @@ internal static class DoctorCommand
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 
-    private static (int Ok, int Warn, int Fail) Summarize(List<DoctorCheck> checks)
+    internal static (int Ok, int Warn, int Fail) Summarize(IReadOnlyList<DoctorCheck> checks)
     {
         int ok = 0, warn = 0, fail = 0;
         foreach (var c in checks)
@@ -718,7 +718,7 @@ internal static class DoctorCommand
     // Records
     // ---------------------------------------------------------------------
 
-    private sealed record DoctorCheck(string Name, string Status, string Detail, string Section)
+    internal sealed record DoctorCheck(string Name, string Status, string Detail, string Section)
     {
         public static DoctorCheck Ok(string name, string detail, string section) => new(name, "ok", detail, section);
         public static DoctorCheck Warn(string name, string detail, string section) => new(name, "warn", detail, section);

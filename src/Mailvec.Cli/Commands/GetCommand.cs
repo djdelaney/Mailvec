@@ -25,18 +25,21 @@ internal static class GetCommand
             bodyOpt,
         };
 
-        cmd.SetAction(parseResult =>
-        {
-            var id = parseResult.GetValue(idArg)!;
-            var body = parseResult.GetValue(bodyOpt);
-            return Run(id, body);
-        });
+        cmd.SetAction(parseResult => Run(
+            parseResult.GetValue(idArg)!,
+            parseResult.GetValue(bodyOpt)));
         return cmd;
     }
 
     private static int Run(string id, bool fullBody)
     {
         using var sp = CliServices.Build();
+        return Execute(sp, id, fullBody, Console.Out, Console.Error);
+    }
+
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int Execute(IServiceProvider sp, string id, bool fullBody, TextWriter @out, TextWriter err)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var repo = sp.GetRequiredService<MessageRepository>();
         var fastmail = sp.GetRequiredService<IOptions<FastmailOptions>>().Value;
@@ -49,49 +52,49 @@ internal static class GetCommand
 
         if (message is null)
         {
-            Console.Error.WriteLine($"No message found for id '{id}'.");
+            err.WriteLine($"No message found for id '{id}'.");
             return 1;
         }
 
-        Print(message, fullBody, fastmail);
+        Print(@out, message, fullBody, fastmail);
         return 0;
     }
 
-    private static void Print(Message m, bool fullBody, FastmailOptions fastmail)
+    private static void Print(TextWriter @out, Message m, bool fullBody, FastmailOptions fastmail)
     {
         var date = m.DateSent?.ToString("u") ?? "(no date)";
         var from = m.FromName is null ? m.FromAddress : $"{m.FromName} <{m.FromAddress}>";
 
-        Console.WriteLine($"id:        {m.Id}");
-        Console.WriteLine($"messageId: {m.MessageId}");
-        if (m.ThreadId is not null) Console.WriteLine($"threadId:  {m.ThreadId}");
-        Console.WriteLine($"folder:    {m.Folder}");
-        Console.WriteLine($"date:      {date}");
-        Console.WriteLine($"from:      {from ?? "(unknown)"}");
-        if (m.ToAddresses.Count > 0) Console.WriteLine($"to:        {FormatAddresses(m.ToAddresses)}");
-        if (m.CcAddresses.Count > 0) Console.WriteLine($"cc:        {FormatAddresses(m.CcAddresses)}");
-        Console.WriteLine($"subject:   {m.Subject ?? "(no subject)"}");
+        @out.WriteLine($"id:        {m.Id}");
+        @out.WriteLine($"messageId: {m.MessageId}");
+        if (m.ThreadId is not null) @out.WriteLine($"threadId:  {m.ThreadId}");
+        @out.WriteLine($"folder:    {m.Folder}");
+        @out.WriteLine($"date:      {date}");
+        @out.WriteLine($"from:      {from ?? "(unknown)"}");
+        if (m.ToAddresses.Count > 0) @out.WriteLine($"to:        {FormatAddresses(m.ToAddresses)}");
+        if (m.CcAddresses.Count > 0) @out.WriteLine($"cc:        {FormatAddresses(m.CcAddresses)}");
+        @out.WriteLine($"subject:   {m.Subject ?? "(no subject)"}");
 
         var url = WebmailLinkBuilder.Build(m.MessageId, fastmail);
-        if (url is not null) Console.WriteLine($"webmail:   {url}");
+        if (url is not null) @out.WriteLine($"webmail:   {url}");
 
         if (m.Attachments.Count > 0)
         {
-            Console.WriteLine();
-            Console.WriteLine($"attachments ({m.Attachments.Count}):");
+            @out.WriteLine();
+            @out.WriteLine($"attachments ({m.Attachments.Count}):");
             foreach (var a in m.Attachments)
             {
                 var size = a.SizeBytes is { } b ? $"{b:N0} B" : "?";
                 var status = a.ExtractionStatus is null ? "" : $"  [{a.ExtractionStatus}]";
-                Console.WriteLine($"  partIndex={a.PartIndex}  {a.FileName ?? "(unnamed)"}  {a.ContentType ?? "?"}  {size}{status}");
+                @out.WriteLine($"  partIndex={a.PartIndex}  {a.FileName ?? "(unnamed)"}  {a.ContentType ?? "?"}  {size}{status}");
             }
         }
 
         if (!string.IsNullOrEmpty(m.BodyText))
         {
-            Console.WriteLine();
-            Console.WriteLine("body:");
-            Console.WriteLine(fullBody || m.BodyText.Length <= 1024 ? m.BodyText : m.BodyText[..1024] + "\n…(truncated; pass --body for full text)");
+            @out.WriteLine();
+            @out.WriteLine("body:");
+            @out.WriteLine(fullBody || m.BodyText.Length <= 1024 ? m.BodyText : m.BodyText[..1024] + "\n…(truncated; pass --body for full text)");
         }
     }
 

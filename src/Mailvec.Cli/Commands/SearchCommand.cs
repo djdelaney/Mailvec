@@ -33,42 +33,53 @@ internal static class SearchCommand
             dateToOpt,
         };
 
-        cmd.SetAction(async parseResult =>
-        {
-            var query = parseResult.GetValue(queryArg)!;
-            var limit = parseResult.GetValue(limitOpt);
-            var semantic = parseResult.GetValue(semanticOpt);
-            var hybrid = parseResult.GetValue(hybridOpt);
-            var titlesOnly = parseResult.GetValue(titlesOnlyOpt);
-            var withId = parseResult.GetValue(withIdOpt);
-            var dateFromRaw = parseResult.GetValue(dateFromOpt);
-            var dateToRaw = parseResult.GetValue(dateToOpt);
-
-            if (semantic && hybrid)
-            {
-                Console.Error.WriteLine("--semantic and --hybrid are mutually exclusive.");
-                return 2;
-            }
-
-            DateTimeOffset? dateFrom, dateTo;
-            try
-            {
-                dateFrom = ParseDate(dateFromRaw, "--date-from");
-                dateTo = ParseDate(dateToRaw, "--date-to");
-            }
-            catch (FormatException ex)
-            {
-                Console.Error.WriteLine(ex.Message);
-                return 2;
-            }
-
-            var filters = new SearchFilters(DateFrom: dateFrom, DateTo: dateTo);
-            return await Run(query, limit, semantic, hybrid, titlesOnly, withId, filters);
-        });
+        cmd.SetAction(async parseResult => await ParseAndRun(
+            parseResult.GetValue(queryArg)!,
+            parseResult.GetValue(limitOpt),
+            parseResult.GetValue(semanticOpt),
+            parseResult.GetValue(hybridOpt),
+            parseResult.GetValue(titlesOnlyOpt),
+            parseResult.GetValue(withIdOpt),
+            parseResult.GetValue(dateFromOpt),
+            parseResult.GetValue(dateToOpt),
+            Console.Out,
+            Console.Error));
         return cmd;
     }
 
-    private static DateTimeOffset? ParseDate(string? value, string flagName)
+    /// <summary>
+    /// Test seam — validates flags + parses dates, returning early with
+    /// exit code 2 on bad input. Delegates the actual search to
+    /// <see cref="ExecuteAsync"/>, which is itself a test seam.
+    /// </summary>
+    internal static async Task<int> ParseAndRun(
+        string query, int limit, bool semantic, bool hybrid, bool titlesOnly, bool withId,
+        string? dateFromRaw, string? dateToRaw, TextWriter @out, TextWriter err)
+    {
+        if (semantic && hybrid)
+        {
+            err.WriteLine("--semantic and --hybrid are mutually exclusive.");
+            return 2;
+        }
+
+        DateTimeOffset? dateFrom, dateTo;
+        try
+        {
+            dateFrom = ParseDate(dateFromRaw, "--date-from");
+            dateTo = ParseDate(dateToRaw, "--date-to");
+        }
+        catch (FormatException ex)
+        {
+            err.WriteLine(ex.Message);
+            return 2;
+        }
+
+        var filters = new SearchFilters(DateFrom: dateFrom, DateTo: dateTo);
+        using var sp = CliServices.Build();
+        return await ExecuteAsync(sp, query, limit, semantic, hybrid, titlesOnly, withId, filters, @out);
+    }
+
+    internal static DateTimeOffset? ParseDate(string? value, string flagName)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
@@ -76,9 +87,11 @@ internal static class SearchCommand
         throw new FormatException($"{flagName} '{value}' is not a valid ISO 8601 date.");
     }
 
-    private static async Task<int> Run(string query, int limit, bool semantic, bool hybrid, bool titlesOnly, bool withId, SearchFilters filters)
+    /// <summary>Test seam — runs the search against the injected provider.</summary>
+    internal static async Task<int> ExecuteAsync(
+        IServiceProvider sp, string query, int limit, bool semantic, bool hybrid,
+        bool titlesOnly, bool withId, SearchFilters filters, TextWriter @out)
     {
-        using var sp = CliServices.Build();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var fastmail = sp.GetRequiredService<IOptions<FastmailOptions>>().Value;
 
@@ -86,7 +99,7 @@ internal static class SearchCommand
         {
             var search = sp.GetRequiredService<HybridSearchService>();
             var hits = await search.SearchAsync(query, limit, filters: filters);
-            PrintHybrid(hits, titlesOnly, withId, fastmail);
+            PrintHybrid(@out, hits, titlesOnly, withId, fastmail);
             return 0;
         }
 
@@ -94,72 +107,72 @@ internal static class SearchCommand
         {
             var search = sp.GetRequiredService<VectorSearchService>();
             var hits = await search.SearchAsync(query, limit, filters: filters);
-            PrintVector(hits, titlesOnly, withId, fastmail);
+            PrintVector(@out, hits, titlesOnly, withId, fastmail);
             return 0;
         }
 
         var keyword = sp.GetRequiredService<KeywordSearchService>();
-        PrintKeyword(keyword.Search(query, limit, filters), titlesOnly, withId, fastmail);
+        PrintKeyword(@out, keyword.Search(query, limit, filters), titlesOnly, withId, fastmail);
         return 0;
     }
 
-    private static void PrintKeyword(IReadOnlyList<Mailvec.Core.Models.SearchHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
+    private static void PrintKeyword(TextWriter @out, IReadOnlyList<Mailvec.Core.Models.SearchHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
     {
-        if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
-        Console.WriteLine($"{hits.Count} result(s):\n");
+        if (hits.Count == 0) { @out.WriteLine("(no matches)"); return; }
+        @out.WriteLine($"{hits.Count} result(s):\n");
         foreach (var h in hits)
         {
             var date = h.DateSent?.ToString("yyyy-MM-dd") ?? "          ";
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
-            Console.WriteLine($"[bm25 {h.Bm25Score,7:F2}]  {Bold(h.Subject ?? "(no subject)")}");
-            Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
-            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Dim(h.Snippet)}");
-            if (withId) Console.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
-            PrintWebmailUrl(h.MessageIdHeader, fastmail);
-            Console.WriteLine();
+            @out.WriteLine($"[bm25 {h.Bm25Score,7:F2}]  {Bold(h.Subject ?? "(no subject)")}");
+            @out.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
+            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) @out.WriteLine($"                  {Dim(h.Snippet)}");
+            if (withId) @out.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
+            PrintWebmailUrl(@out, h.MessageIdHeader, fastmail);
+            @out.WriteLine();
         }
     }
 
-    private static void PrintVector(IReadOnlyList<VectorHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
+    private static void PrintVector(TextWriter @out, IReadOnlyList<VectorHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
     {
-        if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
-        Console.WriteLine($"{hits.Count} result(s):\n");
+        if (hits.Count == 0) { @out.WriteLine("(no matches)"); return; }
+        @out.WriteLine($"{hits.Count} result(s):\n");
         foreach (var h in hits)
         {
             var date = h.DateSent?.ToString("yyyy-MM-dd") ?? "          ";
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
-            Console.WriteLine($"[dist {h.Distance,7:F3}]  {Bold(h.Subject ?? "(no subject)")}");
-            Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
-            if (!titlesOnly) Console.WriteLine($"                  {Dim(Truncate(h.ChunkText, 240))}");
-            if (withId) Console.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
-            PrintWebmailUrl(h.MessageIdHeader, fastmail);
-            Console.WriteLine();
+            @out.WriteLine($"[dist {h.Distance,7:F3}]  {Bold(h.Subject ?? "(no subject)")}");
+            @out.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}")}");
+            if (!titlesOnly) @out.WriteLine($"                  {Dim(Truncate(h.ChunkText, 240))}");
+            if (withId) @out.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
+            PrintWebmailUrl(@out, h.MessageIdHeader, fastmail);
+            @out.WriteLine();
         }
     }
 
-    private static void PrintHybrid(IReadOnlyList<HybridHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
+    private static void PrintHybrid(TextWriter @out, IReadOnlyList<HybridHit> hits, bool titlesOnly, bool withId, FastmailOptions fastmail)
     {
-        if (hits.Count == 0) { Console.WriteLine("(no matches)"); return; }
-        Console.WriteLine($"{hits.Count} result(s):\n");
+        if (hits.Count == 0) { @out.WriteLine("(no matches)"); return; }
+        @out.WriteLine($"{hits.Count} result(s):\n");
         foreach (var h in hits)
         {
             var date = h.DateSent?.ToString("yyyy-MM-dd") ?? "          ";
             var from = h.FromName ?? h.FromAddress ?? "(unknown)";
             var legs = $"bm25={h.Bm25Rank?.ToString() ?? "-"} vec={h.VectorRank?.ToString() ?? "-"}";
-            Console.WriteLine($"[rrf {h.RrfScore,6:F4}]  {Bold(h.Subject ?? "(no subject)")}");
-            Console.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}    ({legs})")}");
-            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) Console.WriteLine($"                  {Dim(Truncate(h.Snippet, 240))}");
-            if (withId) Console.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
-            PrintWebmailUrl(h.MessageIdHeader, fastmail);
-            Console.WriteLine();
+            @out.WriteLine($"[rrf {h.RrfScore,6:F4}]  {Bold(h.Subject ?? "(no subject)")}");
+            @out.WriteLine($"                  {Dim($"{date}  {h.Folder}  ·  {from}    ({legs})")}");
+            if (!titlesOnly && !string.IsNullOrEmpty(h.Snippet)) @out.WriteLine($"                  {Dim(Truncate(h.Snippet, 240))}");
+            if (withId) @out.WriteLine($"                  {Dim($"id: {h.MessageIdHeader}")}");
+            PrintWebmailUrl(@out, h.MessageIdHeader, fastmail);
+            @out.WriteLine();
         }
     }
 
     /// <summary>Emits the Fastmail deep-link if AccountId is configured; silent otherwise.</summary>
-    private static void PrintWebmailUrl(string messageIdHeader, FastmailOptions fastmail)
+    private static void PrintWebmailUrl(TextWriter @out, string messageIdHeader, FastmailOptions fastmail)
     {
         var url = WebmailLinkBuilder.Build(messageIdHeader, fastmail);
-        if (url is not null) Console.WriteLine($"                  {Dim(url)}");
+        if (url is not null) @out.WriteLine($"                  {Dim(url)}");
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";

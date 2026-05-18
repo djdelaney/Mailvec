@@ -62,13 +62,19 @@ internal static class ExtractAttachmentsCommand
     private static int Run(int? limit, int batch, bool noReembed)
     {
         using var sp = CliServices.Build();
+        return Execute(sp, limit, batch, noReembed, Console.Out, Console.Error);
+    }
+
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int Execute(IServiceProvider sp, int? limit, int batch, bool noReembed, TextWriter @out, TextWriter err)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
 
         var ingestOptions = sp.GetRequiredService<IOptions<IngestOptions>>().Value;
         var maildirRoot = PathExpansion.Expand(ingestOptions.MaildirRoot);
         if (string.IsNullOrEmpty(maildirRoot) || !Directory.Exists(maildirRoot))
         {
-            Console.Error.WriteLine($"Maildir root not found: '{maildirRoot}'. Set Ingest__MaildirRoot or fix appsettings.json.");
+            err.WriteLine($"Maildir root not found: '{maildirRoot}'. Set Ingest__MaildirRoot or fix appsettings.json.");
             return 2;
         }
 
@@ -104,15 +110,15 @@ internal static class ExtractAttachmentsCommand
 
         if (totalCandidates == 0)
         {
-            Console.WriteLine("No attachments need extraction. Nothing to do.");
+            @out.WriteLine("No attachments need extraction. Nothing to do.");
             return 0;
         }
 
         var ceiling = limit is { } l ? Math.Min(l, affectedMessages) : affectedMessages;
-        Console.WriteLine($"Backfill candidates: {totalCandidates:N0} attachments across {affectedMessages:N0} messages.");
-        if (limit is not null) Console.WriteLine($"Limit: this run will process at most {ceiling:N0} message(s).");
-        Console.WriteLine($"Re-embed after backfill: {(noReembed ? "no (use --reembed or `mailvec reindex --all` later)" : "yes")}.");
-        Console.WriteLine();
+        @out.WriteLine($"Backfill candidates: {totalCandidates:N0} attachments across {affectedMessages:N0} messages.");
+        if (limit is not null) @out.WriteLine($"Limit: this run will process at most {ceiling:N0} message(s).");
+        @out.WriteLine($"Re-embed after backfill: {(noReembed ? "no (use --reembed or `mailvec reindex --all` later)" : "yes")}.");
+        @out.WriteLine();
 
         long messagesProcessed = 0;
         long messagesWithNewText = 0;
@@ -143,12 +149,12 @@ internal static class ExtractAttachmentsCommand
                     // loop on this message forever. Most likely cause:
                     // mbsync moved/renamed the file and the indexer hasn't
                     // rescanned yet. The user can re-run after a rescan.
-                    Console.Error.WriteLine($"  msg {msg.Id}: source not found ({maildirFile}); marking attachments 'failed'.");
+                    err.WriteLine($"  msg {msg.Id}: source not found ({maildirFile}); marking attachments 'failed'.");
                     StampMessageAttachmentsFailed(connections, msg.Id);
                     continue;
                 }
 
-                if (TryProcessMessage(connections, extractor, msg, maildirFile, statusCounts, out var newTextCount, out var attachmentsThisMessage))
+                if (TryProcessMessage(connections, extractor, msg, maildirFile, statusCounts, err, out var newTextCount, out var attachmentsThisMessage))
                 {
                     attachmentsExtracted += attachmentsThisMessage;
                     if (newTextCount > 0)
@@ -168,25 +174,25 @@ internal static class ExtractAttachmentsCommand
 
                 if (messagesProcessed % 50 == 0)
                 {
-                    Console.WriteLine($"  ... {messagesProcessed:N0}/{ceiling:N0} messages, {attachmentsExtracted:N0} attachments stamped");
+                    @out.WriteLine($"  ... {messagesProcessed:N0}/{ceiling:N0} messages, {attachmentsExtracted:N0} attachments stamped");
                 }
             }
         }
 
-        Console.WriteLine();
-        Console.WriteLine($"Processed {messagesProcessed:N0} message(s); stamped {attachmentsExtracted:N0} attachment(s).");
+        @out.WriteLine();
+        @out.WriteLine($"Processed {messagesProcessed:N0} message(s); stamped {attachmentsExtracted:N0} attachment(s).");
         if (statusCounts.Count > 0)
         {
-            Console.WriteLine("Status breakdown:");
+            @out.WriteLine("Status breakdown:");
             foreach (var (status, n) in statusCounts.OrderByDescending(kv => kv.Value))
             {
-                Console.WriteLine($"  {status,-12} {n:N0}");
+                @out.WriteLine($"  {status,-12} {n:N0}");
             }
         }
         if (!noReembed && messagesWithNewText > 0)
         {
-            Console.WriteLine();
-            Console.WriteLine($"Cleared chunks/embedded_at for {messagesWithNewText:N0} message(s). The embedder picks up cleared messages on its next poll — no need to run `reindex` separately.");
+            @out.WriteLine();
+            @out.WriteLine($"Cleared chunks/embedded_at for {messagesWithNewText:N0} message(s). The embedder picks up cleared messages on its next poll — no need to run `reindex` separately.");
         }
         return 0;
     }
@@ -204,6 +210,7 @@ internal static class ExtractAttachmentsCommand
         MessageRow msg,
         string maildirFile,
         Dictionary<string, long> statusCounts,
+        TextWriter err,
         out int newTextCount,
         out int attachmentsThisMessage)
     {
@@ -222,7 +229,7 @@ internal static class ExtractAttachmentsCommand
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"  msg {msg.Id}: parse failed ({ex.GetType().Name}: {ex.Message}); skipping.");
+            err.WriteLine($"  msg {msg.Id}: parse failed ({ex.GetType().Name}: {ex.Message}); skipping.");
             return false;
         }
 

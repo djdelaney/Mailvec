@@ -1,9 +1,9 @@
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
+using Mailvec.Core.Search;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Mailvec.Cli.Tests;
 
@@ -12,14 +12,16 @@ namespace Mailvec.Cli.Tests;
 /// <see cref="IServiceProvider"/> wired with the dependencies the CLI
 /// commands' <c>Execute</c> seams need. Mirrors a slimmed-down
 /// <c>CliServices.Build()</c> — no Console wiring, no Ollama HttpClient
-/// (none of the destructive commands tested here hit Ollama).
+/// (none of the commands tested here hit Ollama).
 /// </summary>
 public sealed class TestServiceProvider : IDisposable
 {
     public string DirectoryPath { get; }
     public string DatabasePath { get; }
-    public ServiceProvider Services { get; }
-    public ConnectionFactory Connections { get; }
+    public ServiceProvider Services { get; private set; }
+    public ConnectionFactory Connections { get; private set; }
+
+    private readonly ServiceCollection _services;
 
     public TestServiceProvider()
     {
@@ -27,18 +29,40 @@ public sealed class TestServiceProvider : IDisposable
         Directory.CreateDirectory(DirectoryPath);
         DatabasePath = Path.Combine(DirectoryPath, "archive.sqlite");
 
-        var services = new ServiceCollection();
-        services.AddLogging(b => b.AddProvider(NullLoggerProvider.Instance));
-        services.Configure<ArchiveOptions>(o => o.DatabasePath = DatabasePath);
-        services.AddSingleton<ConnectionFactory>();
-        services.AddSingleton<SchemaMigrator>();
-        services.AddSingleton<MessageRepository>();
-        services.AddSingleton<MetadataRepository>();
-        services.AddSingleton<ChunkRepository>();
+        _services = new ServiceCollection();
+        _services.AddLogging(b => b.AddProvider(NullLoggerProvider.Instance));
+        _services.Configure<ArchiveOptions>(o => o.DatabasePath = DatabasePath);
+        _services.AddSingleton<ConnectionFactory>();
+        _services.AddSingleton<SchemaMigrator>();
+        _services.AddSingleton<MessageRepository>();
+        _services.AddSingleton<MetadataRepository>();
+        _services.AddSingleton<ChunkRepository>();
+        _services.AddSingleton<KeywordSearchService>();
 
-        Services = services.BuildServiceProvider();
+        Services = _services.BuildServiceProvider();
         Connections = Services.GetRequiredService<ConnectionFactory>();
         Services.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
+    }
+
+    /// <summary>
+    /// Register an extra Options binding before the service provider is
+    /// built. Tests call this then <see cref="Rebuild"/> when they need
+    /// command-specific options like IngestOptions / OllamaOptions /
+    /// FastmailOptions that the default provider doesn't include.
+    /// </summary>
+    public TestServiceProvider AddOption<T>(Action<T> configure) where T : class
+    {
+        _services.Configure(configure);
+        return this;
+    }
+
+    /// <summary>Rebuilds the provider after additional Configure calls.</summary>
+    public ServiceProvider Rebuild()
+    {
+        Services.Dispose();
+        Services = _services.BuildServiceProvider();
+        Connections = Services.GetRequiredService<ConnectionFactory>();
+        return Services;
     }
 
     public void Dispose()

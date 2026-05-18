@@ -37,6 +37,12 @@ internal static class RepairCommand
     private static int Run(bool dryRun)
     {
         using var sp = CliServices.Build();
+        return Execute(sp, dryRun, Console.Out);
+    }
+
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int Execute(IServiceProvider sp, bool dryRun, TextWriter @out)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
 
         var totalIssues = 0;
@@ -44,40 +50,40 @@ internal static class RepairCommand
 
         // ----- Orphan vec0 rows -----
         var chunks = sp.GetRequiredService<ChunkRepository>();
-        Console.WriteLine("Orphan vectors");
+        @out.WriteLine("Orphan vectors");
         var orphans = chunks.CountOrphanEmbeddings();
         if (orphans == 0)
         {
-            Console.WriteLine("  none");
+            @out.WriteLine("  none");
         }
         else
         {
             totalIssues += orphans;
-            Console.WriteLine($"  found {orphans:N0} chunk_embeddings row(s) without a matching chunks row");
+            @out.WriteLine($"  found {orphans:N0} chunk_embeddings row(s) without a matching chunks row");
             if (dryRun)
             {
-                Console.WriteLine("  dry run — nothing deleted");
+                @out.WriteLine("  dry run — nothing deleted");
             }
             else
             {
                 var deleted = chunks.DeleteOrphanEmbeddings();
                 totalRepaired += deleted;
-                Console.WriteLine($"  deleted {deleted:N0}");
+                @out.WriteLine($"  deleted {deleted:N0}");
             }
         }
 
-        Console.WriteLine();
+        @out.WriteLine();
         if (totalIssues == 0)
         {
-            Console.WriteLine("No repairs needed.");
+            @out.WriteLine("No repairs needed.");
         }
         else if (dryRun)
         {
-            Console.WriteLine($"Dry run: would repair {totalIssues:N0} item(s).");
+            @out.WriteLine($"Dry run: would repair {totalIssues:N0} item(s).");
         }
         else
         {
-            Console.WriteLine($"Repaired {totalRepaired:N0} item(s).");
+            @out.WriteLine($"Repaired {totalRepaired:N0} item(s).");
         }
         return 0;
     }

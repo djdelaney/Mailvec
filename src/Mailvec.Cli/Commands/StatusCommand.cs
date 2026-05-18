@@ -18,6 +18,12 @@ internal static class StatusCommand
     private static int Run()
     {
         using var sp = CliServices.Build();
+        return Execute(sp, Console.Out);
+    }
+
+    /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
+    internal static int Execute(IServiceProvider sp, TextWriter @out)
+    {
         var migrator = sp.GetRequiredService<SchemaMigrator>();
         migrator.EnsureUpToDate();
 
@@ -31,16 +37,16 @@ internal static class StatusCommand
         var schemaModel = metadata.Get("embedding_model") ?? "(not set)";
         var schemaDim = metadata.Get("embedding_dimensions") ?? "(not set)";
 
-        Console.WriteLine($"Database:    {Mailvec.Core.PathExpansion.Expand(archive.DatabasePath)}");
-        Console.WriteLine($"Maildir:     {Mailvec.Core.PathExpansion.Expand(ingest.MaildirRoot)}");
-        Console.WriteLine();
-        Console.WriteLine($"Messages:    {total:N0} total, {deleted:N0} deleted");
-        Console.WriteLine($"Embeddings:  {embedded:N0} / {Math.Max(total - deleted, 0):N0} ({Coverage(embedded, total - deleted)})  [{chunkCount:N0} chunks]");
-        Console.WriteLine();
-        Console.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={ollama.EmbeddingModel} ({ollama.EmbeddingDimensions}d)");
+        @out.WriteLine($"Database:    {Mailvec.Core.PathExpansion.Expand(archive.DatabasePath)}");
+        @out.WriteLine($"Maildir:     {Mailvec.Core.PathExpansion.Expand(ingest.MaildirRoot)}");
+        @out.WriteLine();
+        @out.WriteLine($"Messages:    {total:N0} total, {deleted:N0} deleted");
+        @out.WriteLine($"Embeddings:  {embedded:N0} / {Math.Max(total - deleted, 0):N0} ({Coverage(embedded, total - deleted)})  [{chunkCount:N0} chunks]");
+        @out.WriteLine();
+        @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={ollama.EmbeddingModel} ({ollama.EmbeddingDimensions}d)");
         if (schemaModel != "(not set)" && schemaModel != ollama.EmbeddingModel)
         {
-            Console.WriteLine("⚠  Schema/config mismatch — the embedder will refuse to start. Run `mailvec reindex --all` to switch models.");
+            @out.WriteLine("⚠  Schema/config mismatch — the embedder will refuse to start. Run `mailvec reindex --all` to switch models.");
         }
         return 0;
     }
