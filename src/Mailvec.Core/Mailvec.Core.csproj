@@ -25,4 +25,8 @@
     <EmbeddedResource Include="..\..\schema\migrations\*.sql" LinkBase="Schema\migrations" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Mailvec.Core.Tests" />
+  </ItemGroup>
+
 </Project>

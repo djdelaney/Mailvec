@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Mailvec.Core\Mailvec.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Mailvec.Embedder.Tests" />
+  </ItemGroup>
+
 </Project>
