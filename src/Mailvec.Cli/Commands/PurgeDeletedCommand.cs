@@ -35,42 +35,53 @@ internal static class PurgeDeletedCommand
     private static int Run(bool yes, bool dryRun)
     {
         using var sp = CliServices.Build();
+        return Execute(sp, yes, dryRun, Console.Out, () => Console.ReadLine());
+    }
+
+    /// <summary>
+    /// Test seam: lets tests inject a pre-built <see cref="IServiceProvider"/>
+    /// (typically backed by a temp DB), capture stdout via a custom writer,
+    /// and script the y/N prompt. The CLI wrapper above passes the standard
+    /// Console.Out + Console.ReadLine.
+    /// </summary>
+    internal static int Execute(IServiceProvider sp, bool yes, bool dryRun, TextWriter @out, Func<string?> readLine)
+    {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var messages = sp.GetRequiredService<MessageRepository>();
 
         var count = messages.CountSoftDeleted();
         if (count == 0)
         {
-            Console.WriteLine("No soft-deleted messages to purge.");
+            @out.WriteLine("No soft-deleted messages to purge.");
             return 0;
         }
 
-        Console.WriteLine($"{count:N0} soft-deleted message(s) will be hard-deleted, along with their chunks, vectors, attachments, and FTS entries.");
+        @out.WriteLine($"{count:N0} soft-deleted message(s) will be hard-deleted, along with their chunks, vectors, attachments, and FTS entries.");
 
         if (dryRun)
         {
-            Console.WriteLine("Dry run — no changes made.");
+            @out.WriteLine("Dry run — no changes made.");
             return 0;
         }
 
         if (!yes)
         {
-            Console.Write("This is irreversible. Proceed? [y/N]: ");
-            var input = Console.ReadLine();
+            @out.Write("This is irreversible. Proceed? [y/N]: ");
+            var input = readLine();
             if (!string.Equals(input?.Trim(), "y", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("Aborted.");
+                @out.WriteLine("Aborted.");
                 return 1;
             }
         }
 
         var purged = messages.PurgeSoftDeleted();
-        Console.WriteLine($"Purged {purged:N0} message(s).");
-        Console.WriteLine();
-        Console.WriteLine("Freed pages stay inside the SQLite file. To reclaim disk space:");
-        Console.WriteLine("  1. mailvec checkpoint            # flush the WAL");
-        Console.WriteLine("  2. stop indexer/embedder/mcp     # VACUUM needs an exclusive moment");
-        Console.WriteLine("  3. sqlite3 <db-path> 'VACUUM;'   # rewrites the file without freed pages");
+        @out.WriteLine($"Purged {purged:N0} message(s).");
+        @out.WriteLine();
+        @out.WriteLine("Freed pages stay inside the SQLite file. To reclaim disk space:");
+        @out.WriteLine("  1. mailvec checkpoint            # flush the WAL");
+        @out.WriteLine("  2. stop indexer/embedder/mcp     # VACUUM needs an exclusive moment");
+        @out.WriteLine("  3. sqlite3 <db-path> 'VACUUM;'   # rewrites the file without freed pages");
         return 0;
     }
 }
