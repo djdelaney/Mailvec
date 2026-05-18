@@ -20,25 +20,10 @@ actor MailvecClient {
         return URLSession(configuration: c)
     }()
 
-    private let decoder: JSONDecoder = {
-        let d = JSONDecoder()
-        // The .NET server emits ISO 8601 with arbitrary-precision fractional
-        // seconds (e.g. "2026-05-14T19:03:42.909205+00:00" — 6 digits).
-        // Foundation's ISO8601DateFormatter only accepts millisecond precision
-        // (3 digits), so we truncate the fractional part to 3 digits before
-        // handing it to the formatter. Falls through to the no-fraction
-        // variant for timestamps that don't have a fractional part at all.
-        d.dateDecodingStrategy = .custom { dec in
-            let s = try dec.singleValueContainer().decode(String.self)
-            let normalised = normaliseFractionalSeconds(s)
-            if let d = isoFormatter.date(from: normalised) { return d }
-            if let d = isoFormatterNoFraction.date(from: s) { return d }
-            throw DecodingError.dataCorruptedError(
-                in: try dec.singleValueContainer(),
-                debugDescription: "Unparseable date '\(s)'")
-        }
-        return d
-    }()
+    // Shared with the test target — see WireDecoder.swift. Production and
+    // tests must use the same decoder shape or the contract test gives
+    // false confidence.
+    private let decoder: JSONDecoder = WireDecoder.make()
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -204,40 +189,3 @@ enum MailvecClientError: LocalizedError {
     }
 }
 
-private let isoFormatter: ISO8601DateFormatter = {
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f
-}()
-
-private let isoFormatterNoFraction: ISO8601DateFormatter = {
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime]
-    return f
-}()
-
-/// Trims the fractional-seconds portion of an ISO 8601 timestamp to exactly
-/// three digits, which is what `ISO8601DateFormatter` accepts. Leaves
-/// timestamps without a fractional part untouched.
-///
-/// Examples:
-///   "2026-05-14T19:03:42.909205+00:00" → "2026-05-14T19:03:42.909+00:00"
-///   "2026-05-14T19:03:42.9+00:00"       → "2026-05-14T19:03:42.900+00:00"
-///   "2026-05-14T19:03:42+00:00"         → "2026-05-14T19:03:42+00:00"
-private func normaliseFractionalSeconds(_ s: String) -> String {
-    guard let dotRange = s.range(of: ".") else { return s }
-    // Find the end of the fractional-digits run (first non-digit after the dot).
-    let fracStart = dotRange.upperBound
-    var fracEnd = fracStart
-    while fracEnd < s.endIndex, s[fracEnd].isNumber {
-        fracEnd = s.index(after: fracEnd)
-    }
-    let fraction = s[fracStart..<fracEnd]
-    let normalisedFraction: String
-    if fraction.count >= 3 {
-        normalisedFraction = String(fraction.prefix(3))
-    } else {
-        normalisedFraction = fraction + String(repeating: "0", count: 3 - fraction.count)
-    }
-    return s[..<fracStart] + normalisedFraction + s[fracEnd...]
-}
