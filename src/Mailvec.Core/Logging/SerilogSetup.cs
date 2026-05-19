@@ -15,12 +15,21 @@ namespace Mailvec.Core.Logging;
 /// Output:
 ///   - Rolling file at <logDir>/mailvec-&lt;service&gt;-&lt;date&gt;.log,
 ///     daily rolling, also rolls if a single day exceeds 10 MB,
-///     14 most recent files retained.
+///     14 most recent files retained. SKIPPED in stdio mode — see below.
 ///   - Console sink (stdout) by default — useful for `dotnet run` during dev.
 ///     Skipped when MAILVEC_LAUNCHD=1 is set so production doesn't double-write
 ///     into the launchd-captured StandardOutPath.
 ///     Forced to stderr when stdioMode=true (the MCP stdio transport reserves
 ///     stdout for JSON-RPC framing — a single byte on stdout corrupts the protocol).
+///
+/// Why the file sink is skipped in stdio mode: Claude Desktop spawns one
+/// `Mailvec.Mcp --stdio` child per session (main chat + one per Cowork session),
+/// concurrent with the launchd HTTP MCP. All three would target the same
+/// mailvec-mcp-&lt;date&gt;.log. `shared: false` only enforces single-writer on
+/// Windows — POSIX `O_APPEND` happily admits multiple writers, and the daily/
+/// size-cap roll and retention prune become silently racy (IOExceptions get
+/// swallowed by Serilog's SelfLog). Stdio output goes to stderr only; the
+/// client captures it (Claude Desktop → ~/Library/Logs/Claude/mcp-server-mailvec.log).
 ///
 /// Log dir resolves from MAILVEC_LOG_DIR env var, then ~/Library/Logs/Mailvec/.
 ///
@@ -37,13 +46,15 @@ public static class SerilogSetup
         string serviceName,
         bool stdioMode = false)
     {
-        var logDir = ResolveLogDir();
-        Directory.CreateDirectory(logDir);
-
         var config = new LoggerConfiguration()
             .ReadFrom.Configuration(configuration)
-            .Enrich.WithProperty("service", serviceName)
-            .WriteTo.File(
+            .Enrich.WithProperty("service", serviceName);
+
+        if (!stdioMode)
+        {
+            var logDir = ResolveLogDir();
+            Directory.CreateDirectory(logDir);
+            config = config.WriteTo.File(
                 path: Path.Combine(logDir, $"mailvec-{serviceName}-.log"),
                 rollingInterval: RollingInterval.Day,
                 fileSizeLimitBytes: 10 * 1024 * 1024,
@@ -52,6 +63,7 @@ public static class SerilogSetup
                 shared: false,
                 outputTemplate:
                     "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}");
+        }
 
         var underLaunchd = string.Equals(
             Environment.GetEnvironmentVariable("MAILVEC_LAUNCHD"),
