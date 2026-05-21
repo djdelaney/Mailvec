@@ -248,7 +248,13 @@ public class TrayStatusServiceTests
                 MessagesEmbedded: embedded,
                 CoveragePct: coverage,
                 ChunkCount: 0),
-            Ollama: new OllamaHealth("http://localhost:11434", Reachable: true, ConfiguredModel: "mxbai-embed-large"));
+            Ollama: new OllamaHealth("http://localhost:11434", Reachable: true, ConfiguredModel: "mxbai-embed-large"),
+            Embedder: new EmbedderHealth(
+                LastSuccessAt: DateTimeOffset.UtcNow,
+                LastFailureAt: null,
+                ConsecutiveFailures: 0,
+                LastFailureKind: null,
+                Stuck: false));
     }
 
     private static HealthReport ReportWith(long messagesTotal, long messagesDeleted, long embedded)

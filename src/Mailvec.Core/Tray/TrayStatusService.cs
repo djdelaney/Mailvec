@@ -172,6 +172,21 @@ public sealed class TrayStatusService(
         {
             if (running)
             {
+                // Embedder-specific: a running embedder that's been failing
+                // batches back-to-back is the classic silent-regression we
+                // need to surface loudly. HealthReport.Embedder.Stuck flips
+                // true after N consecutive batch failures (see
+                // EmbedderHealthKeys.StuckThreshold). Turning the tile red
+                // here propagates through ClassifySeverity to the menu-bar
+                // dot. The "busy" syncing path stays for the healthy
+                // partial-coverage case.
+                if (id == "embedder" && healthReport.Embedder.Stuck)
+                {
+                    var detail = healthReport.Embedder.LastFailureKind is { } kind
+                        ? $"stuck — {healthReport.Embedder.ConsecutiveFailures} failed batches ({kind})"
+                        : $"stuck — {healthReport.Embedder.ConsecutiveFailures} failed batches";
+                    return (false, false, "error", detail);
+                }
                 var busy = id == "embedder" && healthReport.Embeddings.CoveragePct < 100.0;
                 return (true, busy, busy ? "syncing" : "ok", busy ? "embedding" : "idle");
             }
