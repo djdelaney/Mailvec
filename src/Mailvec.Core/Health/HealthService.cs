@@ -1,3 +1,4 @@
+using System.Globalization;
 using Mailvec.Core.Data;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
@@ -37,10 +38,13 @@ public sealed class HealthService(
         var live = Math.Max(total - deleted, 0);
         var coverage = live == 0 ? 0d : (double)embedded / live;
 
-        var status = (ollamaReachable, modelMismatch) switch
+        var embedder = BuildEmbedderHealth();
+
+        var status = (ollamaReachable, modelMismatch, embedder.Stuck) switch
         {
-            (false, _) => "degraded",
-            (_, true) => "degraded",
+            (false, _, _) => "degraded",
+            (_, true, _) => "degraded",
+            (_, _, true) => "degraded",
             _ => "ok",
         };
 
@@ -63,7 +67,42 @@ public sealed class HealthService(
             Ollama: new OllamaHealth(
                 BaseUrl: ollamaOpts.Value.BaseUrl,
                 Reachable: ollamaReachable,
-                ConfiguredModel: configModel));
+                ConfiguredModel: configModel),
+            Embedder: embedder);
+    }
+
+    /// <summary>
+    /// Read the embedder's batch-outcome heartbeat (written by the Embedder
+    /// process via <see cref="EmbedderHealthKeys"/>) and decide whether it's
+    /// stuck. The keys may be absent on a fresh database or a system that's
+    /// never had the embedder run a batch — in that case we report null
+    /// timestamps and Stuck=false, which is the correct "no signal yet"
+    /// reading rather than a false-positive degraded.
+    /// </summary>
+    private EmbedderHealth BuildEmbedderHealth()
+    {
+        var consecutiveFailuresRaw = metadata.Get(EmbedderHealthKeys.ConsecutiveFailures);
+        _ = int.TryParse(consecutiveFailuresRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var consecutiveFailures);
+
+        var lastSuccessAt = ParseTimestamp(metadata.Get(EmbedderHealthKeys.LastSuccessAt));
+        var lastFailureAt = ParseTimestamp(metadata.Get(EmbedderHealthKeys.LastFailureAt));
+        var lastFailureKind = metadata.Get(EmbedderHealthKeys.LastFailureKind);
+        if (string.IsNullOrEmpty(lastFailureKind)) lastFailureKind = null;
+
+        var stuck = consecutiveFailures >= EmbedderHealthKeys.StuckThreshold;
+
+        return new EmbedderHealth(
+            LastSuccessAt: lastSuccessAt,
+            LastFailureAt: lastFailureAt,
+            ConsecutiveFailures: consecutiveFailures,
+            LastFailureKind: lastFailureKind,
+            Stuck: stuck);
+    }
+
+    private static DateTimeOffset? ParseTimestamp(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return null;
+        return DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : null;
     }
 
     private (long Total, long Deleted, long Embedded, long Chunks, DateTimeOffset? LastIndexedAt) ReadCounts()
@@ -92,7 +131,23 @@ public sealed record HealthReport(
     string Status,
     DatabaseHealth Database,
     EmbeddingHealth Embeddings,
-    OllamaHealth Ollama);
+    OllamaHealth Ollama,
+    EmbedderHealth Embedder);
+
+/// <summary>
+/// Dynamic "is the embedder making progress" signal — distinct from the
+/// static <see cref="EmbeddingHealth"/> (model name / coverage count).
+/// Stuck is the load-bearing flag: when true, /health flips to degraded and
+/// any monitor wired to that state will fire. ConsecutiveFailures is the
+/// raw counter the embedder writes after each attempted batch; the rest are
+/// breadcrumbs for the user looking at /health to understand "since when".
+/// </summary>
+public sealed record EmbedderHealth(
+    DateTimeOffset? LastSuccessAt,
+    DateTimeOffset? LastFailureAt,
+    int ConsecutiveFailures,
+    string? LastFailureKind,
+    bool Stuck);
 
 public sealed record DatabaseHealth(
     string Path,

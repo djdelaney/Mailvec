@@ -441,7 +441,17 @@ internal static class DoctorCommand
             Ollama: new OllamaHealth(
                 BaseUrl: ollama.BaseUrl,
                 Reachable: false,         // honest sentinel; rendered as "skipped"
-                ConfiguredModel: ollama.EmbeddingModel));
+                ConfiguredModel: ollama.EmbeddingModel),
+            // Doctor's offline-mode HealthReport doesn't have access to the
+            // embedder heartbeat metadata; leave the fields blank rather than
+            // synthesising values. Doctor's own /health probe (further down)
+            // is what actually surfaces a stuck embedder to the user.
+            Embedder: new EmbedderHealth(
+                LastSuccessAt: null,
+                LastFailureAt: null,
+                ConsecutiveFailures: 0,
+                LastFailureKind: null,
+                Stuck: false));
     }
 
     // ---------------------------------------------------------------------

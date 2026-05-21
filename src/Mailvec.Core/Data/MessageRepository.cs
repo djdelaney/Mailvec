@@ -179,6 +179,34 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
     private static void ReplaceAttachments(SqliteConnection conn, SqliteTransaction tx, long messageId, IReadOnlyList<ParsedAttachment> attachments)
     {
+        // chunks.attachment_id has ON DELETE CASCADE → SQLite will silently
+        // cascade-delete the attachment-sourced chunks rows when we DELETE
+        // FROM attachments below. chunk_embeddings is a vec0 virtual table
+        // that does NOT participate in FK cascade, so its rows for those
+        // chunk_ids would be left orphaned. chunks.id is INTEGER PRIMARY KEY
+        // without AUTOINCREMENT, so future inserts pick MAX(id)+1 — eventually
+        // a new chunk lands on an orphan rowid and the embedder blows up with
+        // `UNIQUE constraint failed on chunk_embeddings primary key` and the
+        // message gets stuck unembedded. Clear the orphaned-by-cascade rows
+        // here while the chunks rows still exist and are joinable. Body
+        // chunks (attachment_id IS NULL) are unaffected by this cascade; the
+        // scanner's ClearEmbeddingsForMessage call cleans them in a later tx.
+        // The matching guard for the messages-cascade path lives in
+        // PurgeSoftDeleted.
+        using (var delEmbeddings = conn.CreateCommand())
+        {
+            delEmbeddings.Transaction = tx;
+            delEmbeddings.CommandText = """
+                DELETE FROM chunk_embeddings
+                WHERE chunk_id IN (
+                    SELECT id FROM chunks
+                    WHERE message_id = $mid AND attachment_id IS NOT NULL
+                )
+                """;
+            delEmbeddings.Parameters.AddWithValue("$mid", messageId);
+            delEmbeddings.ExecuteNonQuery();
+        }
+
         using (var del = conn.CreateCommand())
         {
             del.Transaction = tx;

@@ -1,4 +1,5 @@
 using Mailvec.Core.Data;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Models;
 using Mailvec.Core.Parsing;
 
@@ -225,6 +226,62 @@ public class MessageRepositoryTests
         var msg = repo.GetById(id).ShouldNotBeNull();
         msg.Attachments.ShouldBeEmpty();
         msg.HasAttachments.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Re_upsert_with_attachment_chunks_present_does_not_orphan_chunk_embeddings()
+    {
+        // Regression: ReplaceAttachments runs `DELETE FROM attachments` on
+        // content-change, and `chunks.attachment_id REFERENCES attachments(id)
+        // ON DELETE CASCADE` then silently deletes the attachment-sourced
+        // chunks rows. chunk_embeddings is a vec0 virtual table and does NOT
+        // participate in FK cascade — without an explicit pre-cascade DELETE
+        // in ReplaceAttachments, the vec0 rows for those chunk_ids leak as
+        // orphans and eventually collide with future MAX(id)+1 inserts, which
+        // breaks the embedder with `UNIQUE constraint failed on
+        // chunk_embeddings primary key`.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        var initial = new List<ParsedAttachment>
+        {
+            new(0, "doc.pdf", "application/pdf", 100),
+        };
+        long id = repo.Upsert(Sample(attachments: initial, contentHash: "h1"), "INBOX", "INBOX/cur", "f1", now);
+        var attId = repo.GetById(id).ShouldNotBeNull().Attachments[0].Id;
+
+        // Embed one body chunk + one attachment-sourced chunk against this message.
+        chunks.ReplaceChunksForMessage(
+            id,
+            [
+                new TextChunk(0, "body text", 1),
+                new TextChunk(1, "doc.pdf\n\nextracted attachment text", 1, Source: "attachment", AttachmentId: attId),
+            ],
+            [Hot(0), Hot(1)],
+            now);
+
+        chunks.CountForMessage(id).ShouldBe(2);
+        chunks.CountOrphanEmbeddings().ShouldBe(0);
+
+        // Content-change re-upsert: triggers ReplaceAttachments, whose
+        // attachments DELETE cascades to the attachment chunk row. The vec0
+        // row for that chunk must be cleared in the same transaction.
+        var replacement = new List<ParsedAttachment>
+        {
+            new(0, "new.pdf", "application/pdf", 200),
+        };
+        repo.Upsert(Sample(attachments: replacement, contentHash: "h2"), "INBOX", "INBOX/cur", "f1", now);
+
+        chunks.CountOrphanEmbeddings().ShouldBe(0);
+    }
+
+    private static float[] Hot(int index, int dim = 1024)
+    {
+        var v = new float[dim];
+        v[index] = 1f;
+        return v;
     }
 
     [Fact]

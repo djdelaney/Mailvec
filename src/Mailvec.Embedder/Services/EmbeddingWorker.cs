@@ -46,7 +46,14 @@ public sealed class EmbeddingWorker(
                 var processed = await ProcessOneBatchAsync(batchSize, stoppingToken).ConfigureAwait(false);
                 if (processed == 0)
                 {
+                    // Idle: nothing was attempted. Don't touch the
+                    // success/failure counters — they reflect the outcome of
+                    // the last *attempted* batch, not "the embedder is alive".
                     await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    RecordBatchSuccess();
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -55,6 +62,7 @@ public sealed class EmbeddingWorker(
             }
             catch (Exception ex)
             {
+                RecordBatchFailure(ex);
                 logger.LogError(ex, "Embedding batch failed; will retry after poll interval");
                 await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
             }
@@ -218,6 +226,45 @@ public sealed class EmbeddingWorker(
         if (hasAttachments) sb.Append("Attachments: ").Append(attachmentNames).Append("\n\n");
         sb.Append(body);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Persist a "this batch succeeded" beat to the metadata table so the MCP
+    /// server's /health endpoint (a separate process) can tell whether the
+    /// embedder is making progress. The two services share state only through
+    /// SQLite, so this is the cheapest single-row signal we can give them.
+    /// Reset the consecutive-failures counter; only attempted batches touch
+    /// these keys, so an idle embedder doesn't keep stamping fresh timestamps.
+    /// </summary>
+    private void RecordBatchSuccess()
+    {
+        var nowIso = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        metadata.Set(EmbedderHealthKeys.LastSuccessAt, nowIso);
+        metadata.Set(EmbedderHealthKeys.ConsecutiveFailures, "0");
+        metadata.Set(EmbedderHealthKeys.LastFailureKind, "");
+    }
+
+    /// <summary>
+    /// Persist a "this batch failed" beat. Increments the consecutive-failures
+    /// counter so HealthService can flip /health to degraded after N straight
+    /// failures (the recurring orphan-vector / UNIQUE-constraint bug used to
+    /// rack up thousands of these per day with no automated escalation).
+    /// </summary>
+    private void RecordBatchFailure(Exception ex)
+    {
+        var nowIso = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        // Best-effort increment. The embedder is the sole writer and a single
+        // BackgroundService instance, so there's no in-process race; the only
+        // other reader (HealthService) is read-only and tolerant of stale
+        // values to the tune of one poll cycle.
+        var prior = metadata.Get(EmbedderHealthKeys.ConsecutiveFailures);
+        var next = int.TryParse(prior, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n + 1 : 1;
+        metadata.Set(EmbedderHealthKeys.ConsecutiveFailures, next.ToString(CultureInfo.InvariantCulture));
+        metadata.Set(EmbedderHealthKeys.LastFailureAt, nowIso);
+        // Truncate so the metadata row stays cheap. Exception type name is
+        // enough to disambiguate the common cases (SqliteException, HttpRequest-
+        // Exception, etc.); message bodies belong in the rolling log file.
+        metadata.Set(EmbedderHealthKeys.LastFailureKind, ex.GetType().Name);
     }
 
     /// <summary>
