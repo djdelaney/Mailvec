@@ -47,18 +47,24 @@ internal static class EvalImportCommand
 
         cmd.SetAction(async (parseResult, ct) =>
         {
-            var logDir = ResolveLogDir(parseResult.GetValue(logDirOpt));
-            if (!Directory.Exists(logDir))
+            var mailvecLogDir = ResolveLogDir(parseResult.GetValue(logDirOpt));
+            var claudeLogPath = ClaudeStdioLogPath();
+
+            if (!Directory.Exists(mailvecLogDir) && !File.Exists(claudeLogPath))
             {
-                Console.Error.WriteLine($"Log directory does not exist: {logDir}");
+                Console.Error.WriteLine("No MCP log sources found. Looked in:");
+                Console.Error.WriteLine($"  - {mailvecLogDir} (launchd HTTP MCP)");
+                Console.Error.WriteLine($"  - {claudeLogPath} (Claude Desktop stdio MCP)");
                 Console.Error.WriteLine("Set Mcp:LogToolCalls=true on the MCP server, run a search via Claude, and try again.");
                 return 2;
             }
 
-            var calls = LoadRecentCalls(logDir, parseResult.GetValue(limitOpt));
+            var calls = LoadRecentCalls(mailvecLogDir, claudeLogPath, parseResult.GetValue(limitOpt));
             if (calls.Count == 0)
             {
-                Console.Error.WriteLine($"No mcp-call lines for search_emails found in {logDir}.");
+                Console.Error.WriteLine("No mcp-call lines for search_emails found. Looked in:");
+                Console.Error.WriteLine($"  - {mailvecLogDir} (launchd HTTP MCP)");
+                Console.Error.WriteLine($"  - {claudeLogPath} (Claude Desktop stdio MCP)");
                 Console.Error.WriteLine("Confirm Mcp:LogToolCalls=true on the MCP server, then exercise it via Claude.");
                 return 2;
             }
@@ -122,45 +128,45 @@ internal static class EvalImportCommand
     }
 
     /// <summary>
-    /// Reads <c>mcp-call tool=search_emails</c> entries across every
-    /// <c>mailvec-mcp-*.log</c> in <paramref name="logDir"/>, dedupes by
-    /// canonical args (Claude often retries with identical params), and
-    /// returns the most recent <paramref name="limit"/>.
+    /// Default path for Claude Desktop's capture of the stdio MCP child's stderr.
+    /// SerilogSetup gates the file sink behind <c>!stdioMode</c>, so the stdio
+    /// MCP never writes to <c>~/Library/Logs/Mailvec/</c>; tool-call lines only
+    /// land here.
     /// </summary>
-    private static IReadOnlyList<RecentCall> LoadRecentCalls(string logDir, int limit)
+    private static string ClaudeStdioLogPath() =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library", "Logs", "Claude", "mcp-server-mailvec.log");
+
+    // Launchd HTTP MCP: full timestamp + SourceContext per the file sink's outputTemplate.
+    private static readonly Regex FileSinkLine = new(
+        @"^(?<ts>\S+ \S+ \S+) \[INF\] Mailvec\.Mcp\.ToolCallLogger: mcp-call tool=search_emails args=(?<args>\{.*\})$",
+        RegexOptions.Compiled);
+
+    // Claude Desktop stdio MCP: Serilog's default Console template — HH:mm:ss, no date, no SourceContext.
+    private static readonly Regex StdioLine = new(
+        @"^\[(?<ts>\d{2}:\d{2}:\d{2}) INF\] mcp-call tool=search_emails args=(?<args>\{.*\})$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Reads <c>mcp-call tool=search_emails</c> entries from both possible
+    /// sources — the launchd HTTP MCP's rolling files in <paramref name="mailvecLogDir"/>,
+    /// and Claude Desktop's stderr capture at <paramref name="claudeLogPath"/>.
+    /// Dedupes by canonical args (Claude often retries with identical params)
+    /// and returns the most recent <paramref name="limit"/>.
+    /// </summary>
+    private static IReadOnlyList<RecentCall> LoadRecentCalls(string mailvecLogDir, string claudeLogPath, int limit)
     {
-        var files = Directory.GetFiles(logDir, "mailvec-mcp-*.log");
-        if (files.Length == 0) return [];
-
-        // Regex anchors on the well-known ToolCallLogger output. The args
-        // payload is a JSON object — `{...}` capture is greedy to the end of
-        // the line, which works because Serilog writes one log event per line.
-        var line = new Regex(
-            @"^(?<ts>\S+ \S+ \S+) \[INF\] Mailvec\.Mcp\.ToolCallLogger: mcp-call tool=search_emails args=(?<args>\{.*\})$",
-            RegexOptions.Compiled);
-
         var calls = new List<RecentCall>(256);
-        foreach (var path in files)
+
+        if (Directory.Exists(mailvecLogDir))
         {
-            foreach (var raw in File.ReadLines(path))
-            {
-                var m = line.Match(raw);
-                if (!m.Success) continue;
-
-                if (!DateTimeOffset.TryParse(m.Groups["ts"].Value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var ts))
-                    continue;
-
-                CallArgs? parsed;
-                try
-                {
-                    parsed = JsonSerializer.Deserialize<CallArgs>(m.Groups["args"].Value, JsonOpts);
-                }
-                catch (JsonException) { continue; }
-                if (parsed is null) continue;
-
-                calls.Add(new RecentCall(ts, parsed, m.Groups["args"].Value));
-            }
+            foreach (var path in Directory.GetFiles(mailvecLogDir, "mailvec-mcp-*.log"))
+                LoadFileSinkLog(path, calls);
         }
+
+        if (File.Exists(claudeLogPath))
+            LoadStdioLog(claudeLogPath, calls);
 
         // Most-recent first, dedupe by canonical args string, take the requested cap.
         return calls
@@ -168,6 +174,75 @@ internal static class EvalImportCommand
             .DistinctBy(c => c.RawArgs, StringComparer.Ordinal)
             .Take(limit)
             .ToList();
+    }
+
+    private static void LoadFileSinkLog(string path, List<RecentCall> sink)
+    {
+        foreach (var raw in File.ReadLines(path))
+        {
+            var m = FileSinkLine.Match(raw);
+            if (!m.Success) continue;
+
+            if (!DateTimeOffset.TryParse(m.Groups["ts"].Value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var ts))
+                continue;
+
+            if (TryParseArgs(m.Groups["args"].Value, out var args))
+                sink.Add(new RecentCall(ts, args, m.Groups["args"].Value));
+        }
+    }
+
+    /// <summary>
+    /// Reconstructs absolute timestamps for stdio-format lines (which only
+    /// carry HH:mm:ss) by anchoring on the file's mtime and walking backwards.
+    /// Each time the per-line time-of-day jumps forward as we step backward
+    /// through the file, we crossed midnight — decrement the running date.
+    /// </summary>
+    internal static void LoadStdioLog(string path, List<RecentCall> sink) =>
+        LoadStdioLog(File.ReadLines(path), File.GetLastWriteTime(path), sink);
+
+    internal static void LoadStdioLog(IEnumerable<string> lines, DateTime mtimeLocal, List<RecentCall> sink)
+    {
+        var parsed = new List<(TimeSpan TimeOfDay, CallArgs Args, string RawArgs)>(64);
+        foreach (var raw in lines)
+        {
+            var m = StdioLine.Match(raw);
+            if (!m.Success) continue;
+            if (!TimeSpan.TryParseExact(m.Groups["ts"].Value, @"hh\:mm\:ss", CultureInfo.InvariantCulture, out var tod))
+                continue;
+            if (TryParseArgs(m.Groups["args"].Value, out var args))
+                parsed.Add((tod, args, m.Groups["args"].Value));
+        }
+        if (parsed.Count == 0) return;
+
+        // If the last line's time is later in the day than mtime's time-of-day,
+        // the file hasn't been touched today and the trailing entries are from
+        // a previous day. Same shift applies to every line we walk back through.
+        var date = mtimeLocal.Date;
+        if (parsed[^1].TimeOfDay > mtimeLocal.TimeOfDay)
+            date = date.AddDays(-1);
+
+        var offset = TimeZoneInfo.Local.GetUtcOffset(mtimeLocal);
+        TimeSpan? nextTod = null;
+        for (var i = parsed.Count - 1; i >= 0; i--)
+        {
+            var (tod, args, rawArgs) = parsed[i];
+            if (nextTod is not null && tod > nextTod.Value)
+                date = date.AddDays(-1);
+            nextTod = tod;
+            sink.Add(new RecentCall(new DateTimeOffset(date + tod, offset), args, rawArgs));
+        }
+    }
+
+    private static bool TryParseArgs(string json, out CallArgs args)
+    {
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<CallArgs>(json, JsonOpts);
+            if (parsed is not null) { args = parsed; return true; }
+        }
+        catch (JsonException) { }
+        args = null!;
+        return false;
     }
 
     private static void PrintCallList(IReadOnlyList<RecentCall> calls)
@@ -242,10 +317,10 @@ internal static class EvalImportCommand
         PropertyNameCaseInsensitive = true,
     };
 
-    private sealed record RecentCall(DateTimeOffset Timestamp, CallArgs Args, string RawArgs);
+    internal sealed record RecentCall(DateTimeOffset Timestamp, CallArgs Args, string RawArgs);
 
     /// <summary>Mirror of the search_emails MCP tool's parameter set.</summary>
-    private sealed class CallArgs
+    internal sealed class CallArgs
     {
         public string? Query { get; set; }
         public string? Mode { get; set; }
