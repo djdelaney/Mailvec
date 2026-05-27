@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-`mailvec-project-scope.md` is the design document and the canonical reference for goals, non-goals, schema, and the phased build plan. Read it before making non-trivial changes. `CHANGELOG.md` is the phase-by-phase build history; don't duplicate it here.
+The schema is `schema/001_initial.sql` + migrations under `schema/migrations/` — silent-corruption-prone invariants are captured in this file under "Schema & data invariants". `CHANGELOG.md` is the phase-by-phase build history. Design rationale that didn't make it into code lives in `docs/security.md` (threat model) and `docs/future-ideas.md` (deferred work + still-open questions).
 
 Operator/release/contributor docs (read on demand):
 - `ops/UPGRADING.md` — bumping NuGet packages, the .NET SDK, sqlite-vec, SQLite, Ollama floor.
