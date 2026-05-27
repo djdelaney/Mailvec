@@ -84,22 +84,20 @@ curl -s http://127.0.0.1:3333/health | jq .
 Operations and dev:
 
 - **[docs/imap-setup.md](docs/imap-setup.md)** — mbsync config, Keychain, first-sync, Fastmail label-filtering gotcha
-- **[docs/dev-walkthrough.md](docs/dev-walkthrough.md)** — manual terminal-driven walkthrough against a real IMAP account, no install required
-- **[docs/repo-layout.md](docs/repo-layout.md)** — file tree
+- **[docs/dev-walkthrough.md](docs/dev-walkthrough.md)** — point the pipeline at a throwaway DB for debugging without touching production
 - **[docs/logs.md](docs/logs.md)** — log paths, rotation, dev overrides
-- **[docs/glossary.md](docs/glossary.md)** — FTS5, RRF, MCP, Maildir, etc.
 
 Client wiring:
 
-- **[docs/claude-desktop.md](docs/claude-desktop.md)** — MCPB bundle build / install / update
-- **[docs/clients/](docs/clients/)** — per-client snippets (Claude Code, Gemini CLI, Codex CLI, ChatGPT desktop)
+- **[docs/clients/](docs/clients/)** — per-client snippets (Claude Desktop, Claude Code, Gemini CLI, Codex CLI, ChatGPT desktop)
 - **[docs/tray.md](docs/tray.md)** — menu-bar app
 - **[docs/attachments.md](docs/attachments.md)** — how `get_attachment` works + filesystem-MCP wiring
 - **[docs/fastmail-deep-links.md](docs/fastmail-deep-links.md)** — optional `webmailUrl` field
+- **[docs/security.md](docs/security.md)** — threat model: what's exposed, what's accepted, what's out of scope
+- **[docs/future-ideas.md](docs/future-ideas.md)** — deferred work (cloud-LLM access, tailnet, OCR)
 
 Project:
 
-- **[mailvec-project-scope.md](mailvec-project-scope.md)** — design doc; canonical reference for goals, non-goals, schema, phased plan
 - **[CHANGELOG.md](CHANGELOG.md)** — phase-by-phase build history
 - **[CLAUDE.md](CLAUDE.md)** — contributor-facing architectural map, build conventions, gotchas
 - **[ops/UPGRADING.md](ops/UPGRADING.md)** — bumping NuGet packages, the .NET SDK, sqlite-vec, SQLite, Ollama floor
@@ -107,7 +105,7 @@ Project:
 
 ## Security model
 
-Single-user, single-Mac. The macOS user account is the trust boundary; inside it any local process can call any tool, outside it Mailvec is unreachable. The MCP HTTP server binds `127.0.0.1`, all five tools are read-only against the database, and `get_attachment`'s only filesystem write is a sanitized + path-contained drop into `~/Downloads/mailvec/`. There's no authentication, no rate limiting, and `Mcp:LogToolCalls=false` by default — turning it on writes query strings into the rolling log files. Full discussion (what's accepted, what's out of scope, why Phase 5 doesn't change the model) lives in [`mailvec-project-scope.md`](mailvec-project-scope.md) §10 Security model. Read it before changing the bind address, adding a mutating tool, or pointing the server at anything other than loopback.
+Single-user, single-Mac. The macOS user account is the trust boundary; inside it any local process can call any tool, outside it Mailvec is unreachable. The MCP HTTP server binds `127.0.0.1`, all five tools are read-only against the database, and `get_attachment`'s only filesystem write is a sanitized + path-contained drop into `~/Downloads/mailvec/`. There's no authentication, no rate limiting, and `Mcp:LogToolCalls=false` by default — turning it on writes query strings into the rolling log files. Full discussion (what's accepted, what's out of scope, why Phase 5 doesn't change the model) lives in [`docs/security.md`](docs/security.md). Read it before changing the bind address, adding a mutating tool, or pointing the server at anything other than loopback.
 
 ## Status
 
