@@ -1,6 +1,6 @@
 # MCPB bundle — contributor notes
 
-Release/build steps live in [`ops/mcpb-release.md`](../../ops/mcpb-release.md). User-facing install docs live in [`docs/claude-desktop.md`](../claude-desktop.md). This page is the code-edit gotcha collection — read it before editing `manifest.json`, `ops/build-mcpb.sh`, or any `[McpServerTool]` whose output crosses into Claude Desktop.
+Release/build steps live in [`ops/mcpb-release.md`](../../ops/mcpb-release.md). User-facing install docs live in [`docs/clients/claude-desktop.md`](../clients/claude-desktop.md). This page is the code-edit gotcha collection — read it before editing `manifest.json`, `ops/build-mcpb.sh`, or any `[McpServerTool]` whose output crosses into Claude Desktop.
 
 ## manifest.json quirks
 

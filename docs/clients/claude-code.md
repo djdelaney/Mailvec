@@ -49,7 +49,7 @@ The launchd plist sets `MAILVEC_LAUNCHD=1` to suppress Serilog's Console sink in
 ## Known quirks
 
 - **HTTP transport requires a session.** Streamable HTTP clients must `initialize` first, capture the `Mcp-Session-Id` response header, send `notifications/initialized`, and include the session header on every subsequent call. Claude Code handles this automatically, but if you ever `curl` the endpoint directly, calls without the session header silently 404.
-- **No auth, 127.0.0.1 only.** Anything running as your user on the same machine can call any tool. That's the threat model — see `mailvec-project-scope.md` §10 Security model (and §12 for the cloud-access framing).
+- **No auth, 127.0.0.1 only.** Anything running as your user on the same machine can call any tool. That's the threat model — see [`docs/security.md`](../security.md) (and [`docs/future-ideas.md`](../future-ideas.md) for the cloud-access framing).
 
 ## Verifying
 

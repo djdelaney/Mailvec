@@ -1,6 +1,6 @@
 # Changelog
 
-Built in phases per the [design doc](mailvec-project-scope.md#8-phased-build-plan). Each phase has a hard exit criterion and shipped standalone value before the next began.
+Built in phases. Each phase has a hard exit criterion and shipped standalone value before the next began.
 
 ## ✅ Phase 0 — Repo scaffold
 
@@ -36,7 +36,7 @@ Wires the archive up to Claude. **Exit criterion met.**
 
 - `Mailvec.Mcp` runs in two transports sharing the same Core wiring:
   - **HTTP** (default) on `127.0.0.1:3333` for Claude Code and the smoke tests.
-  - **stdio** (`--stdio` flag) for Claude Desktop, packaged as an `.mcpb` bundle (see [docs/claude-desktop.md](docs/claude-desktop.md)).
+  - **stdio** (`--stdio` flag) for Claude Desktop, packaged as an `.mcpb` bundle (see [docs/clients/claude-desktop.md](docs/clients/claude-desktop.md)).
 - Tools: `search_emails` (keyword / semantic / hybrid with folder/date/sender filters), `get_email`, `get_thread`, `list_folders`, `get_attachment`. The original 6-tool design merged to 4 search/fetch tools — `recent_emails` is `search_emails` with `query` omitted, and `find_by_sender` is `search_emails` with `fromExact` — plus `get_attachment` added later for attachment delivery (see [docs/attachments.md](docs/attachments.md)).
 - Hybrid search reused from Phase 2.
 - Attachment **filename** indexing: filenames are stored in the `attachments` table and surfaced through FTS5 (so a query like `"mortgage statement"` matches an email whose only mention is in `mortgage_statement_2024.pdf`). Per-attachment metadata (filename, content type, size, partIndex) is returned by `get_email`. Attachment **content** indexing landed in Phase 4.5 below.
@@ -71,10 +71,8 @@ Mailvec works end-to-end with Claude Desktop (MCPB stdio) and Claude Code (HTTP)
 - **ChatGPT desktop** once its MCP-server registration ships in the user's release.
 - Per-client config snippets checked into `docs/clients/`, exercised in an integration tier during release prep.
 
-Public-HTTPS / OAuth access for cloud LLMs (Claude.ai web, ChatGPT Connectors, Gemini in the browser) is parked in [`mailvec-project-scope.md`](mailvec-project-scope.md) §12 Future ideas — the operational cost of a public tunnel + OAuth issuer for a single-user system is higher than the value over local-agent coverage.
+Public-HTTPS / OAuth access for cloud LLMs (Claude.ai web, ChatGPT Connectors, Gemini in the browser) is parked in [`docs/future-ideas.md`](docs/future-ideas.md) — the operational cost of a public tunnel + OAuth issuer for a single-user system is higher than the value over local-agent coverage.
 
-See [`mailvec-project-scope.md`](mailvec-project-scope.md) §8 Phase 5 for sequencing.
-
-## Out of scope (per design doc §13)
+## Out of scope
 
 Sending mail, modifying Fastmail state, multi-account support, calendar/contacts/files, web UI, real-time push. Attachment **filenames** are indexed (FTS5), attachments themselves are extractable to disk via `get_attachment`, and PDF / DOCX / plain-text **content** is extracted at index time and fed into both FTS5 and the vector index (Phase 4.5). OCR for image-only PDFs and content extraction for other formats (spreadsheets, presentations, archives) remain out of scope — let downstream tools (Claude Code's `Read`, a filesystem MCP, your existing PDF skills) interpret the bytes once `get_attachment` has dropped them on disk.
