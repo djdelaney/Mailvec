@@ -30,6 +30,15 @@ public sealed class TrayStatusService(
     IOptions<ArchiveOptions> archiveOpts,
     ILogger<TrayStatusService> logger)
 {
+    /// <summary>
+    /// Detail string the service tile shows when a long-lived agent is
+    /// installed-but-unloaded (the state the Pause button leaves it in).
+    /// Used as a typed signal between <see cref="ClassifyService"/> and
+    /// <see cref="ClassifySeverity"/> — don't free-type the literal in
+    /// either place.
+    /// </summary>
+    internal const string PausedDetail = "paused";
+
     public async Task<TrayStatus> BuildAsync(CancellationToken ct = default)
     {
         var healthTask = health.CheckAsync(ct);
@@ -163,7 +172,13 @@ public sealed class TrayStatusService(
 
         if (!info.Loaded)
         {
-            return (false, false, "error", "not installed");
+            // The Pause button (bootout) leaves the plist on disk but
+            // unloads the agent; LaunchdInspector flags that case with
+            // State == "paused" so we don't blare the red "not installed"
+            // banner at a user who just clicked Pause.
+            return info.State == "paused"
+                ? (false, false, "warn", PausedDetail)
+                : (false, false, "error", "not installed");
         }
 
         var running = state == "running" && info.Pid is not null;
@@ -225,6 +240,12 @@ public sealed class TrayStatusService(
         if (h.Embeddings.ModelMismatch) return "error";
         if (!ollama.Ok) return "error";
         if (services.Any(s => s.Severity == "error")) return "error";
+        // Paused trumps the syncing-from-progress signal. With the embedder
+        // booted out, embed coverage will sit below 100% indefinitely — the
+        // dashboard previously showed a misleading "Syncing" pill in that
+        // state. Flip to "warn" so the menu-bar dot reminds the user they're
+        // paused without firing the red error banner.
+        if (services.Any(s => s.Detail == PausedDetail)) return "warn";
         if (progress is not null) return "syncing";
         return "ok";
     }
