@@ -47,10 +47,22 @@ public sealed class LaunchdInspector(ILogger<LaunchdInspector> logger)
         var (exitCode, stdout) = await RunAsync(["print", $"gui/{Uid}/{label}"], PrintTimeout, ct).ConfigureAwait(false);
         if (exitCode != 0)
         {
-            return new LaunchdServiceInfo(label, Loaded: false, State: "unloaded", Pid: null, LastExitCode: null, Runs: 0);
+            // "bootout" (the Pause button's verb) and "never installed" both
+            // make `launchctl print` exit non-zero. Disambiguate by checking
+            // for the plist on disk: present means installed-but-paused;
+            // absent means never installed. ClassifyService keys off
+            // State == "paused" to skip the red error banner.
+            var state = PlistExists(label) ? "paused" : "unloaded";
+            return new LaunchdServiceInfo(label, Loaded: false, State: state, Pid: null, LastExitCode: null, Runs: 0);
         }
 
         return ParsePrintOutput(label, stdout);
+    }
+
+    private static bool PlistExists(string label)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return File.Exists(Path.Combine(home, "Library", "LaunchAgents", $"{label}.plist"));
     }
 
     /// <summary>
