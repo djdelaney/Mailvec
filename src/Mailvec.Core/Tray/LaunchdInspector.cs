@@ -59,11 +59,18 @@ public sealed class LaunchdInspector(ILogger<LaunchdInspector> logger)
         return ParsePrintOutput(label, stdout);
     }
 
-    private static bool PlistExists(string label)
+    /// <summary>
+    /// Canonical path the installer writes plists to, also the path
+    /// <see cref="KickstartAsync"/> hands to <c>launchctl bootstrap</c>.
+    /// Visible for testing.
+    /// </summary>
+    internal static string PlistPath(string label)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return File.Exists(Path.Combine(home, "Library", "LaunchAgents", $"{label}.plist"));
+        return Path.Combine(home, "Library", "LaunchAgents", $"{label}.plist");
     }
+
+    private static bool PlistExists(string label) => File.Exists(PlistPath(label));
 
     /// <summary>
     /// Visible for testing — given the raw text from
@@ -117,8 +124,34 @@ public sealed class LaunchdInspector(ILogger<LaunchdInspector> logger)
         {
             throw new ArgumentException($"Unknown service label: {label}");
         }
-        var (exit, _) = await RunAsync(["kickstart", "-k", $"gui/{Uid}/{label}"], TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
-        return exit == 0;
+
+        // Fast path: service is already loaded (the post-redeploy restart
+        // case). kickstart -k stops and respawns it.
+        var (kickExit, _) = await RunAsync(["kickstart", "-k", $"gui/{Uid}/{label}"], TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+        if (kickExit == 0) return true;
+
+        // Slow path: the service was booted out (the Resume-from-Pause case)
+        // or has never been loaded this session. kickstart can't operate on
+        // a label that isn't in the registry, so bootstrap the plist back in
+        // — RunAtLoad in the plist will spawn the process. If the plist is
+        // missing entirely there's nothing we can do; return false so the
+        // caller surfaces the failure.
+        var plistPath = PlistPath(label);
+        if (!File.Exists(plistPath))
+        {
+            logger.LogWarning(
+                "Cannot resume {Label}: kickstart failed (exit {Exit}) and plist {PlistPath} is missing.",
+                label, kickExit, plistPath);
+            return false;
+        }
+        var (bootExit, bootOut) = await RunAsync(["bootstrap", $"gui/{Uid}", plistPath], TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+        if (bootExit != 0)
+        {
+            logger.LogWarning(
+                "bootstrap of {Label} failed (exit {Exit}): {Stdout}",
+                label, bootExit, bootOut.Trim());
+        }
+        return bootExit == 0;
     }
 
     public async Task<bool> BootoutAsync(string label, CancellationToken ct = default)
