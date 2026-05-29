@@ -64,8 +64,12 @@ public sealed class MaildirWatcher : IDisposable
 
     private void OnEvent(string fullPath)
     {
-        // Ignore events on tmp/ — mbsync writes there before atomic rename into new/.
-        if (fullPath.Contains("/tmp/", StringComparison.Ordinal) || fullPath.EndsWith("/tmp", StringComparison.Ordinal))
+        // Ignore events whose path inside the watched root contains a tmp/
+        // segment — mbsync writes there before the atomic rename into new/.
+        // Compare against the path *relative to _root* so a watcher rooted
+        // under a directory that happens to contain "/tmp/" (e.g. macOS
+        // $TMPDIR=/tmp/<user>/ during tests) doesn't filter every event.
+        if (IsInsideMbsyncTmp(fullPath))
             return;
 
         lock (_gate)
@@ -74,6 +78,28 @@ public sealed class MaildirWatcher : IDisposable
             _debounceTask ??= Task.Run(DebounceLoopAsync);
         }
     }
+
+    /// <summary>
+    /// Visible for testing. True iff <paramref name="fullPath"/> is the
+    /// <c>tmp</c> directory of some Maildir bucket under <paramref name="root"/>,
+    /// or a file inside one. Substring-matching the absolute path was wrong
+    /// because the root itself can legitimately live under <c>/tmp/</c>.
+    /// </summary>
+    internal static bool IsInsideMbsyncTmp(string fullPath, string root)
+    {
+        var rel = Path.GetRelativePath(root, fullPath);
+        // GetRelativePath returns the absolute path back if the file isn't
+        // under root — treat that as "not inside tmp" (we'd ignore it for
+        // other reasons; the watcher shouldn't see such events).
+        if (Path.IsPathRooted(rel)) return false;
+        foreach (var segment in rel.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (segment == "tmp") return true;
+        }
+        return false;
+    }
+
+    private bool IsInsideMbsyncTmp(string fullPath) => IsInsideMbsyncTmp(fullPath, _root);
 
     private async Task DebounceLoopAsync()
     {

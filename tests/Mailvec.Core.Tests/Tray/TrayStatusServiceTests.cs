@@ -91,6 +91,22 @@ public class TrayStatusServiceTests
         detail.ShouldBe("not installed");
     }
 
+    [Fact]
+    public void ClassifyService_paused_returns_warn_not_error()
+    {
+        // The Pause button shells out to `launchctl bootout`, which leaves
+        // the plist on disk but unloads the agent. LaunchdInspector flags
+        // that case with State == "paused" so we don't fire the red
+        // "indexer is in trouble — not installed" banner at a user who
+        // just clicked Pause.
+        var info = new LaunchdServiceInfo("com.mailvec.indexer", Loaded: false, State: "paused", Pid: null, LastExitCode: null, Runs: 0);
+        var (ok, busy, severity, detail) = TrayStatusService.ClassifyService("indexer", info, HealthyReport());
+        ok.ShouldBeFalse();
+        busy.ShouldBeFalse();
+        severity.ShouldBe("warn");
+        detail.ShouldBe("paused");
+    }
+
     [Theory]
     [InlineData(MbsyncErrorKind.Locked, "error")]
     [InlineData(MbsyncErrorKind.Dns, "warn")]
@@ -173,6 +189,21 @@ public class TrayStatusServiceTests
             ollama: new TrayOllamaStatus(true, "ok", "ok"),
             progress: new TrayEmbedProgress(50, 100, 10, 5));
         sev.ShouldBe("syncing");
+    }
+
+    [Fact]
+    public void ClassifySeverity_returns_warn_when_a_service_is_paused_even_if_progress_in_flight()
+    {
+        // With the embedder paused, coverage stays below 100% so the
+        // `progress is not null` branch would otherwise mark the system
+        // "syncing" — a misleading label for an intentionally-stopped
+        // pipeline. The paused-check must run before the progress check.
+        var paused = new TrayServiceStatus("embedder", "paused", Ok: false, Busy: false, Severity: "warn");
+        var sev = TrayStatusService.ClassifySeverity(HealthyReport(),
+            services: [Tile("ok"), paused],
+            ollama: new TrayOllamaStatus(true, "ok", "ok"),
+            progress: new TrayEmbedProgress(50, 100, 0, 0));
+        sev.ShouldBe("warn");
     }
 
     [Fact]

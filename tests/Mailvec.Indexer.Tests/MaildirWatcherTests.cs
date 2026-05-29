@@ -17,6 +17,31 @@ public class MaildirWatcherTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_root, "INBOX", "tmp"));
     }
 
+    /// <summary>
+    /// Poll the pulses channel until one arrives or the deadline elapses,
+    /// returning the elapsed wait so failure messages are diagnosable. Beats
+    /// a bare <c>ReadAsync(cts.Token)</c> because the failure mode is "no
+    /// pulse within budget" rather than an opaque <see cref="OperationCanceledException"/>.
+    /// </summary>
+    private static async Task<bool> WaitForPulseAsync(MaildirWatcher w, TimeSpan budget)
+    {
+        var deadline = DateTime.UtcNow + budget;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (w.Pulses.TryRead(out _)) return true;
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+                if (await w.Pulses.WaitToReadAsync(cts.Token).ConfigureAwait(false))
+                {
+                    if (w.Pulses.TryRead(out _)) return true;
+                }
+            }
+            catch (OperationCanceledException) { /* loop again */ }
+        }
+        return false;
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); }
@@ -40,18 +65,17 @@ public class MaildirWatcherTests : IDisposable
     public async Task File_creation_in_cur_emits_a_debounced_pulse()
     {
         // FileSystemWatcher fires async; the debounce loop schedules a pulse
-        // after the configured quiet period. The test waits up to ~3 seconds
-        // for the channel to deliver — generous enough for slow CI runners
-        // without hanging the test suite if the watcher is broken.
+        // after the configured quiet period. WaitForPulseAsync polls up to
+        // a generous budget so slow CI nodes don't false-fail, but reports a
+        // diagnosable boolean instead of an opaque OperationCanceledException.
         using var watcher = BuildWatcher(_root, debounceMs: 100);
         watcher.Start();
 
         // Touch a .eml file inside cur/ — counts as a real change.
         File.WriteAllText(Path.Combine(_root, "INBOX", "cur", "1.host:2,S"), "Subject: hi\n\nbody");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        var got = await watcher.Pulses.ReadAsync(cts.Token);
-        got.ShouldBe((byte)0);
+        var pulsed = await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5));
+        pulsed.ShouldBeTrue($"watcher did not pulse within budget; root was '{_root}'");
     }
 
     [Fact]
@@ -67,8 +91,36 @@ public class MaildirWatcherTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "INBOX", "tmp", "partial"), "in-flight");
 
         // Wait past the debounce; we expect no pulse.
-        await Task.Delay(500);
-        watcher.Pulses.TryRead(out _).ShouldBeFalse();
+        var pulsed = await WaitForPulseAsync(watcher, TimeSpan.FromMilliseconds(500));
+        pulsed.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("INBOX/cur/1.host:2,S", false)]
+    [InlineData("INBOX/new/2.host", false)]
+    [InlineData("INBOX/tmp/partial", true)]
+    [InlineData("INBOX/tmp", true)]
+    [InlineData("INBOX.Drafts/tmp/draft", true)]
+    [InlineData("tmpfolder/cur/notes", false)]       // segment "tmp" must match exactly
+    [InlineData("INBOX/cur/tmp-file.eml", false)]    // "tmp" inside a filename is fine
+    public void IsInsideMbsyncTmp_matches_only_tmp_path_segments(string relative, bool expected)
+    {
+        // Regression: the original substring check on "/tmp/" would false-fire
+        // whenever the watcher root lived under a path containing /tmp/
+        // (macOS $TMPDIR=/tmp/<user>/ during tests). Match against the path
+        // *relative to the root* so only true mbsync staging dirs are filtered.
+        var rootsUnderTmp = new[]
+        {
+            "/tmp/claude-501/run",   // the case that flaked this test on macOS
+            "/var/folders/zz/T",     // the normal macOS tmpdir
+            "/home/user/Mail",       // a non-tmp root
+        };
+        foreach (var root in rootsUnderTmp)
+        {
+            var full = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            MaildirWatcher.IsInsideMbsyncTmp(full, root).ShouldBe(expected,
+                $"root='{root}' full='{full}' expected={expected}");
+        }
     }
 
     [Fact]
