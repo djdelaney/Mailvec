@@ -21,9 +21,9 @@ public sealed class EvalRunnerTests
         public CancellationToken ObservedLastToken { get; private set; }
 
         public async Task<IReadOnlyList<string>> RankAsync(
-            string query, EvalMode mode, int topK, SearchFilters? filters, CancellationToken ct)
+            string? query, EvalMode mode, int topK, SearchFilters? filters, CancellationToken ct)
         {
-            var call = new RankCall(query, mode, topK, filters);
+            var call = new RankCall(query ?? "", mode, topK, filters);
             Calls.Add(call);
             ObservedLastToken = ct;
             if (Delay is { } d) await Task.Delay(d, ct).ConfigureAwait(false);

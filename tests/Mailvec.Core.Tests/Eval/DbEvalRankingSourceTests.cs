@@ -28,7 +28,7 @@ public sealed class DbEvalRankingSourceTests
         // injected services, so we can pass null!. Belt-and-braces: if a
         // future contributor adds an EvalMode value but forgets to wire a
         // case, this guards against the default branch silently degrading.
-        var src = new DbEvalRankingSource(keyword: null!, vector: null!, hybrid: null!);
+        var src = new DbEvalRankingSource(keyword: null!, vector: null!, hybrid: null!, messages: null!);
 
         await Should.ThrowAsync<ArgumentOutOfRangeException>(async () =>
             await src.RankAsync("q", (EvalMode)999, topK: 10, filters: null, CancellationToken.None));
@@ -115,6 +115,30 @@ public sealed class DbEvalRankingSourceTests
         ids.ShouldContain("kept@x");
     }
 
+    [Fact]
+    public async Task Empty_query_browses_by_date_desc_and_honours_filters()
+    {
+        using var fixture = new Fixture();
+
+        var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        // Two in-folder messages (newer should come first) + one out-of-folder
+        // that the filter must exclude even though it's the most recent.
+        fixture.IngestWithChunk("older@x", "older", "body", hotIndex: 0, folder: "Finance", dateSent: t0);
+        fixture.IngestWithChunk("newer@x", "newer", "body", hotIndex: 1, folder: "Finance", dateSent: t0.AddDays(10));
+        fixture.IngestWithChunk("other@x", "other", "body", hotIndex: 2, folder: "INBOX", dateSent: t0.AddDays(20));
+
+        // Mode is irrelevant for browse — assert all three agree.
+        foreach (var mode in new[] { EvalMode.Keyword, EvalMode.Semantic, EvalMode.Hybrid })
+        {
+            var ids = await fixture.Source.RankAsync(
+                query: null, mode, topK: 10,
+                filters: new SearchFilters(Folder: "Finance", null, null, null, null),
+                CancellationToken.None);
+
+            ids.ShouldBe(["newer@x", "older@x"]);  // date_sent DESC, INBOX excluded
+        }
+    }
+
     // ----------- helpers -----------
 
     private sealed class Fixture : IDisposable
@@ -152,10 +176,10 @@ public sealed class DbEvalRankingSourceTests
             var keyword = new KeywordSearchService(_db.Connections);
             var vector = new VectorSearchService(_db.Connections, ollama);
             var hybrid = new HybridSearchService(keyword, vector);
-            Source = new DbEvalRankingSource(keyword, vector, hybrid);
+            Source = new DbEvalRankingSource(keyword, vector, hybrid, _messages);
         }
 
-        public void IngestWithChunk(string messageId, string subject, string body, int hotIndex, string folder = "INBOX")
+        public void IngestWithChunk(string messageId, string subject, string body, int hotIndex, string folder = "INBOX", DateTimeOffset? dateSent = null)
         {
             var parsed = new ParsedMessage(
                 MessageId: messageId,
@@ -165,7 +189,7 @@ public sealed class DbEvalRankingSourceTests
                 FromName: null,
                 ToAddresses: [],
                 CcAddresses: [],
-                DateSent: DateTimeOffset.UtcNow,
+                DateSent: dateSent ?? DateTimeOffset.UtcNow,
                 BodyText: body,
                 BodyHtml: null,
                 RawHeaders: $"Message-ID: <{messageId}>\r\n",

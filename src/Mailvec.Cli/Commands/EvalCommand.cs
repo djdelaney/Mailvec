@@ -207,7 +207,7 @@ internal static class EvalCommand
                 first = false;
 
                 var meta = queriesById.GetValueOrDefault(q.Id);
-                var queryText = meta is null ? q.Query : meta.Query;
+                var queryText = (meta is null ? q.Query : meta.Query) is { Length: > 0 } t ? t : "(browse)";
                 var trimmed = queryText.Length > 60 ? queryText[..57] + "..." : queryText;
                 Console.WriteLine(
                     $"    {Colors.QueryId($"{q.Id,-10}")}  " +
@@ -371,7 +371,7 @@ internal static class EvalCommand
     private static void PrintSingleQuery(EvalQuery q, EvalMode mode, int topK, EvalQueryResult r)
     {
         Console.WriteLine();
-        Console.WriteLine($"== {Colors.QueryId(q.Id)}  [{Colors.ModeHeader(ModeName(mode))}]  \"{q.Query}\"");
+        Console.WriteLine($"== {Colors.QueryId(q.Id)}  [{Colors.ModeHeader(ModeName(mode))}]  \"{(string.IsNullOrEmpty(q.Query) ? "(browse)" : q.Query)}\"");
         if (q.Filters is not null)
             Console.WriteLine($"   {Colors.Dim("filters:")} {FilterSummary(q.Filters)}");
         Console.WriteLine(

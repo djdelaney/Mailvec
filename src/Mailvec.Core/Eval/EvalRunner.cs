@@ -108,7 +108,7 @@ public sealed class EvalRunner(IEvalRankingSource ranking)
 
         return new EvalQueryResult(
             Id: query.Id,
-            Query: query.Query,
+            Query: query.Query ?? "",
             RelevantCount: query.Relevant.Count,
             RankedMessageIds: ranked,
             RanksOfExpected: ranksOfExpected,
