@@ -36,13 +36,11 @@ public sealed class HybridSearchService(KeywordSearchService keyword, VectorSear
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         filters ??= SearchFilters.None;
 
-        // Vec0 KNN runs before our filter join, so when filters are restrictive
-        // the K nearest by raw similarity may all be filtered out. Inflate k
-        // when filters are active so the post-filter set still has signal.
-        var vectorK = filters.IsEmpty ? candidatesPerLeg * 2 : candidatesPerLeg * 10;
-
+        // vec0 KNN runs before the filter join; VectorSearchService owns the
+        // k-escalation that keeps a restrictive filter from starving the vector
+        // leg, so we just ask for `candidatesPerLeg` and let it fetch enough.
         var keywordHits = keyword.Search(query, limit: candidatesPerLeg, filters);
-        var vectorHits = await vector.SearchAsync(query, limit: candidatesPerLeg, k: vectorK, filters, ct).ConfigureAwait(false);
+        var vectorHits = await vector.SearchAsync(query, limit: candidatesPerLeg, k: candidatesPerLeg * 2, filters, ct).ConfigureAwait(false);
 
         return Fuse(keywordHits, vectorHits, limit);
     }
