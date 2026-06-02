@@ -22,10 +22,9 @@ public interface IEvalRankingSource
 
 /// <summary>
 /// Production <see cref="IEvalRankingSource"/> backed by the keyword, vector,
-/// and hybrid search services. Owns the per-mode dispatch and the vector-leg
-/// k-inflation for filtered queries (vec0 KNN runs before the filter join, so
-/// a small k + restrictive filter can produce an empty post-filter set —
-/// mirrors <see cref="HybridSearchService"/>'s own inflation). An empty query
+/// and hybrid search services. Owns the per-mode dispatch; the vector-leg
+/// k-escalation for filtered queries now lives in <see cref="VectorSearchService"/>
+/// (single source of truth), so this just passes a base k. An empty query
 /// routes to query-less browse (date-desc), mirroring <c>search_emails</c>.
 /// </summary>
 public sealed class DbEvalRankingSource(
@@ -59,8 +58,9 @@ public sealed class DbEvalRankingSource(
             }
             case EvalMode.Semantic:
             {
-                var k = (filters is null || filters.IsEmpty) ? Math.Max(100, topK * 5) : Math.Max(500, topK * 50);
-                var hits = await vector.SearchAsync(query, topK, k: k, filters, ct).ConfigureAwait(false);
+                // VectorSearchService escalates k internally under filters, so a
+                // single base k is enough — no filter-aware pre-inflation here.
+                var hits = await vector.SearchAsync(query, topK, k: Math.Max(100, topK * 5), filters, ct).ConfigureAwait(false);
                 return hits.Select(h => h.MessageIdHeader).ToList();
             }
             case EvalMode.Hybrid:
