@@ -29,13 +29,26 @@ public sealed record VectorHit(
 
 public sealed class VectorSearchService(ConnectionFactory connections, OllamaClient ollama)
 {
+    // vec0 KNN runs BEFORE our filter join, so the k nearest chunks may all be
+    // filtered out. Rather than make every caller guess a filter-aware k (which
+    // historically drifted — some callers inflated, some didn't, and bare
+    // semantic+folder returned ~1 result), escalate k here until we have `limit`
+    // post-filter hits or hit the ceiling. A filtered semantic query is a rare,
+    // off-hot-path request, so the extra KNN round-trips are acceptable.
+    private const int KnnEscalationFactor = 8;
+    // sqlite-vec rejects a knn `k` larger than 4096 ("k value in knn query too
+    // large"). That's the hard ceiling on how deep we can over-fetch; a filter
+    // whose matches all sit beyond the 4096 nearest chunks can't be served by
+    // KNN at all (acceptable — far better than the old fixed k=500).
+    private const int Vec0MaxK = 4096;
+
     /// <summary>
     /// Embeds the query, runs k-nearest-neighbour against chunk_embeddings,
     /// joins back to messages (skipping soft-deleted), and returns the best
     /// chunk per message (since one message can have multiple chunks).
-    /// When filters are present, k is internally inflated so post-filter we
-    /// still have a chance of returning `limit` results — vec0 KNN happens
-    /// before the filter join, so a small k + restrictive filter = empty.
+    /// When filters are present, k is escalated internally (see
+    /// <see cref="SearchByVector"/>) so a restrictive filter can't silently
+    /// starve the result set — vec0 KNN happens before the filter join.
     /// </summary>
     public async Task<IReadOnlyList<VectorHit>> SearchAsync(string query, int limit = 20, int k = 100, SearchFilters? filters = null, CancellationToken ct = default)
     {
@@ -50,18 +63,59 @@ public sealed class VectorSearchService(ConnectionFactory connections, OllamaCli
     /// <summary>
     /// Same as SearchAsync but skips the embed step. Used by tests with hand-built
     /// vectors and by HybridSearchService when the query was already embedded.
+    /// <para>
+    /// `k` is the KNN fetch size for the unfiltered case. When filters are
+    /// present it is only a starting floor: if the post-filter set is shorter
+    /// than `limit`, the KNN is re-run with progressively larger k (×8 per round,
+    /// capped at <see cref="Vec0MaxK"/>) until `limit` hits are found or every
+    /// available chunk has been fetched. This is the single source of truth for
+    /// the "vec0 filters after KNN" workaround — callers no longer pre-inflate k.
+    /// </para>
     /// </summary>
     public IReadOnlyList<VectorHit> SearchByVector(float[] queryVector, int limit, int k, SearchFilters? filters = null)
     {
         filters ??= SearchFilters.None;
 
         using var conn = connections.Open();
+
+        if (filters.IsEmpty)
+            return ExecuteKnn(conn, queryVector, limit, k, filters);
+
+        // Filtered: escalate k until we have `limit` post-filter hits or we've
+        // fetched every available neighbour. Bounding by the chunk count (not a
+        // "result count stopped growing" heuristic) is what makes this correct —
+        // in-filter matches can sit arbitrarily far down the distance ranking, so
+        // we must keep widening until either limit is met or there's nothing left
+        // to widen into. KnnEscalationCap backstops a pathologically large table.
+        var maxK = Math.Min(Vec0MaxK, CountChunks(conn));
+        if (maxK == 0) return [];
+        var curK = Math.Min(Math.Max(k, limit), maxK);
+        while (true)
+        {
+            var hits = ExecuteKnn(conn, queryVector, limit, curK, filters);
+            if (hits.Count >= limit || curK >= maxK)
+                return hits;
+            curK = Math.Min(curK * KnnEscalationFactor, maxK);
+        }
+    }
+
+    private static int CountChunks(SqliteConnection conn)
+    {
+        // chunks is 1:1 with chunk_embeddings (ChunkRepository writes both), and a
+        // plain-table count is far cheaper than counting the vec0 virtual table.
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT count(*) FROM chunks";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static IReadOnlyList<VectorHit> ExecuteKnn(SqliteConnection conn, float[] queryVector, int limit, int k, SearchFilters filters)
+    {
         using var cmd = conn.CreateCommand();
         // Take the BEST chunk per message: window over chunks ordered by distance.
         // Vec0 requires the MATCH + k constraint and ORDER BY distance.
-        // Filters apply in the joined CTE — vec0 cannot itself filter on
-        // joined columns, so we over-fetch (k may be inflated by caller) and
-        // drop non-matching messages here.
+        // Filters apply in the joined CTE — vec0 cannot itself filter on joined
+        // columns, so we over-fetch the k nearest and drop non-matching messages
+        // here (SearchByVector escalates k across calls when this starves).
         var sql = new StringBuilder("""
             WITH neighbours AS (
                 SELECT chunk_id, distance
@@ -107,7 +161,9 @@ public sealed class VectorSearchService(ConnectionFactory connections, OllamaCli
             """);
         cmd.CommandText = sql.ToString();
         cmd.Parameters.Add("$vec", SqliteType.Blob).Value = VectorBlob.Serialize(queryVector);
-        cmd.Parameters.AddWithValue("$k", k);
+        // sqlite-vec hard-rejects k > 4096; clamp so an over-eager caller (or a
+        // large unfiltered limit) can't throw instead of just returning fewer.
+        cmd.Parameters.AddWithValue("$k", Math.Min(k, Vec0MaxK));
         cmd.Parameters.AddWithValue("$limit", limit);
 
         var hits = new List<VectorHit>();

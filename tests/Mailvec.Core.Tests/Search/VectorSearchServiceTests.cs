@@ -138,6 +138,41 @@ public class VectorSearchServiceTests
     }
 
     [Fact]
+    public void Escalates_k_so_a_restrictive_folder_filter_is_not_starved()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var now = DateTimeOffset.UtcNow;
+
+        // 60 INBOX "chaff" messages whose chunks are the nearest to the query
+        // (one-hot on dims 0..59). The 3 target messages live in Archive.2024 and
+        // are FAR from the query (dims 500..502) — i.e. well beyond a small k.
+        for (var i = 0; i < 60; i++)
+        {
+            long cid = messages.Upsert(M($"chaff{i}@x", "noise", "noise"), "INBOX", "INBOX/cur", $"c{i}", now);
+            chunks.ReplaceChunksForMessage(cid, [new TextChunk(0, "noise", 1)], [OneHot(1024, hotIndex: i)], now);
+        }
+        for (var i = 0; i < 3; i++)
+        {
+            long tid = messages.Upsert(M($"target{i}@x", "target", "target"), "Archive.2024", "Archive.2024/cur", $"t{i}", now);
+            chunks.ReplaceChunksForMessage(tid, [new TextChunk(0, "target", 1)], [OneHot(1024, hotIndex: 500 + i)], now);
+        }
+
+        var query = OneHot(1024, hotIndex: 0);   // nearest neighbours are all INBOX chaff
+        var filters = new SearchFilters(Folder: "Archive.2024");
+
+        // Base k=5 is far smaller than the ~60 chaff chunks that rank ahead of the
+        // targets. A single-shot KNN would return 0 in-folder hits; escalation must
+        // widen k until the 3 Archive.2024 targets surface.
+        var hits = search.SearchByVector(query, limit: 3, k: 5, filters);
+
+        hits.Count.ShouldBe(3);
+        hits.ShouldAllBe(h => h.Folder == "Archive.2024");
+    }
+
+    [Fact]
     public void Returns_best_chunk_per_message_when_a_message_has_multiple()
     {
         using var db = new TempDatabase();
