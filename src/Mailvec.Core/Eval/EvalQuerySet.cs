@@ -80,6 +80,11 @@ public sealed class EvalQuerySet
             // otherwise it'd "browse the entire archive newest-first".
             if (string.IsNullOrWhiteSpace(q.Query) && (q.Filters is null || q.Filters.ToSearchFilters().IsEmpty))
                 throw new InvalidDataException($"{path}: query '{q.Id}' has no 'query' text and no filters — query-less browse needs at least one filter to scope results.");
+            // A negative query asserts "nothing should match"; a non-empty relevant
+            // set contradicts that. Catch the mislabel here rather than silently
+            // scoring it as both a recall query and a specificity query.
+            if (q.ExpectEmpty && q.Relevant.Count > 0)
+                throw new InvalidDataException($"{path}: query '{q.Id}' is expectEmpty but lists {q.Relevant.Count} relevant message(s); a negative query must have an empty 'relevant'.");
             foreach (var r in q.Relevant)
             {
                 if (string.IsNullOrWhiteSpace(r.MessageId))
@@ -96,6 +101,13 @@ public sealed class EvalQuery
     public string? Query { get; set; }
     public EvalQueryFilters? Filters { get; set; }
     public List<RelevantEntry> Relevant { get; set; } = [];
+    /// <summary>
+    /// Negative / zero-result query: the archive contains nothing relevant, so
+    /// the system should return as little as possible. Scored as specificity
+    /// (returned-nothing = 1.0), reported separately, and excluded from the
+    /// NDCG/MRR/Recall aggregate (which is undefined over an empty gold set).
+    /// </summary>
+    public bool ExpectEmpty { get; set; }
     public string? Notes { get; set; }
 }
 

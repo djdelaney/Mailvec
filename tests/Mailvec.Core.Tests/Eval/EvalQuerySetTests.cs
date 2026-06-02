@@ -147,6 +147,46 @@ public sealed class EvalQuerySetTests
     }
 
     [Fact]
+    public void Load_ExpectEmpty_WithEmptyRelevant_IsAllowed()
+    {
+        var json = """
+            {
+              "version": 1,
+              "queries": [
+                { "id": "q041", "query": "timeshare offer", "expectEmpty": true, "relevant": [] }
+              ]
+            }
+            """;
+        var path = WriteTemp(json);
+        try
+        {
+            var set = EvalQuerySet.Load(path);
+            set.Queries[0].ExpectEmpty.ShouldBeTrue();
+            set.Queries[0].Relevant.ShouldBeEmpty();
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Load_ExpectEmpty_WithRelevant_Throws()
+    {
+        var json = """
+            {
+              "version": 1,
+              "queries": [
+                { "id": "q041", "query": "timeshare offer", "expectEmpty": true, "relevant": ["<a@x>"] }
+              ]
+            }
+            """;
+        var path = WriteTemp(json);
+        try
+        {
+            Should.Throw<InvalidDataException>(() => EvalQuerySet.Load(path));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void NextSequentialId_FindsHighestQNumber()
     {
         var set = new EvalQuerySet

@@ -18,18 +18,25 @@ semantic 0.799 / 0.856 / 0.847 · **hybrid 0.937 / 0.975 / 0.966**.
   Required an engine change — `DbEvalRankingSource` now routes empty-query+filters to
   `BrowseByFilters`, and `EvalQuerySet.Validate` allows an empty query when a filter
   scopes it.
-- [ ] **Deep-history retrieval — thin.** 21/27 queries have `dateFrom` in 2026; only 3
-  in 2023, 3 in 2025. Archive spans 2005–2026 (74k msgs). Nothing tests decade-old mail
-  where vector drift and corpus dilution are worst.
+- [x] **Deep-history retrieval.** Covered by **q038** (2013 Toyota Financial billing
+  statements, no sender filter — a pure corpus-dilution test) and **q040** (2017
+  landscaping thread). q038 scores 1.0 across all modes; decade-old transactional mail
+  retrieves cleanly.
 - [x] **Attachment-driven matches.** Covered by **q034** (PDF, "uniform construction
   code" only in attachment), **q035** (DOCX, "bus stop"), **q036** (two SimpleLab PDF
   reports). Each verified term lives in `attachment_text` only, never the body.
-- [ ] **Negative / zero-result queries — 0/27.** No query that should return nothing, so
-  false-positive behavior (precision under an empty gold set) is untested.
-- [ ] **Conversational / human mail — thin.** Set skews heavily transactional (receipts,
-  order confirmations, bills). Semantic leg's relative weakness (0.799) reflects this.
-  Real back-and-forth human threads, where semantic recall earns its keep, are
-  underrepresented.
+- [x] **Negative / zero-result queries.** Covered by **q041** ("timeshare …", DB-verified
+  absent in 2026). Required harness support: `expectEmpty` queries are scored as
+  *specificity* (returned-nothing = 1.0), reported separately, and excluded from the
+  NDCG/MRR/Recall aggregate (undefined over empty gold). Finding: **every mode hallucinates**
+  — keyword/hybrid return 10 false hits (OR-ish term matching pulls "vacation/offer/resort"
+  mail), semantic 8 (specificity 0.20). A query for something you don't have surfaces
+  confident-looking junk; there's no relevance floor.
+- [x] **Conversational / human mail.** Covered by **q039** (2019 bachelor-party thread) and
+  **q040** (2017 landscaping complaint). Both expose the predicted semantic-leg weakness on
+  human prose: thin idiomatic replies ("Magic/barcade", World Cup) miss (q039 recall 0.60),
+  while the distinctive "sewer vent cap" carries keyword recall to 1.0 in q040 (semantic
+  0.67). This is the gap's thesis, now measurable.
 
 ## Failing queries in the current set (real misses, separate from coverage)
 
@@ -48,18 +55,23 @@ semantic 0.799 / 0.856 / 0.847 · **hybrid 0.937 / 0.975 / 0.966**.
 - [x] Add a `fromExact` query ("all mail from a specific sender address"). → q032.
 - [x] Add an attachment-only query — term in an indexed PDF/DOCX but not the email body,
   so a pass proves the attachment pipeline. → q034 (PDF), q035 (DOCX), q036 (PDF ×2).
-- [ ] Add 2–3 deep-history queries (pre-2020 `dateFrom`).
+- [x] Add 2–3 deep-history queries (pre-2020 `dateFrom`). → q038 (2013), q040 (2017).
 - [x] Add graded relevance so NDCG can reward correct ordering. → q037 (Cometeer
   lifecycle). q037 currently scores NDCG 0.859: hybrid ranks the thin "Delivered!" ping
   above the info-rich "Order Confirmed" — a real ordering weakness the grade scheme now
   exposes.
 - [ ] Investigate q011 (recall 0.571) — worst real failure.
 
-> Set grew 27 → 35 (q030–q037). Full hybrid baseline after merge: NDCG 0.936 / MRR 0.967
-> / Recall 0.968 (vs 0.937 / 0.975 / 0.966 on the 27-set — stable, new queries are
-> well-calibrated). Per-query recall@10: q030 1.0, q031 0.80 (Amex "Important Notice"
-> statement phrasing ranks below 10 — genuine miss, kept tagged), q032 1.0, q033 1.0,
-> q034–q036 1.0, q037 1.0 (NDCG 0.859 on grade ordering).
+> Set grew 27 → 35 (q030–q037), then → 39 (q038–q041). Full hybrid baseline at 39q
+> (38 scored + 1 negative): NDCG 0.931 / MRR 0.969 / Recall 0.961 — stable vs the 27-set
+> (0.937 / 0.975 / 0.966); the conversational adds (q039 0.60, q040 hybrid recall) pull the
+> mean down slightly on purpose, since they expose the semantic-leg weakness the set was
+> blind to. Negative query q041: specificity keyword 0.000 / semantic 0.200 / hybrid 0.000.
+> Baseline snapshot: `baselines/2026-06-02-39q.json`.
+>
+> Remaining coverage gap: none of the original "zero/thin" gaps are open. What's left is
+> the **failing-query investigations** below (q011, q006, q005, q008, q004) — real ranking
+> misses, not coverage holes.
 
 > Before landing any ranking-affecting change, capture an eval baseline first
 > (`mailvec eval --json baselines/<date>.json`) — see `baselines/README.md`.
