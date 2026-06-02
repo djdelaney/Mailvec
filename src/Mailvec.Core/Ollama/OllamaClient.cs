@@ -23,21 +23,40 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
     private const int MinTruncatedChars = 64;
 
     /// <summary>
-    /// Cheap reachability check — hits GET /api/tags (the model list endpoint).
-    /// Returns true if Ollama responded with 2xx; false on any HTTP/transport error.
-    /// Bounded by a short internal timeout so the MCP health endpoint can't hang
-    /// on the shared embedder HttpClient's 60s timeout. Does not surface error detail.
+    /// Readiness check — sends a minimal /api/embed against the *configured*
+    /// model and confirms a non-empty vector comes back. This is deliberately
+    /// stronger than a GET /api/tags liveness ping: Ollama answers /api/tags
+    /// with 200 even when the model can't actually load (incomplete/wrong
+    /// build, missing runner, GPU OOM), and that exact "reachable but can't
+    /// embed" state silently wedges the embedder while leaving /health green.
+    /// A real embed is the only signal that "reachable" also means "ready".
+    ///
+    /// Bounded by a short internal timeout so the MCP health endpoint can't
+    /// hang on the shared embedder HttpClient's 60s timeout — 5s allows for a
+    /// cold model load on the first probe (subsequent probes hit a warm model
+    /// kept resident by KeepAlive). Returns false on any error; does not
+    /// surface detail.
     /// </summary>
     public async Task<bool> PingAsync(CancellationToken ct = default)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(2));
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            using var response = await http.GetAsync("/api/tags", cts.Token).ConfigureAwait(false);
-            return response.IsSuccessStatusCode;
+            var request = new EmbedRequest
+            {
+                Model = _opts.EmbeddingModel,
+                Input = ["ping"],
+                KeepAlive = _opts.KeepAlive,
+                Truncate = true,
+            };
+            using var response = await http.PostAsJsonAsync("/api/embed", request, cts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return false;
+            var parsed = await response.Content.ReadFromJsonAsync<EmbedResponse>(cts.Token).ConfigureAwait(false);
+            return parsed?.Embeddings is { Length: > 0 } embeddings && embeddings[0].Length > 0;
         }
         catch (HttpRequestException) { return false; }
+        catch (System.Text.Json.JsonException) { return false; }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
     }
 

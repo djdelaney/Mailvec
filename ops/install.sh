@@ -223,17 +223,21 @@ echo
 [[ -f "$MBSYNCRC" ]]     || echo "warning: mbsync config '$MBSYNCRC' does not exist yet."
 if ! curl -fsS --max-time 2 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
     echo "warning: Ollama not reachable at $OLLAMA_URL (start it later; embedder will retry)."
-    echo "         If installed via Homebrew: brew services start ollama"
+    echo "         Install the cask if you haven't: brew install --cask ollama-app && open -a Ollama"
 fi
-# Reachable now ≠ reachable after reboot. brew services manages the launchd
-# agent that auto-starts Ollama at login; without it, a fresh boot leaves
-# Ollama down and the embedder/MCP /health degraded until you run it manually.
-if command -v brew >/dev/null 2>&1 \
+# Reachable now ≠ reachable after reboot. The recommended cask (ollama-app)
+# auto-starts via its own Login Item, so /Applications/Ollama.app surviving
+# reboot is the app's job, not ours — skip the check entirely for cask installs.
+# Only the legacy `ollama` *formula* relies on brew services for autostart, so
+# the warning below is scoped to that case.
+if [[ ! -d /Applications/Ollama.app ]] \
+   && command -v brew >/dev/null 2>&1 \
    && command -v ollama >/dev/null 2>&1 \
    && [[ "$(command -v ollama)" == "$(brew --prefix)/bin/ollama" ]] \
    && ! brew services list 2>/dev/null | awk '$1=="ollama"{print $2}' | grep -qx started; then
-    echo "warning: Homebrew-installed Ollama is not registered with brew services."
-    echo "         To make it survive reboot: brew services start ollama"
+    echo "warning: formula-installed Ollama is not registered with brew services."
+    echo "         Either switch to the cask (brew install --cask ollama-app) or, to"
+    echo "         make the formula survive reboot: brew services start ollama"
 fi
 
 # ---------------------------------------------------------------------------
