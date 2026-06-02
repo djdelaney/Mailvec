@@ -15,7 +15,11 @@ struct CoverageRing: View {
                         radius: 6)
                 .animation(.easeInOut(duration: 0.8), value: progress)
             VStack(spacing: 2) {
-                Text(progress, format: .percent.precision(.fractionLength(0)))
+                // Round down (and show a decimal place below 100%) so a capped
+                // 99.9% never rounds up to a misleading "100%" while work remains.
+                Text(progress, format: .percent
+                    .precision(.fractionLength(progress >= 1 ? 0 : 1))
+                    .rounded(rule: .down))
                     .font(.system(size: 16, weight: .bold)).monospacedDigit()
                     .kerning(-0.4)
                 Text("EMBEDDED")
