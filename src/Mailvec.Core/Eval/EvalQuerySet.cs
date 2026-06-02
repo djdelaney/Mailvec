@@ -75,7 +75,11 @@ public sealed class EvalQuerySet
         {
             if (string.IsNullOrWhiteSpace(q.Id)) throw new InvalidDataException($"{path}: query missing id.");
             if (!ids.Add(q.Id)) throw new InvalidDataException($"{path}: duplicate query id '{q.Id}'.");
-            if (string.IsNullOrWhiteSpace(q.Query)) throw new InvalidDataException($"{path}: query '{q.Id}' missing 'query' text.");
+            // An empty 'query' means query-less browse (date-desc, no ranking).
+            // That's only meaningful with at least one filter to scope it —
+            // otherwise it'd "browse the entire archive newest-first".
+            if (string.IsNullOrWhiteSpace(q.Query) && (q.Filters is null || q.Filters.ToSearchFilters().IsEmpty))
+                throw new InvalidDataException($"{path}: query '{q.Id}' has no 'query' text and no filters — query-less browse needs at least one filter to scope results.");
             foreach (var r in q.Relevant)
             {
                 if (string.IsNullOrWhiteSpace(r.MessageId))
@@ -88,7 +92,8 @@ public sealed class EvalQuerySet
 public sealed class EvalQuery
 {
     public string Id { get; set; } = string.Empty;
-    public string Query { get; set; } = string.Empty;
+    /// <summary>Free-text query, or null/empty for query-less browse (see <see cref="EvalQuerySet.Validate"/>).</summary>
+    public string? Query { get; set; }
     public EvalQueryFilters? Filters { get; set; }
     public List<RelevantEntry> Relevant { get; set; } = [];
     public string? Notes { get; set; }

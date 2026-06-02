@@ -8,23 +8,22 @@ semantic 0.799 / 0.856 / 0.847 · **hybrid 0.937 / 0.975 / 0.966**.
 
 ## Coverage gaps — features with zero or thin eval coverage
 
-- [ ] **`folder` filter — 0/27.** Relevant docs span 8 folders (INBOX, Shopping,
-  Utilities, Travel, Kids, Sent, Finance, Local) but no query filters by one. The
-  `folder` leg of `SearchFilterSql.Append` is untested across all three search legs.
-- [ ] **`fromExact` filter — 0/27.** Never tested. `fromContains` only appears in 3
-  (q017/q018/q025). `fromExact` is the recommended path for "all mail from <addr>".
-- [ ] **Graded relevance — 0/27.** Every query uses binary relevance, so NDCG can't
-  distinguish "perfect" from "good-enough" ordering. The grade 1/2/3 mechanism is
-  unexercised — not testing whether the best hit outranks a near-duplicate.
-- [ ] **Query-less browse — 0/27.** `MessageRepository.BrowseByFilters` (date-sorted,
-  no-query path behind "show me recent X") has no eval coverage at all.
+- [x] **`folder` filter.** Covered by **q030** (Utilities energy/electric bills) and
+  **q031** (Finance credit-card statements). Both lean on the folder leg keeping
+  similar-but-wrong-folder mail in scope while ranking/relevance excludes it.
+- [x] **`fromExact` filter.** Covered by **q032** (`no.reply.alerts@chase.com`, with the
+  same-sender auto-loan statement as the discriminator).
+- [x] **Graded relevance.** Covered by **q037** (Cometeer lifecycle, 3/2/1 grades).
+- [x] **Query-less browse.** Covered by **q033** (`BrowseByFilters`, Monarch, date-desc).
+  Required an engine change — `DbEvalRankingSource` now routes empty-query+filters to
+  `BrowseByFilters`, and `EvalQuerySet.Validate` allows an empty query when a filter
+  scopes it.
 - [ ] **Deep-history retrieval — thin.** 21/27 queries have `dateFrom` in 2026; only 3
   in 2023, 3 in 2025. Archive spans 2005–2026 (74k msgs). Nothing tests decade-old mail
   where vector drift and corpus dilution are worst.
-- [ ] **Attachment-driven matches — incidental, not deliberate.** 25 of 136 relevant
-  docs carry extracted-text attachments (133 attachment-source chunks), but no query is
-  built so the term lives *only* in the attachment and not the body. No test proves a
-  PDF/DOCX-only match surfaces.
+- [x] **Attachment-driven matches.** Covered by **q034** (PDF, "uniform construction
+  code" only in attachment), **q035** (DOCX, "bus stop"), **q036** (two SimpleLab PDF
+  reports). Each verified term lives in `attachment_text` only, never the body.
 - [ ] **Negative / zero-result queries — 0/27.** No query that should return nothing, so
   false-positive behavior (precision under an empty gold set) is untested.
 - [ ] **Conversational / human mail — thin.** Set skews heavily transactional (receipts,
@@ -45,14 +44,22 @@ semantic 0.799 / 0.856 / 0.847 · **hybrid 0.937 / 0.975 / 0.966**.
 
 ## Suggested new queries (highest leverage first)
 
-- [ ] Add a `folder`-filtered query (e.g. scope a Utilities-folder bill).
-- [ ] Add a `fromExact` query ("all mail from a specific sender address").
-- [ ] Add an attachment-only query — term in an indexed PDF/DOCX but not the email body,
-  so a pass proves the attachment pipeline.
+- [x] Add a `folder`-filtered query (e.g. scope a Utilities-folder bill). → q030, q031.
+- [x] Add a `fromExact` query ("all mail from a specific sender address"). → q032.
+- [x] Add an attachment-only query — term in an indexed PDF/DOCX but not the email body,
+  so a pass proves the attachment pipeline. → q034 (PDF), q035 (DOCX), q036 (PDF ×2).
 - [ ] Add 2–3 deep-history queries (pre-2020 `dateFrom`).
-- [ ] Add graded relevance to a few existing multi-hit queries (q002-style) so NDCG can
-  reward correct ordering.
+- [x] Add graded relevance so NDCG can reward correct ordering. → q037 (Cometeer
+  lifecycle). q037 currently scores NDCG 0.859: hybrid ranks the thin "Delivered!" ping
+  above the info-rich "Order Confirmed" — a real ordering weakness the grade scheme now
+  exposes.
 - [ ] Investigate q011 (recall 0.571) — worst real failure.
+
+> Set grew 27 → 35 (q030–q037). Full hybrid baseline after merge: NDCG 0.936 / MRR 0.967
+> / Recall 0.968 (vs 0.937 / 0.975 / 0.966 on the 27-set — stable, new queries are
+> well-calibrated). Per-query recall@10: q030 1.0, q031 0.80 (Amex "Important Notice"
+> statement phrasing ranks below 10 — genuine miss, kept tagged), q032 1.0, q033 1.0,
+> q034–q036 1.0, q037 1.0 (NDCG 0.859 on grade ordering).
 
 > Before landing any ranking-affecting change, capture an eval baseline first
 > (`mailvec eval --json baselines/<date>.json`) — see `baselines/README.md`.

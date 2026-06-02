@@ -1,3 +1,4 @@
+using Mailvec.Core.Data;
 using Mailvec.Core.Search;
 
 namespace Mailvec.Core.Eval;
@@ -12,7 +13,7 @@ namespace Mailvec.Core.Eval;
 public interface IEvalRankingSource
 {
     Task<IReadOnlyList<string>> RankAsync(
-        string query,
+        string? query,
         EvalMode mode,
         int topK,
         SearchFilters? filters,
@@ -24,20 +25,31 @@ public interface IEvalRankingSource
 /// and hybrid search services. Owns the per-mode dispatch and the vector-leg
 /// k-inflation for filtered queries (vec0 KNN runs before the filter join, so
 /// a small k + restrictive filter can produce an empty post-filter set —
-/// mirrors <see cref="HybridSearchService"/>'s own inflation).
+/// mirrors <see cref="HybridSearchService"/>'s own inflation). An empty query
+/// routes to query-less browse (date-desc), mirroring <c>search_emails</c>.
 /// </summary>
 public sealed class DbEvalRankingSource(
     KeywordSearchService keyword,
     VectorSearchService vector,
-    HybridSearchService hybrid) : IEvalRankingSource
+    HybridSearchService hybrid,
+    MessageRepository messages) : IEvalRankingSource
 {
     public async Task<IReadOnlyList<string>> RankAsync(
-        string query,
+        string? query,
         EvalMode mode,
         int topK,
         SearchFilters? filters,
         CancellationToken ct)
     {
+        // Query-less browse: filter-only, date_sent DESC, no ranking. Mode is
+        // irrelevant here — there's no query to rank against, so all three
+        // modes return the same browse list (the live search_emails behaviour).
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            var browsed = messages.BrowseByFilters(filters ?? new SearchFilters(), topK);
+            return browsed.Select(m => m.MessageId).ToList();
+        }
+
         switch (mode)
         {
             case EvalMode.Keyword:
