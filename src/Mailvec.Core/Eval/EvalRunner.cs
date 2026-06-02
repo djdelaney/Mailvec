@@ -13,16 +13,28 @@ public sealed record EvalQueryResult(
     double Ndcg,
     double Mrr,
     double Recall,
-    double LatencyMs);
+    double LatencyMs,
+    bool ExpectEmpty = false,
+    int ReturnedCount = 0,
+    // Negative-query metric: 1.0 when nothing was returned, scaling to 0.0 as the
+    // result count approaches top-k. NaN for normal (non-expectEmpty) queries.
+    double Specificity = double.NaN);
 
 public sealed record EvalModeResult(
     EvalMode Mode,
     int TopK,
     IReadOnlyList<EvalQueryResult> Queries)
 {
-    public double MeanNdcg => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.Ndcg);
-    public double MeanMrr => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.Mrr);
-    public double MeanRecall => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.Recall);
+    // Aggregate quality means cover only scored (non-negative) queries — NDCG/MRR/
+    // Recall are undefined over an empty gold set, so folding negatives in would
+    // drag the means toward 0 for no real reason.
+    private IReadOnlyList<EvalQueryResult> Scored => Queries.Where(q => !q.ExpectEmpty).ToList();
+    public IReadOnlyList<EvalQueryResult> NegativeQueries => Queries.Where(q => q.ExpectEmpty).ToList();
+    public double MeanNdcg => Scored.Count == 0 ? 0.0 : Scored.Average(q => q.Ndcg);
+    public double MeanMrr => Scored.Count == 0 ? 0.0 : Scored.Average(q => q.Mrr);
+    public double MeanRecall => Scored.Count == 0 ? 0.0 : Scored.Average(q => q.Recall);
+    /// <summary>Mean specificity over negative (expectEmpty) queries; 0 if there are none.</summary>
+    public double MeanSpecificity => NegativeQueries.Count == 0 ? 0.0 : NegativeQueries.Average(q => q.Specificity);
 
     public double MeanLatencyMs => Queries.Count == 0 ? 0.0 : Queries.Average(q => q.LatencyMs);
     public double P50LatencyMs => Percentile(Queries.Select(q => q.LatencyMs), 0.50);
@@ -106,6 +118,8 @@ public sealed class EvalRunner(IEvalRankingSource ranking)
             }
         }
 
+        var returnedInTopK = Math.Min(ranked.Count, topK);
+
         return new EvalQueryResult(
             Id: query.Id,
             Query: query.Query ?? "",
@@ -115,6 +129,13 @@ public sealed class EvalRunner(IEvalRankingSource ranking)
             Ndcg: EvalMetrics.NdcgAtK(ranked, grades, topK),
             Mrr: EvalMetrics.MrrAtK(ranked, relevantSet, topK),
             Recall: EvalMetrics.RecallAtK(ranked, relevantSet, topK),
-            LatencyMs: latencyMs);
+            LatencyMs: latencyMs,
+            ExpectEmpty: query.ExpectEmpty,
+            ReturnedCount: returnedInTopK,
+            // Specificity: 1.0 when nothing came back, scaling linearly to 0.0 as the
+            // result count fills top-k. Only meaningful for negative queries.
+            Specificity: query.ExpectEmpty
+                ? 1.0 - Math.Min(1.0, topK <= 0 ? 0.0 : returnedInTopK / (double)topK)
+                : double.NaN);
     }
 }
