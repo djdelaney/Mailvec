@@ -106,6 +106,47 @@ public sealed class EvalQuerySetTests
     }
 
     [Fact]
+    public void Load_EmptyQuery_WithFilters_IsAllowedAsBrowse()
+    {
+        // Query-less browse: no 'query', but a fromExact filter scopes it.
+        var json = """
+            {
+              "version": 1,
+              "queries": [
+                { "id": "q033", "query": null, "filters": { "fromExact": "x@y.com" }, "relevant": ["<a@x>"] }
+              ]
+            }
+            """;
+        var path = WriteTemp(json);
+        try
+        {
+            var set = EvalQuerySet.Load(path);
+            set.Queries[0].Query.ShouldBeNull();
+            set.Queries[0].Filters!.FromExact.ShouldBe("x@y.com");
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Load_EmptyQuery_WithoutFilters_Throws()
+    {
+        var json = """
+            {
+              "version": 1,
+              "queries": [
+                { "id": "q099", "query": null, "relevant": ["<a@x>"] }
+              ]
+            }
+            """;
+        var path = WriteTemp(json);
+        try
+        {
+            Should.Throw<InvalidDataException>(() => EvalQuerySet.Load(path));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void NextSequentialId_FindsHighestQNumber()
     {
         var set = new EvalQuerySet
