@@ -37,6 +37,19 @@ semantic 0.799 / 0.856 / 0.847 · **hybrid 0.937 / 0.975 / 0.966**.
   human prose: thin idiomatic replies ("Magic/barcade", World Cup) miss (q039 recall 0.60),
   while the distinctive "sewer vent cap" carries keyword recall to 1.0 in q040 (semantic
   0.67). This is the gap's thesis, now measurable.
+- [x] **Date-range filtering as a discriminator.** Covered by **q042** (Verizon bill/payment,
+  Dec 2025 — 4 gold, 207 out-of-window siblings, -05:00 offsets) and **q043** (Amex "weekly
+  account snapshot" — 5 gold in a one-month window vs **203** identical-subject siblings, -07:00).
+  Dates were previously on all queries but only ever *bounded* gold; nothing would fail if the
+  boundary logic regressed. These are deliberate regression detectors: with the date filter
+  working, recall 1.0; if it breaks (esp. the `datetime()` mixed-offset normalization flagged
+  as silent-corruption-prone), the out-of-window siblings crowd the in-window gold out of top-10.
+- [x] **Dual-signal RRF (body + attachment).** Covered by **q044** (Oliver Heating invoice +
+  AC checklist PDF), **q045** (Miller & Sons water-conditioning estimate PDF), **q046** (MTBrewer
+  Electric invoice PDF). Where q034-q036 prove the attachment leg in *isolation* (term only in
+  the attachment), these have the query terms in BOTH body and `attachment_text` (DB-verified),
+  exercising the fusion boost — each ranks #1, and q046 outranks a competing single-domain
+  invoice (Oliver) at rank 2.
 
 ## Failing queries in the current set (real misses, separate from coverage)
 
@@ -72,18 +85,17 @@ semantic 0.799 / 0.856 / 0.847 · **hybrid 0.937 / 0.975 / 0.966**.
   lifecycle). q037 currently scores NDCG 0.859: hybrid ranks the thin "Delivered!" ping
   above the info-rich "Order Confirmed" — a real ordering weakness the grade scheme now
   exposes.
-- [ ] Investigate q011 (recall 0.571) — worst real failure.
 
-> Set grew 27 → 35 (q030–q037), then → 39 (q038–q041). Full hybrid baseline at 39q
-> (38 scored + 1 negative): NDCG 0.931 / MRR 0.969 / Recall 0.961 — stable vs the 27-set
-> (0.937 / 0.975 / 0.966); the conversational adds (q039 0.60, q040 hybrid recall) pull the
-> mean down slightly on purpose, since they expose the semantic-leg weakness the set was
-> blind to. Negative query q041: specificity keyword 0.000 / semantic 0.200 / hybrid 0.000.
-> Baseline snapshot: `baselines/2026-06-02-39q.json`.
+> Set grew 27 → 35 (q030–q037) → 39 (q038–q041) → 44 (q042–q046: date-discriminator +
+> dual-signal). q042–q046 all score hybrid 1.000/1.000/1.000 with filters working — they're
+> regression detectors, not current failures. Negative query q041: specificity keyword 0.000 /
+> semantic 0.200 / hybrid 0.000.
 >
-> Remaining coverage gap: none of the original "zero/thin" gaps are open. What's left is
-> the **failing-query investigations** below (q011, q006, q005, q008, q004) — real ranking
-> misses, not coverage holes.
+> Remaining coverage gap: none. Both the original "zero/thin" gaps and the later-found ones
+> (date-as-discriminator, dual-signal) are closed. What's left is the **failing-query
+> investigations** below (q011, q023, q006, q005, q008, q004) — real ranking misses, not
+> coverage holes. (Optional/niche, not tracked: multilingual/non-English retrieval — ~120
+> recent Spanish messages exist with zero coverage.)
 
 > Before landing any ranking-affecting change, capture an eval baseline first
 > (`mailvec eval --json baselines/<date>.json`) — see `baselines/README.md`.
