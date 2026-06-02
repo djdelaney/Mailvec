@@ -65,6 +65,8 @@ public sealed class EvalReportRun
             Mrr = m.MeanMrr,
             Recall = m.MeanRecall,
             QueryCount = m.Queries.Count,
+            NegativeQueryCount = m.NegativeQueries.Count,
+            MeanSpecificity = m.MeanSpecificity,
             MeanLatencyMs = m.MeanLatencyMs,
             P50LatencyMs = m.P50LatencyMs,
             P95LatencyMs = m.P95LatencyMs,
@@ -78,6 +80,10 @@ public sealed class EvalReportRun
             Recall = q.Recall,
             RanksOfExpected = q.RanksOfExpected.ToList(),
             LatencyMs = q.LatencyMs,
+            ExpectEmpty = q.ExpectEmpty,
+            ReturnedCount = q.ReturnedCount,
+            // null (omitted) for normal queries — in-memory it's NaN, which JSON can't encode.
+            Specificity = q.ExpectEmpty ? q.Specificity : null,
         }).ToList(),
     };
 }
@@ -88,6 +94,11 @@ public sealed class EvalReportAggregate
     public double Mrr { get; set; }
     public double Recall { get; set; }
     public int QueryCount { get; set; }
+    // Negative-query fields default to 0 for historical reports written before
+    // expectEmpty support. QueryCount still counts all queries (incl. negatives);
+    // Ndcg/Mrr/Recall above are means over the scored (non-negative) queries only.
+    public int NegativeQueryCount { get; set; }
+    public double MeanSpecificity { get; set; }
     // Latency fields default to 0 when loading historical reports written before timing was captured.
     public double MeanLatencyMs { get; set; }
     public double P50LatencyMs { get; set; }
@@ -103,4 +114,7 @@ public sealed class EvalReportQuery
     public double Recall { get; set; }
     public List<int> RanksOfExpected { get; set; } = [];
     public double LatencyMs { get; set; }
+    public bool ExpectEmpty { get; set; }
+    public int ReturnedCount { get; set; }
+    public double? Specificity { get; set; }
 }

@@ -163,6 +163,23 @@ internal static class EvalCommand
                 $"{Colors.Score(r.MeanMrr, $"{r.MeanMrr,7:F3}")}  " +
                 $"{Colors.Score(r.MeanRecall, $"{r.MeanRecall,7:F3}")}");
         }
+
+        // Negative / zero-result queries are scored separately: specificity =
+        // how well the mode returned nothing (1.000 = clean, lower = false hits).
+        var negCount = results.FirstOrDefault()?.NegativeQueries.Count ?? 0;
+        if (negCount > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine(Colors.Dim($"  Negative queries ({negCount}) — specificity (1.000 = returned nothing; NDCG/MRR/Recall above exclude these):"));
+            Console.WriteLine($"  {"Mode",-10}  {"Specif.",7}");
+            Console.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 7)}"));
+            foreach (var r in results)
+            {
+                Console.WriteLine(
+                    $"  {Colors.ModeHeader($"{ModeName(r.Mode),-10}")}  " +
+                    $"{Colors.Score(r.MeanSpecificity, $"{r.MeanSpecificity,7:F3}")}");
+            }
+        }
     }
 
     /// <summary>
@@ -180,11 +197,31 @@ internal static class EvalCommand
 
         foreach (var mr in results)
         {
+            // Negative queries have no gold and a 0 NDCG; printing them in the
+            // NDCG-sorted list would falsely flag them as the worst failures.
+            // Pull them out and report specificity in their own block.
+            var negatives = mr.NegativeQueries;
             var rows = mr.Queries
+                .Where(q => !q.ExpectEmpty)
                 .Where(q => includeAll || q.Ndcg < 0.9995)
                 .OrderBy(q => q.Ndcg)
                 .ThenBy(q => q.Mrr)
                 .ToList();
+
+            if (negatives.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"  {Colors.Bold(Colors.ModeHeader(ModeName(mr.Mode)))}: negative queries (specificity; want 1.000)");
+                foreach (var q in negatives)
+                {
+                    var meta = queriesById.GetValueOrDefault(q.Id);
+                    var queryText = (meta?.Query is { Length: > 0 } t ? t : q.Query) ?? "";
+                    var trimmed = queryText.Length > 50 ? queryText[..47] + "..." : queryText;
+                    var detail = q.ReturnedCount == 0 ? "returned nothing" : $"returned {q.ReturnedCount} false hit{(q.ReturnedCount == 1 ? "" : "s")}";
+                    Console.WriteLine($"    {Colors.QueryId($"{q.Id,-10}")}  {Colors.Score(q.Specificity, $"{q.Specificity,6:F3}")}  {trimmed}  ({detail})");
+                }
+            }
+
             if (rows.Count == 0)
             {
                 Console.WriteLine();
@@ -337,6 +374,7 @@ internal static class EvalCommand
             if (prior is null) continue;
             var priorById = prior.Queries.ToDictionary(q => q.Id, q => q);
             var rows = cur.Queries
+                .Where(q => !q.ExpectEmpty)  // negatives have no NDCG; tracked via specificity instead
                 .Select(q => (q, prev: priorById.GetValueOrDefault(q.Id)))
                 .Where(t => t.prev is not null && Math.Abs(t.q.Ndcg - t.prev!.Ndcg) >= 0.05)
                 .OrderByDescending(t => Math.Abs(t.q.Ndcg - t.prev!.Ndcg))
@@ -374,6 +412,23 @@ internal static class EvalCommand
         Console.WriteLine($"== {Colors.QueryId(q.Id)}  [{Colors.ModeHeader(ModeName(mode))}]  \"{(string.IsNullOrEmpty(q.Query) ? "(browse)" : q.Query)}\"");
         if (q.Filters is not null)
             Console.WriteLine($"   {Colors.Dim("filters:")} {FilterSummary(q.Filters)}");
+
+        if (q.ExpectEmpty)
+        {
+            // Negative query: no gold, so NDCG/MRR/Recall are meaningless. Report
+            // specificity (want 1.000) and what leaked through.
+            var detail = r.ReturnedCount == 0 ? "returned nothing — clean" : $"returned {r.ReturnedCount} false hit{(r.ReturnedCount == 1 ? "" : "s")}";
+            Console.WriteLine($"   {Colors.Dim("negative query")} — specificity={Colors.Score(r.Specificity, $"{r.Specificity:F3}")}  ({detail})");
+            if (r.ReturnedCount > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"   Top {Math.Min(topK, r.RankedMessageIds.Count)} (all false positives):");
+                for (var i = 0; i < Math.Min(topK, r.RankedMessageIds.Count); i++)
+                    Console.WriteLine($"     {i + 1,2}. {r.RankedMessageIds[i]}");
+            }
+            return;
+        }
+
         Console.WriteLine(
             $"   NDCG@{topK}={Colors.Score(r.Ndcg, $"{r.Ndcg:F3}")}  " +
             $"MRR={Colors.Score(r.Mrr, $"{r.Mrr:F3}")}  " +

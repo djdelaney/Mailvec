@@ -83,6 +83,43 @@ public sealed class EvalRunnerTests
     }
 
     [Fact]
+    public async Task ExpectEmpty_query_scores_specificity_and_is_excluded_from_quality_means()
+    {
+        // A negative query returning 4 of top-10 → specificity 1 - 4/10 = 0.6.
+        var fake = new FakeRankingSource { Script = _ => new[] { "a@x", "b@x", "c@x", "d@x" } };
+        var runner = new EvalRunner(fake);
+        var negative = new EvalQuery { Id = "neg", Query = "absent topic", ExpectEmpty = true };
+        var normal = Query("pos", "present", "a@x");
+
+        var result = await runner.RunAsync(Set(negative, normal), EvalMode.Hybrid, topK: 10);
+
+        var negResult = result.Queries.Single(q => q.Id == "neg");
+        negResult.ExpectEmpty.ShouldBeTrue();
+        negResult.ReturnedCount.ShouldBe(4);
+        negResult.Specificity.ShouldBe(0.6, tolerance: 1e-12);
+
+        // The negative query must not drag the quality means — they cover only
+        // the one scored query ("pos", which has a@x at rank 1 → all 1.0).
+        result.NegativeQueries.Count.ShouldBe(1);
+        result.MeanRecall.ShouldBe(1.0, tolerance: 1e-12);
+        result.MeanNdcg.ShouldBe(1.0, tolerance: 1e-12);
+        result.MeanSpecificity.ShouldBe(0.6, tolerance: 1e-12);
+    }
+
+    [Fact]
+    public async Task ExpectEmpty_query_returning_nothing_scores_perfect_specificity()
+    {
+        var fake = new FakeRankingSource { Script = _ => Array.Empty<string>() };
+        var runner = new EvalRunner(fake);
+        var negative = new EvalQuery { Id = "neg", Query = "absent topic", ExpectEmpty = true };
+
+        var r = await runner.RunOneAsync(negative, EvalMode.Keyword, topK: 10);
+
+        r.ReturnedCount.ShouldBe(0);
+        r.Specificity.ShouldBe(1.0, tolerance: 1e-12);
+    }
+
+    [Fact]
     public async Task Captures_latency_of_the_ranking_call_only()
     {
         // Floor the assert well below the delay so CI jitter doesn't flake;
