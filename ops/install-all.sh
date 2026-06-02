@@ -14,7 +14,9 @@
 # - Xcode + Command Line Tools (full Xcode, not just CLT — xcodebuild needs it)
 # - xcodegen (`brew install xcodegen`)
 # - mbsync (`brew install isync`)
-# - Ollama (`brew install ollama && brew services start ollama`)
+# - Ollama, via the cask (`brew install --cask ollama-app`), NOT the `ollama`
+#   formula — the formula bottle has shipped without the GGML llama-server, so
+#   mxbai-embed-large fails to load. The cask auto-starts via its own Login Item.
 # - ~/.mbsyncrc configured + IMAP password in Keychain — README "mbsync" section
 #
 # Why not bundle prereqs too? They all need user-specific config (Fastmail

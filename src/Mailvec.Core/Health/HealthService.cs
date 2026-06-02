@@ -37,8 +37,9 @@ public sealed class HealthService(
 
         var live = Math.Max(total - deleted, 0);
         var coverage = live == 0 ? 0d : (double)embedded / live;
+        var backlog = Math.Max(live - embedded, 0);
 
-        var embedder = BuildEmbedderHealth();
+        var embedder = BuildEmbedderHealth(backlog);
 
         var status = (ollamaReachable, modelMismatch, embedder.Stuck) switch
         {
@@ -79,7 +80,7 @@ public sealed class HealthService(
     /// timestamps and Stuck=false, which is the correct "no signal yet"
     /// reading rather than a false-positive degraded.
     /// </summary>
-    private EmbedderHealth BuildEmbedderHealth()
+    private EmbedderHealth BuildEmbedderHealth(long backlog)
     {
         var consecutiveFailuresRaw = metadata.Get(EmbedderHealthKeys.ConsecutiveFailures);
         _ = int.TryParse(consecutiveFailuresRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var consecutiveFailures);
@@ -89,7 +90,7 @@ public sealed class HealthService(
         var lastFailureKind = metadata.Get(EmbedderHealthKeys.LastFailureKind);
         if (string.IsNullOrEmpty(lastFailureKind)) lastFailureKind = null;
 
-        var stuck = consecutiveFailures >= EmbedderHealthKeys.StuckThreshold;
+        var stuck = IsStuck(backlog, consecutiveFailures, lastSuccessAt, lastFailureAt);
 
         return new EmbedderHealth(
             LastSuccessAt: lastSuccessAt,
@@ -97,6 +98,41 @@ public sealed class HealthService(
             ConsecutiveFailures: consecutiveFailures,
             LastFailureKind: lastFailureKind,
             Stuck: stuck);
+    }
+
+    /// <summary>
+    /// Decide whether the embedder is stuck. Two independent triggers, OR'd:
+    ///   1. <c>consecutiveFailures >= StuckThreshold</c> — the fast path for
+    ///      quick-failing batches (e.g. SQLite constraint errors that throw
+    ///      immediately).
+    ///   2. Time-based backstop — there's still work to embed, the most recent
+    ///      attempt failed (or none has ever succeeded), and no batch has
+    ///      succeeded within <see cref="EmbedderHealthKeys.StuckStaleAfter"/>.
+    ///      This catches the slow-failing case where each batch burns minutes
+    ///      of Ollama timeout before incrementing the counter, so the count
+    ///      alone would take 15+ minutes to trip.
+    /// A backlog of 0 is never stuck: a fully-drained embedder with a stale
+    /// failure on record is simply idle, not broken.
+    /// </summary>
+    internal static bool IsStuck(
+        long backlog,
+        int consecutiveFailures,
+        DateTimeOffset? lastSuccessAt,
+        DateTimeOffset? lastFailureAt,
+        DateTimeOffset? now = null)
+    {
+        if (consecutiveFailures >= EmbedderHealthKeys.StuckThreshold) return true;
+        if (backlog <= 0) return false;
+
+        // The last attempt must have failed — either there's a failure on
+        // record newer than the last success, or there's never been a success.
+        var lastAttemptFailed = lastFailureAt is not null
+            && (lastSuccessAt is null || lastFailureAt >= lastSuccessAt);
+        if (!lastAttemptFailed) return false;
+
+        var nowUtc = now ?? DateTimeOffset.UtcNow;
+        var staleFor = nowUtc - (lastSuccessAt ?? lastFailureAt!.Value);
+        return staleFor >= EmbedderHealthKeys.StuckStaleAfter;
     }
 
     private static DateTimeOffset? ParseTimestamp(string? raw)

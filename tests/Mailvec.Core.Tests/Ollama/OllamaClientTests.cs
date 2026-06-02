@@ -50,6 +50,50 @@ public class OllamaClientTests
     }
 
     [Fact]
+    public async Task PingAsync_probes_embed_and_returns_true_on_valid_vector()
+    {
+        HttpRequestMessage? captured = null;
+        var client = ClientWith(req =>
+        {
+            captured = req;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { embeddings = new[] { new[] { 1f, 0f, 0f, 0f } } })
+            };
+        });
+
+        (await client.PingAsync()).ShouldBeTrue();
+
+        // Readiness probe must hit /api/embed (not the /api/tags liveness check)
+        // so it actually exercises model loading.
+        captured.ShouldNotBeNull();
+        captured.RequestUri!.AbsolutePath.ShouldBe("/api/embed");
+    }
+
+    [Fact]
+    public async Task PingAsync_returns_false_when_model_cannot_load()
+    {
+        // Ollama up but the model can't load: HTTP error (the wedge state).
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent("error starting llama-server: llama-server binary not found")
+        });
+
+        (await client.PingAsync()).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task PingAsync_returns_false_on_empty_embedding_list()
+    {
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { embeddings = Array.Empty<float[]>() })
+        });
+
+        (await client.PingAsync()).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Empty_input_short_circuits_without_calling_server()
     {
         var called = false;

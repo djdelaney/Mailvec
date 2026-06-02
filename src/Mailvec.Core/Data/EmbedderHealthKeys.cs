@@ -17,12 +17,26 @@ public static class EmbedderHealthKeys
 
     /// <summary>
     /// Threshold at which /health flips to "degraded" because the embedder
-    /// can't drain its backlog. Each consecutive failure roughly equals one
-    /// poll cycle (default 30s in EmbedderOptions), so 3 ≈ 90s of sustained
-    /// breakage before paging — generous enough to absorb a transient Ollama
-    /// blip without false-positives, tight enough that a true stuck state
-    /// surfaces within a couple of minutes rather than the 3-day window the
-    /// orphan-vector bug previously slipped through.
+    /// can't drain its backlog. A single failed batch is not always one poll
+    /// cycle: when Ollama accepts the connection but never responds (model
+    /// can't load, wedged runner), each failure burns the full Polly
+    /// retry+timeout budget — minutes, not 30s — before the outer catch
+    /// increments this counter. 2 consecutive failures already means several
+    /// minutes of sustained breakage, tight enough to surface a real stall
+    /// without tripping on a single transient Ollama blip. The
+    /// <see cref="StuckStaleAfter"/> backstop below catches slow-cycling
+    /// failures that haven't yet reached this count.
     /// </summary>
-    public const int StuckThreshold = 3;
+    public const int StuckThreshold = 2;
+
+    /// <summary>
+    /// Time-based backstop for <see cref="StuckThreshold"/>. A wedged Ollama
+    /// can take 15+ minutes to rack up enough consecutive failures because
+    /// each cycle is dominated by the per-attempt timeout. Independently of
+    /// the counter, HealthService treats the embedder as stuck when there's
+    /// an unembedded backlog, the most recent attempt failed, and no batch
+    /// has succeeded within this window — so a "reachable but can't embed"
+    /// outage surfaces in minutes rather than depending on cycle timing.
+    /// </summary>
+    public static readonly TimeSpan StuckStaleAfter = TimeSpan.FromMinutes(10);
 }

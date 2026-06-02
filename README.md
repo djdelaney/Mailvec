@@ -46,8 +46,9 @@ Requires macOS 14+, the .NET 10 SDK, and a few brews. Embeddings are local-only 
 
 ```sh
 # 1. Prereqs
-brew install dotnet ollama isync xcodegen
-brew services start ollama
+brew install dotnet isync xcodegen
+brew install --cask ollama-app   # the cask, NOT `brew install ollama` — see note below
+open -a Ollama                   # launch once; enable "Open at Login" to survive reboot
 ollama pull mxbai-embed-large
 
 # 2. Configure mbsync (see docs/imap-setup.md for the Fastmail / Keychain dance)
@@ -59,6 +60,8 @@ mbsync -aV                                       # first sync — may take hours
 ./ops/fetch-sqlite-vec.sh                        # one-time: pulls vec0.dylib
 ./ops/install-all.sh                             # services + tray app, launchd-managed
 ```
+
+> **Install Ollama via the cask (`ollama-app`), not the `ollama` formula.** The Homebrew *formula* bottle has shipped incomplete builds that bundle only the MLX runner and no `llama-server`, so GGML models like `mxbai-embed-large` fail to load (`llama-server binary not found`) — Ollama answers HTTP but every `/api/embed` hangs. The cask is Ollama's own complete prebuilt app, auto-updates, keeps the `ollama` CLI on your PATH, and is what the tray's "Start Ollama" button launches. If you previously installed the formula: `brew services stop ollama && brew uninstall ollama`, then install the cask.
 
 `install-all.sh` orchestrates three scripts and prompts for site-specific values (Maildir root, DB path, Ollama URL, optional Fastmail account id). Use `--no-tray` to skip the SwiftUI build.
 
