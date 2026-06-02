@@ -26,7 +26,11 @@ struct TrayHealth: Codable, Equatable {
     var sparkline: [Int]
 
     var embedCoverage: Double {
-        embedTotal == 0 ? 1.0 : Double(embedded) / Double(embedTotal)
+        guard embedTotal > 0 else { return 1.0 }
+        if embedded >= embedTotal { return 1.0 }
+        // Cap below 1.0 while any message is still embedding so a near-complete
+        // fraction (e.g. 74027/74029 = 99.997%) can't be displayed as "100%".
+        return min(Double(embedded) / Double(embedTotal), 0.999)
     }
 }
 
