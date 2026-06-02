@@ -40,8 +40,20 @@ semantic 0.799 / 0.856 / 0.847 · **hybrid 0.937 / 0.975 / 0.966**.
 
 ## Failing queries in the current set (real misses, separate from coverage)
 
-- [ ] **q011 "pool setup scheduled" — recall 0.571.** 3 of 7 relevant docs missed
-  entirely. Ranks `[1,2,0,0,6,4,0]`. Worst real failure — investigate first.
+- [ ] **q011 "pool setup scheduled" — recall 0.500 (was 0.571).** Genuine miss. Gold grew
+  7→8 in the 2026-06-02 audit (added the `tgbeggs` "Re: Crane on pool curve" reply, which
+  also ranks outside top-10). Human thread replies in the pool-setup discussion rank below
+  the automated/announcement mail. Worst real failure — investigate first.
+- [ ] **q023 "fortress floor quote" — recall@10 0.588, but NOT a ranking failure.** Gold
+  grew 10→17 in the audit (added the human quote negotiation: `johnh@` vendor replies + the
+  homeowner's replies, which hybrid hadn't surfaced). With gold=17 > k=10, recall@10 is
+  *structurally capped* at 10/17=0.588 — at least 7 are always outside the top-10 window
+  regardless of ranking. The honest signals: **NDCG@10 = 1.000** (top-10 all relevant) and
+  **recall@20 = 0.941** (16/17 land in ranks 1–16; only the 05-14 homeowner reply falls past
+  20). Decision: **keep the full gold=17 and read NDCG@10** as the quality signal for this
+  query (recall@10's 0.588 is a known ceiling, not a regression). General note: **any query
+  whose gold exceeds the eval's `--top-k` can never reach recall@k = 1.0** — recall@k examines
+  only the top k. NDCG@k and MRR are unaffected.
 - [ ] **q006 "ATA tournament" — MRR 0.333.** Top relevant doc only at rank 4. Ranks
   `[4,3,7,8,9]`. Ranking problem, not recall.
 - [ ] **q005 "domain registration renewal" — recall 0.75.** 1 missed. Ranks `[1,2,3,0]`.
