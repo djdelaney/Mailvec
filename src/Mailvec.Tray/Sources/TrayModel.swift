@@ -60,6 +60,21 @@ final class TrayModel: ObservableObject {
 
     private var poller: Task<Void, Never>?
 
+    /// High-water mark of pending work (`embedTotal - embedded`) observed
+    /// since the archive was last fully caught up. Drives the "significant
+    /// batch" gate on the embed-complete notification: a drain to 100% only
+    /// fires a banner if the backlog it cleared was large enough to be worth
+    /// flagging (an initial backfill or a big sync), not the routine handful
+    /// of new messages that arrive between polls. Reset to 0 each time we
+    /// reach 100%, so every not-done streak is sized independently.
+    private var peakPendingSinceDone = 0
+
+    /// Minimum cleared backlog for the embed-complete banner to fire. Below
+    /// this, drain-to-empty is the silent steady state — the case the user
+    /// hits constantly as new mail trickles in. Initial archives and large
+    /// syncs clear far more than this; a few new mails clear far less.
+    private let embedNotifyThreshold = 50
+
     init() {
         recentSearches = (UserDefaults.standard.array(forKey: recentsKey) as? [String]) ?? []
         if let raw = UserDefaults.standard.string(forKey: dateRangeKey),
@@ -128,6 +143,13 @@ final class TrayModel: ObservableObject {
     /// the user would get a banner every 5-second poll while a problem
     /// persists.
     private func detectAndNotifyTransitions(from old: TrayHealth?, to new: TrayHealth) {
+        // Track the high-water mark of pending work across the current
+        // not-done streak. Done outside the `old` guard so the very first
+        // poll after launch seeds it (a big backlog present at startup
+        // still counts toward the batch size it eventually clears).
+        let pending = max(0, new.embedTotal - new.embedded)
+        peakPendingSinceDone = max(peakPendingSinceDone, pending)
+
         guard let old else { return }   // First poll — no comparison baseline.
 
         // Ollama: reachable → unreachable
@@ -151,16 +173,24 @@ final class TrayModel: ObservableObject {
                 body: detail)
         }
 
-        // Initial archive embedded: coverage < 100% → coverage = 100%.
-        // Only fire when both totals are non-zero (an empty archive would
-        // be 100% trivially and shouldn't celebrate).
+        // Archive caught up: coverage < 100% → coverage = 100%. Only fire
+        // when both totals are non-zero (an empty archive is 100% trivially
+        // and shouldn't celebrate) AND the backlog we just cleared was large
+        // enough to be worth a banner. Without the size gate this fires every
+        // time the queue drains after a few new mails arrive — which is the
+        // steady state on a live archive, so it became constant noise.
         let oldDone = old.embedTotal > 0 && old.embedded >= old.embedTotal
         let newDone = new.embedTotal > 0 && new.embedded >= new.embedTotal
         if !oldDone && newDone {
-            TrayNotifications.send(
-                kind: .embedComplete,
-                title: "Mailvec: archive fully embedded",
-                body: "All \(new.embedded.formatted()) messages are searchable.")
+            let cleared = peakPendingSinceDone
+            peakPendingSinceDone = 0   // Start a fresh streak.
+            if cleared >= embedNotifyThreshold {
+                TrayNotifications.send(
+                    kind: .embedComplete,
+                    title: "Mailvec: archive fully embedded",
+                    body: "Finished embedding \(cleared.formatted()) messages — "
+                        + "all \(new.embedded.formatted()) are now searchable.")
+            }
         }
     }
 

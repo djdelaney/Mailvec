@@ -14,7 +14,7 @@ struct GeneralTab: View {
             }
 
             Section {
-                Toggle("Initial archive embedded", isOn: $prefs.notifyEmbedDone)
+                Toggle("Large batch embedded", isOn: $prefs.notifyEmbedDone)
                 Toggle("Sync failures", isOn: $prefs.notifySyncFailures)
                 Toggle("Ollama unreachable", isOn: $prefs.notifyOllamaDown)
             } header: { Text("Notifications") } footer: {
