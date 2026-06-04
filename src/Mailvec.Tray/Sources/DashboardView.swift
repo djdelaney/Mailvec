@@ -33,14 +33,6 @@ struct DashboardView: View {
 private struct HeaderBand: View {
     @EnvironmentObject var model: TrayModel
 
-    /// Watermark falls back to a system symbol when `mailvec.mv` isn't in the
-    /// asset catalog. Once the SF Symbol is imported the cast resolves the
-    /// branded version automatically.
-    private var brandWatermark: Image {
-        NSImage(named: "mailvec.mv") != nil
-            ? Image("mailvec.mv").renderingMode(.template)
-            : Image(systemName: "tray.full.fill")
-    }
     /// Coloured inline icon used next to the "Mailvec" wordmark.
     private var brandColorIcon: Image {
         NSImage(named: "mailvec.mv-color") != nil
@@ -50,57 +42,49 @@ private struct HeaderBand: View {
 
     var body: some View {
         let h = model.health
-        ZStack(alignment: .topTrailing) {
-            // Decorative watermark — falls back to a system symbol when the
-            // custom mailvec.mv asset isn't in the bundle.
-            brandWatermark
-                .resizable().scaledToFit()
-                .frame(width: 120, height: 120)
-                .foregroundStyle(.white.opacity(0.06))
-                .offset(x: 16, y: -22)
-                .allowsHitTesting(false)
-
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 9) {
-                    brandColorIcon
-                        .resizable().scaledToFit().frame(width: 18)
-                    Text("Mailvec").font(.system(size: 14, weight: .bold))
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                    Spacer()
-                    StatusPill(severity: h?.severity ?? .ok)
-                }
-                HStack(spacing: 14) {
-                    CoverageRing(
-                        progress: h?.embedCoverage ?? 0,
-                        severity: h?.severity ?? .ok
-                    )
-                    .frame(width: 72, height: 72)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(h?.messages.formatted() ?? "—")
-                                .font(.system(size: 28, weight: .bold))
-                                .monospacedDigit()
-                                .kerning(-0.6)
-                            Text("messages")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.white.opacity(0.6))
-                        }
-                        HStack(spacing: 12) {
-                            MiniStat(label: "chunks",  value: h?.chunks.formatted() ?? "—")
-                            MiniStat(label: "indexed", value: h?.lastIndexedAt.map(relative) ?? "—")
-                            MiniStat(label: "db",      value: h.map { fmtBytes($0.dbSizeBytes) } ?? "—")
-                        }
-                    }
-                    Spacer()
-                }
+        // No decorative watermark behind this band — its faint strokes sat
+        // behind the small, tinted "All clear" status pill and made it hard
+        // to read on high-contrast displays, so it was removed.
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                brandColorIcon
+                    .resizable().scaledToFit().frame(width: 18)
+                Text("Mailvec").font(.system(size: 14, weight: .bold))
+                Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer()
+                StatusPill(severity: h?.severity ?? .ok)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .foregroundStyle(Brand.bandText)
+            HStack(spacing: 14) {
+                CoverageRing(
+                    progress: h?.embedCoverage ?? 0,
+                    severity: h?.severity ?? .ok
+                )
+                .frame(width: 72, height: 72)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(h?.messages.formatted() ?? "—")
+                            .font(.system(size: 28, weight: .bold))
+                            .monospacedDigit()
+                            .kerning(-0.6)
+                        Text("messages")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    HStack(spacing: 12) {
+                        MiniStat(label: "chunks",  value: h?.chunks.formatted() ?? "—")
+                        MiniStat(label: "indexed", value: h?.lastIndexedAt.map(relative) ?? "—")
+                        MiniStat(label: "db",      value: h.map { fmtBytes($0.dbSizeBytes) } ?? "—")
+                    }
+                }
+                Spacer()
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .foregroundStyle(Brand.bandText)
         .background(
             LinearGradient(
                 colors: [Brand.bandTop, Brand.bandBottom],
