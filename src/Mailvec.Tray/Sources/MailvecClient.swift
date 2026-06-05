@@ -77,6 +77,20 @@ actor MailvecClient {
         return resp.results
     }
 
+    /// Fire-and-forget pre-warm of the search path. Called when the search pane
+    /// opens so the first hybrid/semantic query lands warm: the server runs a
+    /// throwaway hybrid query that pulls the chunk vectors into cache (the real
+    /// cost — see docs/contributing/search-performance.md) and warms Ollama too.
+    /// Best-effort: the server kicks it off detached and returns 202 immediately
+    /// (no body), so we don't decode or surface errors.
+    func warm() async {
+        var req = URLRequest(url: base.appending(path: "/tray/warm"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        _ = try? await session.data(for: req)
+        TrayLog.debug("POST /tray/warm", "sent")
+    }
+
     /// Pause/Resume buttons in the dashboard footer. Acts on indexer +
     /// embedder together (the user's spec — leave mbsync's timer alone).
     /// Returns true if both succeeded.
