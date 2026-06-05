@@ -79,6 +79,35 @@ public static class TrayEndpoints
             }
         });
 
+        // Pre-warm the vector-search path so the first real search from the
+        // popover lands warm (~0.3s) instead of cold (~1-6s). The cost that
+        // actually matters is the KNN scan over ~1.2 GB of chunk vectors — NOT
+        // Ollama embedding (~0.02s) and NOT HTTP overhead (~10ms). See
+        // docs/contributing/search-performance.md for the full investigation.
+        // A throwaway hybrid query pulls those vectors into the OS/SQLite page
+        // cache and JITs the hybrid path; it embeds via Ollama too, so it also
+        // covers warming the embedding model. The tray fires this when the
+        // search pane opens, so it runs behind the user's typing. Detached with
+        // CancellationToken.None — NOT the request token, which would cancel the
+        // warm the instant we return the 202. Best-effort: errors are swallowed.
+        group.MapPost("/warm", (TraySearchService search) =>
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await search.SearchAsync(
+                        new TraySearchRequest(
+                            Query: "warm", Mode: "hybrid", Limit: 1,
+                            Folder: null, DateFrom: null, DateTo: null,
+                            FromContains: null, FromExact: null),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch { /* best-effort warm; nothing observes this task */ }
+            });
+            return Results.Accepted();
+        });
+
         // POST so the action verb (kickstart / bootout) makes semantic sense.
         // Restricted to the four mailvec labels inside LaunchdInspector.
         group.MapPost("/control", async (TrayControlRequest body, LaunchdInspector inspector, CancellationToken ct) =>

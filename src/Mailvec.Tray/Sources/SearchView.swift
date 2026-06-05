@@ -9,7 +9,8 @@ struct SearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             SlimHeader()
-            SearchInput(text: $model.searchQuery, focused: $fieldFocused)
+            SearchInput(text: $model.searchQuery, focused: $fieldFocused,
+                        searching: model.isSearching)
                 .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
                 .onSubmit {
                     // Enter commits the query to recents AND opens the
@@ -23,16 +24,19 @@ struct SearchView: View {
                     }
                 }
                 .onChange(of: model.searchQuery) { _, _ in
-                    Task { await model.runSearch() }
+                    // Debounced: a burst of keystrokes collapses into one
+                    // request once typing pauses. Enter (onSubmit) bypasses
+                    // the debounce and searches immediately.
+                    model.scheduleSearch()
                 }
                 .onChange(of: model.mode) { _, _ in
-                    Task { await model.runSearch() }
+                    Task { await model.runSearchNow() }
                 }
                 .onChange(of: model.folderFilter) { _, _ in
-                    Task { await model.runSearch() }
+                    Task { await model.runSearchNow() }
                 }
                 .onChange(of: model.dateRange) { _, _ in
-                    Task { await model.runSearch() }
+                    Task { await model.runSearchNow() }
                 }
                 // ↑ / ↓ navigate the result list while focus stays in the
                 // search field. Returning .handled prevents the TextField
@@ -53,6 +57,13 @@ struct SearchView: View {
             Group {
                 if model.searchQuery.isEmpty {
                     EmptyState()
+                } else if model.searchHits.isEmpty {
+                    // No hits yet: either the first search for this query is
+                    // still running (spinner) or it genuinely returned nothing
+                    // (message). Either way, beats a blank pane. A refine over
+                    // existing results keeps showing ResultsList while the
+                    // field/header spinners signal the in-flight request.
+                    SearchStatusState(searching: model.isSearching)
                 } else {
                     ResultsList()
                 }
@@ -68,6 +79,11 @@ struct SearchView: View {
         .background(Brand.popoverBg)
         .frame(maxHeight: 820)
         .onAppear { fieldFocused = true }
+        // Pre-warm the search path the moment the pane opens, so the cold cost
+        // (the ~1.2 GB vector KNN scan, plus any Ollama model load) happens
+        // behind the user's typing instead of stalling the first hybrid/semantic
+        // query. Best-effort + idempotent. See docs/contributing/search-performance.md.
+        .task { await MailvecClient.shared.warm() }
         .onExitCommand { model.pane = .dashboard }
     }
 }
@@ -98,6 +114,9 @@ private struct SlimHeader: View {
         .foregroundStyle(Brand.bandText)
     }
     private var caption: String {
+        if model.isSearching {
+            return "Searching \(model.mode.label.lowercased())…"
+        }
         if model.searchQuery.isEmpty {
             return "Search \(model.health?.embedded ?? 0) indexed messages"
         }
@@ -108,6 +127,7 @@ private struct SlimHeader: View {
 private struct SearchInput: View {
     @Binding var text: String
     var focused: FocusState<Bool>.Binding
+    var searching: Bool
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Brand.accent)
@@ -115,6 +135,12 @@ private struct SearchInput: View {
                 .textFieldStyle(.plain)
                 .focused(focused)
                 .font(.system(size: 13))
+            // Spinner sits alongside the clear button so the user gets an
+            // immediate "working…" signal during the multi-second semantic
+            // searches; clearing the field stays available throughout.
+            if searching {
+                ProgressView().controlSize(.small).scaleEffect(0.7)
+            }
             if !text.isEmpty {
                 Button { text = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.borderless).foregroundStyle(.secondary)
@@ -208,6 +234,38 @@ private struct FilterChipContent: View {
         .overlay(RoundedRectangle(cornerRadius: 6)
             .stroke(active ? Brand.accent.opacity(0.4) : Brand.hairline))
         .foregroundStyle(active ? Brand.accentDeep : .secondary)
+    }
+}
+
+// MARK: Searching / no-results state
+
+/// Shown when the query is non-empty but there are no hits to render — a
+/// spinner while the first search runs, or a "no matches" message once it
+/// completes empty. Prevents the blank pane that made a running search look
+/// like an ignored keystroke.
+private struct SearchStatusState: View {
+    let searching: Bool
+    var body: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            if searching {
+                ProgressView().controlSize(.small)
+                Text("Searching…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.secondary)
+                Text("No matches")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Try a different query, mode, or filter.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
