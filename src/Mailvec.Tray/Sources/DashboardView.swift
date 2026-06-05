@@ -90,6 +90,13 @@ private struct HeaderBand: View {
                 colors: [Brand.bandTop, Brand.bandBottom],
                 startPoint: .top, endPoint: .bottom)
         )
+        // This band is a permanently-dark gradient while the app forces the
+        // rest of the popover to `.light`. The status tints on it are now fixed
+        // bright colors (Brand.statusOk/Warn/Error) precisely because system
+        // `.green`/`.orange`/`.red` dimmed here — but we still pin the subtree
+        // to `.dark` so any remaining adaptive chrome (dividers, etc.) resolves
+        // for a dark backdrop.
+        .environment(\.colorScheme, .dark)
     }
 }
 

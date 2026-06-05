@@ -78,12 +78,16 @@ struct StatusBadge: View {
         .background(color.opacity(0.14), in: Capsule())
         .foregroundStyle(color)
     }
+    // System colors (adaptive), matching the sibling component's `toneFill`
+    // above. The Preferences window follows the system appearance, so fixed
+    // dark-for-light RGB values dimmed against the dark grouped-form background
+    // in Dark Mode — these brighten automatically instead.
     private var color: Color {
         switch tone {
-        case .ok:    Color(red: 0.122, green: 0.478, blue: 0.227)
-        case .warn:  Color(red: 0.639, green: 0.369, blue: 0.0)
-        case .error: Color(red: 0.757, green: 0.176, blue: 0.102)
-        case .info:  Color(red: 0.039, green: 0.361, blue: 0.808)
+        case .ok:    .green
+        case .warn:  .orange
+        case .error: .red
+        case .info:  .blue
         }
     }
 }
