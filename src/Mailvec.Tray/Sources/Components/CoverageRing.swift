@@ -29,5 +29,7 @@ struct CoverageRing: View {
             .foregroundStyle(Brand.bandText)
         }
     }
-    private var tint: Color { severity == .error ? .red : Brand.accent }
+    // Fixed bright error tint (not system `.red`) for the same reason as
+    // StatusPill — system colors dim against the dark band. See Brand.statusOk.
+    private var tint: Color { severity == .error ? Brand.statusError : Brand.accent }
 }
