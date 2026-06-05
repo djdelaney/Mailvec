@@ -10,12 +10,14 @@ struct StatusPill: View {
             Text(label).font(.system(size: 11, weight: .semibold))
         }
         .padding(.horizontal, 9).padding(.vertical, 3)
-        .background(.white.opacity(0.10), in: Capsule())
-        .overlay(Capsule().stroke(tint.opacity(0.33)))
+        .background(tint.opacity(0.18), in: Capsule())
+        .overlay(Capsule().stroke(tint.opacity(0.55)))
         .foregroundStyle(tint)
     }
+    // Fixed bright tints — see Brand.statusOk note. System `.green`/`.orange`/
+    // `.red` dim against the dark band, which is why this pill was hard to read.
     private var tint: Color {
-        switch severity { case .ok: .green; case .syncing: Brand.accent; case .warn: .orange; case .error: .red }
+        switch severity { case .ok: Brand.statusOk; case .syncing: Brand.accent; case .warn: Brand.statusWarn; case .error: Brand.statusError }
     }
     private var label: String {
         switch severity { case .ok: "All clear"; case .syncing: "Syncing"; case .warn: "Warning"; case .error: "Attention" }
