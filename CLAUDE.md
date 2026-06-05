@@ -11,6 +11,7 @@ Operator/release/contributor docs (read on demand):
 - `ops/mcpb-release.md` — building and shipping the MCPB bundle.
 - `docs/contributing/tray.md` — SwiftUI / macOS gotchas; read before editing `src/Mailvec.Tray/`.
 - `docs/contributing/attachments.md` — `get_attachment` implementation quirks.
+- `docs/contributing/search-performance.md` — diagnosing search latency (tray vs CLI, warm vs cold vector cache, the `/tray/warm` pre-warm); read before "optimising" search.
 - `docs/contributing/mcpb.md` — `manifest.json` quirks + tool-shape rules that break the Claude Desktop install.
 - `src/Mailvec.Tray/project.yml` — XcodeGen spec for the menu-bar tray app; regenerate the `.xcodeproj` with `xcodegen generate` whenever files are added/renamed.
 

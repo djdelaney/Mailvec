@@ -15,6 +15,11 @@ final class TrayModel: ObservableObject {
     @Published var lastError: String?
     @Published var searchQuery: String = ""
     @Published var searchHits: [SearchHit] = []
+    /// True while a `/tray/search` request is in flight. Drives the spinner
+    /// in the search field / header / results area so a multi-second semantic
+    /// search doesn't look like the popover ignored the keystroke. Only the
+    /// most recent search (see `searchGeneration`) clears it.
+    @Published var isSearching = false
     /// Keyboard cursor / highlight target — moved by ↑/↓ and used by
     /// Enter-opens-in-Fastmail. Decoupled from `expandedHit` so arrow-key
     /// navigation doesn't expand each row's inline preview (which would
@@ -194,37 +199,103 @@ final class TrayModel: ObservableObject {
         }
     }
 
-    /// Live search — called on every keystroke. Does NOT add to history,
-    /// so the recents list isn't polluted with every partial query the user
-    /// typed. Use `commitSearch()` on Enter to persist a query.
-    func runSearch() async {
-        await performSearch(commit: false)
+    /// Pending debounced keystroke search. Cancelled and replaced on each
+    /// keystroke so a burst of typing collapses into one request once the
+    /// user pauses — semantic search embeds the query through Ollama, so
+    /// firing one per character flooded the server and stacked up multi-second
+    /// requests. `performSearch` cancels this too, so Enter / filter changes
+    /// (which run immediately) never leave a stale debounce to double-fire.
+    private var debounceTask: Task<Void, Never>?
+    private let searchDebounceMs: UInt64 = 350
+
+    /// Debounced live search — wired to the query field's `onChange`. Empties
+    /// clear results immediately (no point waiting); otherwise the request
+    /// fires `searchDebounceMs` after the last keystroke. Does NOT persist to
+    /// recents — that's `commitSearch()` on Enter.
+    func scheduleSearch() {
+        searchGeneration += 1          // supersede anything pending / in flight
+        debounceTask?.cancel()
+        let gen = searchGeneration
+        guard !searchQuery.isEmpty else {
+            debounceTask = nil
+            isSearching = false
+            searchHits = []
+            searchSelection = nil
+            expandedHit = nil
+            return
+        }
+        // Flip the spinner on at the keystroke, not when the debounced request
+        // finally fires — otherwise the results pane would flash "No matches"
+        // during the debounce window. Cleared by `performSearch`'s defer.
+        isSearching = true
+        debounceTask = Task { [weak self, gen, ms = searchDebounceMs] in
+            try? await Task.sleep(nanoseconds: ms * 1_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.performSearch(commit: false, generation: gen)
+        }
+    }
+
+    /// Immediate search for deliberate single actions — Enter and filter/mode
+    /// changes. Bumps the generation and cancels any pending keystroke debounce
+    /// so it can't fire a duplicate behind this one; an already-awaiting
+    /// debounce request is dropped by the generation guard once this bump makes
+    /// its token stale. Does NOT add to history unless `commit` is set.
+    func runSearchNow(commit: Bool = false) async {
+        searchGeneration += 1
+        debounceTask?.cancel()
+        await performSearch(commit: commit, generation: searchGeneration)
     }
 
     /// Triggered on Enter — runs the search AND persists the query to the
     /// recents list. Idempotent if the query is unchanged from the live run.
     func commitSearch() async {
-        await performSearch(commit: true)
+        await runSearchNow(commit: true)
     }
 
-    private func performSearch(commit: Bool) async {
+    /// Monotonic token bumped at every search *trigger* (keystroke, filter
+    /// change, Enter, clear) — the single source of truth for "which search is
+    /// current". `performSearch` captures the token it was triggered with and
+    /// only applies results / owns the spinner while it still matches. Bumping
+    /// at the trigger rather than inside `performSearch` is what lets a new
+    /// keystroke immediately invalidate the in-flight request it cancels: that
+    /// request's URLError lands with a now-stale token and is dropped silently
+    /// instead of clearing a spinner the newer search already owns. (Earlier,
+    /// `performSearch` cancelled `debounceTask` itself — which, when the debounce
+    /// task WAS the caller, cancelled its own in-flight request and returned
+    /// instant empty results. Cancellation now only ever comes from a newer
+    /// trigger.)
+    private var searchGeneration = 0
+
+    private func performSearch(commit: Bool, generation gen: Int) async {
         guard !searchQuery.isEmpty else {
-            searchHits = []
-            searchSelection = nil
+            if gen == searchGeneration {
+                isSearching = false
+                searchHits = []
+                searchSelection = nil
+                expandedHit = nil
+            }
             return
         }
+        isSearching = true
+        // Only the current search owns the spinner; a superseded run (its token
+        // now stale) must not flip it off while a newer one is still live.
+        defer { if gen == searchGeneration { isSearching = false } }
         do {
             let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             // Result limit hardcoded — anything larger crowds the popover,
             // anything smaller hides relevant hits. Was previously a
             // @AppStorage Stepper but the configurability was never useful.
-            searchHits = try await MailvecClient.shared.search(
+            let hits = try await MailvecClient.shared.search(
                 trimmed,
                 mode: mode,
                 limit: 20,
                 folder: folderFilter,
                 dateFrom: dateRange.dateFrom,
                 dateTo: nil)
+            // A newer search started while this one was awaiting (or cancelled
+            // it) — drop its results rather than clobbering the fresher query's.
+            guard gen == searchGeneration else { return }
+            searchHits = hits
             // Don't auto-expand the first hit — the user explicitly picks
             // a row to preview. If the previously-selected id is still in
             // the new result set (e.g. they tweaked a filter), keep it
@@ -241,6 +312,9 @@ final class TrayModel: ObservableObject {
             }
             if commit { rememberSearch(trimmed) }
         } catch {
+            // Superseded / cancelled request — stay silent so a newer search's
+            // spinner and results aren't disturbed by this one's cancellation.
+            guard gen == searchGeneration else { return }
             lastError = error.localizedDescription
         }
     }
