@@ -40,7 +40,7 @@ public sealed class MbsyncErrorTail(IMbsyncErrorTailClock? clock = null)
     /// Reads the err log and returns the most recent error if one falls
     /// inside the freshness window, else null.
     /// </summary>
-    public MbsyncError? CheckRecent(string? logPath = null, string? plistPath = null)
+    public MbsyncError? CheckRecent(string? logPath = null, string? plistPath = null, string? outLogPath = null)
     {
         try
         {
@@ -57,6 +57,22 @@ public sealed class MbsyncErrorTail(IMbsyncErrorTailClock? clock = null)
             var info = new FileInfo(resolvedLog);
             if (info.Length == 0) return null;
             if ((now - info.LastWriteTimeUtc).TotalSeconds > windowSeconds) return null;
+
+            // Positive recovery signal. mbsync writes run progress to its
+            // stdout log on a successful run but nothing to stderr. If the
+            // stdout log was touched *more recently* than this stderr log, the
+            // latest run succeeded with no new error — treat the stale error
+            // as resolved. This drops the tile back to green on the next good
+            // sync (≤ one interval, or immediately after a manual kickstart)
+            // instead of waiting out the full freshness window. A failed run
+            // appends to stderr and bumps this log's mtime past stdout, so the
+            // error correctly reappears.
+            var resolvedOut = PathExpansion.Expand(outLogPath ?? DeriveOutLogPath(logPath ?? DefaultLogPath));
+            if (File.Exists(resolvedOut))
+            {
+                var outInfo = new FileInfo(resolvedOut);
+                if (outInfo.Length > 0 && outInfo.LastWriteTimeUtc > info.LastWriteTimeUtc) return null;
+            }
 
             // Tail the file. mbsync emits one error per line, so we can
             // safely read the last few KB and split on newlines.
@@ -103,6 +119,44 @@ public sealed class MbsyncErrorTail(IMbsyncErrorTailClock? clock = null)
     /// no upward dependency on that service. Falls back to 600s (the
     /// install-template default) when the plist is missing or malformed.
     /// </summary>
+    /// <summary>
+    /// Best-effort "last successful sync" timestamp: the mtime of mbsync's
+    /// stdout log. mbsync writes run progress to stdout on a run that produced
+    /// output, so this advances on each successful sync — the closest signal
+    /// we have to a completion time without parsing mbsync's progress lines.
+    /// Returns null when the log is missing or empty (never synced). This is
+    /// the same file the stdout-mtime recovery check in
+    /// <see cref="CheckRecent"/> reads, so the dashboard's "last sync" display
+    /// and the tile's recovery stay sourced from one signal.
+    /// </summary>
+    public DateTimeOffset? LastSuccessfulSyncAt(string? outLogPath = null)
+    {
+        try
+        {
+            var resolved = PathExpansion.Expand(outLogPath ?? DeriveOutLogPath(DefaultLogPath));
+            if (!File.Exists(resolved)) return null;
+            var info = new FileInfo(resolved);
+            if (info.Length == 0) return null;
+            return new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Derives the stdout log path that sits next to the stderr log. The
+    /// launchd plist writes <c>mailvec-mbsync.out.log</c> alongside
+    /// <c>mailvec-mbsync.err.log</c>; callers only hand us the latter. Falls
+    /// back to the input path for non-standard names, which makes the
+    /// stdout-mtime check a harmless self-compare (mtime is never &gt; itself).
+    /// </summary>
+    private static string DeriveOutLogPath(string errLogPath) =>
+        errLogPath.EndsWith(".err.log", StringComparison.Ordinal)
+            ? errLogPath[..^".err.log".Length] + ".out.log"
+            : errLogPath;
+
     private static int ReadStartIntervalSeconds(string plistPath)
     {
         try

@@ -56,7 +56,12 @@ public sealed class TrayStatusService(
         // BuildServices override the mbsync entry if there's a recent
         // error worth showing to the user.
         var mbsyncErr = mbsyncErrors.CheckRecent();
-        var (services, mbsyncInfo) = BuildServices(launchdMap, healthReport, mbsyncErr);
+        var services = BuildServices(launchdMap, healthReport, mbsyncErr);
+        // Closest signal to a sync-completion time: mbsync's stdout log mtime,
+        // which advances on every run that produced output. Same source the
+        // recovery check reads, so the dashboard's "last sync" and the tile's
+        // recovery stay consistent.
+        var lastSyncAt = mbsyncErrors.LastSuccessfulSyncAt();
         var ollama = new TrayOllamaStatus(
             Ok: healthReport.Ollama.Reachable,
             Detail: healthReport.Ollama.Reachable
@@ -80,7 +85,7 @@ public sealed class TrayStatusService(
             EmbedTotal: live,
             Chunks: healthReport.Embeddings.ChunkCount,
             LastIndexedAt: healthReport.Database.LastIndexedAt,
-            LastSyncAt: mbsyncInfo.LastSyncAt,
+            LastSyncAt: lastSyncAt,
             DbSizeBytes: dbBytes,
             SchemaVersion: schemaVersion,
             Services: services,
@@ -90,15 +95,12 @@ public sealed class TrayStatusService(
             Sparkline: sparkline);
     }
 
-    internal static (IReadOnlyList<TrayServiceStatus> Services, (DateTimeOffset? LastSyncAt, int Runs) MbsyncInfo)
-        BuildServices(
+    internal static IReadOnlyList<TrayServiceStatus> BuildServices(
             IReadOnlyDictionary<string, LaunchdServiceInfo> launchdMap,
             HealthReport healthReport,
             MbsyncError? mbsyncErr)
     {
         var services = new List<TrayServiceStatus>(4);
-        DateTimeOffset? mbsyncLastSync = null;
-        int mbsyncRuns = 0;
 
         foreach (var label in LaunchdInspector.ServiceLabels)
         {
@@ -110,11 +112,10 @@ public sealed class TrayStatusService(
 
             if (id == "mbsync")
             {
-                mbsyncRuns = info.Runs;
-                // mbsync is a timer-driven agent — when it's "not running" with
-                // exit 0, that's the *healthy* state between runs. We don't
-                // have a precise last-completion time without parsing log files,
-                // so we leave LastSyncAt null when there's no other signal.
+                // mbsync is a timer-driven agent — "not running" with exit 0 is
+                // the healthy state between runs. The completion *time* comes
+                // from the stdout log mtime (see LastSuccessfulSyncAt), not from
+                // launchd, which has no last-run timestamp.
 
                 // Stderr override: if mbsync wrote an error inside the
                 // freshness window, that's the truth — launchd's exit
@@ -123,14 +124,27 @@ public sealed class TrayStatusService(
                 // rest are usually transient (also warn).
                 if (mbsyncErr is not null)
                 {
-                    (ok, busy, severity, detail) = ApplyMbsyncErrorOverride(mbsyncErr);
+                    // Second positive recovery signal (complements the stdout
+                    // mtime check in MbsyncErrorTail): if the indexer has
+                    // ingested a new or changed message *after* the error was
+                    // written, mbsync must have delivered mail successfully
+                    // since, so the error is stale. The scanner's mtime
+                    // fast-path means LastIndexedAt only advances on real
+                    // content — never on idle rescans — so this can't
+                    // false-positive a green tile onto a genuinely stuck sync.
+                    var recoveredSince = healthReport.Database.LastIndexedAt is { } lastIndexed
+                        && lastIndexed > mbsyncErr.ObservedAt;
+                    if (!recoveredSince)
+                    {
+                        (ok, busy, severity, detail) = ApplyMbsyncErrorOverride(mbsyncErr);
+                    }
                 }
             }
 
             services.Add(new TrayServiceStatus(id, detail, ok, busy, severity));
         }
 
-        return (services, (mbsyncLastSync, mbsyncRuns));
+        return services;
     }
 
     /// <summary>
