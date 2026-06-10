@@ -153,6 +153,88 @@ public sealed class MbsyncErrorTailTests : IDisposable
     }
 
     [Fact]
+    public void Newer_stdout_log_suppresses_a_recent_error()
+    {
+        // A later successful run wrote to stdout (out.log) without touching
+        // stderr — the error is stale even though it's inside the freshness
+        // window. Tile should recover immediately rather than waiting it out.
+        WritePlistWithInterval(600);
+        var now = new DateTime(2026, 5, 17, 9, 0, 0, DateTimeKind.Utc);
+        WriteLog("Error: channel is locked\n", mtimeUtc: now.AddMinutes(-5));
+        var outLog = _logPath + ".out";
+        File.WriteAllText(outLog, "Channels: 1  Boxes: 1  Far: +3 *0 #0 -0\n");
+        File.SetLastWriteTimeUtc(outLog, now.AddMinutes(-1));
+        try
+        {
+            var tail = new MbsyncErrorTail(new FixedClock(now));
+            Assert.Null(tail.CheckRecent(_logPath, _plistPath, outLogPath: outLog));
+        }
+        finally
+        {
+            File.Delete(outLog);
+        }
+    }
+
+    [Fact]
+    public void Older_stdout_log_does_not_suppress_a_recent_error()
+    {
+        // stdout is older than the stderr error → the most recent run failed.
+        // The error must still surface.
+        WritePlistWithInterval(600);
+        var now = new DateTime(2026, 5, 17, 9, 0, 0, DateTimeKind.Utc);
+        WriteLog("Error: channel is locked\n", mtimeUtc: now.AddMinutes(-2));
+        var outLog = _logPath + ".out";
+        File.WriteAllText(outLog, "Channels: 1  Boxes: 1\n");
+        File.SetLastWriteTimeUtc(outLog, now.AddMinutes(-10));
+        try
+        {
+            var tail = new MbsyncErrorTail(new FixedClock(now));
+            Assert.NotNull(tail.CheckRecent(_logPath, _plistPath, outLogPath: outLog));
+        }
+        finally
+        {
+            File.Delete(outLog);
+        }
+    }
+
+    [Fact]
+    public void LastSuccessfulSyncAt_returns_stdout_log_mtime()
+    {
+        var outLog = _logPath + ".out";
+        var stamp = new DateTime(2026, 5, 17, 8, 45, 0, DateTimeKind.Utc);
+        File.WriteAllText(outLog, "Channels: 1  Boxes: 1\n");
+        File.SetLastWriteTimeUtc(outLog, stamp);
+        try
+        {
+            var tail = new MbsyncErrorTail(new FixedClock(DateTime.UtcNow));
+            var result = tail.LastSuccessfulSyncAt(outLogPath: outLog);
+            Assert.Equal(new DateTimeOffset(stamp, TimeSpan.Zero), result);
+        }
+        finally
+        {
+            File.Delete(outLog);
+        }
+    }
+
+    [Fact]
+    public void LastSuccessfulSyncAt_returns_null_when_stdout_log_missing_or_empty()
+    {
+        var tail = new MbsyncErrorTail(new FixedClock(DateTime.UtcNow));
+        Assert.Null(tail.LastSuccessfulSyncAt(outLogPath: _logPath + ".nonexistent"));
+
+        var empty = _logPath + ".out";
+        File.WriteAllText(empty, string.Empty);
+        try
+        {
+            Assert.Null(tail.LastSuccessfulSyncAt(outLogPath: empty));
+        }
+        finally
+        {
+            File.Delete(empty);
+        }
+    }
+
+    [Fact]
     public void Missing_plist_falls_back_to_default_interval()
     {
         // No plist at the configured path — should still work using the

@@ -124,6 +124,33 @@ public class TrayStatusServiceTests
         severity.ShouldBe(expectedSeverity);
     }
 
+    [Theory]
+    [InlineData(+60, "ok")]    // new mail indexed 1 min AFTER the error → recovered
+    [InlineData(-60, "error")] // last index 1 min BEFORE the error → still stuck
+    public void BuildServices_mbsync_recovers_when_new_mail_indexed_after_error(int indexedOffsetSeconds, string expectedSeverity)
+    {
+        var errorAt = new DateTimeOffset(2026, 5, 17, 9, 0, 0, TimeSpan.Zero);
+        var lastIndexed = errorAt.AddSeconds(indexedOffsetSeconds);
+
+        var baseReport = HealthyReport();
+        var report = baseReport with { Database = baseReport.Database with { LastIndexedAt = lastIndexed } };
+
+        // mbsync idle with exit 0 (the healthy-looking state the stderr
+        // override exists to correct), other agents running cleanly.
+        var map = new Dictionary<string, LaunchdServiceInfo>
+        {
+            ["com.mailvec.mbsync"] = new("com.mailvec.mbsync", Loaded: true, State: "not running", Pid: null, LastExitCode: 0, Runs: 5),
+            ["com.mailvec.indexer"] = new("com.mailvec.indexer", true, "running", 1, 0, 1),
+            ["com.mailvec.embedder"] = new("com.mailvec.embedder", true, "running", 2, 0, 1),
+            ["com.mailvec.mcp"] = new("com.mailvec.mcp", true, "running", 3, 0, 1),
+        };
+        var err = new MbsyncError("Error: channel is locked", MbsyncErrorKind.Locked, errorAt, 1200);
+
+        var services = TrayStatusService.BuildServices(map, report, err);
+        var mbsync = services.First(s => s.Id == "mbsync");
+        mbsync.Severity.ShouldBe(expectedSeverity);
+    }
+
     [Fact]
     public void BuildProgress_returns_null_when_coverage_complete()
     {
