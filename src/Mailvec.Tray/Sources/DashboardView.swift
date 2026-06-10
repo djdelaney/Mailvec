@@ -74,8 +74,9 @@ private struct HeaderBand: View {
                             .foregroundStyle(.white.opacity(0.6))
                     }
                     HStack(spacing: 12) {
-                        MiniStat(label: "chunks",  value: h?.chunks.formatted() ?? "—")
+                        MiniStat(label: "sync",    value: h?.lastSyncAt.map(relative) ?? "—")
                         MiniStat(label: "indexed", value: h?.lastIndexedAt.map(relative) ?? "—")
+                        MiniStat(label: "chunks",  value: h?.chunks.formatted() ?? "—")
                         MiniStat(label: "db",      value: h.map { fmtBytes($0.dbSizeBytes) } ?? "—")
                     }
                 }
@@ -201,6 +202,13 @@ private struct ThroughputCard: View {
 private struct ErrorBanner: View {
     @EnvironmentObject var model: TrayModel
     let health: TrayHealth
+
+    // Tracks the in-flight retry so the button can show progress + outcome.
+    // Without this the kickstart fired silently and the returned bool was
+    // discarded, so a working retry was indistinguishable from a no-op.
+    @State private var retryPhase: RetryPhase = .idle
+    enum RetryPhase: Equatable { case idle, running, succeeded, failed }
+
     var body: some View {
         let problem = ErrorBanner.diagnose(health)
         VStack(alignment: .leading, spacing: 10) {
@@ -222,11 +230,23 @@ private struct ErrorBanner: View {
                 }
                 Button("View logs") { openLogs(for: problem.kind) }
                 if let retry = problem.retryService {
-                    Button("Retry now") {
-                        Task {
-                            _ = try? await MailvecClient.shared.control(
-                                service: retry, action: "kickstart")
-                            await model.refresh()
+                    switch retryPhase {
+                    case .idle:
+                        Button("Retry now") { runRetry(service: retry) }
+                    case .running:
+                        HStack(spacing: 5) {
+                            ProgressView().controlSize(.small)
+                            Text("Restarting…")
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                    case .succeeded:
+                        Label("Restarted", systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 11)).foregroundStyle(.green)
+                    case .failed:
+                        HStack(spacing: 6) {
+                            Label("Restart failed", systemImage: "xmark.circle.fill")
+                                .font(.system(size: 11)).foregroundStyle(.red)
+                            Button("Try again") { runRetry(service: retry) }
                         }
                     }
                 }
@@ -271,6 +291,26 @@ private struct ErrorBanner: View {
                        body: "Mailvec is reporting a degraded state.",
                        primaryAction: nil,
                        retryService: nil)
+    }
+
+    /// Fire the kickstart, surface its outcome, then auto-revert to the
+    /// button after a few seconds. The `control` call returns false (or
+    /// throws) when launchctl exits non-zero, so a failed retry now shows
+    /// red instead of looking like nothing happened.
+    private func runRetry(service: String) {
+        retryPhase = .running
+        Task {
+            let ok = (try? await MailvecClient.shared.control(
+                service: service, action: "kickstart")) ?? false
+            await model.refresh()
+            retryPhase = ok ? .succeeded : .failed
+            // Linger on the outcome, then reset so the button returns —
+            // unless another retry is already in flight.
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if retryPhase == .succeeded || retryPhase == .failed {
+                retryPhase = .idle
+            }
+        }
     }
 
     private func openLogs(for kind: Problem.Kind) {

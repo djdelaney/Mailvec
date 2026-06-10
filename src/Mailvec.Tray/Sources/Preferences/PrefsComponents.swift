@@ -9,17 +9,26 @@ struct Banner: View {
     // requirement. Callsites pass it as `body:` via the explicit init below.
     var caption: String? = nil
     var action: (() -> Void)? = nil
+    // Async variant: returns true on success. When set, the button manages
+    // its own spinner + ✓/✗ outcome so a fire-and-forget control call (e.g.
+    // SyncTab's "Sync now" kickstart) isn't indistinguishable from a no-op.
+    var asyncAction: (() async -> Bool)? = nil
     var actionLabel: String = "Action"
+
+    @State private var actionPhase: ActionPhase = .idle
+    enum ActionPhase: Equatable { case idle, running, succeeded, failed }
 
     init(tone: Tone,
          title: String,
          body: String? = nil,
          action: (() -> Void)? = nil,
+         asyncAction: (() async -> Bool)? = nil,
          actionLabel: String = "Action") {
         self.tone = tone
         self.title = title
         self.caption = body
         self.action = action
+        self.asyncAction = asyncAction
         self.actionLabel = actionLabel
     }
 
@@ -34,7 +43,9 @@ struct Banner: View {
                 }
             }
             Spacer(minLength: 8)
-            if let action {
+            if let asyncAction {
+                asyncActionView(asyncAction)
+            } else if let action {
                 Button(actionLabel, action: action)
                     .buttonStyle(.borderedProminent).tint(Brand.accent)
                     .controlSize(.small)
@@ -43,6 +54,44 @@ struct Banner: View {
         .padding(10)
         .background(toneBg, in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(toneStroke))
+    }
+
+    @ViewBuilder
+    private func asyncActionView(_ run: @escaping () async -> Bool) -> some View {
+        switch actionPhase {
+        case .idle:
+            Button(actionLabel) { fire(run) }
+                .buttonStyle(.borderedProminent).tint(Brand.accent)
+                .controlSize(.small)
+        case .running:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.small)
+                Text("Starting…").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        case .succeeded:
+            Label("Started", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 11)).foregroundStyle(.green)
+        case .failed:
+            HStack(spacing: 6) {
+                Label("Failed", systemImage: "xmark.circle.fill")
+                    .font(.system(size: 11)).foregroundStyle(.red)
+                Button("Try again") { fire(run) }.controlSize(.small)
+            }
+        }
+    }
+
+    /// Run the action, surface its outcome, then revert to the button after a
+    /// few seconds — unless another run is already in flight.
+    private func fire(_ run: @escaping () async -> Bool) {
+        actionPhase = .running
+        Task {
+            let ok = await run()
+            actionPhase = ok ? .succeeded : .failed
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if actionPhase == .succeeded || actionPhase == .failed {
+                actionPhase = .idle
+            }
+        }
     }
 
     private var iconCircle: some View {
