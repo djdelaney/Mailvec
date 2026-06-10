@@ -11,12 +11,11 @@ struct SyncTab: View {
                     tone: .ok,
                     title: "Last sync \(prefs.system.lastSyncRelative)",
                     body: "\(prefs.system.lastSyncDetail) · next run \(prefs.system.nextSyncRelative)",
-                    action: {
-                        Task {
-                            _ = try? await MailvecClient.shared.control(
-                                service: "mbsync", action: "kickstart")
-                            await prefs.loadSystem()
-                        }
+                    asyncAction: {
+                        let ok = (try? await MailvecClient.shared.control(
+                            service: "mbsync", action: "kickstart")) ?? false
+                        await prefs.loadSystem()
+                        return ok
                     },
                     actionLabel: "Sync now"
                 )
