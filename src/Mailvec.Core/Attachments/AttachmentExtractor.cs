@@ -122,7 +122,22 @@ public sealed class AttachmentExtractor(
         // maildir_path looks like "INBOX/cur" — relative to MaildirRoot, with
         // '/' separators that Path.Combine handles fine on macOS.
         var relative = message.MaildirPath.Replace('/', Path.DirectorySeparatorChar);
-        return Path.Combine(_maildirRoot, relative, message.MaildirFilename);
+        var canonicalRoot = Path.GetFullPath(_maildirRoot);
+        var target = Path.GetFullPath(Path.Combine(canonicalRoot, relative, message.MaildirFilename));
+
+        // Containment guard — the path is built from DB columns, which are only
+        // ever written by the trusted indexer (via Path.GetRelativePath). This
+        // makes that invariant local: refuse to read outside the Maildir root
+        // even if a future writer lets a traversal sequence into those columns.
+        // Mirrors ResolveSafeOutputPath's check on the write side.
+        if (!target.StartsWith(canonicalRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && target != canonicalRoot)
+        {
+            throw new InvalidOperationException(
+                $"Refusing to read outside Maildir root. Target '{target}' is not within '{canonicalRoot}'.");
+        }
+
+        return target;
     }
 
     /// <summary>
