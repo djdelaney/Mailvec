@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Mailvec.OutlookExport</RootNamespace>
+    <!-- Runs only on Windows (late-bound COM against classic Outlook), but
+         compiles everywhere so `dotnet build` of the solution works on macOS.
+         See README.md in this directory for the win-x64 publish command. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MimeKit" />
+  </ItemGroup>
+
+</Project>
