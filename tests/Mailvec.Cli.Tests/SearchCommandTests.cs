@@ -219,6 +219,7 @@ public class SearchCommandTests
             var client = sp.GetRequiredService<HotEmbeddingClient>().Build();
             return new OllamaClient(client, sp.GetRequiredService<IOptions<OllamaOptions>>(), NullLogger<OllamaClient>.Instance);
         });
+        services.AddSingleton<Mailvec.Core.Embedding.IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
         services.AddSingleton<VectorSearchService>();
         services.AddSingleton<HybridSearchService>();
 

@@ -1,6 +1,6 @@
 using System.Globalization;
 using Mailvec.Core.Data;
-using Mailvec.Core.Ollama;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Options;
 
@@ -15,7 +15,7 @@ namespace Mailvec.Core.Health;
 public sealed class HealthService(
     ConnectionFactory connections,
     MetadataRepository metadata,
-    OllamaClient ollama,
+    IEmbeddingClient ollama,
     IOptions<ArchiveOptions> archiveOpts,
     IOptions<OllamaOptions> ollamaOpts)
 {

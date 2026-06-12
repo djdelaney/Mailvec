@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Mailvec.Core.Data;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Health;
-using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Options;
 
@@ -19,7 +19,7 @@ public sealed class TraySystemService(
     LaunchdInspector launchd,
     ConnectionFactory connections,
     MetadataRepository metadata,
-    OllamaClient ollama,
+    IEmbeddingClient ollama,
     IOptions<ArchiveOptions> archiveOpts,
     IOptions<IngestOptions> ingestOpts,
     IOptions<OllamaOptions> ollamaOpts,
