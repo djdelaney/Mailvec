@@ -50,6 +50,36 @@ public class OllamaClientTests
     }
 
     [Fact]
+    public async Task Normalizes_vectors_that_arrive_unnormalized()
+    {
+        // A model that returns raw (unnormalized) embeddings must be
+        // normalized client-side so vec0's L2 KNN ranks cosine-equivalently.
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { embeddings = new[] { new[] { 2f, 0f, 0f, 0f } } })
+        });
+
+        var result = await client.EmbedAsync(["x"]);
+
+        result[0].ShouldBe(new[] { 1f, 0f, 0f, 0f });
+    }
+
+    [Fact]
+    public async Task Leaves_already_normalized_vectors_bit_for_bit_untouched()
+    {
+        // mxbai vectors arrive normalized; they must pass through unchanged so
+        // re-embeds stay byte-identical to vectors stored before the safeguard.
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { embeddings = new[] { new[] { 0.6f, 0.8f, 0f, 0f } } })
+        });
+
+        var result = await client.EmbedAsync(["x"]);
+
+        result[0].ShouldBe(new[] { 0.6f, 0.8f, 0f, 0f });
+    }
+
+    [Fact]
     public async Task PingAsync_probes_embed_and_returns_true_on_valid_vector()
     {
         HttpRequestMessage? captured = null;

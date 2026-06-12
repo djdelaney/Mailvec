@@ -196,4 +196,46 @@ public class VectorSearchServiceTests
         hits[0].ChunkIndex.ShouldBe(1);              // and it's the closest chunk
         hits[0].ChunkText.ShouldBe("second");
     }
+
+    [Fact]
+    public async Task Query_instruction_prefix_is_prepended_to_query_embeds()
+    {
+        using var db = new TempDatabase();
+        var fake = new CapturingEmbeddingClient();
+        var opts = Microsoft.Extensions.Options.Options.Create(new Core.Options.OllamaOptions
+        {
+            QueryInstructionPrefix = "Instruct: retrieve passages\nQuery: ",
+        });
+        var search = new VectorSearchService(db.Connections, fake, opts);
+
+        await search.SearchAsync("kids haircut barber", limit: 5);
+
+        fake.LastInputs.ShouldNotBeNull();
+        fake.LastInputs![0].ShouldBe("Instruct: retrieve passages\nQuery: kids haircut barber");
+    }
+
+    [Fact]
+    public async Task Empty_prefix_embeds_the_bare_query()
+    {
+        using var db = new TempDatabase();
+        var fake = new CapturingEmbeddingClient();
+        var search = new VectorSearchService(db.Connections, fake);   // no options at all
+
+        await search.SearchAsync("kids haircut barber", limit: 5);
+
+        fake.LastInputs![0].ShouldBe("kids haircut barber");
+    }
+
+    private sealed class CapturingEmbeddingClient : IEmbeddingClient
+    {
+        public IReadOnlyList<string>? LastInputs;
+
+        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
+        {
+            LastInputs = inputs;
+            return Task.FromResult(new[] { OneHot(1024, hotIndex: 0) });
+        }
+
+        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
+    }
 }

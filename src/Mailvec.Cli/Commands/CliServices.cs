@@ -1,6 +1,7 @@
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Eval;
 using Mailvec.Core.Health;
 using Mailvec.Core.Ollama;
@@ -81,6 +82,7 @@ internal static class CliServices
             client.BaseAddress = new Uri(opts.BaseUrl);
             client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
         });
+        services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
 
         var sp = services.BuildServiceProvider();
 

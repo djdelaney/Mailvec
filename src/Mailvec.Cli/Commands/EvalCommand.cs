@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Diagnostics;
 using System.Globalization;
+using Mailvec.Core;
 using Mailvec.Core.Data;
 using Mailvec.Core.Eval;
 using Microsoft.Extensions.DependencyInjection;
@@ -130,7 +131,9 @@ internal static class EvalCommand
 
             if (jsonPath is not null)
             {
-                EvalReport.From(modeResults, querySetPath: path, topK: topK).Save(jsonPath);
+                // Collapse ~ so committed baseline reports don't embed the
+                // local username in the recorded query-set path.
+                EvalReport.From(modeResults, querySetPath: PathExpansion.Collapse(path), topK: topK).Save(jsonPath);
                 Console.WriteLine($"\nWrote report → {jsonPath}");
             }
 
