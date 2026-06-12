@@ -1,7 +1,6 @@
 using System.Globalization;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
-using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -15,7 +14,7 @@ public sealed class EmbeddingWorker(
     MessageRepository messages,
     ChunkRepository chunks,
     ChunkingService chunker,
-    OllamaClient ollama,
+    IEmbeddingClient ollama,
     IOptions<EmbedderOptions> embedderOptions,
     IOptions<OllamaOptions> ollamaOptions,
     ILogger<EmbeddingWorker> logger)

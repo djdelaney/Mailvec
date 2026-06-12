@@ -55,4 +55,29 @@ public sealed class PathExpansionTests
     {
         Assert.Equal("/tmp/foo", PathExpansion.Expand("/tmp/foo"));
     }
+
+    [Fact]
+    public void Collapse_RewritesHomePrefixToTilde()
+    {
+        Assert.Equal("~/Library/foo.json", PathExpansion.Collapse(Path.Combine(Home, "Library/foo.json")));
+    }
+
+    [Fact]
+    public void Collapse_LeavesPathsOutsideHomeUntouched()
+    {
+        Assert.Equal("/tmp/foo", PathExpansion.Collapse("/tmp/foo"));
+    }
+
+    [Fact]
+    public void Collapse_RoundTripsThroughExpand()
+    {
+        var original = Path.Combine(Home, "Library/Application Support/Mailvec/eval/queries.json");
+        Assert.Equal(original, PathExpansion.Expand(PathExpansion.Collapse(original)));
+    }
+
+    [Fact]
+    public void Collapse_HomeItselfBecomesTilde()
+    {
+        Assert.Equal("~", PathExpansion.Collapse(Home));
+    }
 }
