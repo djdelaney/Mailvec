@@ -39,6 +39,7 @@ builder.Services
         o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(300);
         o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
     });
+builder.Services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
 
 builder.Services.AddHostedService<EmbeddingWorker>();
 

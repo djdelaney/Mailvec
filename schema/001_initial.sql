@@ -129,8 +129,15 @@ CREATE INDEX idx_chunks_message    ON chunks(message_id);
 CREATE INDEX idx_chunks_attachment ON chunks(attachment_id) WHERE attachment_id IS NOT NULL;
 
 -- Vector index. Dimension MUST match Ollama:EmbeddingDimensions in config.
--- mxbai-embed-large = 1024; nomic-embed-text = 768. Mixing models silently
--- corrupts results; the embedder verifies the metadata table on startup.
+-- Mixing models silently corrupts results; the embedder verifies the
+-- metadata table on startup.
+-- NOTE: the FLOAT[N] dimension literal below and the metadata seed values
+-- at the bottom of this file are rewritten from Ollama:EmbeddingModel /
+-- EmbeddingDimensions by SchemaMigrator.SubstituteEmbeddingConfig when a
+-- fresh DB is created. Each substitution token (the bracketed FLOAT
+-- dimension, the quoted model name, the embedding_dimensions seed tuple)
+-- must appear EXACTLY ONCE in this file — the migrator throws otherwise.
+-- Don't repeat them elsewhere in quoted/bracketed form, even in comments.
 CREATE VIRTUAL TABLE chunk_embeddings USING vec0(
     chunk_id   INTEGER PRIMARY KEY,
     embedding  FLOAT[1024]
@@ -144,7 +151,10 @@ CREATE TABLE sync_state (
     content_hash      TEXT
 );
 
--- Schema + embedding-model metadata. Seeded by the migration runner.
+-- Schema + embedding-model metadata. Seeded by the migration runner; the
+-- embedding values are substituted from config at fresh-DB creation (see
+-- the vector-index note above) and changed later only via
+-- `mailvec switch-model`.
 CREATE TABLE metadata (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
