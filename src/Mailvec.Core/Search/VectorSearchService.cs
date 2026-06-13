@@ -1,8 +1,10 @@
 using System.Text;
 using Mailvec.Core.Data;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Models;
-using Mailvec.Core.Ollama;
+using Mailvec.Core.Options;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Options;
 
 namespace Mailvec.Core.Search;
 
@@ -27,7 +29,9 @@ public sealed record VectorHit(
     int? MatchedAttachmentPartIndex = null,
     string? MatchedAttachmentFileName = null);
 
-public sealed class VectorSearchService(ConnectionFactory connections, OllamaClient ollama)
+// ollamaOptions is optional so existing direct test constructions compile;
+// DI always supplies it. Only QueryInstructionPrefix is read here.
+public sealed class VectorSearchService(ConnectionFactory connections, IEmbeddingClient ollama, IOptions<OllamaOptions>? ollamaOptions = null)
 {
     // vec0 KNN runs BEFORE our filter join, so the k nearest chunks may all be
     // filtered out. Rather than make every caller guess a filter-aware k (which
@@ -54,7 +58,14 @@ public sealed class VectorSearchService(ConnectionFactory connections, OllamaCli
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
-        var vectors = await ollama.EmbedAsync([query], ct).ConfigureAwait(false);
+        // Query-side instruction prefix for asymmetric (instruction-tuned)
+        // models. Documents are embedded bare by the EmbeddingWorker; only
+        // the query carries the instruction — that's how these models are
+        // trained. Empty prefix (mxbai et al.) embeds the query unchanged.
+        var prefix = ollamaOptions?.Value.QueryInstructionPrefix;
+        var embedText = string.IsNullOrEmpty(prefix) ? query : prefix + query;
+
+        var vectors = await ollama.EmbedAsync([embedText], ct).ConfigureAwait(false);
         if (vectors.Length == 0) return [];
 
         return SearchByVector(vectors[0], limit, k, filters);

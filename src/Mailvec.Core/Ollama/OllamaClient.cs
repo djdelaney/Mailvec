@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -14,7 +15,7 @@ namespace Mailvec.Core.Ollama;
 /// underlying HttpClient (BaseAddress, timeout, resilience) via DI; this class
 /// does not own the HttpClient lifetime.
 /// </summary>
-public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> options, ILogger<OllamaClient> logger)
+public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> options, ILogger<OllamaClient> logger) : IEmbeddingClient
 {
     private readonly OllamaOptions _opts = options.Value;
 
@@ -166,6 +167,10 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
                 throw new InvalidOperationException(
                     $"Embedding {i} has {vec.Length} dimensions; expected {expected} for model {_opts.EmbeddingModel}.");
             }
+            // IEmbeddingClient contract: vectors are L2-normalized so vec0's
+            // L2 KNN ranks cosine-equivalently regardless of model. No-op
+            // (bit-for-bit) for models that already normalize, like mxbai.
+            VectorMath.NormalizeInPlaceIfNeeded(vec);
         }
 
         return (parsed.Embeddings, null);
