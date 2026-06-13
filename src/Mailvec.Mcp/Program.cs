@@ -1,6 +1,7 @@
 using System.Reflection;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Health;
 using Mailvec.Core.Logging;
 using Mailvec.Core.Ollama;
@@ -130,6 +131,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
         client.BaseAddress = new Uri(opts.BaseUrl);
         client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
     });
+    services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
 }
 
 // Surfaced to clients in the `initialize` response as `serverInfo`. The `name`

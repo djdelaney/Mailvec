@@ -1,9 +1,19 @@
+using System.Globalization;
 using System.Reflection;
+using Mailvec.Core.Options;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Mailvec.Core.Data;
 
-public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<SchemaMigrator> logger)
+// ollamaOptions is optional so the many direct test constructions keep
+// working with the mxbai-embed-large/1024 defaults baked into OllamaOptions.
+// DI always supplies it, so production fresh DBs are created with whatever
+// model/dimensions the binary is configured for.
+public sealed class SchemaMigrator(
+    ConnectionFactory connections,
+    ILogger<SchemaMigrator> logger,
+    IOptions<OllamaOptions>? ollamaOptions = null)
 {
     // Bump this when adding a new migration file under schema/migrations/.
     // Fresh DBs get 001_initial.sql which stamps schema_version directly;
@@ -49,8 +59,12 @@ public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<Schema
 
         if (current == 0)
         {
-            logger.LogInformation("Applying initial schema (stamping version {Version})", LatestSchemaVersion);
-            ExecuteScript(conn, LoadEmbeddedSql("001_initial.sql"));
+            var opts = ollamaOptions?.Value ?? new OllamaOptions();
+            logger.LogInformation(
+                "Applying initial schema (stamping version {Version}, embedding model {Model} @{Dim}d)",
+                LatestSchemaVersion, opts.EmbeddingModel, opts.EmbeddingDimensions);
+            ExecuteScript(conn, SubstituteEmbeddingConfig(
+                LoadEmbeddedSql("001_initial.sql"), opts.EmbeddingModel, opts.EmbeddingDimensions));
             return;
         }
 
@@ -142,6 +156,113 @@ public sealed class SchemaMigrator(ConnectionFactory connections, ILogger<Schema
             // "no such table: metadata" -> fresh DB, schema not yet applied.
             return 0;
         }
+    }
+
+    /// <summary>
+    /// Rewrites 001_initial.sql's embedding literals (the vec0 column
+    /// dimension and the metadata seed) to the configured model/dimensions.
+    /// Runs on every fresh-DB creation, including the mxbai default (an
+    /// identity rewrite), so the path is always exercised. Each target token
+    /// must appear exactly once in the script — a schema edit that breaks
+    /// that assumption fails loudly here instead of silently shipping a DB
+    /// whose vec0 dimension disagrees with config.
+    /// </summary>
+    internal static string SubstituteEmbeddingConfig(string sql, string model, int dimensions)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(model);
+        ArgumentOutOfRangeException.ThrowIfLessThan(dimensions, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(dimensions, 8192);
+        if (model.Contains('\''))
+            throw new ArgumentException($"Embedding model name must not contain a single quote: {model}", nameof(model));
+
+        var dims = dimensions.ToString(CultureInfo.InvariantCulture);
+        // Order matters: FLOAT[1024] must be rewritten before the
+        // ('embedding_dimensions', '1024') seed so the two '1024' tokens
+        // can't be confused; the model token is matched in its quoted form
+        // because the schema comments mention mxbai-embed-large unquoted.
+        sql = ReplaceExactlyOnce(sql, "FLOAT[1024]", $"FLOAT[{dims}]");
+        sql = ReplaceExactlyOnce(sql, "'mxbai-embed-large'", $"'{model}'");
+        sql = ReplaceExactlyOnce(sql, "('embedding_dimensions', '1024')", $"('embedding_dimensions', '{dims}')");
+        return sql;
+    }
+
+    private static string ReplaceExactlyOnce(string sql, string token, string replacement)
+    {
+        var first = sql.IndexOf(token, StringComparison.Ordinal);
+        if (first < 0)
+            throw new InvalidOperationException(
+                $"Schema substitution token '{token}' not found in 001_initial.sql — the schema and SchemaMigrator.SubstituteEmbeddingConfig have drifted.");
+        if (sql.IndexOf(token, first + token.Length, StringComparison.Ordinal) >= 0)
+            throw new InvalidOperationException(
+                $"Schema substitution token '{token}' appears more than once in 001_initial.sql — refusing an ambiguous rewrite.");
+        return string.Concat(sql.AsSpan(0, first), replacement, sql.AsSpan(first + token.Length));
+    }
+
+    public sealed record SwitchModelResult(
+        string? OldModel, string? OldDimensions, long ChunksDeleted, long MessagesReset);
+
+    /// <summary>
+    /// The sanctioned way to change a database's embedding model: drops and
+    /// recreates chunk_embeddings with the new dimension, clears all chunks,
+    /// re-queues every message for embedding, and updates the metadata the
+    /// embedder's startup check validates against. One transaction — vec0
+    /// DDL inside a transaction is the same pattern ExecuteScript already
+    /// uses for fresh DBs. The embedder must be (re)started with matching
+    /// Ollama:EmbeddingModel / EmbeddingDimensions config afterwards.
+    /// </summary>
+    public SwitchModelResult SwitchEmbeddingModel(string model, int dimensions)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(model);
+        ArgumentOutOfRangeException.ThrowIfLessThan(dimensions, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(dimensions, 8192);
+        if (model.Contains('\''))
+            throw new ArgumentException($"Embedding model name must not contain a single quote: {model}", nameof(model));
+
+        using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+
+        string? Scalar(string sqlText)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = sqlText;
+            return cmd.ExecuteScalar()?.ToString();
+        }
+
+        long Exec(string sqlText)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = sqlText;
+            return cmd.ExecuteNonQuery();
+        }
+
+        var oldModel = Scalar("SELECT value FROM metadata WHERE key = 'embedding_model'");
+        var oldDims = Scalar("SELECT value FROM metadata WHERE key = 'embedding_dimensions'");
+
+        Exec("DROP TABLE chunk_embeddings");
+        // vec0 DDL can't take parameters; dimensions is range-validated above.
+        Exec($"CREATE VIRTUAL TABLE chunk_embeddings USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[{dimensions.ToString(CultureInfo.InvariantCulture)}])");
+        var chunksDeleted = Exec("DELETE FROM chunks");
+        var messagesReset = Exec("UPDATE messages SET embedded_at = NULL");
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO metadata(key, value) VALUES('embedding_model', $m), ('embedding_dimensions', $d)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """;
+            cmd.Parameters.AddWithValue("$m", model);
+            cmd.Parameters.AddWithValue("$d", dimensions.ToString(CultureInfo.InvariantCulture));
+            cmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+        logger.LogInformation(
+            "Switched embedding model {OldModel}@{OldDims} -> {Model}@{Dims}: {Chunks} chunks dropped, {Messages} messages re-queued",
+            oldModel, oldDims, model, dimensions, chunksDeleted, messagesReset);
+        return new SwitchModelResult(oldModel, oldDims, chunksDeleted, messagesReset);
     }
 
     private static string LoadEmbeddedSql(string fileName)

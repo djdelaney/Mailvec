@@ -29,4 +29,25 @@ public static class PathExpansion
 
         return Path.GetFullPath(path);
     }
+
+    /// <summary>
+    /// Inverse of <see cref="Expand"/>, for paths that get persisted or
+    /// displayed: rewrites an absolute path under the user's home directory
+    /// to the ~/ shorthand. Exists so artifacts that may be committed to the
+    /// repo (eval baseline reports record the query-set path) never embed
+    /// the local username. Expand round-trips the result.
+    /// </summary>
+    public static string Collapse(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var full = Path.GetFullPath(path);
+
+        if (full == home) return "~";
+        var prefix = home.EndsWith('/') ? home : home + "/";
+        return full.StartsWith(prefix, StringComparison.Ordinal)
+            ? "~/" + full[prefix.Length..]
+            : full;
+    }
 }
