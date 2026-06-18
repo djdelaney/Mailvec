@@ -8,48 +8,48 @@
     <!-- SQLite. The sqlite-vec extension is loaded at runtime from
          runtimes/osx-arm64/native/vec0.dylib; fetch it via
          ops/fetch-sqlite-vec.sh. -->
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core"        Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core"        Version="10.0.9" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3"     Version="3.0.3" />
 
     <!-- MIME parsing -->
     <PackageVersion Include="MimeKit"                           Version="4.17.0" />
 
     <!-- HTML parsing for HTML-to-text conversion -->
-    <PackageVersion Include="AngleSharp"                        Version="1.4.0" />
+    <PackageVersion Include="AngleSharp"                        Version="1.5.1" />
 
     <!-- Attachment text extraction (PDF + DOCX). Pure-managed; no native deps. -->
     <PackageVersion Include="PdfPig"                            Version="0.1.14" />
     <PackageVersion Include="DocumentFormat.OpenXml"            Version="3.5.1" />
 
     <!-- Generic Host / configuration / logging -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting"                  Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder"     Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting"                  Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder"     Version="10.0.9" />
     <!-- Explicit refs needed by Mailvec.Core/SharedConfig — Json + EnvironmentVariables -->
     <!-- aren't pulled in transitively by Configuration.Binder. -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json"                 Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Options"                  Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions"     Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console"          Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Http"                     Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="10.6.0" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json"                 Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Options"                  Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions"     Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console"          Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Http"                     Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="10.7.0" />
 
     <!-- Serilog: rolling-file logging in-process, replaces a custom rotator. -->
     <PackageVersion Include="Serilog"                                       Version="4.3.1" />
     <PackageVersion Include="Serilog.Extensions.Hosting"                    Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console"                         Version="6.1.1" />
     <PackageVersion Include="Serilog.Sinks.File"                            Version="7.0.0" />
-    <PackageVersion Include="Serilog.Settings.Configuration"                Version="10.0.0" />
+    <PackageVersion Include="Serilog.Settings.Configuration"                Version="10.0.1" />
 
     <!-- MCP server -->
-    <PackageVersion Include="ModelContextProtocol"              Version="1.3.0" />
-    <PackageVersion Include="ModelContextProtocol.AspNetCore"   Version="1.3.0" />
+    <PackageVersion Include="ModelContextProtocol"              Version="1.4.0" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore"   Version="1.4.0" />
 
     <!-- CLI -->
-    <PackageVersion Include="System.CommandLine"                Version="2.0.8" />
+    <PackageVersion Include="System.CommandLine"                Version="2.0.9" />
 
     <!-- Testing -->
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing"  Version="10.0.8" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing"  Version="10.0.9" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk"            Version="18.6.0" />
     <PackageVersion Include="xunit"                             Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio"         Version="3.1.5" />
