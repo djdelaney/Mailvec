@@ -9,7 +9,7 @@
       Phase 5 expects multiple non-Claude clients to depend on the tool surface,
       so version drift between manifest and binary would make triage painful.
     -->
-    <Version>0.1.21</Version>
+    <Version>0.1.22</Version>
   </PropertyGroup>
 
   <ItemGroup>
