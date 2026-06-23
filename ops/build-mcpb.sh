@@ -116,6 +116,15 @@ if [[ ! -f "$STAGING/server/runtimes/$RID/native/vec0.dylib" ]]; then
     exit 1
 fi
 
+# Stable Developer ID signature on the self-contained MCP binary (and its
+# bundled CoreCLR / sqlite-vec dylibs) so Claude Desktop's spawned stdio child
+# keeps its TCC grants (Mail access, Apple Events) across bundle upgrades
+# instead of re-prompting on every install. Ad-hoc fallback when no cert.
+# See ops/sign-publish.sh.
+echo "→ Signing server binary..."
+source "$REPO_ROOT/ops/sign-publish.sh"
+mailvec_sign_publish "$STAGING/server" "Mailvec.Mcp" "com.mailvec.mcp"
+
 cp "$REPO_ROOT/manifest.json" "$STAGING/manifest.json"
 
 # Bundle icons referenced by manifest.json (light + dark variants). Paths in
