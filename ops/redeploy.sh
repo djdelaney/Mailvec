@@ -79,6 +79,19 @@ project_for() {
     esac
 }
 
+apphost_for() {
+    case "$1" in
+        indexer)  echo "Mailvec.Indexer" ;;
+        embedder) echo "Mailvec.Embedder" ;;
+        mcp)      echo "Mailvec.Mcp" ;;
+        cli)      echo "Mailvec.Cli" ;;
+    esac
+}
+
+# Stable Developer ID signing so TCC grants survive a redeploy. Falls back to
+# ad-hoc when no cert is present. See ops/sign-publish.sh.
+source "$REPO_ROOT/ops/sign-publish.sh"
+
 # ---------------------------------------------------------------------------
 # Publish + kickstart each service
 # ---------------------------------------------------------------------------
@@ -90,6 +103,7 @@ for svc in "${SERVICES[@]}"; do
     echo "==> $svc"
     echo "    publish -> $out"
     dotnet publish "$REPO_ROOT/$proj" -c Release -o "$out" --nologo -v quiet
+    mailvec_sign_publish "$out" "$(apphost_for "$svc")" "com.mailvec.$svc"
 
     # CLI has no launchd agent — it's invoked on demand from the tray UI
     # and the user's shell via ~/.local/bin/mailvec. Skip the kickstart.

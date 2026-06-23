@@ -251,14 +251,18 @@ mkdir -p "$(dirname "$DB_PATH")"
 # ---------------------------------------------------------------------------
 echo
 echo "Publishing services..."
+# Stable Developer ID signing so TCC grants survive a republish; ad-hoc
+# fallback when no cert. See ops/sign-publish.sh.
+source "$REPO_ROOT/ops/sign-publish.sh"
 for svc in "${SERVICES[@]}"; do
     case "$svc" in
-        indexer)  proj=src/Mailvec.Indexer/Mailvec.Indexer.csproj ;;
-        embedder) proj=src/Mailvec.Embedder/Mailvec.Embedder.csproj ;;
-        mcp)      proj=src/Mailvec.Mcp/Mailvec.Mcp.csproj ;;
+        indexer)  proj=src/Mailvec.Indexer/Mailvec.Indexer.csproj; apphost=Mailvec.Indexer ;;
+        embedder) proj=src/Mailvec.Embedder/Mailvec.Embedder.csproj; apphost=Mailvec.Embedder ;;
+        mcp)      proj=src/Mailvec.Mcp/Mailvec.Mcp.csproj; apphost=Mailvec.Mcp ;;
     esac
     echo "  -> $svc"
     dotnet publish "$REPO_ROOT/$proj" -c Release -o "$PREFIX/$svc" --nologo -v quiet
+    mailvec_sign_publish "$PREFIX/$svc" "$apphost" "com.mailvec.$svc"
 done
 
 # Publish the CLI to $PREFIX/cli/ and install a shim at ~/.local/bin/mailvec.
@@ -269,6 +273,7 @@ done
 # excludes /usr/local/share/dotnet) before exec'ing the dll.
 echo "  -> cli"
 dotnet publish "$REPO_ROOT/src/Mailvec.Cli/Mailvec.Cli.csproj" -c Release -o "$PREFIX/cli" --nologo -v quiet
+mailvec_sign_publish "$PREFIX/cli" "Mailvec.Cli" "com.mailvec.cli"
 
 SHIM_DIR="$HOME/.local/bin"
 SHIM_PATH="$SHIM_DIR/mailvec"

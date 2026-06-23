@@ -35,6 +35,10 @@ cd "$REPO_ROOT"
 
 echo "→ Publishing Mailvec.Mcp to $PUBLISH_DIR ..."
 dotnet publish src/Mailvec.Mcp/Mailvec.Mcp.csproj -c Release -o "$PUBLISH_DIR" --nologo --verbosity quiet
+# Stable Developer ID signature so TCC grants persist across republish; ad-hoc
+# fallback when no cert. See ops/sign-publish.sh.
+source "$REPO_ROOT/ops/sign-publish.sh"
+mailvec_sign_publish "$PUBLISH_DIR" "Mailvec.Mcp" "com.mailvec.mcp"
 echo "✓ Published"
 
 mkdir -p "$(dirname "$LAUNCHER_PATH")"
