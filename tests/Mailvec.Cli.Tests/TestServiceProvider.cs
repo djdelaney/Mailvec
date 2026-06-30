@@ -68,7 +68,14 @@ public sealed class TestServiceProvider : IDisposable
     public void Dispose()
     {
         Services.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        // Scope the pool clear to THIS database (see TempDatabase) — a global
+        // ClearAllPools() races with parallel test classes' in-use connections.
+        // ConnectionFactory isn't IDisposable, so Connections is still usable
+        // after the provider is disposed.
+        using (var conn = Connections.Open())
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+        }
         try { Directory.Delete(DirectoryPath, recursive: true); }
         catch (IOException) { /* best effort */ }
     }

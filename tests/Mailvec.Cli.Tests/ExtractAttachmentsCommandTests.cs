@@ -25,7 +25,15 @@ public class ExtractAttachmentsCommandTests : IDisposable
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        // Scope the pool clear to THIS database (see TempDatabase) — a global
+        // ClearAllPools() races with parallel test classes' in-use connections.
+        // The pool key derives solely from DatabasePath, so a fresh
+        // ConnectionFactory on _dbPath produces the same connection string.
+        var connections = new ConnectionFactory(Options.Create(new ArchiveOptions { DatabasePath = _dbPath }));
+        using (var conn = connections.Open())
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+        }
         try { Directory.Delete(_root, recursive: true); }
         catch (IOException) { /* best effort */ }
     }

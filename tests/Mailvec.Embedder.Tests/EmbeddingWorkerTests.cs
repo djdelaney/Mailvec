@@ -36,7 +36,12 @@ public class EmbeddingWorkerTests : IDisposable
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        // Scope the pool clear to THIS database (see TempDatabase) — a global
+        // ClearAllPools() races with parallel test classes' in-use connections.
+        using (var conn = _connections.Open())
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+        }
         try { Directory.Delete(_dirPath, recursive: true); }
         catch (IOException) { /* best effort */ }
     }
