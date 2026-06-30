@@ -144,7 +144,7 @@ Attachment text:
 
 Once Phase 5 starts (Gemini CLI / Codex CLI / ChatGPT desktop pointing at the same server), tool names, parameter names, and response field names become a **contract** — renames break every client at once. Treat this list as locked unless you're deliberately bumping the version:
 
-- **Tool names**: `search_emails`, `get_email`, `get_thread`, `list_folders`, `get_attachment`. Set via `[McpServerTool(Name = "...")]` on each tool class — don't let the SDK infer from the C# method name.
+- **Tool names**: `search_emails`, `get_email`, `get_thread`, `list_folders`, `get_attachment`, `get_attachment_text`. Set via `[McpServerTool(Name = "...")]` on each tool class — don't let the SDK infer from the C# method name.
 - **Parameter names** that travel back as references between tools: `partIndex` (returned by `get_email`, consumed by `get_attachment`); `id` and `messageId` everywhere; `mode` ∈ {`hybrid`, `keyword`, `semantic`}; `fromContains` / `fromExact` / `dateFrom` / `dateTo` / `folder` filter set.
 - **Response field names** that clients narrate to users: `matchedAttachment.{partIndex,fileName}`, `archiveStats.{totalMessages,oldestDate,latestDate}`, `appliedFilters.*`, `webmailUrl`.
 - **Server identity**: `serverInfo.name = "mailvec"` (lowercase, the protocol identifier — Phase 5 client configs key off it). Bump `serverInfo.version` whenever you ship a tool-surface change so a client log line of "I'm talking to mailvec 0.1.16" tells you which build you're seeing.
