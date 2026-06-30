@@ -102,6 +102,9 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.Configure<OllamaOptions>(config.GetSection(OllamaOptions.SectionName));
     services.Configure<McpOptions>(config.GetSection(McpOptions.SectionName));
     services.Configure<FastmailOptions>(config.GetSection(FastmailOptions.SectionName));
+    // EmbedderOptions so HealthService can report whether OCR is enabled (the
+    // MCP doesn't run OCR; it just surfaces the config + backlog to the tray).
+    services.Configure<EmbedderOptions>(config.GetSection(EmbedderOptions.SectionName));
 
     services.AddSingleton<ConnectionFactory>();
     services.AddSingleton<SchemaMigrator>();
@@ -132,6 +135,16 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
         client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
     });
     services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+
+    // Vision client so HealthService can probe whether the OCR model is pulled
+    // (surfaced as a tray warn, never a /health 503). Mirrors CliServices.
+    services.AddHttpClient<OllamaVisionClient>((sp, client) =>
+    {
+        var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
+        client.BaseAddress = new Uri(opts.BaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.VisionRequestTimeoutSeconds));
+    });
+    services.AddTransient<Mailvec.Core.Vision.IVisionClient>(sp => sp.GetRequiredService<OllamaVisionClient>());
 }
 
 // Surfaced to clients in the `initialize` response as `serverInfo`. The `name`

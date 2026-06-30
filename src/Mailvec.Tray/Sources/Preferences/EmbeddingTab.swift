@@ -55,8 +55,29 @@ struct EmbeddingTab: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
+                if prefs.system.ocrEnabled {
+                    LabeledContent("OCR model") {
+                        HStack(spacing: 6) {
+                            Text(prefs.system.visionModel)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            if prefs.system.visionModelReachable {
+                                StatusBadge(tone: .ok, label: "available")
+                            } else {
+                                StatusBadge(tone: .warn, label: "not pulled")
+                            }
+                        }
+                    }
+                    LabeledContent("Scanned PDFs") {
+                        Text(prefs.system.ocrPending > 0
+                            ? "\(prefs.system.ocrRecovered.formatted()) recovered · \(prefs.system.ocrPending.formatted()) queued"
+                            : "\(prefs.system.ocrRecovered.formatted()) recovered")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } header: { Text("Provider") } footer: {
-                RowHint(text: "Embedding model + chunk size are pinned in appsettings.json. Changing either invalidates the existing vector index — run `ops/redeploy.sh embedder` after editing and then `mailvec reindex --all`.")
+                RowHint(text: "Embedding model + chunk size are pinned in appsettings.json. Changing either invalidates the existing vector index — run `ops/redeploy.sh embedder` after editing and then `mailvec reindex --all`. Scanned-PDF OCR uses the vision model; pull it with `ollama pull \(prefs.system.visionModel)`.")
             }
 
             Section {

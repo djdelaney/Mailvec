@@ -76,6 +76,15 @@ public sealed class TraySystemService(
             CoverageDone: healthReport.Embeddings.MessagesEmbedded,
             CoverageTotal: healthReport.Database.MessagesTotal - healthReport.Database.MessagesDeleted,
 
+            // OCR (vision) stage — reuses the health snapshot so the Preferences
+            // window and the dashboard can't disagree. VisionModelReachable
+            // folds null (probe skipped / OCR off) to false for the bool field.
+            OcrEnabled: healthReport.Ocr.Enabled,
+            VisionModel: healthReport.Ocr.VisionModel,
+            VisionModelReachable: healthReport.Ocr.ModelAvailable ?? false,
+            OcrRecovered: healthReport.Ocr.Recovered,
+            OcrPending: healthReport.Ocr.Pending,
+
             McpHttpEnabled: mcp is not null && mcp.State == "running",
             McpBindAddress: mcpOpts.Value.BindAddress,
             McpPort: mcpOpts.Value.Port,

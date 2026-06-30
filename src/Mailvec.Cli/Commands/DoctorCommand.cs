@@ -470,6 +470,14 @@ internal static class DoctorCommand
                 BaseUrl: ollama.BaseUrl,
                 Reachable: false,         // honest sentinel; rendered as "skipped"
                 ConfiguredModel: ollama.EmbeddingModel),
+            // OCR is surfaced by doctor's own dedicated vision-model check, not
+            // through this offline report — so a zero/skipped placeholder here.
+            Ocr: new OcrHealth(
+                Enabled: false,
+                VisionModel: ollama.VisionModel,
+                ModelAvailable: null,
+                Pending: 0,
+                Recovered: 0),
             // Doctor's offline-mode HealthReport doesn't have access to the
             // embedder heartbeat metadata; leave the fields blank rather than
             // synthesising values. Doctor's own /health probe (further down)

@@ -89,6 +89,12 @@ struct SystemSnapshot: Equatable {
     var coverageDone: Int
     var coverageTotal: Int
 
+    var ocrEnabled: Bool
+    var visionModel: String
+    var visionModelReachable: Bool
+    var ocrRecovered: Int
+    var ocrPending: Int
+
     var mcpHttpEnabled: Bool
     var mcpBindAddress: String
     var mcpPort: Int
@@ -120,6 +126,11 @@ struct SystemSnapshot: Equatable {
             schemaModelMatches: t.schemaModelMatches,
             coverageDone: t.coverageDone,
             coverageTotal: t.coverageTotal,
+            ocrEnabled: t.ocrEnabled ?? true,
+            visionModel: t.visionModel ?? "—",
+            visionModelReachable: t.visionModelReachable ?? false,
+            ocrRecovered: t.ocrRecovered ?? 0,
+            ocrPending: t.ocrPending ?? 0,
             mcpHttpEnabled: t.mcpHttpEnabled,
             mcpBindAddress: t.mcpBindAddress,
             mcpPort: t.mcpPort,
@@ -156,6 +167,11 @@ struct SystemSnapshot: Equatable {
         schemaModelMatches: true,
         coverageDone: 0,
         coverageTotal: 0,
+        ocrEnabled: true,
+        visionModel: "qwen2.5vl:7b",
+        visionModelReachable: false,
+        ocrRecovered: 0,
+        ocrPending: 0,
         mcpHttpEnabled: false,
         mcpBindAddress: "127.0.0.1",
         mcpPort: 3333,

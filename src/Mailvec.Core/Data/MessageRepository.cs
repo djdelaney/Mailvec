@@ -560,6 +560,33 @@ public sealed class MessageRepository(ConnectionFactory connections)
     }
 
     /// <summary>
+    /// Pipeline counts for the OCR stage, surfaced by <c>/health</c>, the tray,
+    /// and <c>mailvec status</c>. <c>Pending</c> uses the *same* predicate as
+    /// <see cref="EnumerateAttachmentsNeedingOcr"/> so the number the user sees
+    /// matches exactly what the embedder will actually OCR — keep them in
+    /// lockstep. <c>Recovered</c> is attachments whose text the vision pass has
+    /// already recovered (status='ocr'). Both exclude soft-deleted messages.
+    /// </summary>
+    public (long Pending, long Recovered) OcrCounts()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+              (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
+                 WHERE a.extraction_status = $noText AND lower(a.filename) LIKE '%.pdf'
+                   AND m.deleted_at IS NULL),
+              (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
+                 WHERE a.extraction_status = $ocr AND m.deleted_at IS NULL)
+            """;
+        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
+        using var reader = cmd.ExecuteReader();
+        reader.Read();
+        return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+
+    /// <summary>
     /// Persist OCR-recovered text for an attachment (status='ocr'), rebuild the
     /// parent message's denormalized FTS <c>attachment_text</c> so keyword
     /// search sees it, and re-queue the message for embedding by clearing

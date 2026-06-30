@@ -33,7 +33,10 @@ internal static class StatusCommand
         var ollama = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
         var metadata = sp.GetRequiredService<MetadataRepository>();
 
-        var (total, deleted, embedded, chunkCount, ocrPending) = ReadCounts(conn);
+        var (total, deleted, embedded, chunkCount) = ReadCounts(conn);
+        // OCR backlog via the shared predicate so this line can never disagree
+        // with /health, the tray, or what the embedder actually OCRs.
+        var ocrPending = sp.GetRequiredService<MessageRepository>().OcrCounts().Pending;
         var schemaModel = metadata.Get("embedding_model") ?? "(not set)";
         var schemaDim = metadata.Get("embedding_dimensions") ?? "(not set)";
 
@@ -55,7 +58,7 @@ internal static class StatusCommand
         return 0;
     }
 
-    private static (long Total, long Deleted, long Embedded, long Chunks, long OcrPending) ReadCounts(Microsoft.Data.Sqlite.SqliteConnection conn)
+    private static (long Total, long Deleted, long Embedded, long Chunks) ReadCounts(Microsoft.Data.Sqlite.SqliteConnection conn)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -63,14 +66,11 @@ internal static class StatusCommand
               (SELECT COUNT(*) FROM messages),
               (SELECT COUNT(*) FROM messages WHERE deleted_at IS NOT NULL),
               (SELECT COUNT(*) FROM messages WHERE embedded_at IS NOT NULL AND deleted_at IS NULL),
-              (SELECT COUNT(*) FROM chunks),
-              (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = 'no_text' AND lower(a.filename) LIKE '%.pdf'
-                   AND m.deleted_at IS NULL)
+              (SELECT COUNT(*) FROM chunks)
             """;
         using var reader = cmd.ExecuteReader();
         reader.Read();
-        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4));
+        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
     }
 
     private static string Coverage(long covered, long total) =>
