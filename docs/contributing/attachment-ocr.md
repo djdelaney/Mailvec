@@ -1,9 +1,9 @@
 # Design proposal — OCR for scanned (image-only) PDFs
 
-**Status:** in progress — steps 1–5 implemented. Scanned PDFs are now OCR'd by
-the embedder and fully searchable (semantic + keyword). Steps 6–7 remaining
-(doctor/install vision-model checks, docs + backfill drain). See the phased plan
-at the bottom.
+**Status:** feature-complete in code (steps 1–6 + step-7 docs). Scanned PDFs are
+OCR'd by the embedder and fully searchable (semantic + keyword), `mailvec doctor`
+checks the vision model, and the docs are updated. Remaining is operational only
+(step 7): pull `qwen2.5vl:7b`, drain the backfill, re-baseline `mailvec eval`.
 
 ## Goal
 
@@ -134,6 +134,12 @@ set it to `-1` (pin-forever).
    `is "done" or "ocr"`. `BuildAttachmentText` needed no change — it already keys off
    `extracted_text` presence, not status. OCR backlog shown in `mailvec status` (a `/health` field
    can fold into step 6's doctor work).
-6. ⬜ `mailvec doctor` vision-model check; `ops/install-all.sh` offers to `ollama pull qwen2.5vl:7b`.
-7. ⬜ Let the backfill drain, re-baseline `mailvec eval`, update CLAUDE.md
-   (embedder-reads-filesystem, status enum) + UPGRADING.md (vision-model floor).
+6. ✅ `mailvec doctor` "OCR model" check (warns with the `ollama pull` hint when OCR is on but the
+   model isn't pulled; `IVisionClient` registered in `CliServices`). The vision model is documented
+   in the README quickstart next to `mxbai-embed-large` — `install-all.sh` pulls no models (the
+   embedding model is a manual prereq too), so a README line is the consistent home, not new pull logic.
+7. ◐ Docs done: CLAUDE.md (embedder-now-reads-filesystem, the `ocr` status, `Mailvec.Pdf`/native
+   dep, the scanned-PDF OCR section), README (vision-model prereq), UPGRADING.md (vision model).
+   **Operational, pending you on the real box:** pull `qwen2.5vl:7b`, let the backfill drain the ~309
+   `no_text` PDFs (watch `mailvec status` → "OCR pending"), then re-baseline `mailvec eval` (the new
+   content shifts ranking).
