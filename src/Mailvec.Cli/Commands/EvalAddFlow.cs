@@ -124,18 +124,19 @@ internal static class EvalAddFlow
 
         foreach (var token in pinned)
         {
-            // Allow N=G grade syntax for symmetry with the interactive picker.
+            // Allow <id>=<grade> for graded relevance. Message-IDs frequently
+            // contain '=' (Gmail base64-ish ids like ...M8=y0BJF...@mail.gmail.com),
+            // so splitting on the FIRST '=' mis-parses the id tail as the grade.
+            // Only a trailing "=<number>" is a grade: split on the LAST '=' and
+            // accept it as a grade solely when the suffix parses as a number;
+            // otherwise the whole token is the id (default grade 1.0).
             string idPart;
             double grade = 1.0;
-            var eq = token.IndexOf('=');
-            if (eq >= 0)
+            var eq = token.LastIndexOf('=');
+            if (eq >= 0 && double.TryParse(token.AsSpan(eq + 1), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedGrade))
             {
                 idPart = token[..eq];
-                if (!double.TryParse(token.AsSpan(eq + 1), NumberStyles.Float, CultureInfo.InvariantCulture, out grade))
-                {
-                    Console.Error.WriteLine($"Could not parse grade in '{token}'. Use the form <id>=<grade>.");
-                    return (null, []);
-                }
+                grade = parsedGrade;
             }
             else
             {
