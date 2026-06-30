@@ -5,6 +5,7 @@ using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Mailvec.Mcp.Tools;
+using Mailvec.Pdf;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;

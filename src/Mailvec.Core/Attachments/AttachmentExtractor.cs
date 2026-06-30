@@ -24,7 +24,7 @@ public sealed class AttachmentExtractor(
     IOptions<IngestOptions> ingestOptions,
     IOptions<McpOptions> mcpOptions)
 {
-    private readonly string _maildirRoot = PathExpansion.Expand(ingestOptions.Value.MaildirRoot);
+    private readonly MaildirAttachmentReader _reader = new(ingestOptions);
     private readonly string _downloadDir = PathExpansion.Expand(mcpOptions.Value.AttachmentDownloadDir);
     private readonly int _inlineTextMaxBytes = mcpOptions.Value.AttachmentInlineTextMaxBytes;
 
@@ -56,26 +56,8 @@ public sealed class AttachmentExtractor(
     {
         ArgumentNullException.ThrowIfNull(message);
 
-        var maildirFile = ResolveMaildirFile(message);
-        if (!File.Exists(maildirFile))
-        {
-            throw new FileNotFoundException(
-                $"Maildir file not found for message {message.Id} ({message.MessageId}). " +
-                $"The file may have been moved or deleted; an indexer rescan should fix it. " +
-                $"Looked at: {maildirFile}");
-        }
-
-        using var stream = File.OpenRead(maildirFile);
-        var mime = MimeMessage.Load(stream);
-
-        var attachments = mime.Attachments.ToList();
-        if (partIndex < 0 || partIndex >= attachments.Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(partIndex),
-                $"Message {message.Id} has {attachments.Count} attachment(s); partIndex {partIndex} is out of range.");
-        }
-
-        var entity = attachments[partIndex];
+        var data = _reader.Read(message, partIndex);
+        var entity = data.Entity;
         var safeName = ResolveSafeFileName(entity, partIndex);
         var contentType = ResolveContentType(entity, safeName);
 
@@ -85,7 +67,7 @@ public sealed class AttachmentExtractor(
         var outputName = $"{message.Id}-{partIndex}-{safeName}";
         var targetPath = ResolveSafeOutputPath(_downloadDir, outputName);
 
-        var bytes = DecodeEntity(entity);
+        var bytes = data.Bytes;
         bool wasReused = TryReuseExisting(targetPath, bytes.LongLength);
         if (!wasReused)
         {
@@ -115,29 +97,6 @@ public sealed class AttachmentExtractor(
             SizeBytes: bytes.LongLength,
             WasReused: wasReused,
             InlineText: inlineText);
-    }
-
-    private string ResolveMaildirFile(Message message)
-    {
-        // maildir_path looks like "INBOX/cur" — relative to MaildirRoot, with
-        // '/' separators that Path.Combine handles fine on macOS.
-        var relative = message.MaildirPath.Replace('/', Path.DirectorySeparatorChar);
-        var canonicalRoot = Path.GetFullPath(_maildirRoot);
-        var target = Path.GetFullPath(Path.Combine(canonicalRoot, relative, message.MaildirFilename));
-
-        // Containment guard — the path is built from DB columns, which are only
-        // ever written by the trusted indexer (via Path.GetRelativePath). This
-        // makes that invariant local: refuse to read outside the Maildir root
-        // even if a future writer lets a traversal sequence into those columns.
-        // Mirrors ResolveSafeOutputPath's check on the write side.
-        if (!target.StartsWith(canonicalRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && target != canonicalRoot)
-        {
-            throw new InvalidOperationException(
-                $"Refusing to read outside Maildir root. Target '{target}' is not within '{canonicalRoot}'.");
-        }
-
-        return target;
     }
 
     /// <summary>
@@ -280,21 +239,6 @@ public sealed class AttachmentExtractor(
         "image/gif" => ".gif",
         _ => string.Empty,
     };
-
-    private static byte[] DecodeEntity(MimeEntity entity)
-    {
-        using var ms = new MemoryStream();
-        if (entity is MimePart part && part.Content is not null)
-        {
-            part.Content.DecodeTo(ms);
-        }
-        else
-        {
-            // Multipart attachments (rare — e.g. message/rfc822 subparts).
-            entity.WriteTo(ms);
-        }
-        return ms.ToArray();
-    }
 
     private string? TryDecodeInlineText(byte[] bytes, string contentType)
     {

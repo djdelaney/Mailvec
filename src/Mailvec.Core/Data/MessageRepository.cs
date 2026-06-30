@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Models;
 using Mailvec.Core.Parsing;
 using Mailvec.Core.Search;
@@ -519,6 +520,94 @@ public sealed class MessageRepository(ConnectionFactory connections)
         }
     }
 
+    /// <summary>
+    /// Scanned / image-only PDF attachments (extraction_status='no_text') whose
+    /// text the embedder's OCR pass should try to recover. Returns enough to
+    /// locate the bytes in the Maildir. Materialised (not streamed) because the
+    /// caller does slow async OCR between items.
+    /// </summary>
+    public IReadOnlyList<OcrCandidate> EnumerateAttachmentsNeedingOcr(int batchSize)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder
+            FROM attachments a
+            JOIN messages m ON m.id = a.message_id
+            WHERE a.extraction_status = $noText
+              AND lower(a.filename) LIKE '%.pdf'
+              AND m.deleted_at IS NULL
+            ORDER BY a.id
+            LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$limit", batchSize);
+
+        var list = new List<OcrCandidate>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new OcrCandidate(
+                AttachmentId: reader.GetInt64(0),
+                PartIndex: reader.GetInt32(1),
+                MessageId: reader.GetInt64(2),
+                MessageIdHeader: reader.GetString(3),
+                MaildirPath: reader.GetString(4),
+                MaildirFilename: reader.GetString(5),
+                Folder: reader.GetString(6)));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Persist OCR-recovered text for an attachment (status='ocr') and re-queue
+    /// its parent message for embedding by clearing embedded_at. The re-embed's
+    /// ReplaceChunksForMessage replaces the message's chunks, so we don't clear
+    /// them here. One transaction.
+    /// </summary>
+    public void SaveOcrText(long attachmentId, long messageId, string text)
+    {
+        using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                UPDATE attachments
+                SET extracted_text = $text, extraction_status = $ocr, extracted_at = $now
+                WHERE id = $id;
+                """;
+            cmd.Parameters.AddWithValue("$text", text);
+            cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
+            cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("$id", attachmentId);
+            cmd.ExecuteNonQuery();
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "UPDATE messages SET embedded_at = NULL WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$id", messageId);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
+    /// <summary>
+    /// Mark an attachment 'failed' so the OCR pass stops re-selecting a PDF that
+    /// PDFium can't even open (a poison doc would otherwise be retried forever).
+    /// </summary>
+    public void MarkAttachmentOcrFailed(long attachmentId)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE attachments SET extraction_status = $failed WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
+        cmd.Parameters.AddWithValue("$id", attachmentId);
+        cmd.ExecuteNonQuery();
+    }
+
     private static IReadOnlyList<AttachmentEmbeddingPayload> LoadAttachmentTexts(SqliteConnection conn, long messageId)
     {
         using var cmd = conn.CreateCommand();
@@ -693,3 +782,28 @@ public sealed record AttachmentEmbeddingPayload(
     int PartIndex,
     string? FileName,
     string Text);
+
+/// <summary>
+/// A scanned-PDF attachment the embedder's OCR pass should process, plus the
+/// message fields needed to read its bytes from the Maildir.
+/// </summary>
+public sealed record OcrCandidate(
+    long AttachmentId,
+    int PartIndex,
+    long MessageId,
+    string MessageIdHeader,
+    string MaildirPath,
+    string MaildirFilename,
+    string Folder)
+{
+    /// <summary>Minimal Message for <see cref="MaildirAttachmentReader"/> (only the path fields are read).</summary>
+    public Message ToMessage() => new()
+    {
+        Id = MessageId,
+        MessageId = MessageIdHeader,
+        MaildirPath = MaildirPath,
+        MaildirFilename = MaildirFilename,
+        Folder = Folder,
+        HasAttachments = true,
+    };
+}
