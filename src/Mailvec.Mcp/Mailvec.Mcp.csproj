@@ -9,7 +9,7 @@
       Phase 5 expects multiple non-Claude clients to depend on the tool surface,
       so version drift between manifest and binary would make triage painful.
     -->
-    <Version>0.1.25</Version>
+    <Version>0.1.26</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,8 +17,10 @@
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <!-- PDF page rasterisation for get_attachment_page_image. PDFtoImage wraps
          PDFium + SkiaSharp and brings the native assets for osx/linux (arm+x64)
-         transitively; see Directory.Packages.props. -->
+         transitively; see Directory.Packages.props. SkiaSharp is referenced
+         directly for JPEG encoding (quality + forced white background). -->
     <PackageReference Include="PDFtoImage" />
+    <PackageReference Include="SkiaSharp" />
   </ItemGroup>
 
   <ItemGroup>

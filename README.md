@@ -15,7 +15,7 @@ Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server wo
 ## What you get
 
 - **A local searchable archive** of your IMAP account on disk — keyword (FTS5/BM25), semantic (sqlite-vec, mxbai-embed-large), and hybrid (RRF fusion) search.
-- **An MCP server** Claude Desktop, Claude Code, and other local agents can call to search your mail, fetch threads, and extract attachments.
+- **An MCP server** Claude Desktop, Claude Code, and other local agents can call to search your mail, fetch threads, and read attachments — the raw file, its extracted text, or a rendered page image.
 - **A menu-bar app** for live status, inline search, and one-click ops tasks. Optional — the whole pipeline works headless.
 
 ## Architecture
@@ -94,7 +94,7 @@ Client wiring:
 
 - **[docs/clients/](docs/clients/)** — per-client snippets (Claude Desktop, Claude Code, Gemini CLI, Codex CLI, ChatGPT desktop)
 - **[docs/tray.md](docs/tray.md)** — menu-bar app
-- **[docs/attachments.md](docs/attachments.md)** — how `get_attachment` works + filesystem-MCP wiring
+- **[docs/attachments.md](docs/attachments.md)** — reading attachments three ways (`get_attachment` file, `get_attachment_text`, `get_attachment_page_image`) + filesystem-MCP wiring
 - **[docs/fastmail-deep-links.md](docs/fastmail-deep-links.md)** — optional `webmailUrl` field
 - **[docs/security.md](docs/security.md)** — threat model: what's exposed, what's accepted, what's out of scope
 - **[docs/future-ideas.md](docs/future-ideas.md)** — deferred work (cloud-LLM access, tailnet, OCR)
@@ -108,7 +108,7 @@ Project:
 
 ## Security model
 
-Single-user, single-Mac. The macOS user account is the trust boundary; inside it any local process can call any tool, outside it Mailvec is unreachable. The MCP HTTP server binds `127.0.0.1`, all five tools are read-only against the database, and `get_attachment`'s only filesystem write is a sanitized + path-contained drop into `~/Downloads/mailvec/`. There's no authentication, no rate limiting, and `Mcp:LogToolCalls=false` by default — turning it on writes query strings into the rolling log files. Full discussion (what's accepted, what's out of scope, why Phase 5 doesn't change the model) lives in [`docs/security.md`](docs/security.md). Read it before changing the bind address, adding a mutating tool, or pointing the server at anything other than loopback.
+Single-user, single-Mac. The macOS user account is the trust boundary; inside it any local process can call any tool, outside it Mailvec is unreachable. The MCP HTTP server binds `127.0.0.1`, all seven tools are read-only against the database, and the only filesystem writes are `get_attachment` / `get_attachment_page_image` dropping a sanitized, path-contained copy into `~/Downloads/mailvec/`. There's no authentication, no rate limiting, and `Mcp:LogToolCalls=false` by default — turning it on writes query strings into the rolling log files. Full discussion (what's accepted, what's out of scope, why Phase 5 doesn't change the model) lives in [`docs/security.md`](docs/security.md). Read it before changing the bind address, adding a mutating tool, or pointing the server at anything other than loopback.
 
 ## Status
 

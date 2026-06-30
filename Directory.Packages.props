@@ -64,6 +64,10 @@
     <PackageVersion Include="xunit.runner.visualstudio"         Version="3.1.5" />
     <PackageVersion Include="Shouldly"                          Version="4.3.0" />
     <PackageVersion Include="coverlet.collector"                Version="10.0.1" />
+    <!-- Test-only: decode rendered PNGs to assert dimensions / non-blank / per-
+         region content for the PDF page-image tool. Matches the SkiaSharp
+         version PDFtoImage resolves transitively. -->
+    <PackageVersion Include="SkiaSharp"                         Version="3.119.2" />
   </ItemGroup>
 
 </Project>

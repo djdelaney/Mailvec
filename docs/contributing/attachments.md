@@ -2,15 +2,17 @@
 
 User-facing docs ("how Claude reads the file", inline content blocks, attachment content indexing) live in [`docs/attachments.md`](../attachments.md). This page is the implementation gotcha collection — read it before editing the MCP `get_attachment` tool, `AttachmentExtractor`, or related code.
 
-## Why we ship paths, not bytes
+**Sibling tools.** `get_attachment` is the raw-file tool. Two others read attachment *content* and DO send bytes/text over MCP: `get_attachment_text` (a pure DB read of `extracted_text`) and `get_attachment_page_image` (renders a PDF page to JPEG via `PdfRenderer`/PDFium — see the native-dep note in `ops/UPGRADING.md` and the renderer's sizing/JPEG rationale in `PdfRenderer.cs`). The "ship paths not bytes" rule below is specific to `get_attachment`'s *raw arbitrary-file* delivery — it is not a blanket ban on returning content.
 
-- **Don't ship binary bytes to Claude over MCP.** Current design writes the file to a user-visible directory and returns a text response with the path. Claude Code's built-in `Read` handles PDFs/text/images natively; on Claude.ai or Claude Desktop, a filesystem MCP server (e.g. `@modelcontextprotocol/server-filesystem`) pointed at the download dir picks up the read. (Earlier attempts to send bytes via `EmbeddedResourceBlock` foundered on Claude.ai's bridge mapping every blob to `image` regardless of MIME.)
+## Why we ship paths, not bytes (for the raw file)
+
+- **Don't ship arbitrary binary bytes to Claude over MCP.** `get_attachment` writes the file to a user-visible directory and returns a text response with the path. Claude Code's built-in `Read` handles PDFs/text/images natively; on Claude.ai or Claude Desktop, a filesystem MCP server (e.g. `@modelcontextprotocol/server-filesystem`) pointed at the download dir picks up the read. (Earlier attempts to send bytes via `EmbeddedResourceBlock` foundered on Claude.ai's bridge mapping every blob to `image` regardless of MIME — which is also why the *only* binary we inline is `image/*`, and why `get_attachment_page_image` returns an image rather than the raw PDF.)
 - **Where to write.** `Mcp:AttachmentDownloadDir` defaults to `~/Downloads/mailvec/`. Avoid `~/Library/Caches/` (hidden) and `~/Documents/` (TCC-blocked).
 - **Output filename is `{messageId}-{partIndex}-{sanitized-name}`.** The id+index prefix guarantees no collisions and keeps the originating email greppable.
 
 ## Cross-tool contract
 
-- **`get_email` advertises the `partIndex` Claude needs.** Don't rename `partIndex` without updating both tools — Claude reads the field name from `get_email`'s output schema and passes it back to `get_attachment`.
+- **`get_email` advertises the `partIndex` Claude needs.** Don't rename `partIndex` without updating all the attachment tools — Claude reads the field name from `get_email`'s output schema and passes it back to `get_attachment`, `get_attachment_text`, and `get_attachment_page_image`.
 
 ## Security
 
