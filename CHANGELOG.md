@@ -61,6 +61,7 @@ Extends keyword + semantic + hybrid search to the *contents* of attached documen
 - Pure-managed extractors: PDF via `PdfPig`, DOCX via `DocumentFormat.OpenXml`, plain text inline. No native deps, no shell-out, no OCR. Scanned PDFs come back as `extraction_status='no_text'` and are intentionally not retried.
 - The embedder stitches body + per-attachment chunks into one chunk stream per message; vector search dedups to one row per message and surfaces `matchedAttachment { partIndex, fileName }` when the winning chunk came from a document — exactly the inputs `get_attachment` needs.
 - FTS5 column `attachment_text` carries the extracted text alongside `body_text`, so keyword and hybrid searches surface document-content hits without any extra wiring.
+- Read-side delivery beyond `get_attachment`'s file-on-disk: `get_attachment_text` returns the stored `extracted_text` inline (pure DB read — works over a remote connection, the universal "what does this say" path), and `get_attachment_page_image` renders a PDF page to JPEG via PDFtoImage/PDFium (the one binary type every client renders; covers tables/forms/signatures and scanned PDFs that have no text layer). The renderer caps the long edge at ~1536px and encodes JPEG q85. PDFium is the only native dep in the read path besides sqlite-vec, referenced solely by `Mailvec.Mcp` — see [`ops/UPGRADING.md`](ops/UPGRADING.md).
 
 ## ⬜ Phase 5 — Support for non-Claude local agents
 

@@ -1,5 +1,17 @@
 # Reading attachments
 
+There are three tools, for three jobs:
+
+| Tool | Returns | Best for |
+| --- | --- | --- |
+| `get_attachment` | the **file on disk** (+ inline image/small-text) | getting the actual file; images |
+| `get_attachment_text` | the **extracted text** (PDF/DOCX) inline | "what does this document say" — works over a remote connection, no filesystem |
+| `get_attachment_page_image` | a **rendered page** as an inline JPEG | layout that text loses (tables, forms, signatures) or scanned/image-only PDFs |
+
+All three take the email (`id` or `messageId`) plus `partIndex` from the `get_email` response.
+
+## `get_attachment` — the file
+
 `get_attachment` extracts a single email attachment to `~/Downloads/mailvec/` (configurable via `Mcp:AttachmentDownloadDir`) and returns the absolute path. It deliberately does **not** try to ship the bytes back through MCP — Claude.ai's MCP bridge currently mishandles non-image binary blobs and rejects them as "unsupported image format". Putting the file on disk delegates the "interpret bytes by file type" job to whichever tool is best at it.
 
 ## How Claude actually reads the file
@@ -18,6 +30,14 @@ For convenience, two cases are also inlined as native MCP content blocks regardl
 
 The file is also always saved to disk in those cases, so a downstream tool can still pick it up.
 
+## `get_attachment_text` — the document's text
+
+`get_attachment_text` returns the text Mailvec already extracted from the attachment at ingest time (PDF via PdfPig, DOCX via OpenXml), straight from the database — **no filesystem touched**. Because it returns a plain text block, it renders on every client and works identically over a remote (HTTP/OAuth) connection, where a returned filesystem path would be meaningless. This is the path for "summarise this contract" / "what's the total on this invoice". When extraction couldn't produce text (scanned/image-only PDF, encrypted, oversize, unsupported), it says so and points you at `get_attachment` or `get_attachment_page_image`.
+
+## `get_attachment_page_image` — a rendered page
+
+`get_attachment_page_image` rasterises **one page** of a PDF to a JPEG and returns it inline as an `ImageContentBlock` (the one binary type that renders reliably on every client, including a remote connector). Use it when layout carries meaning that flattened text loses — tables, forms, charts, signatures — or for **scanned / image-only PDFs** that have no text layer at all. One page per call (`page`, 1-based): read `get_attachment_text` first to find the page you need, then render just that one. The renderer caps the long edge at ~1536px (matching what Claude downsamples to anyway), so payloads stay small. Only PDFs are supported.
+
 ## Attachment content indexing
 
-Beyond delivery, attachment **contents** are indexed at ingest time (Phase 4.5). PDF / DOCX / plain-text bodies are extracted into FTS5 and embedded into the vector index, so a query that only appears inside a PDF body returns the parent email and identifies which attachment drove the hit (`matchedAttachment { partIndex, fileName }`). OCR for image-only PDFs is out of scope — use `get_attachment` to drop the file on disk and let Claude vision handle it.
+Beyond delivery, attachment **contents** are indexed at ingest time (Phase 4.5). PDF / DOCX / plain-text bodies are extracted into FTS5 and embedded into the vector index, so a query that only appears inside a PDF body returns the parent email and identifies which attachment drove the hit (`matchedAttachment { partIndex, fileName }`). OCR for image-only PDFs is out of scope at *index* time — those stay unsearchable — but `get_attachment_page_image` renders them on demand so Claude vision can read the page directly.

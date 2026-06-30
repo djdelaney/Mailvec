@@ -10,7 +10,7 @@ using ModelContextProtocol.Server;
 namespace Mailvec.Mcp.Tools;
 
 /// <summary>
-/// Renders a single page of a PDF attachment to a PNG and returns it as an
+/// Renders a single page of a PDF attachment to a JPEG and returns it as an
 /// <see cref="ImageContentBlock"/> — the one binary content type that renders
 /// reliably on every Claude client, including a remote connector where
 /// non-image blobs don't. This is the high-fidelity path for tables, charts,
@@ -37,7 +37,7 @@ public sealed class GetAttachmentPageImageTool(
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("windows")]
     [Description(
-        "Render one page of a PDF attachment to a PNG image (returned inline as an ImageContentBlock that Claude can " +
+        "Render one page of a PDF attachment to a JPEG image (returned inline as an ImageContentBlock that Claude can " +
         "see). Identify the email with `id` OR `messageId`, the attachment with `partIndex` from get_email, and the page " +
         "with `page` (1-based, default 1). Use this when the layout matters and text extraction is lossy or empty: " +
         "tables, charts, forms, signatures, or scanned / image-only PDFs that get_attachment_text can't read. " +
@@ -103,13 +103,13 @@ public sealed class GetAttachmentPageImageTool(
         }
 
         int pageCount;
-        byte[] png;
+        byte[] jpeg;
         try
         {
             pageCount = PdfRenderer.PageCount(pdf);
             if (page > pageCount)
                 throw new McpException($"'{result.FileName}' has {pageCount} page(s); page {page} is out of range.");
-            png = PdfRenderer.RenderPagePng(pdf, page - 1);
+            jpeg = PdfRenderer.RenderPageJpeg(pdf, page - 1);
         }
         catch (McpException)
         {
@@ -127,18 +127,18 @@ public sealed class GetAttachmentPageImageTool(
         {
             new TextContentBlock
             {
-                Text = $"Rendered page {page} of {pageCount} from {result.FileName} as a PNG image.",
+                Text = $"Rendered page {page} of {pageCount} from {result.FileName} as a JPEG image.",
             },
             new ImageContentBlock
             {
                 // Same encoding quirk as get_attachment: the SDK's Data setter
                 // takes the UTF-8 bytes of the base64 string, not the raw bytes.
-                Data = Encoding.UTF8.GetBytes(Convert.ToBase64String(png)),
-                MimeType = "image/png",
+                Data = Encoding.UTF8.GetBytes(Convert.ToBase64String(jpeg)),
+                MimeType = "image/jpeg",
             },
         };
 
-        callLog.LogResult(ToolName, new { id = msg.Id, partIndex, page, pageCount, pngBytes = png.Length }, startTs);
+        callLog.LogResult(ToolName, new { id = msg.Id, partIndex, page, pageCount, jpegBytes = jpeg.Length }, startTs);
         return new CallToolResult { Content = content };
     }
 

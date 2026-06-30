@@ -12,6 +12,13 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Shouldly" />
     <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="SkiaSharp" />
+  </ItemGroup>
+
+  <!-- Real PDF fixtures for the page-image render tests. Copied next to the
+       test assembly so they resolve from AppContext.BaseDirectory. -->
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- WebApplicationFactory needs the ASP.NET Core shared framework. -->

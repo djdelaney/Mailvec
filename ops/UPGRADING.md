@@ -41,6 +41,15 @@ The dylib is also bundled into `dist/mailvec-<version>.mcpb` via `Directory.Buil
 
 **Don't switch to the NuGet wrapper** (`sqlite-vec` 0.1.7-alpha.2.1, prerelease for over a year, lags upstream).
 
+## PDF rendering (PDFtoImage / PDFium)
+
+The `get_attachment_page_image` MCP tool rasterises PDF pages via `PDFtoImage` (pinned in `Directory.Packages.props`), which wraps Google's PDFium plus SkiaSharp — both **native**. Unlike `vec0.dylib` these arrive through NuGet, not a fetch script: bumping `PDFtoImage` pulls matching `bblanchon.PDFium.*` and `SkiaSharp.NativeAssets.*` transitively for `osx-arm64` / `osx-x64` / `linux-x64` / `linux-arm64`.
+
+- Referenced **only** by `Mailvec.Mcp` (keep it that way — the other services stay native-dep-free). The test project also references `SkiaSharp` directly to decode rendered images.
+- After a bump: `dotnet test tests/Mailvec.Mcp.Tests` — the page-image tests do a real PDFium render, so they fail loudly if the native lib doesn't load on the current RID. Then rebuild the MCPB; the natives ship inside the self-contained bundle and grow it by a few MB.
+- The Linux assets come via `SkiaSharp.NativeAssets.Linux.NoDependencies` (transitive), so no system `fontconfig`/`freetype` is needed on a headless box. Don't add the plain `SkiaSharp.NativeAssets.Linux` (it pulls those system deps) and keep its version matched to the resolved `SkiaSharp`.
+- `PdfRenderer` is `[SupportedOSPlatform]`-gated to macOS/Linux/Windows; if a bump changes those annotations, the build fails with CA1416 (warnings-as-errors).
+
 ## SQLite itself
 
 Ships inside `SQLitePCLRaw.bundle_e_sqlite3` — bump the bundle to bump SQLite. WAL mode and FTS5 syntax are stable across SQLite versions. On a major bump, verify:
