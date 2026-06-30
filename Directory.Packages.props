@@ -21,6 +21,15 @@
     <PackageVersion Include="PdfPig"                            Version="0.1.15" />
     <PackageVersion Include="DocumentFormat.OpenXml"            Version="3.5.1" />
 
+    <!-- PDF page -> image rendering for the MCP get_attachment_page_image tool.
+         Wraps Google's PDFium (native) + SkiaSharp; referenced ONLY by
+         Mailvec.Mcp so the native dep stays out of the other services. PDFtoImage
+         transitively supplies PDFium + SkiaSharp native assets for osx-arm64 /
+         osx-x64 / linux-x64 / linux-arm64 (the latter via
+         SkiaSharp.NativeAssets.Linux.NoDependencies, which needs no system
+         fontconfig/freetype — ideal for a headless homelab box). -->
+    <PackageVersion Include="PDFtoImage"                       Version="5.2.1" />
+
     <!-- Generic Host / configuration / logging -->
     <PackageVersion Include="Microsoft.Extensions.Hosting"                  Version="10.0.9" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder"     Version="10.0.9" />

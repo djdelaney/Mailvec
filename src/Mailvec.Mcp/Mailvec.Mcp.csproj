@@ -9,16 +9,24 @@
       Phase 5 expects multiple non-Claude clients to depend on the tool surface,
       so version drift between manifest and binary would make triage painful.
     -->
-    <Version>0.1.24</Version>
+    <Version>0.1.25</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <!-- PDF page rasterisation for get_attachment_page_image. PDFtoImage wraps
+         PDFium + SkiaSharp and brings the native assets for osx/linux (arm+x64)
+         transitively; see Directory.Packages.props. -->
+    <PackageReference Include="PDFtoImage" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Mailvec.Core\Mailvec.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Mailvec.Mcp.Tests" />
   </ItemGroup>
 
 </Project>
