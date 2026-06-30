@@ -39,6 +39,25 @@ public class SimpleCommandsTests
     }
 
     [Fact]
+    public void Status_shows_the_ocr_backlog_when_scanned_pdfs_await()
+    {
+        using var ctx = new TestServiceProvider();
+        ctx.AddOption<IngestOptions>(o => o.MaildirRoot = "/tmp/mail");
+        ctx.AddOption<OllamaOptions>(o => { o.EmbeddingModel = "mxbai-embed-large"; o.EmbeddingDimensions = 1024; });
+        var sp = ctx.Rebuild();
+        sp.GetRequiredService<MessageRepository>().Upsert(
+            new ParsedMessage("scan@x", "scan@x", "s", "a@x", null, [], [], DateTimeOffset.UtcNow, "b", null,
+                "Message-ID: <scan@x>\r\n", 100, "h",
+                [new ParsedAttachment(0, "scan.pdf", "application/pdf", 100, ExtractedText: null, ExtractionStatus: "no_text")]),
+            "INBOX", "INBOX/cur", "scan.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        StatusCommand.Execute(sp, writer);
+
+        writer.ToString().ShouldContain("OCR pending: 1 scanned PDF");
+    }
+
+    [Fact]
     public void Status_emits_mismatch_warning_when_schema_model_disagrees_with_config()
     {
         using var ctx = new TestServiceProvider();

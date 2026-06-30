@@ -69,7 +69,7 @@ public sealed class GetEmailTool(
                 a.ContentType,
                 a.SizeBytes,
                 a.ExtractionStatus,
-                IndexedForSearch: a.ExtractionStatus == "done"))
+                IndexedForSearch: a.ExtractionStatus is "done" or "ocr"))
             .ToList();
 
         var response = new GetEmailResponse(
@@ -126,10 +126,11 @@ public sealed record AttachmentInfo(
     string? ContentType,
     long? SizeBytes,
     // Result of running attachment text extraction (PDF/DOCX/TXT). One of
-    // 'done', 'no_text', 'unsupported', 'oversize', 'encrypted', 'failed',
+    // 'done', 'ocr' (recovered from a scanned PDF by the embedder's vision-model
+    // OCR pass), 'no_text', 'unsupported', 'oversize', 'encrypted', 'failed',
     // or null when extraction wasn't attempted (legacy rows).
     string? ExtractionStatus,
-    // True iff the attachment's text was extracted and embedded — i.e.,
-    // search_emails can match this email by its content. Convenience flag
-    // for Claude; equivalent to ExtractionStatus == "done".
+    // True iff the attachment's text was extracted (natively or via OCR) and
+    // embedded — i.e., search_emails can match this email by its content.
+    // Convenience flag for Claude; equivalent to ExtractionStatus in ('done','ocr').
     bool IndexedForSearch);
