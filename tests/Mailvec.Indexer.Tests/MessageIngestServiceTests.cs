@@ -37,7 +37,15 @@ public class MessageIngestServiceTests : IDisposable
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        // Scope the clear to THIS database's pool (unique per DataSource) — a
+        // global SqliteConnection.ClearAllPools() races with other test classes
+        // running in parallel (xUnit parallelizes classes by default), disposing
+        // their in-use native connection handles mid-test → ObjectDisposedException
+        // or silently-wrong query results.
+        using (var conn = _connections.Open())
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+        }
         try { Directory.Delete(Path.GetDirectoryName(_root)!, recursive: true); }
         catch (IOException) { /* best effort */ }
     }
@@ -55,7 +63,7 @@ public class MessageIngestServiceTests : IDisposable
         // the DB. But the StartAsync return semantics in BackgroundService
         // depend on the framework version, so allow a brief poll window
         // before asserting — keeps the test stable across .NET releases.
-        await WaitForAsync(() => _messages.CountAll() == 1, TimeSpan.FromSeconds(2));
+        (await WaitForAsync(() => _messages.CountAll() == 1, TimeSpan.FromSeconds(2))).ShouldBeTrue();
         _messages.GetByMessageId("init@x").ShouldNotBeNull();
 
         await service.StopAsync(default);
@@ -66,32 +74,42 @@ public class MessageIngestServiceTests : IDisposable
     {
         var service = BuildService(debounceMs: 100);
         await service.StartAsync(default);
-        await WaitForAsync(() => _messages.CountAll() == 0, TimeSpan.FromSeconds(1));
+        (await WaitForAsync(() => _messages.CountAll() == 0, TimeSpan.FromSeconds(1))).ShouldBeTrue();
 
         // After the service is running, drop a new .eml. The FileSystemWatcher
         // pulse should trigger a rescan and pick it up.
         WriteEml("INBOX", "cur", "2.host:2,S", "new body", "new@x");
 
         // Allow time for: FileSystemWatcher event → debounce window → pulse →
-        // ReadPulsesAsync → scanner.ScanAll() → DB visible. 6s is generous
-        // — the underlying flow is the same one MaildirWatcherTests exercises
-        // in ~1s — but Watcher + scanner together hit more thread-pool
-        // scheduling and the connection factory than the unit-test path.
-        await WaitForAsync(() => _messages.CountAll() == 1, TimeSpan.FromSeconds(6));
+        // ReadPulsesAsync → scanner.ScanAll() → DB visible. macOS FSEvents can
+        // silently DROP the Created notification under full-solution parallel
+        // load (5 test assemblies hammering the thread pool at once), which left
+        // the pulse un-fired and flaked this ~1-in-6 — a longer deadline alone
+        // didn't help because the event never arrives. So re-write the file each
+        // cycle: every delivered event gives the pulse another chance, and with
+        // a 100ms debounce vs 500ms retouch a pulse fires between touches. Still
+        // asserts the real chain (watcher pulse → ScanAll → DB row), just resilient
+        // to dropped events. ScanAll picks the file up whenever a pulse lands.
+        var ingested = await WaitForAsync(
+            () => _messages.CountAll() == 1,
+            TimeSpan.FromSeconds(20),
+            retouch: () => WriteEml("INBOX", "cur", "2.host:2,S", "new body", "new@x"));
+        ingested.ShouldBeTrue("watcher never triggered a rescan that ingested the new file");
         _messages.GetByMessageId("new@x").ShouldNotBeNull();
 
         await service.StopAsync(default);
     }
 
-    private async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    private async Task<bool> WaitForAsync(Func<bool> condition, TimeSpan timeout, Action? retouch = null)
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
         while (DateTimeOffset.UtcNow < deadline)
         {
-            if (condition()) return;
-            await Task.Delay(50);
+            if (condition()) return true;
+            retouch?.Invoke();
+            await Task.Delay(retouch is null ? 50 : 500);
         }
-        condition().ShouldBeTrue(); // final assertion if timed out
+        return condition();
     }
 
     private void WriteEml(string folder, string subdir, string filename, string body, string messageId)

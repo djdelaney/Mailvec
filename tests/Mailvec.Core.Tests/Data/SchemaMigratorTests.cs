@@ -87,10 +87,10 @@ public class SchemaMigratorTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "mailvec-dims-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
+        var connections = new ConnectionFactory(Microsoft.Extensions.Options.Options.Create(
+            new ArchiveOptions { DatabasePath = Path.Combine(dir, "archive.sqlite") }));
         try
         {
-            var connections = new ConnectionFactory(Microsoft.Extensions.Options.Options.Create(
-                new ArchiveOptions { DatabasePath = Path.Combine(dir, "archive.sqlite") }));
             var opts = Microsoft.Extensions.Options.Options.Create(
                 new OllamaOptions { EmbeddingModel = "qwen3-embedding:4b", EmbeddingDimensions = 2560 });
 
@@ -105,7 +105,12 @@ public class SchemaMigratorTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            // Scope the pool clear to THIS database (see TempDatabase) — a global
+            // ClearAllPools() races with parallel test classes' in-use connections.
+            using (var conn = connections.Open())
+            {
+                Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+            }
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { /* best effort */ }
         }
     }
@@ -226,10 +231,9 @@ public class SchemaMigratorTests
         var dir = Path.Combine(Path.GetTempPath(), "mailvec-migration-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var dbPath = Path.Combine(dir, "archive.sqlite");
+        var connections = new ConnectionFactory(Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = dbPath }));
         try
         {
-            var connections = new ConnectionFactory(Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = dbPath }));
-
             using (var seed = connections.Open())
             {
                 ApplyV2Schema(seed);
@@ -261,7 +265,12 @@ public class SchemaMigratorTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            // Scope the pool clear to THIS database (see TempDatabase) — a global
+            // ClearAllPools() races with parallel test classes' in-use connections.
+            using (var conn = connections.Open())
+            {
+                Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+            }
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { /* best effort */ }
         }
     }
@@ -287,10 +296,9 @@ public class SchemaMigratorTests
         var dir = Path.Combine(Path.GetTempPath(), "mailvec-migration-v1-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var dbPath = Path.Combine(dir, "archive.sqlite");
+        var connections = new ConnectionFactory(Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = dbPath }));
         try
         {
-            var connections = new ConnectionFactory(Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = dbPath }));
-
             using (var seed = connections.Open())
             {
                 ApplyV1Schema(seed);
@@ -337,7 +345,12 @@ public class SchemaMigratorTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            // Scope the pool clear to THIS database (see TempDatabase) — a global
+            // ClearAllPools() races with parallel test classes' in-use connections.
+            using (var conn = connections.Open())
+            {
+                Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+            }
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { /* best effort */ }
         }
     }

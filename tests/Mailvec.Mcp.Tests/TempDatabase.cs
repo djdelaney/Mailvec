@@ -30,7 +30,15 @@ public sealed class TempDatabase : IDisposable
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        // Scope the clear to THIS database's pool (unique per DataSource) — a
+        // global SqliteConnection.ClearAllPools() races with other test classes
+        // running in parallel (xUnit parallelizes classes by default), disposing
+        // their in-use native connection handles mid-test → ObjectDisposedException
+        // or silently-wrong query results.
+        using (var conn = Connections.Open())
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+        }
         try { Directory.Delete(DirectoryPath, recursive: true); }
         catch (IOException) { /* best effort cleanup */ }
     }

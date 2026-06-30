@@ -95,7 +95,17 @@ public sealed class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposa
     public new void Dispose()
     {
         base.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        // Scope the pool clear to THIS database (see TempDatabase) — a global
+        // ClearAllPools() races with parallel test classes' in-use connections.
+        // The pool key derives solely from DatabasePath, so a fresh
+        // ConnectionFactory on _dbPath produces the same connection string.
+        var connections = new Mailvec.Core.Data.ConnectionFactory(
+            Microsoft.Extensions.Options.Options.Create(
+                new Mailvec.Core.Options.ArchiveOptions { DatabasePath = _dbPath }));
+        using (var conn = connections.Open())
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
+        }
         try { Directory.Delete(_tempDir, recursive: true); }
         catch (IOException) { /* best effort */ }
     }
