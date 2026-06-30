@@ -296,27 +296,119 @@ public class EmbeddingWorkerTests : IDisposable
         chunks[0].Source.ShouldBe("body");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_drains_backlog_and_records_success_beat()
+    {
+        // Full run-loop path: startup → ProcessOneBatch embeds the pending
+        // message → RecordBatchSuccess writes the health beat → idle Delay →
+        // StopAsync cancels cleanly. The per-method ProcessOneBatch tests never
+        // exercise ExecuteAsync itself.
+        InsertMessage("loop@x", subject: "Hello", body: new string('a', 300));
+        var worker = BuildWorker(req => Ok(Enumerable.Range(0, ReadInputCount(req))
+            .Select(i => HotVector(i)).ToArray()));
+
+        await worker.StartAsync(default);
+        try
+        {
+            await WaitUntilAsync(
+                () => _metadata.Get(EmbedderHealthKeys.LastSuccessAt) is not null,
+                TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            await worker.StopAsync(default);
+        }
+
+        EmbeddedAt(GetMessageId("loop@x")).ShouldNotBeNull();
+        _metadata.Get(EmbedderHealthKeys.ConsecutiveFailures).ShouldBe("0");
+        _metadata.Get(EmbedderHealthKeys.LastFailureKind).ShouldBe("");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_records_failure_beat_when_embedding_throws()
+    {
+        // A throwing provider drives the generic catch → RecordBatchFailure,
+        // the signal HealthService reads to flip /health to degraded. The
+        // message stays unembedded so the next poll retries it.
+        InsertMessage("boom@x", subject: "Hello", body: new string('a', 300));
+        var worker = BuildWorker(new FakeEmbeddingClient(
+            _ => throw new HttpRequestException("ollama is down")));
+
+        await worker.StartAsync(default);
+        try
+        {
+            await WaitUntilAsync(
+                () => _metadata.Get(EmbedderHealthKeys.ConsecutiveFailures) == "1",
+                TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            await worker.StopAsync(default);
+        }
+
+        _metadata.Get(EmbedderHealthKeys.LastFailureKind).ShouldBe(nameof(HttpRequestException));
+        _metadata.Get(EmbedderHealthKeys.LastFailureAt).ShouldNotBeNull();
+        EmbeddedAt(GetMessageId("boom@x")).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ProcessOneBatchAsync_throws_when_client_returns_fewer_vectors_than_chunks()
+    {
+        // The worker's own vector-count guard, defense-in-depth behind
+        // OllamaClient's identical check. A fake client that under-returns trips
+        // it directly; without the guard, ChunkRepository would pair chunks with
+        // the wrong vectors (silent vector-space corruption).
+        InsertMessage("undercount@x", subject: "S", body: new string('a', 400));
+        var worker = BuildWorker(new FakeEmbeddingClient(_ => [])); // 0 vectors for 1 chunk
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(
+            () => worker.ProcessOneBatchAsync(batchSize: 16, ct: default));
+        ex.Message.ShouldContain("0 vectors");
+    }
+
     // ---------------- helpers ----------------
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(25);
+        }
+        condition().ShouldBeTrue("condition was not met within the timeout");
+    }
 
     private EmbeddingWorker BuildWorker(
         Func<HttpRequestMessage, HttpResponseMessage> respond,
         EmbedderOptions? embedderOpts = null,
         OllamaOptions? ollamaOpts = null)
     {
-        var ollamaOptions = ollamaOpts ?? new OllamaOptions
-        {
-            EmbeddingModel = "mxbai-embed-large",
-            EmbeddingDimensions = 1024,
-            MaxBatchSize = 16,
-        };
-        var ollamaOptionsW = Options.Create(ollamaOptions);
-
+        var ollamaOptions = ollamaOpts ?? DefaultOllamaOptions();
         var http = new HttpClient(new StubHandler(respond))
         {
             BaseAddress = new Uri("http://localhost:11434"),
         };
-        var ollamaClient = new OllamaClient(http, ollamaOptionsW, NullLogger<OllamaClient>.Instance);
+        var ollamaClient = new OllamaClient(http, Options.Create(ollamaOptions), NullLogger<OllamaClient>.Instance);
+        return Assemble(ollamaClient, embedderOpts, ollamaOptions);
+    }
 
+    private EmbeddingWorker BuildWorker(
+        IEmbeddingClient client,
+        EmbedderOptions? embedderOpts = null,
+        OllamaOptions? ollamaOpts = null)
+        => Assemble(client, embedderOpts, ollamaOpts ?? DefaultOllamaOptions());
+
+    private static OllamaOptions DefaultOllamaOptions() => new()
+    {
+        EmbeddingModel = "mxbai-embed-large",
+        EmbeddingDimensions = 1024,
+        MaxBatchSize = 16,
+    };
+
+    private EmbeddingWorker Assemble(IEmbeddingClient client, EmbedderOptions? embedderOpts, OllamaOptions ollamaOptions)
+    {
+        var ollamaOptionsW = Options.Create(ollamaOptions);
         var embedderOptionsW = Options.Create(embedderOpts ?? new EmbedderOptions
         {
             PollIntervalSeconds = 60,
@@ -329,7 +421,7 @@ public class EmbeddingWorkerTests : IDisposable
         var migrator = new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance);
 
         return new EmbeddingWorker(
-            migrator, _metadata, _messages, _chunks, chunker, ollamaClient,
+            migrator, _metadata, _messages, _chunks, chunker, client,
             embedderOptionsW, ollamaOptionsW, NullLogger<EmbeddingWorker>.Instance);
     }
 
@@ -443,5 +535,18 @@ public class EmbeddingWorkerTests : IDisposable
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(respond(request));
+    }
+
+    /// <summary>
+    /// Drives EmbeddingWorker through the IEmbeddingClient seam so tests can
+    /// force failures or wrong-shaped responses that the real OllamaClient (and
+    /// its own validation) wouldn't let through.
+    /// </summary>
+    private sealed class FakeEmbeddingClient(Func<IReadOnlyList<string>, float[][]> embed) : IEmbeddingClient
+    {
+        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
+            Task.FromResult(embed(inputs));
+
+        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
     }
 }
