@@ -560,10 +560,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
     }
 
     /// <summary>
-    /// Persist OCR-recovered text for an attachment (status='ocr') and re-queue
-    /// its parent message for embedding by clearing embedded_at. The re-embed's
-    /// ReplaceChunksForMessage replaces the message's chunks, so we don't clear
-    /// them here. One transaction.
+    /// Persist OCR-recovered text for an attachment (status='ocr'), rebuild the
+    /// parent message's denormalized FTS <c>attachment_text</c> so keyword
+    /// search sees it, and re-queue the message for embedding by clearing
+    /// embedded_at (the re-embed's ReplaceChunksForMessage replaces its chunks).
+    /// One transaction. The messages UPDATE fires the FTS sync trigger.
     /// </summary>
     public void SaveOcrText(long attachmentId, long messageId, string text)
     {
@@ -584,14 +585,40 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.Parameters.AddWithValue("$id", attachmentId);
             cmd.ExecuteNonQuery();
         }
+
+        var attachmentText = ConcatAttachmentText(conn, tx, messageId);
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
-            cmd.CommandText = "UPDATE messages SET embedded_at = NULL WHERE id = $id;";
+            cmd.CommandText = "UPDATE messages SET attachment_text = $at, embedded_at = NULL WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$at", (object?)attachmentText ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$id", messageId);
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
+    }
+
+    /// <summary>
+    /// Space-join the message's attachment texts (any non-empty extracted_text,
+    /// incl. 'ocr') for the FTS attachment_text column. Mirrors the index-time
+    /// <see cref="BuildAttachmentText"/> but reads the persisted rows, since the
+    /// OCR write-back runs after indexing.
+    /// </summary>
+    private static string? ConcatAttachmentText(SqliteConnection conn, SqliteTransaction tx, long messageId)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            SELECT extracted_text FROM attachments
+            WHERE message_id = $mid AND extracted_text IS NOT NULL AND LENGTH(extracted_text) > 0
+            ORDER BY part_index;
+            """;
+        cmd.Parameters.AddWithValue("$mid", messageId);
+
+        var texts = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) texts.Add(reader.GetString(0));
+        return texts.Count == 0 ? null : string.Join(' ', texts);
     }
 
     /// <summary>
