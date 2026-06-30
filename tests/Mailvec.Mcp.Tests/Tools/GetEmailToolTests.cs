@@ -131,6 +131,26 @@ public class GetEmailToolTests
     }
 
     [Fact]
+    public void IndexedForSearch_is_true_for_done_and_ocr_status()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var atts = new[]
+        {
+            new ParsedAttachment(0, "native.pdf",  "application/pdf", 1L, ExtractedText: "x", ExtractionStatus: "done"),
+            new ParsedAttachment(1, "scanned.pdf", "application/pdf", 2L, ExtractedText: "y", ExtractionStatus: "ocr"),
+            new ParsedAttachment(2, "image.png",   "image/png",       3L, ExtractedText: null, ExtractionStatus: "no_text"),
+        };
+        long id = repo.Upsert(Helpers.Sample("idx@x", attachments: atts), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
+
+        var resp = Build(db).GetEmail(id: id);
+
+        resp.Attachments[0].IndexedForSearch.ShouldBeTrue();  // done
+        resp.Attachments[1].IndexedForSearch.ShouldBeTrue();  // ocr
+        resp.Attachments[2].IndexedForSearch.ShouldBeFalse(); // no_text
+    }
+
+    [Fact]
     public void Webmail_url_emitted_when_AccountId_set()
     {
         using var db = new TempDatabase();

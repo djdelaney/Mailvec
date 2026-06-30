@@ -1,8 +1,9 @@
 # Design proposal — OCR for scanned (image-only) PDFs
 
-**Status:** in progress — steps 1–4 implemented (the OCR engine; scanned PDFs
-become semantic-searchable). Steps 5–7 remaining (keyword/FTS, doctor/install,
-docs + backfill). See the phased plan at the bottom.
+**Status:** in progress — steps 1–5 implemented. Scanned PDFs are now OCR'd by
+the embedder and fully searchable (semantic + keyword). Steps 6–7 remaining
+(doctor/install vision-model checks, docs + backfill drain). See the phased plan
+at the bottom.
 
 ## Goal
 
@@ -128,9 +129,11 @@ set it to `-1` (pin-forever).
    re-queue parent. Default-on, graceful skip when the model isn't pulled, poison-PDF→`failed`,
    transient→retry. **Multi-page included here** (was listed under step 5). After this, OCR'd
    scans are *semantic*-searchable via the re-embed.
-5. ⬜ Keyword/FTS: `BuildAttachmentText` + `get_email` `IndexedForSearch` → `IN ('done','ocr')`,
-   and rebuild `messages.attachment_text` in the OCR write-back so FTS sees the text; surface the
-   OCR backlog in `mailvec status` / `/health`. (Multi-page already done.)
+5. ✅ Keyword/FTS: `SaveOcrText` rebuilds `messages.attachment_text` (the FTS trigger then syncs
+   `messages_fts`), so OCR'd text is keyword-searchable too; `get_email` `IndexedForSearch` now
+   `is "done" or "ocr"`. `BuildAttachmentText` needed no change — it already keys off
+   `extracted_text` presence, not status. OCR backlog shown in `mailvec status` (a `/health` field
+   can fold into step 6's doctor work).
 6. ⬜ `mailvec doctor` vision-model check; `ops/install-all.sh` offers to `ollama pull qwen2.5vl:7b`.
 7. ⬜ Let the backfill drain, re-baseline `mailvec eval`, update CLAUDE.md
    (embedder-reads-filesystem, status enum) + UPGRADING.md (vision-model floor).

@@ -68,6 +68,25 @@ public class MessageRepositoryOcrTests
     }
 
     [Fact]
+    public void SaveOcrText_makes_the_recovered_text_keyword_searchable()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "scan@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+        var attId = repo.GetById(id)!.Attachments[0].Id;
+
+        // Before OCR: the word isn't in any indexable column.
+        FtsMatchCount(db, "quarterly").ShouldBe(0);
+
+        repo.SaveOcrText(attId, id, "Quarterly revenue was 12345 dollars");
+
+        // attachment_text rebuilt + FTS (via the update trigger) now matches.
+        AttachmentTextCol(db, id)!.ShouldContain("Quarterly revenue");
+        FtsMatchCount(db, "quarterly").ShouldBe(1);
+        FtsMatchCount(db, "12345").ShouldBe(1);
+    }
+
+    [Fact]
     public void MarkAttachmentOcrFailed_sets_failed_so_it_is_not_re_selected()
     {
         using var db = new TempDatabase();
@@ -98,5 +117,23 @@ public class MessageRepositoryOcrTests
         cmd.CommandText = "SELECT embedded_at FROM messages WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", messageId);
         return cmd.ExecuteScalar() as string;
+    }
+
+    private static string? AttachmentTextCol(TempDatabase db, long messageId)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT attachment_text FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private static int FtsMatchCount(TempDatabase db, string term)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH $q";
+        cmd.Parameters.AddWithValue("$q", term);
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 }
