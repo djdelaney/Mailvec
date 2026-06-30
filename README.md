@@ -50,6 +50,7 @@ brew install dotnet isync xcodegen
 brew install --cask ollama-app   # the cask, NOT `brew install ollama` — see note below
 open -a Ollama                   # launch once; enable "Open at Login" to survive reboot
 ollama pull mxbai-embed-large
+ollama pull qwen2.5vl:7b         # vision model for OCR'ing scanned PDFs (Embedder:OcrEnabled, on by default)
 
 # 2. Configure mbsync (see docs/imap-setup.md for the Fastmail / Keychain dance)
 cp ops/mbsyncrc.example ~/.mbsyncrc && chmod 600 ~/.mbsyncrc
