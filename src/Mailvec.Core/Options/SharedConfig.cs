@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Configuration.EnvironmentVariables;
 using Microsoft.Extensions.Configuration.Json;
 
 namespace Mailvec.Core.Options;
@@ -42,12 +41,24 @@ public static class SharedConfig
     /// <c>Mcp__LogToolCalls</c> env var (passed in by Claude Desktop's
     /// user_config UI) keeps working.
     ///
-    /// Insertion strategy: if an
-    /// <see cref="EnvironmentVariablesConfigurationSource"/> is already in
-    /// the chain (the default for <c>Host.CreateApplicationBuilder</c>),
-    /// we insert immediately before it so env vars retain their natural
-    /// precedence. Otherwise we append, letting the caller add env vars
-    /// later (the pattern used by <c>CliServices</c>).
+    /// Insertion strategy: anchor to the binary-local appsettings JSON
+    /// sources — insert immediately *after* the last <c>appsettings*.json</c>
+    /// source so the shared file overrides them, while staying *below* the
+    /// environment-variable source (every builder adds env vars after its
+    /// JSON sources) so an <c>Ollama__BaseUrl</c> env override still wins.
+    ///
+    /// Why not "before the first env source" (the original approach):
+    /// <c>WebApplication.CreateBuilder</c> seeds an early host-level
+    /// <c>EnvironmentVariables</c> source (<c>DOTNET_</c> prefix) *ahead* of
+    /// <c>appsettings.json</c>. Inserting before that put the shared file
+    /// *below* <c>appsettings.json</c>, so a shared <c>Ollama:BaseUrl</c> was
+    /// silently shadowed by the binary's own <c>appsettings.json</c> — the
+    /// HTTP MCP (and thus the tray) ignored the shared endpoint while the
+    /// embedder appeared to honour it (only because we'd set an env override).
+    /// Anchoring to the appsettings source is correct for both
+    /// <c>Host.CreateApplicationBuilder</c> and <c>WebApplication.CreateBuilder</c>.
+    /// If no appsettings source is present we append, letting the caller add
+    /// env vars later (the pattern used by <c>CliServices</c>).
     /// </summary>
     public static IConfigurationBuilder AddMailvecSharedConfig(this IConfigurationBuilder builder)
     {
@@ -64,18 +75,19 @@ public static class SharedConfig
         };
         src.ResolveFileProvider();
 
-        var envIdx = -1;
+        var lastAppSettingsIdx = -1;
         for (var i = 0; i < builder.Sources.Count; i++)
         {
-            if (builder.Sources[i] is EnvironmentVariablesConfigurationSource)
+            if (builder.Sources[i] is JsonConfigurationSource json
+                && json.Path is { } path
+                && path.Contains("appsettings", StringComparison.OrdinalIgnoreCase))
             {
-                envIdx = i;
-                break;
+                lastAppSettingsIdx = i;
             }
         }
-        if (envIdx >= 0)
+        if (lastAppSettingsIdx >= 0)
         {
-            builder.Sources.Insert(envIdx, src);
+            builder.Sources.Insert(lastAppSettingsIdx + 1, src);
         }
         else
         {
