@@ -17,7 +17,8 @@ public sealed class EmbeddingWorker(
     IEmbeddingClient ollama,
     IOptions<EmbedderOptions> embedderOptions,
     IOptions<OllamaOptions> ollamaOptions,
-    ILogger<EmbeddingWorker> logger)
+    ILogger<EmbeddingWorker> logger,
+    AttachmentOcrService? ocr = null)
     : BackgroundService
 {
     private int _processedThisRun;
@@ -42,18 +43,23 @@ public sealed class EmbeddingWorker(
         {
             try
             {
+                // OCR scanned PDFs first (re-queues their messages), then embed.
+                var ocred = await RunOcrIfEnabledAsync(stoppingToken).ConfigureAwait(false);
+
                 var processed = await ProcessOneBatchAsync(batchSize, stoppingToken).ConfigureAwait(false);
-                if (processed == 0)
+                if (processed > 0)
                 {
-                    // Idle: nothing was attempted. Don't touch the
+                    RecordBatchSuccess();
+                }
+                else if (ocred == 0)
+                {
+                    // Idle: nothing OCR'd and nothing embedded. Don't touch the
                     // success/failure counters — they reflect the outcome of
                     // the last *attempted* batch, not "the embedder is alive".
                     await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
                 }
-                else
-                {
-                    RecordBatchSuccess();
-                }
+                // (ocred > 0 && processed == 0: OCR re-queued work — loop
+                // immediately so the next embed batch picks it up.)
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -68,6 +74,30 @@ public sealed class EmbeddingWorker(
         }
 
         logger.LogInformation("EmbeddingWorker stopping");
+    }
+
+    private async Task<int> RunOcrIfEnabledAsync(CancellationToken ct)
+    {
+        if (ocr is null || !embedderOptions.Value.OcrEnabled) return 0;
+
+        // The renderer is native and platform-gated; the inline OS check both
+        // satisfies CA1416 and short-circuits on an unsupported platform.
+        if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
+        {
+            try
+            {
+                return await ocr.ProcessBatchAsync(embedderOptions.Value.OcrBatchSize, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Per-item OCR failures are handled inside the pass; this guards
+                // the batch enumeration / availability probe so an OCR problem
+                // never stalls the embed pass.
+                logger.LogError(ex, "OCR pass failed; continuing with embedding.");
+                return 0;
+            }
+        }
+        return 0;
     }
 
     internal async Task<int> ProcessOneBatchAsync(int batchSize, CancellationToken ct)

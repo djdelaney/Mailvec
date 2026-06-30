@@ -1,9 +1,11 @@
 using Mailvec.Core;
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
 using Mailvec.Core.Logging;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
+using Mailvec.Core.Vision;
 using Mailvec.Embedder.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http.Resilience;
@@ -17,6 +19,9 @@ SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging,
 builder.Services.Configure<ArchiveOptions>(builder.Configuration.GetSection(ArchiveOptions.SectionName));
 builder.Services.Configure<OllamaOptions>(builder.Configuration.GetSection(OllamaOptions.SectionName));
 builder.Services.Configure<EmbedderOptions>(builder.Configuration.GetSection(EmbedderOptions.SectionName));
+// IngestOptions (MaildirRoot) — the embedder now reads .eml bytes for the
+// scanned-PDF OCR pass. From the shared config, same as the indexer/MCP.
+builder.Services.Configure<IngestOptions>(builder.Configuration.GetSection(IngestOptions.SectionName));
 
 builder.Services.AddSingleton<ConnectionFactory>();
 builder.Services.AddSingleton<SchemaMigrator>();
@@ -24,6 +29,7 @@ builder.Services.AddSingleton<MessageRepository>();
 builder.Services.AddSingleton<MetadataRepository>();
 builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<ChunkingService>();
+builder.Services.AddSingleton<MaildirAttachmentReader>();
 
 builder.Services
     .AddHttpClient<OllamaClient>((sp, client) =>
@@ -40,6 +46,25 @@ builder.Services
         o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
     });
 builder.Services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+
+// Vision client for scanned-PDF OCR — its own HttpClient with a longer timeout
+// (OCR runs much longer than an embed). No resilience handler: a transient
+// failure just leaves the PDF for the next OCR pass.
+builder.Services
+    .AddHttpClient<OllamaVisionClient>((sp, client) =>
+    {
+        var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
+        client.BaseAddress = new Uri(opts.BaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.VisionRequestTimeoutSeconds));
+    });
+builder.Services.AddTransient<IVisionClient>(sp => sp.GetRequiredService<OllamaVisionClient>());
+// AttachmentOcrService is native-renderer-backed and platform-gated; register it
+// only where supported. On any other platform it stays unregistered and the
+// EmbeddingWorker's optional OCR dependency falls back to null (OCR skipped).
+if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
+{
+    builder.Services.AddSingleton<AttachmentOcrService>();
+}
 
 builder.Services.AddHostedService<EmbeddingWorker>();
 

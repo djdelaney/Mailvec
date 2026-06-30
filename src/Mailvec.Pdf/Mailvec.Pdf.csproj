@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PDF page rasterisation, isolated in its own project so only the consumers
+       that actually render (Mailvec.Mcp, and soon Mailvec.Embedder for OCR) pull
+       the native PDFium + SkiaSharp dependency. Core/Indexer/Cli stay native-free.
+       See docs/contributing/attachment-ocr.md and ops/UPGRADING.md. -->
+  <ItemGroup>
+    <PackageReference Include="PDFtoImage" />
+    <PackageReference Include="SkiaSharp" />
+  </ItemGroup>
+
+</Project>
