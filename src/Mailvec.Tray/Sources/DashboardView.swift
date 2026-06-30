@@ -24,7 +24,16 @@ struct DashboardView: View {
             FooterActions()
         }
         .background(Brand.popoverBg)
-        .frame(maxHeight: 720)
+        // Size the popover window to the *actual* content height. The old
+        // `.frame(maxHeight: 720)` advertised a flexible max to
+        // MenuBarExtra(.window), which sized the host window to 720 and then
+        // vertically centered the shorter idle-state body (ThroughputCard, no
+        // recent activity) — leaving inflated cream bars above the header and
+        // below the footer once embedding finished and the body shrank.
+        // fixedSize pins the stack to its ideal height so the window tracks it
+        // both ways. Content is bounded (RecentActivity is prefix(4), cards are
+        // fixed-height), so no scroll/cap is needed.
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
