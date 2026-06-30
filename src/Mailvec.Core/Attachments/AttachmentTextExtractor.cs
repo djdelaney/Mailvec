@@ -25,12 +25,17 @@ namespace Mailvec.Core.Attachments;
 /// - 'done'        — text extracted successfully (may still be empty if the
 ///                   document is genuinely empty after stripping; the indexer
 ///                   uses 'no_text' for that case).
-/// - 'no_text'     — the format was supported but produced no usable text
-///                   (e.g. scanned/image-only PDF — we don't OCR).
+/// - 'no_text'     — the format was supported but produced no usable text at
+///                   index time (e.g. scanned/image-only PDF). The embedder's
+///                   OCR pass may later recover text and re-stamp it 'ocr'.
+/// - 'ocr'         — text recovered by the embedder's vision-model OCR pass
+///                   (scanned PDF). Treated as searchable like 'done'; written
+///                   by MessageRepository.SaveOcrText, not the indexer.
 /// - 'unsupported' — content type / extension not in our handler list.
 /// - 'oversize'    — exceeds Indexer:AttachmentMaxBytes; not even attempted.
 /// - 'encrypted'   — PDF / DOCX is password-protected.
-/// - 'failed'      — parser threw on otherwise-supported input (corrupt file).
+/// - 'failed'      — parser threw on otherwise-supported input (corrupt file),
+///                   or OCR could not open the PDF.
 ///
 /// All stable status values; persisted in attachments.extraction_status.
 /// </summary>
@@ -40,6 +45,7 @@ public sealed class AttachmentTextExtractor(
 {
     public const string StatusDone = "done";
     public const string StatusNoText = "no_text";
+    public const string StatusOcr = "ocr";
     public const string StatusUnsupported = "unsupported";
     public const string StatusOversize = "oversize";
     public const string StatusEncrypted = "encrypted";

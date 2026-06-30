@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Pdf;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;

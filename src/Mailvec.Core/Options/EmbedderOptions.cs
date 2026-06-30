@@ -25,4 +25,18 @@ public sealed class EmbedderOptions
     // body + subject so these messages remain searchable by exact terms,
     // they just stop polluting semantic results. Set to 0 to disable.
     public int MinBodyCharsForVector { get; set; } = 100;
+
+    // OCR for scanned / image-only PDFs (extraction_status='no_text'). When on,
+    // the embedder renders each such PDF and transcribes it with the Ollama
+    // vision model before embedding, so the content becomes searchable. Heavy
+    // but rare; on by default. Degrades gracefully (logs + skips) when the
+    // vision model isn't pulled. See docs/contributing/attachment-ocr.md.
+    public bool OcrEnabled { get; set; } = true;
+
+    // Scanned PDFs OCR'd per OCR pass before yielding to the embed pass. Small,
+    // because OCR is ~tens of seconds per page; keeps the two passes alternating.
+    public int OcrBatchSize { get; set; } = 4;
+
+    // Cap pages rendered + OCR'd per PDF — bounds cost on a pathologically long scan.
+    public int OcrMaxPagesPerPdf { get; set; } = 20;
 }

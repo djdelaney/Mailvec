@@ -2,12 +2,14 @@ using System.Runtime.Versioning;
 using PDFtoImage;
 using SkiaSharp;
 
-namespace Mailvec.Mcp.Tools;
+namespace Mailvec.Pdf;
 
 /// <summary>
-/// Rasterises a single PDF page to PNG via PDFtoImage (PDFium + SkiaSharp,
-/// native). Kept apart from the MCP tool so it can be unit-tested directly —
-/// the test doubles as the "does the native lib load on this RID" check.
+/// Rasterises a single PDF page to JPEG via PDFtoImage (PDFium + SkiaSharp,
+/// native). Lives in its own project (not Core) so the native dep reaches only
+/// Mailvec.Mcp (get_attachment_page_image) and Mailvec.Embedder (scanned-PDF
+/// OCR) — not Core/Indexer/Cli. Self-contained enough to unit-test directly,
+/// which doubles as the "does the native lib load on this RID" check.
 ///
 /// PDFium is not thread-safe; PDFtoImage serialises all calls into it
 /// internally, so callers don't add their own lock.
@@ -27,7 +29,7 @@ namespace Mailvec.Mcp.Tools;
 [SupportedOSPlatform("macos")]
 [SupportedOSPlatform("linux")]
 [SupportedOSPlatform("windows")]
-internal static class PdfRenderer
+public static class PdfRenderer
 {
     private const int Dpi = 150;
     private const int JpegQuality = 85;
@@ -36,7 +38,7 @@ internal static class PdfRenderer
     /// Long-edge ceiling in pixels, just under Claude's ~1568px image cap.
     /// Rendering larger wastes payload Claude would only throw away.
     /// </summary>
-    internal const int MaxEdgePx = 1536;
+    public const int MaxEdgePx = 1536;
 
     /// <summary>Number of pages in the PDF. Throws if the bytes aren't a PDF PDFium can open.</summary>
     public static int PageCount(byte[] pdf) => Conversion.GetPageCount(pdf);

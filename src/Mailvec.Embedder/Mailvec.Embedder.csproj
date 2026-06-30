@@ -13,6 +13,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Mailvec.Core\Mailvec.Core.csproj" />
+    <!-- PDF page rasterisation for the scanned-PDF OCR pass (PDFium + SkiaSharp,
+         native). Same isolated project the MCP server uses. -->
+    <ProjectReference Include="..\Mailvec.Pdf\Mailvec.Pdf.csproj" />
   </ItemGroup>
 
   <ItemGroup>

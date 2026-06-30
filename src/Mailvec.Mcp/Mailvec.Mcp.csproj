@@ -15,20 +15,13 @@
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
-    <!-- PDF page rasterisation for get_attachment_page_image. PDFtoImage wraps
-         PDFium + SkiaSharp and brings the native assets for osx/linux (arm+x64)
-         transitively; see Directory.Packages.props. SkiaSharp is referenced
-         directly for JPEG encoding (quality + forced white background). -->
-    <PackageReference Include="PDFtoImage" />
-    <PackageReference Include="SkiaSharp" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Mailvec.Core\Mailvec.Core.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="Mailvec.Mcp.Tests" />
+    <!-- PDF page rasterisation (PDFium + SkiaSharp, native) lives in Mailvec.Pdf
+         so the native dep doesn't leak into Core/Indexer/Cli. -->
+    <ProjectReference Include="..\Mailvec.Pdf\Mailvec.Pdf.csproj" />
   </ItemGroup>
 
 </Project>
