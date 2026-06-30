@@ -151,7 +151,8 @@ public class DoctorHealthChecksTests
             Database: database ?? Db(),
             Embeddings: embeddings ?? Emb(),
             Ollama: ollama ?? Oll(),
-            Embedder: new EmbedderHealth(null, null, 0, null, Stuck: false));
+            Embedder: new EmbedderHealth(null, null, 0, null, Stuck: false),
+            Ocr: new OcrHealth(Enabled: false, VisionModel: "qwen2.5vl:7b", ModelAvailable: null, Pending: 0, Recovered: 0));
 
     private static DatabaseHealth Db(long total = 100, long deleted = 0, DateTimeOffset? lastIndexed = null)
         => new("/tmp/archive.sqlite", total, deleted, lastIndexed);

@@ -125,6 +125,9 @@ private struct BodyForState: View {
             case .syncing: ProgressCard(health: health)
             default:       ThroughputCard(health: health)
             }
+            if let ocr = health.ocr, ocr.shouldSurface {
+                OcrCard(ocr: ocr)
+            }
             ServicesGrid(services: health.services, ollama: health.ollama)
             RecentActivity(events: Array(health.recentEvents.prefix(4)))
         }
@@ -196,6 +199,82 @@ private struct ThroughputCard: View {
             return "idle · last burst \(minutesAgo)m ago"
         }
         return "idle · no recent activity"
+    }
+}
+
+/// Surfaces the scanned-PDF OCR stage. Two shapes, by severity:
+///   • model missing → amber warn card with a one-click "Copy pull command"
+///     (running it needs a terminal, but the embedder picks the model up on its
+///     next pass automatically once it's pulled — no service restart needed).
+///   • backlog only → a neutral info line showing queued / recovered counts.
+private struct OcrCard: View {
+    let ocr: OCRStatus
+    @State private var copied = false
+
+    var body: some View {
+        if ocr.modelMissing {
+            warnCard
+        } else {
+            infoCard
+        }
+    }
+
+    private var warnCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "doc.viewfinder.fill")
+                    .foregroundStyle(.white, Brand.statusWarn).font(.system(size: 16))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Vision model not installed")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("\(ocr.pending) scanned PDF\(ocr.pending == 1 ? "" : "s") won't be searchable until you pull \(ocr.visionModel).")
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 6) {
+                Button(copied ? "Copied!" : "Copy pull command") { copyPullCommand() }
+                    .buttonStyle(.borderedProminent).tint(Brand.accent)
+                Text("ollama pull \(ocr.visionModel)")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Brand.statusWarn.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.statusWarn.opacity(0.35)))
+    }
+
+    private var infoCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.viewfinder")
+                .foregroundStyle(Brand.accent).font(.system(size: 13))
+            Text("OCR · \(ocr.pending) scanned PDF\(ocr.pending == 1 ? "" : "s") queued")
+                .font(.system(size: 11.5, weight: .semibold))
+            Spacer()
+            if ocr.recovered > 0 {
+                Text("\(ocr.recovered.formatted()) recovered")
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Brand.cardBg, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.hairline))
+    }
+
+    private func copyPullCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("ollama pull \(ocr.visionModel)", forType: .string)
+        copied = true
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            copied = false
+        }
     }
 }
 

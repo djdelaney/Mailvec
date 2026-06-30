@@ -21,6 +21,9 @@ struct TrayHealth: Codable, Equatable {
     var schemaVersion: String
     var services: [ServiceStatus]
     var ollama: OllamaStatus
+    // Optional so a tray build that's newer than the MCP server (or vice versa)
+    // still decodes the rest of the payload instead of failing wholesale.
+    var ocr: OCRStatus?
     var progress: EmbedProgress?
     var recentEvents: [TimelineEvent]
     var sparkline: [Int]
@@ -46,6 +49,26 @@ struct OllamaStatus: Codable, Equatable {
     var ok: Bool
     var detail: String
     var severity: TrayHealth.Severity?
+}
+
+/// Mirrors TrayOcrStatus in TrayModels.cs — the scanned-PDF OCR stage.
+struct OCRStatus: Codable, Equatable {
+    var enabled: Bool
+    var visionModel: String
+    var modelAvailable: Bool?
+    var pending: Int
+    var recovered: Int
+    var severity: TrayHealth.Severity?
+
+    /// Show a dashboard card only when there's something actionable: the model
+    /// isn't installed, or there's a live OCR backlog. A healthy idle stage
+    /// stays silent (matching the CLI, which only prints "OCR pending" when >0).
+    var shouldSurface: Bool {
+        guard enabled else { return false }
+        return modelAvailable == false || pending > 0
+    }
+
+    var modelMissing: Bool { enabled && modelAvailable == false }
 }
 
 struct EmbedProgress: Codable, Equatable {
@@ -184,6 +207,13 @@ struct TraySystem: Codable, Equatable {
     var schemaModelMatches: Bool
     var coverageDone: Int
     var coverageTotal: Int
+
+    // OCR (vision) stage. Optional for tray/server version skew.
+    var ocrEnabled: Bool?
+    var visionModel: String?
+    var visionModelReachable: Bool?
+    var ocrRecovered: Int?
+    var ocrPending: Int?
 
     var mcpHttpEnabled: Bool
     var mcpBindAddress: String
