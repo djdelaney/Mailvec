@@ -6,6 +6,7 @@ using Mailvec.Core;
 using Mailvec.Core.Data;
 using Mailvec.Core.Health;
 using Mailvec.Core.Options;
+using Mailvec.Core.Vision;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -251,6 +252,33 @@ internal static class DoctorCommand
         // not enough on its own. Tail the stderr log and surface anything
         // recent here — same source the tray's mbsync tile reads from.
         checks.Add(InspectMbsyncStderr());
+
+        // ---------------------------------------------------------------
+        // OCR (vision) model — when the embedder is set to OCR scanned PDFs,
+        // confirm the model is pulled, else they silently never get processed.
+        // ---------------------------------------------------------------
+        var embedder = sp.GetRequiredService<IOptions<EmbedderOptions>>().Value;
+        if (embedder.OcrEnabled && !skipNet)
+        {
+            try
+            {
+                var available = await sp.GetRequiredService<IVisionClient>().IsModelAvailableAsync(ct).ConfigureAwait(false);
+                checks.Add(available
+                    ? DoctorCheck.Ok("OCR model", $"{ollama.VisionModel} available", "pipeline")
+                    : DoctorCheck.Warn("OCR model",
+                        $"{ollama.VisionModel} not pulled — scanned PDFs won't be OCR'd. " +
+                        $"Run `ollama pull {ollama.VisionModel}` or set Embedder:OcrEnabled=false.",
+                        "pipeline"));
+            }
+            catch (Exception ex)
+            {
+                checks.Add(DoctorCheck.Warn("OCR model", $"could not check vision model ({ex.GetType().Name}).", "pipeline"));
+            }
+        }
+        else if (embedder.OcrEnabled)
+        {
+            checks.Add(DoctorCheck.Warn("OCR model", "skipped (--no-net)", "pipeline"));
+        }
 
         // ---------------------------------------------------------------
         // MCP HTTP /health — confirms the launchd agent is actually serving

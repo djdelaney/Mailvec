@@ -53,6 +53,9 @@ internal static class CliServices
         // the launchd plist uses, so checking from the CLI matches what
         // external monitors would see.
         services.Configure<McpOptions>(config.GetSection(McpOptions.SectionName));
+        // EmbedderOptions so `mailvec doctor` knows whether OCR is enabled (and
+        // should therefore check the vision model is pulled).
+        services.Configure<EmbedderOptions>(config.GetSection(EmbedderOptions.SectionName));
 
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
@@ -83,6 +86,15 @@ internal static class CliServices
             client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
         });
         services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+
+        // Vision client so `mailvec doctor` can check the OCR model is pulled.
+        services.AddHttpClient<OllamaVisionClient>((sp, client) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
+            client.BaseAddress = new Uri(opts.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.VisionRequestTimeoutSeconds));
+        });
+        services.AddTransient<Mailvec.Core.Vision.IVisionClient>(sp => sp.GetRequiredService<OllamaVisionClient>());
 
         var sp = services.BuildServiceProvider();
 
