@@ -299,7 +299,7 @@ internal static class DoctorCommand
     // Health snapshot adapters
     // ---------------------------------------------------------------------
 
-    private static void AddHealthChecks(List<DoctorCheck> checks, HealthReport report, bool skipNet)
+    internal static void AddHealthChecks(List<DoctorCheck> checks, HealthReport report, bool skipNet)
     {
         // Embedding model schema vs config. ModelMismatch already encodes
         // the rule (schema_model is set AND differs from config_model OR
