@@ -69,10 +69,23 @@ public sealed class TrayStatusService(
                 : "unreachable",
             Severity: healthReport.Ollama.Reachable ? "ok" : "error");
 
+        var ocr = new TrayOcrStatus(
+            Enabled: healthReport.Ocr.Enabled,
+            VisionModel: healthReport.Ocr.VisionModel,
+            ModelAvailable: healthReport.Ocr.ModelAvailable,
+            Pending: healthReport.Ocr.Pending,
+            Recovered: healthReport.Ocr.Recovered,
+            Severity: ClassifyOcr(healthReport.Ocr));
+
         var sparkline = events.SnapshotSparkline();
         var ratePerMin = events.CurrentRatePerMinute();
         var progress = BuildProgress(healthReport, ratePerMin);
         var severity = ClassifySeverity(healthReport, services, ollama, progress);
+        // OCR can only *raise* the floor to warn (a missing vision model is a
+        // real but non-critical config gap) — it never overrides an error and
+        // never escalates to error itself. Kept out of ClassifySeverity's
+        // signature so its existing unit tests stay untouched.
+        if (ocr.Severity == "warn" && severity != "error") severity = "warn";
         var recentEvents = ReadRecentEvents();
         var (live, deleted) = (healthReport.Database.MessagesTotal - healthReport.Database.MessagesDeleted,
                                healthReport.Database.MessagesDeleted);
@@ -90,9 +103,25 @@ public sealed class TrayStatusService(
             SchemaVersion: schemaVersion,
             Services: services,
             Ollama: ollama,
+            Ocr: ocr,
             Progress: progress,
             RecentEvents: recentEvents,
             Sparkline: sparkline);
+    }
+
+    /// <summary>
+    /// OCR tile severity. A backlog alone is "syncing" (work in progress, not a
+    /// problem); a pulled-but-disabled or fully-idle stage is "ok". The only
+    /// warn is OCR enabled while the vision model isn't installed — that's a
+    /// silent gap where scanned PDFs never become searchable. Never "error":
+    /// OCR is best-effort and search works without it.
+    /// </summary>
+    internal static string ClassifyOcr(OcrHealth ocr)
+    {
+        if (!ocr.Enabled) return "ok";
+        if (ocr.ModelAvailable == false) return "warn";
+        if (ocr.Pending > 0) return "syncing";
+        return "ok";
     }
 
     internal static IReadOnlyList<TrayServiceStatus> BuildServices(

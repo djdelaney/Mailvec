@@ -22,6 +22,7 @@ public sealed record TrayStatus(
     string SchemaVersion,
     IReadOnlyList<TrayServiceStatus> Services,
     TrayOllamaStatus Ollama,
+    TrayOcrStatus Ocr,
     TrayEmbedProgress? Progress,
     IReadOnlyList<TrayTimelineEvent> RecentEvents,
     IReadOnlyList<int> Sparkline);  // 30 buckets of embeddings/min, oldest first
@@ -36,6 +37,21 @@ public sealed record TrayServiceStatus(
 public sealed record TrayOllamaStatus(
     bool Ok,
     string Detail,
+    string? Severity);
+
+/// <summary>
+/// Scanned-PDF OCR status for the dashboard. <c>Enabled</c> mirrors
+/// <c>Embedder:OcrEnabled</c>; <c>ModelAvailable</c> is null when OCR is off or
+/// the probe was skipped. <c>Pending</c> / <c>Recovered</c> are the OCR backlog
+/// and the count already transcribed. <c>Severity</c> is "warn" when the model
+/// isn't pulled while OCR is on, "syncing" when there's a backlog, else "ok".
+/// </summary>
+public sealed record TrayOcrStatus(
+    bool Enabled,
+    string VisionModel,
+    bool? ModelAvailable,
+    long Pending,
+    long Recovered,
     string? Severity);
 
 public sealed record TrayEmbedProgress(
@@ -80,6 +96,12 @@ public sealed record TraySystem(
     bool SchemaModelMatches,
     long CoverageDone,
     long CoverageTotal,
+
+    bool OcrEnabled,
+    string VisionModel,
+    bool VisionModelReachable,
+    long OcrRecovered,
+    long OcrPending,
 
     bool McpHttpEnabled,
     string McpBindAddress,

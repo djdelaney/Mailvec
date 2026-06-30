@@ -312,7 +312,13 @@ public class TrayStatusServiceTests
                 LastFailureAt: null,
                 ConsecutiveFailures: 0,
                 LastFailureKind: null,
-                Stuck: false));
+                Stuck: false),
+            Ocr: new OcrHealth(
+                Enabled: true,
+                VisionModel: "qwen2.5vl:7b",
+                ModelAvailable: true,
+                Pending: 0,
+                Recovered: 0));
     }
 
     private static HealthReport ReportWith(long messagesTotal, long messagesDeleted, long embedded)

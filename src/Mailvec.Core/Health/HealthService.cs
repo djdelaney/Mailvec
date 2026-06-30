@@ -2,6 +2,7 @@ using System.Globalization;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
 using Mailvec.Core.Options;
+using Mailvec.Core.Vision;
 using Microsoft.Extensions.Options;
 
 namespace Mailvec.Core.Health;
@@ -17,7 +18,15 @@ public sealed class HealthService(
     MetadataRepository metadata,
     IEmbeddingClient ollama,
     IOptions<ArchiveOptions> archiveOpts,
-    IOptions<OllamaOptions> ollamaOpts)
+    IOptions<OllamaOptions> ollamaOpts,
+    // OCR-pipeline deps are optional so the unit tests (which build a minimal
+    // HealthService by hand) keep compiling without wiring vision/OCR. In the
+    // MCP and CLI DI graphs all three resolve to real services; when null we
+    // report OCR as disabled-with-zero-counts, which is the correct "no signal"
+    // reading rather than a crash.
+    MessageRepository? messages = null,
+    IVisionClient? vision = null,
+    IOptions<EmbedderOptions>? embedderOpts = null)
 {
     public async Task<HealthReport> CheckAsync(CancellationToken ct = default)
     {
@@ -33,7 +42,27 @@ public sealed class HealthService(
         var modelMismatch = schemaModel is not null
             && (schemaModel != configModel || (schemaDim != 0 && schemaDim != configDim));
 
-        var ollamaReachable = await ollama.PingAsync(ct).ConfigureAwait(false);
+        // OCR (vision) is a separate, best-effort pipeline stage. Probe the
+        // vision model concurrently with the embedding-Ollama ping so /health
+        // (polled by the tray every 5s) doesn't pay two serial round-trips.
+        var ocrEnabled = (embedderOpts?.Value ?? new EmbedderOptions()).OcrEnabled;
+        var ollamaPing = ollama.PingAsync(ct);
+        var visionProbe = ocrEnabled && vision is not null
+            ? vision.IsModelAvailableAsync(ct)
+            : null;
+
+        var ollamaReachable = await ollamaPing.ConfigureAwait(false);
+        bool? visionModelAvailable = visionProbe is null
+            ? null
+            : await visionProbe.ConfigureAwait(false);
+
+        var (ocrPending, ocrRecovered) = messages?.OcrCounts() ?? (0L, 0L);
+        var ocr = new OcrHealth(
+            Enabled: ocrEnabled,
+            VisionModel: ollamaOpts.Value.VisionModel,
+            ModelAvailable: visionModelAvailable,
+            Pending: ocrPending,
+            Recovered: ocrRecovered);
 
         var live = Math.Max(total - deleted, 0);
         var coverage = live == 0 ? 0d : (double)embedded / live;
@@ -41,6 +70,11 @@ public sealed class HealthService(
 
         var embedder = BuildEmbedderHealth(backlog);
 
+        // OCR is deliberately NOT part of the degraded decision. Scanned PDFs are
+        // a minority of the corpus and search works fine without them, so a
+        // missing vision model or an OCR backlog is informational — surfaced in
+        // the Ocr section and as a tray *warn*, never a /health 503. Broadening
+        // the degraded set here would page on a non-critical, best-effort stage.
         var status = (ollamaReachable, modelMismatch, embedder.Stuck) switch
         {
             (false, _, _) => "degraded",
@@ -69,7 +103,8 @@ public sealed class HealthService(
                 BaseUrl: ollamaOpts.Value.BaseUrl,
                 Reachable: ollamaReachable,
                 ConfiguredModel: configModel),
-            Embedder: embedder);
+            Embedder: embedder,
+            Ocr: ocr);
     }
 
     /// <summary>
@@ -168,7 +203,23 @@ public sealed record HealthReport(
     DatabaseHealth Database,
     EmbeddingHealth Embeddings,
     OllamaHealth Ollama,
-    EmbedderHealth Embedder);
+    EmbedderHealth Embedder,
+    OcrHealth Ocr);
+
+/// <summary>
+/// Snapshot of the scanned-PDF OCR stage (the embedder's vision pass). Purely
+/// informational on /health — it never flips Status to degraded. <c>Enabled</c>
+/// reflects <c>Embedder:OcrEnabled</c>; <c>ModelAvailable</c> is null when OCR
+/// is disabled or the probe was skipped, true/false otherwise. <c>Pending</c>
+/// is scanned PDFs awaiting OCR; <c>Recovered</c> is those already transcribed
+/// (extraction_status='ocr').
+/// </summary>
+public sealed record OcrHealth(
+    bool Enabled,
+    string VisionModel,
+    bool? ModelAvailable,
+    long Pending,
+    long Recovered);
 
 /// <summary>
 /// Dynamic "is the embedder making progress" signal — distinct from the
