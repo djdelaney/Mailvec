@@ -7,6 +7,8 @@
   <ItemGroup>
     <PackageReference Include="PDFtoImage" />
     <PackageReference Include="SkiaSharp" />
+    <!-- Pure-managed TIFF decode; SkiaSharp ships no TIFF codec. See ImageRenderer. -->
+    <PackageReference Include="BitMiracle.LibTiff.NET" />
   </ItemGroup>
 
 </Project>
