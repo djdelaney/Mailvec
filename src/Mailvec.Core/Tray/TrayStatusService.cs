@@ -75,6 +75,8 @@ public sealed class TrayStatusService(
             ModelAvailable: healthReport.Ocr.ModelAvailable,
             Pending: healthReport.Ocr.Pending,
             Recovered: healthReport.Ocr.Recovered,
+            ImagePending: healthReport.Ocr.ImagePending,
+            ImageRecovered: healthReport.Ocr.ImageRecovered,
             Severity: ClassifyOcr(healthReport.Ocr));
 
         var sparkline = events.SnapshotSparkline();
