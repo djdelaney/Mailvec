@@ -1,21 +1,21 @@
 {
   "version": 1,
-  "ranAt": "2026-07-01T12:58:06.788705+00:00",
+  "ranAt": "2026-07-01T14:11:59.399277+00:00",
   "querySetPath": "~/Library/Application Support/Mailvec/eval/queries.json",
   "topK": 10,
   "runs": [
     {
       "mode": "keyword",
       "aggregate": {
-        "ndcg": 0.8636890535735771,
-        "mrr": 0.8665598290598292,
-        "recall": 0.9205841952165481,
-        "queryCount": 53,
+        "ndcg": 0.869734793411337,
+        "mrr": 0.87609126984127,
+        "recall": 0.9262567527010804,
+        "queryCount": 57,
         "negativeQueryCount": 1,
         "meanSpecificity": 0,
-        "meanLatencyMs": 149.2731679245283,
-        "p50LatencyMs": 56.3031,
-        "p95LatencyMs": 579.6674599999998
+        "meanLatencyMs": 64.70470877192982,
+        "p50LatencyMs": 41.3198,
+        "p95LatencyMs": 188.74699999999999
       },
       "queries": [
         {
@@ -35,7 +35,7 @@
             10,
             1
           ],
-          "latencyMs": 681.2102,
+          "latencyMs": 76.7653,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -53,7 +53,7 @@
             6,
             5
           ],
-          "latencyMs": 403.6677,
+          "latencyMs": 64.1796,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -72,7 +72,7 @@
             3,
             1
           ],
-          "latencyMs": 56.3031,
+          "latencyMs": 26.2988,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -90,7 +90,7 @@
             8,
             7
           ],
-          "latencyMs": 141.9939,
+          "latencyMs": 53.9948,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -106,7 +106,7 @@
             3,
             4
           ],
-          "latencyMs": 34.0425,
+          "latencyMs": 18.7321,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -123,7 +123,7 @@
             0,
             0
           ],
-          "latencyMs": 5.8247,
+          "latencyMs": 4.3451,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -143,7 +143,7 @@
             10,
             0
           ],
-          "latencyMs": 84.1038,
+          "latencyMs": 38.7449,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -163,7 +163,7 @@
             7,
             6
           ],
-          "latencyMs": 75.5445,
+          "latencyMs": 41.3198,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -178,7 +178,7 @@
             2,
             3
           ],
-          "latencyMs": 34.5626,
+          "latencyMs": 20.828,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -198,7 +198,7 @@
             5,
             0
           ],
-          "latencyMs": 28.034,
+          "latencyMs": 22.4561,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -211,7 +211,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 83.0427,
+          "latencyMs": 46.0058,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -225,7 +225,7 @@
             2,
             1
           ],
-          "latencyMs": 21.1451,
+          "latencyMs": 13.6013,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -246,7 +246,7 @@
             5,
             9
           ],
-          "latencyMs": 73.0011,
+          "latencyMs": 47.304,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -260,7 +260,7 @@
             0,
             0
           ],
-          "latencyMs": 98.0042,
+          "latencyMs": 95.4032,
           "expectEmpty": false,
           "returnedCount": 0
         },
@@ -279,7 +279,7 @@
             6,
             4
           ],
-          "latencyMs": 16.3119,
+          "latencyMs": 11.1765,
           "expectEmpty": false,
           "returnedCount": 9
         },
@@ -293,7 +293,7 @@
             1,
             2
           ],
-          "latencyMs": 34.1074,
+          "latencyMs": 26.5072,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -313,7 +313,7 @@
             7,
             8
           ],
-          "latencyMs": 28.1628,
+          "latencyMs": 25.012,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -332,7 +332,7 @@
             5,
             8
           ],
-          "latencyMs": 30.2729,
+          "latencyMs": 28.8919,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -354,7 +354,7 @@
             10,
             9
           ],
-          "latencyMs": 39.0695,
+          "latencyMs": 25.1127,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -370,7 +370,7 @@
             3,
             7
           ],
-          "latencyMs": 16.6571,
+          "latencyMs": 15.9557,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -399,7 +399,7 @@
             1,
             0
           ],
-          "latencyMs": 17.5545,
+          "latencyMs": 13.8348,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -416,7 +416,7 @@
             0,
             9
           ],
-          "latencyMs": 115.9093,
+          "latencyMs": 43.2688,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -430,7 +430,7 @@
             1,
             2
           ],
-          "latencyMs": 54.3734,
+          "latencyMs": 34.5524,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -444,7 +444,7 @@
             1,
             2
           ],
-          "latencyMs": 149.703,
+          "latencyMs": 86.5475,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -458,7 +458,7 @@
             2,
             1
           ],
-          "latencyMs": 2.2963,
+          "latencyMs": 2.5209,
           "expectEmpty": false,
           "returnedCount": 2
         },
@@ -471,7 +471,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2.2492,
+          "latencyMs": 2.3555,
           "expectEmpty": false,
           "returnedCount": 2
         },
@@ -485,7 +485,7 @@
             1,
             3
           ],
-          "latencyMs": 32.4768,
+          "latencyMs": 29.0252,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -501,7 +501,7 @@
             3,
             2
           ],
-          "latencyMs": 40.064,
+          "latencyMs": 34.2382,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -518,7 +518,7 @@
             3,
             2
           ],
-          "latencyMs": 68.7046,
+          "latencyMs": 56.403,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -536,7 +536,7 @@
             3,
             6
           ],
-          "latencyMs": 37.4119,
+          "latencyMs": 31.5732,
           "expectEmpty": false,
           "returnedCount": 7
         },
@@ -555,7 +555,7 @@
             6,
             7
           ],
-          "latencyMs": 205.8484,
+          "latencyMs": 72.8117,
           "expectEmpty": false,
           "returnedCount": 7
         },
@@ -568,7 +568,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 51.6083,
+          "latencyMs": 27.9012,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -581,7 +581,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 92.6824,
+          "latencyMs": 70.1762,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -595,7 +595,7 @@
             2,
             1
           ],
-          "latencyMs": 31.2296,
+          "latencyMs": 28.4655,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -612,7 +612,7 @@
             1,
             4
           ],
-          "latencyMs": 23.12,
+          "latencyMs": 20.3615,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -629,7 +629,7 @@
             4,
             5
           ],
-          "latencyMs": 48.1497,
+          "latencyMs": 44.72,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -646,7 +646,7 @@
             0,
             3
           ],
-          "latencyMs": 304.6405,
+          "latencyMs": 107.2293,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -664,7 +664,7 @@
             2,
             8
           ],
-          "latencyMs": 29.0263,
+          "latencyMs": 27.0263,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -675,7 +675,7 @@
           "mrr": 0,
           "recall": 0,
           "ranksOfExpected": [],
-          "latencyMs": 31.3172,
+          "latencyMs": 27.7362,
           "expectEmpty": true,
           "returnedCount": 10,
           "specificity": 0
@@ -692,7 +692,7 @@
             4,
             3
           ],
-          "latencyMs": 90.6503,
+          "latencyMs": 74.3713,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -709,7 +709,7 @@
             3,
             5
           ],
-          "latencyMs": 60.457,
+          "latencyMs": 55.37,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -722,7 +722,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 24.713,
+          "latencyMs": 24.5632,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -735,7 +735,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 163.8939,
+          "latencyMs": 139.9413,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -748,7 +748,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 55.2401,
+          "latencyMs": 52.5879,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -761,7 +761,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 275.3527,
+          "latencyMs": 236.6912,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -774,7 +774,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 334.3278,
+          "latencyMs": 186.9321,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -787,7 +787,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 229.1155,
+          "latencyMs": 192.3386,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -800,7 +800,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 511.9723,
+          "latencyMs": 312.9509,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -813,7 +813,7 @@
           "ranksOfExpected": [
             9
           ],
-          "latencyMs": 232.2685,
+          "latencyMs": 168.897,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -826,7 +826,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 164.0617,
+          "latencyMs": 154.2147,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -839,7 +839,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 1325.0468,
+          "latencyMs": 157.287,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -852,7 +852,7 @@
           "ranksOfExpected": [
             5
           ],
-          "latencyMs": 830.2205,
+          "latencyMs": 129.3375,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -865,7 +865,66 @@
           "ranksOfExpected": [
             0
           ],
-          "latencyMs": 290.7307,
+          "latencyMs": 187.8491,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q056",
+          "relevantCount": 2,
+          "ndcg": 0.8175295903539445,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            7,
+            1
+          ],
+          "latencyMs": 60.0032,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q057",
+          "relevantCount": 5,
+          "ndcg": 0.975788054854922,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            3,
+            8,
+            4
+          ],
+          "latencyMs": 29.2875,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q058",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 15.1474,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q059",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            2
+          ],
+          "latencyMs": 47.0163,
           "expectEmpty": false,
           "returnedCount": 10
         }
@@ -874,15 +933,15 @@
     {
       "mode": "semantic",
       "aggregate": {
-        "ndcg": 0.8234040667147087,
-        "mrr": 0.8409188034188035,
-        "recall": 0.9035741219564749,
-        "queryCount": 53,
+        "ndcg": 0.8270894905208009,
+        "mrr": 0.8403769841269842,
+        "recall": 0.9104616846738696,
+        "queryCount": 57,
         "negativeQueryCount": 1,
         "meanSpecificity": 0,
-        "meanLatencyMs": 1199.4175377358492,
-        "p50LatencyMs": 782.8741,
-        "p95LatencyMs": 2894.80868
+        "meanLatencyMs": 985.2923754385965,
+        "p50LatencyMs": 787.2879,
+        "p95LatencyMs": 2499.07226
       },
       "queries": [
         {
@@ -902,7 +961,7 @@
             8,
             2
           ],
-          "latencyMs": 6079.3015,
+          "latencyMs": 5152.1457,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -920,7 +979,7 @@
             0,
             0
           ],
-          "latencyMs": 921.6408,
+          "latencyMs": 956.76,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -939,7 +998,7 @@
             3,
             2
           ],
-          "latencyMs": 390.9892,
+          "latencyMs": 291.6885,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -957,7 +1016,7 @@
             5,
             0
           ],
-          "latencyMs": 2429.8951,
+          "latencyMs": 1101.5273,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -973,7 +1032,7 @@
             3,
             0
           ],
-          "latencyMs": 776.0381,
+          "latencyMs": 729.4886,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -990,7 +1049,7 @@
             6,
             7
           ],
-          "latencyMs": 742.7947,
+          "latencyMs": 784.0915,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1010,7 +1069,7 @@
             9,
             7
           ],
-          "latencyMs": 293.7939,
+          "latencyMs": 293.9505,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1030,7 +1089,7 @@
             0,
             0
           ],
-          "latencyMs": 746.2316,
+          "latencyMs": 888.4591,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1045,7 +1104,7 @@
             2,
             0
           ],
-          "latencyMs": 1406.4985,
+          "latencyMs": 1902.2775,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1065,7 +1124,7 @@
             0,
             0
           ],
-          "latencyMs": 767.866,
+          "latencyMs": 1124.4721,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1078,7 +1137,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2545.004,
+          "latencyMs": 847.0385,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1092,7 +1151,7 @@
             2,
             1
           ],
-          "latencyMs": 782.8741,
+          "latencyMs": 1101.5893,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1113,7 +1172,7 @@
             10,
             7
           ],
-          "latencyMs": 337.9445,
+          "latencyMs": 431.9105,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1127,7 +1186,7 @@
             1,
             4
           ],
-          "latencyMs": 356.2811,
+          "latencyMs": 285.2145,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1146,7 +1205,7 @@
             5,
             8
           ],
-          "latencyMs": 1965.1475,
+          "latencyMs": 1299.284,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1160,7 +1219,7 @@
             2,
             1
           ],
-          "latencyMs": 2899.4384,
+          "latencyMs": 1303.4485,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1180,7 +1239,7 @@
             7,
             8
           ],
-          "latencyMs": 884.2272,
+          "latencyMs": 716.8589,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1199,7 +1258,7 @@
             5,
             7
           ],
-          "latencyMs": 941.9555,
+          "latencyMs": 831.9404,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1221,7 +1280,7 @@
             7,
             10
           ],
-          "latencyMs": 1189.5473,
+          "latencyMs": 871.1203,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1237,7 +1296,7 @@
             3,
             5
           ],
-          "latencyMs": 2134.4253,
+          "latencyMs": 2164.0086,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1266,7 +1325,7 @@
             0,
             0
           ],
-          "latencyMs": 293.5664,
+          "latencyMs": 763.861,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1283,7 +1342,7 @@
             10,
             4
           ],
-          "latencyMs": 688.5619,
+          "latencyMs": 882.7084,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1297,7 +1356,7 @@
             2,
             1
           ],
-          "latencyMs": 723.2843,
+          "latencyMs": 793.8471,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1311,7 +1370,7 @@
             0,
             0
           ],
-          "latencyMs": 756.3003,
+          "latencyMs": 682.716,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1325,7 +1384,7 @@
             1,
             6
           ],
-          "latencyMs": 689.4022,
+          "latencyMs": 724.8836,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1338,7 +1397,7 @@
           "ranksOfExpected": [
             5
           ],
-          "latencyMs": 690.756,
+          "latencyMs": 712.8975,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1352,7 +1411,7 @@
             2,
             1
           ],
-          "latencyMs": 702.0082,
+          "latencyMs": 735.0831,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1368,7 +1427,7 @@
             2,
             4
           ],
-          "latencyMs": 1240.9884,
+          "latencyMs": 1810.6867,
           "expectEmpty": false,
           "returnedCount": 9
         },
@@ -1385,7 +1444,7 @@
             3,
             1
           ],
-          "latencyMs": 1583.5442,
+          "latencyMs": 1410.9982,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1403,7 +1462,7 @@
             4,
             5
           ],
-          "latencyMs": 1947.6877,
+          "latencyMs": 3052.9196,
           "expectEmpty": false,
           "returnedCount": 7
         },
@@ -1422,7 +1481,7 @@
             6,
             7
           ],
-          "latencyMs": 1559.7289,
+          "latencyMs": 535.9227,
           "expectEmpty": false,
           "returnedCount": 7
         },
@@ -1435,7 +1494,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2964.6767,
+          "latencyMs": 787.2879,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1448,7 +1507,7 @@
           "ranksOfExpected": [
             3
           ],
-          "latencyMs": 1470.3435,
+          "latencyMs": 1321.1409,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1462,7 +1521,7 @@
             1,
             2
           ],
-          "latencyMs": 722.5912,
+          "latencyMs": 1141.2454,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1479,7 +1538,7 @@
             3,
             4
           ],
-          "latencyMs": 1383.4256,
+          "latencyMs": 1414.2825,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1496,7 +1555,7 @@
             4,
             5
           ],
-          "latencyMs": 1519.0889,
+          "latencyMs": 724.151,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1513,7 +1572,7 @@
             10,
             0
           ],
-          "latencyMs": 1246.7614,
+          "latencyMs": 2523.5521,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1531,7 +1590,7 @@
             2,
             8
           ],
-          "latencyMs": 1267.2032,
+          "latencyMs": 2492.9523,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1542,7 +1601,7 @@
           "mrr": 0,
           "recall": 0,
           "ranksOfExpected": [],
-          "latencyMs": 671.3233,
+          "latencyMs": 731.6872,
           "expectEmpty": true,
           "returnedCount": 10,
           "specificity": 0
@@ -1559,7 +1618,7 @@
             3,
             2
           ],
-          "latencyMs": 2442.315,
+          "latencyMs": 1445.6917,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1576,7 +1635,7 @@
             5,
             4
           ],
-          "latencyMs": 1341.5475,
+          "latencyMs": 1196.8505,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1589,7 +1648,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 1727.5109,
+          "latencyMs": 1176.8948,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1602,7 +1661,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 1239.3505,
+          "latencyMs": 1130.5734,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1615,7 +1674,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2891.7222,
+          "latencyMs": 1127.8665,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1628,7 +1687,7 @@
           "ranksOfExpected": [
             3
           ],
-          "latencyMs": 412.6106,
+          "latencyMs": 285.6465,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1641,7 +1700,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 320.4985,
+          "latencyMs": 340.7881,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1654,7 +1713,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 288.2521,
+          "latencyMs": 294.1272,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1667,7 +1726,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 289.4216,
+          "latencyMs": 298.0623,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1680,7 +1739,7 @@
           "ranksOfExpected": [
             9
           ],
-          "latencyMs": 692.4957,
+          "latencyMs": 284.0112,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1693,7 +1752,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 304.9837,
+          "latencyMs": 277.954,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1706,7 +1765,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 296.8319,
+          "latencyMs": 280.0026,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1719,7 +1778,7 @@
           "ranksOfExpected": [
             3
           ],
-          "latencyMs": 294.6391,
+          "latencyMs": 292.9296,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1732,7 +1791,66 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 313.8136,
+          "latencyMs": 277.1794,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q056",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 288.7553,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q057",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            2,
+            5,
+            4
+          ],
+          "latencyMs": 283.4414,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q058",
+          "relevantCount": 1,
+          "ndcg": 0.5,
+          "mrr": 0.3333333333333333,
+          "recall": 1,
+          "ranksOfExpected": [
+            3
+          ],
+          "latencyMs": 277.7835,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q059",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3
+          ],
+          "latencyMs": 283.0099,
           "expectEmpty": false,
           "returnedCount": 10
         }
@@ -1741,15 +1859,15 @@
     {
       "mode": "hybrid",
       "aggregate": {
-        "ndcg": 0.9025388641561289,
-        "mrr": 0.9150641025641024,
-        "recall": 0.9459276018099547,
-        "queryCount": 53,
+        "ndcg": 0.9095003738592625,
+        "mrr": 0.9211309523809523,
+        "recall": 0.9497899159663865,
+        "queryCount": 57,
         "negativeQueryCount": 1,
         "meanSpecificity": 0,
-        "meanLatencyMs": 2489.896779245283,
-        "p50LatencyMs": 2580.8593,
-        "p95LatencyMs": 3631.8251999999993
+        "meanLatencyMs": 1520.789171929825,
+        "p50LatencyMs": 1365.7896,
+        "p95LatencyMs": 3367.1671199999982
       },
       "queries": [
         {
@@ -1769,7 +1887,7 @@
             9,
             1
           ],
-          "latencyMs": 2034.1499,
+          "latencyMs": 3934.8834,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1787,7 +1905,7 @@
             0,
             0
           ],
-          "latencyMs": 2727.6174,
+          "latencyMs": 2534.4948,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1806,7 +1924,7 @@
             3,
             1
           ],
-          "latencyMs": 1334.6925,
+          "latencyMs": 3282.1695,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1824,7 +1942,7 @@
             8,
             10
           ],
-          "latencyMs": 2850.0916,
+          "latencyMs": 1405.5528,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1840,7 +1958,7 @@
             3,
             5
           ],
-          "latencyMs": 2287.0975,
+          "latencyMs": 1277.9222,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1857,7 +1975,7 @@
             8,
             9
           ],
-          "latencyMs": 1596.0531,
+          "latencyMs": 1593.0709,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1877,7 +1995,7 @@
             8,
             9
           ],
-          "latencyMs": 1207.8656,
+          "latencyMs": 1180.1463,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1897,7 +2015,7 @@
             6,
             8
           ],
-          "latencyMs": 2374.6126,
+          "latencyMs": 3707.1576,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1912,7 +2030,7 @@
             2,
             3
           ],
-          "latencyMs": 2171.744,
+          "latencyMs": 1437.0203,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1932,7 +2050,7 @@
             0,
             0
           ],
-          "latencyMs": 1556.6702,
+          "latencyMs": 1302.1381,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1945,7 +2063,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2580.8593,
+          "latencyMs": 1370.9504,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1959,7 +2077,7 @@
             2,
             1
           ],
-          "latencyMs": 2309.2274,
+          "latencyMs": 1354.1645,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1980,7 +2098,7 @@
             8,
             9
           ],
-          "latencyMs": 1034.572,
+          "latencyMs": 865.7027,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -1994,7 +2112,7 @@
             1,
             4
           ],
-          "latencyMs": 1606.435,
+          "latencyMs": 747.3399,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2013,7 +2131,7 @@
             6,
             7
           ],
-          "latencyMs": 1653.4837,
+          "latencyMs": 1200.0292,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2027,7 +2145,7 @@
             1,
             2
           ],
-          "latencyMs": 1965.2382,
+          "latencyMs": 1797.3618,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2047,7 +2165,7 @@
             7,
             8
           ],
-          "latencyMs": 2415.4377,
+          "latencyMs": 3145.0202,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2066,7 +2184,7 @@
             6,
             8
           ],
-          "latencyMs": 2322.2186,
+          "latencyMs": 1403.5953,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2088,7 +2206,7 @@
             9,
             10
           ],
-          "latencyMs": 2843.9605,
+          "latencyMs": 1458.5689,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2104,7 +2222,7 @@
             3,
             5
           ],
-          "latencyMs": 1973.0105,
+          "latencyMs": 1386.7883,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2133,7 +2251,7 @@
             0,
             0
           ],
-          "latencyMs": 1937.4462,
+          "latencyMs": 1245.6626,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2150,7 +2268,7 @@
             0,
             7
           ],
-          "latencyMs": 2486.3674,
+          "latencyMs": 1662.0707,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2164,7 +2282,7 @@
             1,
             2
           ],
-          "latencyMs": 2494.9829,
+          "latencyMs": 1873.0115,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2178,7 +2296,7 @@
             1,
             3
           ],
-          "latencyMs": 3514.6798,
+          "latencyMs": 2442.2257,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2192,7 +2310,7 @@
             1,
             2
           ],
-          "latencyMs": 2594.0488,
+          "latencyMs": 1303.0305,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2205,7 +2323,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2510.2346,
+          "latencyMs": 1261.2115,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2219,7 +2337,7 @@
             1,
             2
           ],
-          "latencyMs": 3011.3736,
+          "latencyMs": 1659.2588,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2235,7 +2353,7 @@
             2,
             3
           ],
-          "latencyMs": 2374.122,
+          "latencyMs": 3891.0213,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2252,7 +2370,7 @@
             3,
             2
           ],
-          "latencyMs": 2755.891,
+          "latencyMs": 1702.4747,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2270,7 +2388,7 @@
             3,
             6
           ],
-          "latencyMs": 2635.8252,
+          "latencyMs": 1365.7896,
           "expectEmpty": false,
           "returnedCount": 7
         },
@@ -2289,7 +2407,7 @@
             6,
             7
           ],
-          "latencyMs": 2211.0115,
+          "latencyMs": 552.2832,
           "expectEmpty": false,
           "returnedCount": 7
         },
@@ -2302,7 +2420,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2703.9107,
+          "latencyMs": 1227.3156,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2315,7 +2433,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2908.7102,
+          "latencyMs": 1311.6933,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2329,7 +2447,7 @@
             2,
             1
           ],
-          "latencyMs": 3021.505,
+          "latencyMs": 1330.8174,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2346,7 +2464,7 @@
             2,
             4
           ],
-          "latencyMs": 2584.0192,
+          "latencyMs": 1224.2377,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2363,7 +2481,7 @@
             4,
             5
           ],
-          "latencyMs": 3047.7646,
+          "latencyMs": 1179.3892,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2380,7 +2498,7 @@
             9,
             0
           ],
-          "latencyMs": 5050.5713,
+          "latencyMs": 2018.2787,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2398,7 +2516,7 @@
             2,
             5
           ],
-          "latencyMs": 1500.1297,
+          "latencyMs": 2320.4497,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2409,7 +2527,7 @@
           "mrr": 0,
           "recall": 0,
           "ranksOfExpected": [],
-          "latencyMs": 2959.3141,
+          "latencyMs": 1928.9178,
           "expectEmpty": true,
           "returnedCount": 10,
           "specificity": 0
@@ -2426,7 +2544,7 @@
             4,
             2
           ],
-          "latencyMs": 3223.4992,
+          "latencyMs": 1790.8256,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2443,7 +2561,7 @@
             4,
             5
           ],
-          "latencyMs": 2842.4281,
+          "latencyMs": 1470.7964,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2456,7 +2574,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 1993.1674,
+          "latencyMs": 1353.0525,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2469,7 +2587,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 3195.5505,
+          "latencyMs": 1399.5188,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2482,7 +2600,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 3252.779,
+          "latencyMs": 2247.1424,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2495,7 +2613,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 3926.3847,
+          "latencyMs": 2094.1376,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2508,7 +2626,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 2705.1952,
+          "latencyMs": 2597.1691,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2521,7 +2639,7 @@
           "ranksOfExpected": [
             2
           ],
-          "latencyMs": 3807.5433,
+          "latencyMs": 1064.4078,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2534,7 +2652,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2760.1025,
+          "latencyMs": 684.7961,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2547,7 +2665,7 @@
           "ranksOfExpected": [
             4
           ],
-          "latencyMs": 745.4846,
+          "latencyMs": 463.2751,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2560,7 +2678,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 3288.9868,
+          "latencyMs": 555.5991,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2573,7 +2691,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 2866.1972,
+          "latencyMs": 719.8035,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2586,7 +2704,7 @@
           "ranksOfExpected": [
             1
           ],
-          "latencyMs": 3223.6563,
+          "latencyMs": 457.6625,
           "expectEmpty": false,
           "returnedCount": 10
         },
@@ -2599,7 +2717,66 @@
           "ranksOfExpected": [
             0
           ],
-          "latencyMs": 986.6094,
+          "latencyMs": 526.9235,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q056",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 383.914,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q057",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            3,
+            5,
+            4
+          ],
+          "latencyMs": 341.1722,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q058",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 312.7996,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q059",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            3
+          ],
+          "latencyMs": 338.7704,
           "expectEmpty": false,
           "returnedCount": 10
         }
