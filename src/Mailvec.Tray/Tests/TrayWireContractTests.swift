@@ -41,6 +41,7 @@ final class TrayWireContractTests: XCTestCase {
                 { "id": "indexer", "detail": "idle", "ok": true, "busy": false, "severity": null }
             ],
             "ollama": { "ok": true, "detail": "mxbai-embed-large", "severity": "ok" },
+            "ocr": { "enabled": true, "visionModel": "qwen2.5vl:7b", "modelAvailable": true, "pending": 15, "recovered": 2448, "imagePending": 12, "imageRecovered": 2140, "severity": "syncing" },
             "progress": { "done": 12000, "total": 12345, "ratePerMinute": 50, "etaMinutes": 7 },
             "recentEvents": [
                 { "time": "2026-05-14T19:03:42.909+00:00", "kind": "indexed", "text": "Test — alice@example.com", "agent": "indexer", "live": false, "severity": "ok" }
@@ -62,6 +63,11 @@ final class TrayWireContractTests: XCTestCase {
         XCTAssertEqual(status.services[0].id, "mbsync")
         XCTAssertEqual(status.services[1].severity, nil)   // null wire → nil
         XCTAssertEqual(status.ollama.detail, "mxbai-embed-large")
+        XCTAssertEqual(status.ocr?.pending, 15)
+        XCTAssertEqual(status.ocr?.imagePending, 12)
+        XCTAssertEqual(status.ocr?.imageRecovered, 2140)
+        XCTAssertEqual(status.ocr?.pdfPendingCount, 3)
+        XCTAssertEqual(status.ocr?.pendingSummary, "3 scanned PDFs + 12 images")
         XCTAssertEqual(status.progress?.etaMinutes, 7)
         XCTAssertEqual(status.recentEvents[0].kind, .indexed)
         XCTAssertEqual(status.sparkline, [0, 1, 5, 2, 0])
