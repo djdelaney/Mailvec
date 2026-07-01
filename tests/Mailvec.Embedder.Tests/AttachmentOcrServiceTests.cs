@@ -128,6 +128,7 @@ public class AttachmentOcrServiceTests : IDisposable
     private sealed class FakeVision(bool available, Func<byte[], string> ocr) : IVisionClient
     {
         public Task<string> OcrAsync(byte[] image, CancellationToken ct = default) => Task.FromResult(ocr(image));
+        public Task<string> OcrImageAsync(byte[] image, CancellationToken ct = default) => Task.FromResult(ocr(image));
         public Task<bool> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult(available);
     }
 

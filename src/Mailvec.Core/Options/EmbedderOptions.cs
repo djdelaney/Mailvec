@@ -39,4 +39,30 @@ public sealed class EmbedderOptions
 
     // Cap pages rendered + OCR'd per PDF — bounds cost on a pathologically long scan.
     public int OcrMaxPagesPerPdf { get; set; } = 20;
+
+    // OCR for image *attachments* (image/jpeg, image/png, …) the indexer left at
+    // 'unsupported'. Same vision pipeline as the scanned-PDF pass, behind a
+    // two-stage gate that keeps it off the corpus of logos / signature icons /
+    // tracking pixels that dominate inline images: a cheap byte pre-filter in
+    // SQL (ImageOcrMinBytes), then a post-decode dimension/aspect gate. On a real
+    // corpus the byte gate alone sheds the entire sub-2KB icon-strip population;
+    // the decode gate catches byte-heavy-but-tiny images and banner strips. GIFs
+    // are excluded outright (near-always animated/decorative). See
+    // docs/contributing/attachment-ocr.md.
+    public bool ImageOcrEnabled { get; set; } = true;
+
+    // Stage 1 (pre-render, in SQL): skip image attachments smaller than this.
+    // Logos/signature decoration/tracking pixels sit well under 25KB; document
+    // photos, screenshots, and scans sit well above 50KB. 50KB is the
+    // conservative floor — raise it to OCR fewer, lower it to OCR more.
+    public long ImageOcrMinBytes { get; set; } = 50 * 1024;
+
+    // Stage 2 (post-decode): skip images whose *smaller* pixel dimension is below
+    // this — icons and avatars that slipped past the byte gate. 200px is below
+    // any legible page of text but above every icon.
+    public int ImageOcrMinDimension { get; set; } = 200;
+
+    // Stage 2 (post-decode): skip images whose long/short edge ratio exceeds this
+    // — banner strips and 1×N spacer rows that carry no readable text.
+    public double ImageOcrMaxAspectRatio { get; set; } = 8.0;
 }

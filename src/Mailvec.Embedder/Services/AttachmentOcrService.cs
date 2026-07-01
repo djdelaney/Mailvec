@@ -32,6 +32,7 @@ public sealed class AttachmentOcrService(
     ILogger<AttachmentOcrService> logger)
 {
     private readonly int _maxPages = Math.Max(1, options.Value.OcrMaxPagesPerPdf);
+    private readonly EmbedderOptions _opts = options.Value;
 
     /// <summary>
     /// OCR up to <paramref name="batchSize"/> scanned PDFs. Returns the number
@@ -98,10 +99,16 @@ public sealed class AttachmentOcrService(
                     sb.Append(pageText);
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // Transient (Ollama down / timeout). Leave 'no_text' for retry and
-                // stop the batch — no point hammering a wedged model this cycle.
+                throw; // genuine shutdown — propagate so the worker stops
+            }
+            catch (Exception ex)
+            {
+                // Transient: Ollama down, or an HTTP timeout (which surfaces as
+                // TaskCanceledException — an OperationCanceledException — while ct
+                // is NOT cancelled). Leave 'no_text' for retry and stop the batch;
+                // no point hammering a wedged model this cycle.
                 logger.LogWarning(ex,
                     "OCR: vision call failed for attachment {AttachmentId}; will retry. Aborting OCR batch.", c.AttachmentId);
                 break;
@@ -112,6 +119,112 @@ public sealed class AttachmentOcrService(
             logger.LogInformation(
                 "OCR'd attachment {AttachmentId} ({Pages} page(s), {Chars} chars); re-queued message {MessageId}.",
                 c.AttachmentId, pages, sb.Length, c.MessageId);
+        }
+
+        return done;
+    }
+
+    /// <summary>
+    /// OCR up to <paramref name="batchSize"/> image attachments stuck at
+    /// 'unsupported'. Stage-1 (byte) gating happens in the SQL candidate query;
+    /// this method applies stage-2 (decode dimensions / aspect ratio) before the
+    /// vision call. Returns the number that gained searchable text. Mirrors
+    /// <see cref="ProcessBatchAsync"/>'s error handling — same graceful skip when
+    /// the model is unavailable, same per-item terminal marking so a poison row
+    /// never re-selects.
+    /// </summary>
+    public async Task<int> ProcessImageBatchAsync(int batchSize, CancellationToken ct)
+    {
+        var candidates = messages.EnumerateImagesNeedingOcr(Math.Max(1, batchSize), _opts.ImageOcrMinBytes);
+        if (candidates.Count == 0) return 0;
+
+        if (!await vision.IsModelAvailableAsync(ct).ConfigureAwait(false))
+        {
+            logger.LogWarning(
+                "Image OCR is enabled but the vision model is unavailable; leaving {Count} image(s) unprocessed. " +
+                "Pull it (`ollama pull <Ollama:VisionModel>`) or set Embedder:ImageOcrEnabled=false.",
+                candidates.Count);
+            return 0;
+        }
+
+        int done = 0;
+        foreach (var c in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            byte[] bytes;
+            try
+            {
+                bytes = reader.ReadBytes(c.ToMessage(), c.PartIndex);
+            }
+            catch (FileNotFoundException)
+            {
+                logger.LogInformation(
+                    "Image OCR skip: Maildir file missing for attachment {AttachmentId} (message {MessageId}).",
+                    c.AttachmentId, c.MessageId);
+                continue;
+            }
+
+            // Decode + normalise. Null = not a decodable image (e.g. HEIC without
+            // a codec, or a mislabeled binary): mark failed so it isn't retried.
+            var normalized = ImageRenderer.TryNormalize(bytes);
+            if (normalized is null)
+            {
+                logger.LogInformation(
+                    "Image OCR: attachment {AttachmentId} did not decode as an image; marking failed.", c.AttachmentId);
+                messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                continue;
+            }
+
+            // Stage-2 gate: icons/avatars (too small) and banner strips/spacers
+            // (extreme aspect) carry no readable text. Terminally 'no_text' so the
+            // queue drains instead of re-decoding them every cycle.
+            int shortEdge = Math.Min(normalized.Width, normalized.Height);
+            int longEdge = Math.Max(normalized.Width, normalized.Height);
+            double aspect = shortEdge == 0 ? double.PositiveInfinity : (double)longEdge / shortEdge;
+            if (shortEdge < _opts.ImageOcrMinDimension || aspect > _opts.ImageOcrMaxAspectRatio)
+            {
+                logger.LogInformation(
+                    "Image OCR gate: attachment {AttachmentId} {W}x{H} (short {Short}px, aspect {Aspect:F1}) — skipping as non-content.",
+                    c.AttachmentId, normalized.Width, normalized.Height, shortEdge, aspect);
+                messages.MarkAttachmentImageNoText(c.AttachmentId);
+                continue;
+            }
+
+            string text;
+            try
+            {
+                text = await vision.OcrImageAsync(normalized.Jpeg, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // genuine shutdown — propagate so the worker stops
+            }
+            catch (Exception ex)
+            {
+                // Transient: Ollama down, or an HTTP timeout (TaskCanceledException,
+                // an OperationCanceledException, while ct is NOT cancelled).
+                logger.LogWarning(ex,
+                    "Image OCR: vision call failed for attachment {AttachmentId}; will retry. Aborting image OCR batch.",
+                    c.AttachmentId);
+                break;
+            }
+
+            // Empty transcription (a photo with no legible text) is the common
+            // case here — mark terminal rather than persisting an empty 'ocr' row.
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                messages.MarkAttachmentImageNoText(c.AttachmentId);
+                logger.LogInformation(
+                    "Image OCR: attachment {AttachmentId} produced no text; marked no_text.", c.AttachmentId);
+                continue;
+            }
+
+            messages.SaveOcrText(c.AttachmentId, c.MessageId, text);
+            done++;
+            logger.LogInformation(
+                "OCR'd image attachment {AttachmentId} ({W}x{H}, {Chars} chars); re-queued message {MessageId}.",
+                c.AttachmentId, normalized.Width, normalized.Height, text.Length, c.MessageId);
         }
 
         return done;
