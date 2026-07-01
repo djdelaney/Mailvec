@@ -37,16 +37,16 @@ namespace Mailvec.Cli.Commands;
 /// still NULL. Safe to ^C and resume — uncommitted per-message transactions
 /// just roll back, the next run picks up where we left off.
 ///
-/// <para><c>--reextract-calendar</c> / <c>--reextract-vcard</c> switch the
-/// candidate predicate from "status IS NULL" to "looks like an iCalendar /
-/// vCard file (by content-type or extension), regardless of current status".
-/// These are the one-time backfills for the calendar- and vCard-MIME routing
-/// fixes: rows previously stamped <c>unsupported</c> (e.g. octet-stream .ics /
-/// .vcf) get recovered, and rows already stamped <c>done</c> through the old raw
-/// text path get re-extracted through the new unfold/field-extraction path. The
-/// coarse SQL gate is intentionally over-inclusive — <see cref="AttachmentTextExtractor"/>
-/// remains the authority on the actual format, so a false-positive row just
-/// re-stamps to whatever it was.</para>
+/// <para>The <c>--reextract-*</c> flags (<c>calendar</c> / <c>vcard</c> /
+/// <c>office</c>) switch the candidate predicate from "status IS NULL" to "looks
+/// like that format (by content-type or extension), regardless of current
+/// status". These are the one-time backfills for the routing/format additions:
+/// rows previously stamped <c>unsupported</c> (e.g. octet-stream .ics / .vcf, or
+/// any .xlsx/.pptx) get recovered, and rows already stamped through an old raw
+/// path get re-extracted through the new handler. The coarse SQL gate is
+/// intentionally over-inclusive — <see cref="AttachmentTextExtractor"/> remains
+/// the authority on the actual format, so a false-positive row just re-stamps to
+/// whatever it was.</para>
 /// </summary>
 internal static class ExtractAttachmentsCommand
 {
@@ -56,7 +56,8 @@ internal static class ExtractAttachmentsCommand
         var batchOpt = new Option<int>("--batch") { Description = "Messages fetched per DB roundtrip. Default 100.", DefaultValueFactory = _ => 100 };
         var noReembedOpt = new Option<bool>("--no-reembed") { Description = "Skip clearing chunks/embedded_at for messages that gained text. Faster, but the vector index won't reflect attachment content until you run the embedder against those messages explicitly (e.g. via `mailvec reindex --all`)." };
         var reextractCalendarOpt = new Option<bool>("--reextract-calendar") { Description = "Re-extract calendar (.ics / text-calendar / application-ics) attachments regardless of current status, applying the unfold + field-extraction pass. One-time backfill for the calendar-MIME routing fix." };
-        var reextractVCardOpt = new Option<bool>("--reextract-vcard") { Description = "Re-extract vCard (.vcf / text-vcard) attachments regardless of current status. One-time backfill for the vCard-MIME routing fix. Mutually exclusive with --reextract-calendar; run one at a time." };
+        var reextractVCardOpt = new Option<bool>("--reextract-vcard") { Description = "Re-extract vCard (.vcf / text-vcard) attachments regardless of current status. One-time backfill for the vCard-MIME routing fix. Mutually exclusive with the other --reextract-* flags; run one at a time." };
+        var reextractOfficeOpt = new Option<bool>("--reextract-office") { Description = "Re-extract Office Open XML spreadsheets (.xlsx) and presentations (.pptx) regardless of current status. One-time backfill for the xlsx/pptx extractor. Mutually exclusive with the other --reextract-* flags; run one at a time." };
 
         var cmd = new Command("extract-attachments", "Backfill attachment-text extraction for messages where the indexer never ran the extractor (v3->v4 upgrade path or pre-Phase-4.5 ingest).")
         {
@@ -65,15 +66,17 @@ internal static class ExtractAttachmentsCommand
             noReembedOpt,
             reextractCalendarOpt,
             reextractVCardOpt,
+            reextractOfficeOpt,
         };
 
         cmd.SetAction(parse => Run(
             limit: parse.GetValue(limitOpt),
             batch: Math.Max(1, parse.GetValue(batchOpt)),
             noReembed: parse.GetValue(noReembedOpt),
-            // Calendar takes precedence if both are (mistakenly) passed.
+            // First flag set wins if more than one is (mistakenly) passed.
             reextractKind: parse.GetValue(reextractCalendarOpt) ? "calendar"
                 : parse.GetValue(reextractVCardOpt) ? "vcard"
+                : parse.GetValue(reextractOfficeOpt) ? "office"
                 : null));
         return cmd;
     }
@@ -107,6 +110,15 @@ internal static class ExtractAttachmentsCommand
                 lower({col}.content_type) IN ('text/vcard', 'text/x-vcard', 'application/vcard')
                 OR lower({col}.filename) LIKE '%.vcf'
                 OR lower({col}.filename) LIKE '%.vcard'
+            )
+            """,
+        "office" => $"""
+            (
+                lower({col}.content_type) IN (
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'application/vnd.openxmlformats-officedocument.presentationml.presentation')
+                OR lower({col}.filename) LIKE '%.xlsx'
+                OR lower({col}.filename) LIKE '%.pptx'
             )
             """,
         _ => $"{col}.extraction_status IS NULL",

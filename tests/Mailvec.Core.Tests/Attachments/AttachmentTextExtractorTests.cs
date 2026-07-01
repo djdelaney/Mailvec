@@ -1,6 +1,9 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Ax = DocumentFormat.OpenXml.Drawing;
+using Px = DocumentFormat.OpenXml.Presentation;
+using Sx = DocumentFormat.OpenXml.Spreadsheet;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -69,6 +72,49 @@ public class AttachmentTextExtractorTests
         result.Text.ShouldNotBeNull();
         result.Text!.ShouldContain("First paragraph");
         result.Text.ShouldContain("aardvark");
+    }
+
+    [Fact]
+    public void Extracts_xlsx_sheet_names_and_shared_strings()
+    {
+        var xlsxBytes = BuildSimpleXlsx("Guest List", "Alice Johnson", "Table 4", "RSVP yes");
+        const string ct = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        var part = BuildMimePart(xlsxBytes, ct, "wedding.xlsx");
+
+        var result = BuildExtractor().Extract(part, "wedding.xlsx", ct, xlsxBytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("Guest List");    // sheet name
+        result.Text.ShouldContain("Alice Johnson");  // shared string cell
+        result.Text.ShouldContain("RSVP yes");
+    }
+
+    [Fact]
+    public void Extracts_xlsx_via_octet_stream_extension_fallback()
+    {
+        var xlsxBytes = BuildSimpleXlsx("Budget", "Catering total 5000");
+        var part = BuildMimePart(xlsxBytes, "application/octet-stream", "budget.xlsx");
+
+        var result = BuildExtractor().Extract(part, "budget.xlsx", "application/octet-stream", xlsxBytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text!.ShouldContain("Catering total 5000");
+    }
+
+    [Fact]
+    public void Extracts_pptx_slide_text_in_order()
+    {
+        var pptxBytes = BuildSimplePptx("Living Room Design", "Sofa options and paint colors");
+        const string ct = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        var part = BuildMimePart(pptxBytes, ct, "design.pptx");
+
+        var result = BuildExtractor().Extract(part, "design.pptx", ct, pptxBytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("Living Room Design");
+        result.Text.ShouldContain("Sofa options and paint colors");
     }
 
     [Fact]
@@ -373,6 +419,77 @@ public class AttachmentTextExtractorTests
             {
                 main.Document.Body!.AppendChild(new Paragraph(new Run(new Text(text))));
             }
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>Real .xlsx with one named sheet and the given cell texts interned
+    /// in the shared-string table (how Excel stores text).</summary>
+    private static byte[] BuildSimpleXlsx(string sheetName, params string[] cellTexts)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var wbPart = doc.AddWorkbookPart();
+            wbPart.Workbook = new Sx.Workbook();
+            var sheets = wbPart.Workbook.AppendChild(new Sx.Sheets());
+
+            var wsPart = wbPart.AddNewPart<WorksheetPart>();
+            wsPart.Worksheet = new Sx.Worksheet(new Sx.SheetData());
+
+            var sstPart = wbPart.AddNewPart<SharedStringTablePart>();
+            sstPart.SharedStringTable = new Sx.SharedStringTable();
+            foreach (var t in cellTexts)
+            {
+                sstPart.SharedStringTable.AppendChild(new Sx.SharedStringItem(new Sx.Text(t)));
+            }
+
+            sheets.AppendChild(new Sx.Sheet
+            {
+                Id = wbPart.GetIdOfPart(wsPart),
+                SheetId = 1,
+                Name = sheetName,
+            });
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>Real .pptx with one slide per given string; the text sits in a
+    /// Drawing a:t run inside a shape's text body (where slide text lives).</summary>
+    private static byte[] BuildSimplePptx(params string[] slideTexts)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = PresentationDocument.Create(ms, PresentationDocumentType.Presentation))
+        {
+            var presPart = doc.AddPresentationPart();
+            var slideIdList = new Px.SlideIdList();
+            uint sid = 256;
+
+            foreach (var txt in slideTexts)
+            {
+                var slidePart = presPart.AddNewPart<SlidePart>();
+                slidePart.Slide = new Px.Slide(
+                    new Px.CommonSlideData(new Px.ShapeTree(
+                        new Px.NonVisualGroupShapeProperties(
+                            new Px.NonVisualDrawingProperties { Id = 1, Name = "" },
+                            new Px.NonVisualGroupShapeDrawingProperties(),
+                            new Px.ApplicationNonVisualDrawingProperties()),
+                        new Px.GroupShapeProperties(),
+                        new Px.Shape(
+                            new Px.NonVisualShapeProperties(
+                                new Px.NonVisualDrawingProperties { Id = 2, Name = "TextBox" },
+                                new Px.NonVisualShapeDrawingProperties(),
+                                new Px.ApplicationNonVisualDrawingProperties()),
+                            new Px.ShapeProperties(),
+                            new Px.TextBody(
+                                new Ax.BodyProperties(),
+                                new Ax.ListStyle(),
+                                new Ax.Paragraph(new Ax.Run(new Ax.Text(txt))))))));
+
+                slideIdList.AppendChild(new Px.SlideId { Id = sid++, RelationshipId = presPart.GetIdOfPart(slidePart) });
+            }
+
+            presPart.Presentation = new Px.Presentation(slideIdList);
         }
         return ms.ToArray();
     }

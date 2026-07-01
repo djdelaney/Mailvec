@@ -11,6 +11,7 @@ Operator/release/contributor docs (read on demand):
 - `ops/mcpb-release.md` — building and shipping the MCPB bundle.
 - `docs/contributing/tray.md` — SwiftUI / macOS gotchas; read before editing `src/Mailvec.Tray/`.
 - `docs/contributing/attachments.md` — `get_attachment` implementation quirks.
+- `docs/contributing/attachment-indexing.md` — which attachment formats we extract text from, and every size/dimension/filetype gate that makes us skip a file (with the rationale). Read before "why isn't this attachment searchable?" or before loosening a skip/gate.
 - `docs/contributing/search-performance.md` — diagnosing search latency (tray vs CLI, warm vs cold vector cache, the `/tray/warm` pre-warm); read before "optimising" search.
 - `docs/contributing/mcpb.md` — `manifest.json` quirks + tool-shape rules that break the Claude Desktop install.
 - `docs/contributing/embedding-experiments.md` — A/B-testing embedding models / chunk sizes against a parallel DB copy with `mailvec switch-model` + env-var overrides; read before changing the embedding model.

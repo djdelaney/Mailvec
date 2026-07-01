@@ -1,6 +1,9 @@
 using System.Text;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using A = DocumentFormat.OpenXml.Drawing;
+using P = DocumentFormat.OpenXml.Presentation;
+using S = DocumentFormat.OpenXml.Spreadsheet;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -14,9 +17,9 @@ namespace Mailvec.Core.Attachments;
 
 /// <summary>
 /// Recovers plain text from email attachments so it can be embedded for
-/// semantic search. Currently handles PDF (PdfPig), DOCX (DocumentFormat.OpenXml),
-/// iCalendar (.ics / VCALENDAR), vCard (.vcf / VCARD), and plain text (UTF-8 with
-/// Windows-1252 fallback). Anything else returns
+/// semantic search. Currently handles PDF (PdfPig), Office Open XML — DOCX / XLSX
+/// / PPTX (DocumentFormat.OpenXml) — iCalendar (.ics / VCALENDAR), vCard (.vcf /
+/// VCARD), and plain text (UTF-8 with Windows-1252 fallback). Anything else returns
 /// status='unsupported' with no text. The result is meant to feed the embedder,
 /// not to be displayed to the user — light normalization (whitespace,
 /// invisible chars) is good enough.
@@ -109,6 +112,8 @@ public sealed class AttachmentTextExtractor(
         {
             AttachmentFormat.Pdf => ExtractPdf(bytes, fileName),
             AttachmentFormat.Docx => ExtractDocx(bytes, fileName),
+            AttachmentFormat.Xlsx => ExtractXlsx(bytes, fileName),
+            AttachmentFormat.Pptx => ExtractPptx(bytes, fileName),
             AttachmentFormat.Calendar => ExtractCalendar(bytes),
             AttachmentFormat.VCard => ExtractVCard(bytes),
             AttachmentFormat.Text => ExtractText(bytes),
@@ -203,6 +208,106 @@ public sealed class AttachmentTextExtractor(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "DOCX text extraction failed for {Name}", fileName);
+            return new ExtractionResult(null, StatusFailed);
+        }
+    }
+
+    /// <summary>
+    /// Extract text from an .xlsx workbook: the sheet names plus the shared-string
+    /// table. Excel interns every text cell into the workbook's shared-string
+    /// table, so walking it captures all searchable text cheaply — no need to load
+    /// each worksheet part (which keeps memory bounded on large books). Numeric
+    /// cells are skipped (low search value); inline-string cells — rare, mostly
+    /// from programmatic exporters rather than Excel — are not covered.
+    /// </summary>
+    private ExtractionResult ExtractXlsx(byte[] bytes, string? fileName)
+    {
+        try
+        {
+            using var ms = new MemoryStream(bytes, writable: false);
+            using var doc = SpreadsheetDocument.Open(ms, isEditable: false);
+            var workbookPart = doc.WorkbookPart;
+            if (workbookPart is null) return new ExtractionResult(null, StatusNoText);
+
+            var sb = new StringBuilder(Math.Min(bytes.Length, 65_536));
+
+            // Sheet names are often the most descriptive labels ("Guest List",
+            // "Budget", "Vendors").
+            var sheets = workbookPart.Workbook?.Sheets?.Elements<S.Sheet>();
+            if (sheets is not null)
+            {
+                foreach (var sheet in sheets)
+                {
+                    if (!string.IsNullOrWhiteSpace(sheet.Name?.Value)) sb.AppendLine(sheet.Name!.Value);
+                }
+            }
+
+            var stringTable = workbookPart.SharedStringTablePart?.SharedStringTable;
+            if (stringTable is not null)
+            {
+                foreach (var item in stringTable.Elements<S.SharedStringItem>())
+                {
+                    if (sb.Length >= MaxExtractedTextChars) break;
+                    var text = item.InnerText;
+                    if (!string.IsNullOrWhiteSpace(text)) sb.AppendLine(text);
+                }
+            }
+
+            return BuildResult(sb.ToString());
+        }
+        catch (FileFormatException ex) when (ex.Message.Contains("encrypt", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ExtractionResult(null, StatusEncrypted);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "XLSX text extraction failed for {Name}", fileName);
+            return new ExtractionResult(null, StatusFailed);
+        }
+    }
+
+    /// <summary>
+    /// Extract text from a .pptx deck: every slide's text runs in presentation
+    /// order. All visible slide text — titles, bullets, text boxes, table cells —
+    /// is carried in Drawing <c>a:t</c> runs, so a descendant walk per slide
+    /// collects it. Speaker notes are not included.
+    /// </summary>
+    private ExtractionResult ExtractPptx(byte[] bytes, string? fileName)
+    {
+        try
+        {
+            using var ms = new MemoryStream(bytes, writable: false);
+            using var doc = PresentationDocument.Open(ms, isEditable: false);
+            var presentationPart = doc.PresentationPart;
+            var slideIdList = presentationPart?.Presentation?.SlideIdList;
+            if (slideIdList is null) return new ExtractionResult(null, StatusNoText);
+
+            var sb = new StringBuilder(Math.Min(bytes.Length, 65_536));
+            foreach (var slideId in slideIdList.Elements<P.SlideId>())
+            {
+                if (sb.Length >= MaxExtractedTextChars) break;
+                if (slideId.RelationshipId?.Value is not { } relId) continue;
+                if (presentationPart!.GetPartById(relId) is not SlidePart { Slide: { } slide }) continue;
+
+                bool wroteAny = false;
+                foreach (var text in slide.Descendants<A.Text>())
+                {
+                    if (string.IsNullOrWhiteSpace(text.Text)) continue;
+                    sb.Append(text.Text).Append(' ');
+                    wroteAny = true;
+                }
+                if (wroteAny) sb.AppendLine();
+            }
+
+            return BuildResult(sb.ToString());
+        }
+        catch (FileFormatException ex) when (ex.Message.Contains("encrypt", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ExtractionResult(null, StatusEncrypted);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "PPTX text extraction failed for {Name}", fileName);
             return new ExtractionResult(null, StatusFailed);
         }
     }
@@ -632,6 +737,10 @@ public sealed class AttachmentTextExtractor(
         if (ct == "application/pdf") return AttachmentFormat.Pdf;
         if (ct == "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             return AttachmentFormat.Docx;
+        if (ct == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            return AttachmentFormat.Xlsx;
+        if (ct == "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+            return AttachmentFormat.Pptx;
 
         // Calendar detection must precede the generic text/ branch. text/calendar
         // starts with "text/" but needs the ICS-aware unfold/field extraction,
@@ -660,6 +769,8 @@ public sealed class AttachmentTextExtractor(
         {
             ".pdf" => AttachmentFormat.Pdf,
             ".docx" => AttachmentFormat.Docx,
+            ".xlsx" => AttachmentFormat.Xlsx,
+            ".pptx" => AttachmentFormat.Pptx,
             ".txt" or ".md" or ".csv" or ".log" => AttachmentFormat.Text,
             _ => AttachmentFormat.Unsupported,
         };
@@ -679,7 +790,7 @@ public sealed class AttachmentTextExtractor(
         return ms.ToArray();
     }
 
-    private enum AttachmentFormat { Unsupported, Pdf, Docx, Calendar, VCard, Text }
+    private enum AttachmentFormat { Unsupported, Pdf, Docx, Xlsx, Pptx, Calendar, VCard, Text }
 }
 
 public sealed record ExtractionResult(string? Text, string Status);
