@@ -1,3 +1,6 @@
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using Sx = DocumentFormat.OpenXml.Spreadsheet;
 using Mailvec.Cli.Commands;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
@@ -6,6 +9,7 @@ using Mailvec.Core.Parsing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using MimeKit;
 
 namespace Mailvec.Cli.Tests;
 
@@ -359,6 +363,73 @@ public class ExtractAttachmentsCommandTests : IDisposable
         reader.GetString(1).ShouldContain("Jane Roe");
         reader.GetString(1).ShouldContain("Org: Acme Corp");
         reader.GetString(1).ShouldNotContain("BEGIN:VCARD");
+    }
+
+    [Fact]
+    public void Reextract_office_recovers_unsupported_xlsx_rows()
+    {
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+
+        // Stage a real .eml carrying a real .xlsx (binary) attachment, built with
+        // MimeKit so the part round-trips to attachment index 0.
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "sheet.eml");
+        var msg = new MimeMessage { Subject = "Spreadsheet" };
+        msg.From.Add(new MailboxAddress("", "a@x"));
+        msg.To.Add(new MailboxAddress("", "b@x"));
+        msg.Headers.Add("Message-ID", "<sheet@x>");
+        var xlsx = new MimePart("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        {
+            Content = new MimeContent(new MemoryStream(BuildXlsx("Guests", "Alice Johnson", "Table 4"))),
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "guests.xlsx" },
+            ContentTransferEncoding = ContentEncoding.Base64,
+        };
+        msg.Body = new Multipart("mixed") { new TextPart("plain") { Text = "See attached." }, xlsx };
+        using (var fs = File.Create(emlPath)) msg.WriteTo(fs);
+
+        var messages = sp.GetRequiredService<MessageRepository>();
+        var parsed = new ParsedMessage(
+            MessageId: "sheet@x", ThreadId: "sheet@x", Subject: "Spreadsheet",
+            FromAddress: "a@x", FromName: null, ToAddresses: [], CcAddresses: [],
+            DateSent: DateTimeOffset.UtcNow, BodyText: "See attached.", BodyHtml: null,
+            RawHeaders: "Message-ID: <sheet@x>\r\n", SizeBytes: 400, ContentHash: "h",
+            Attachments: [new ParsedAttachment(0, "guests.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 500L, ExtractedText: null, ExtractionStatus: "unsupported")]);
+        messages.Upsert(parsed, "INBOX", "INBOX/cur", "sheet.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: "office", writer, err);
+
+        exit.ShouldBe(0);
+
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT extraction_status, COALESCE(extracted_text,'') FROM attachments WHERE message_id=(SELECT id FROM messages WHERE message_id='sheet@x')";
+        using var reader = cmd.ExecuteReader();
+        reader.Read().ShouldBeTrue();
+        reader.GetString(0).ShouldBe("done");             // recovered from 'unsupported'
+        reader.GetString(1).ShouldContain("Alice Johnson");
+        reader.GetString(1).ShouldContain("Guests");      // sheet name
+    }
+
+    private static byte[] BuildXlsx(string sheetName, params string[] cellTexts)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var wbPart = doc.AddWorkbookPart();
+            wbPart.Workbook = new Sx.Workbook();
+            var sheets = wbPart.Workbook.AppendChild(new Sx.Sheets());
+            var wsPart = wbPart.AddNewPart<WorksheetPart>();
+            wsPart.Worksheet = new Sx.Worksheet(new Sx.SheetData());
+            var sstPart = wbPart.AddNewPart<SharedStringTablePart>();
+            sstPart.SharedStringTable = new Sx.SharedStringTable();
+            foreach (var t in cellTexts)
+            {
+                sstPart.SharedStringTable.AppendChild(new Sx.SharedStringItem(new Sx.Text(t)));
+            }
+            sheets.AppendChild(new Sx.Sheet { Id = wbPart.GetIdOfPart(wsPart), SheetId = 1, Name = sheetName });
+        }
+        return ms.ToArray();
     }
 
     private ServiceProvider BuildProvider(string maildirRoot)
