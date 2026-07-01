@@ -68,6 +68,10 @@ final class TrayWireContractTests: XCTestCase {
         XCTAssertEqual(status.ocr?.imageRecovered, 2140)
         XCTAssertEqual(status.ocr?.pdfPendingCount, 3)
         XCTAssertEqual(status.ocr?.pendingSummary, "3 scanned PDFs + 12 images")
+        XCTAssertEqual(status.ocr?.imageRecoveredCount, 2140)
+        // Locale-safe: assert the image tail is present, not the exact grouped digits.
+        XCTAssertTrue(status.ocr?.recoveredLine.contains("recovered") ?? false)
+        XCTAssertTrue(status.ocr?.recoveredLine.contains("from images") ?? false)
         XCTAssertEqual(status.progress?.etaMinutes, 7)
         XCTAssertEqual(status.recentEvents[0].kind, .indexed)
         XCTAssertEqual(status.sparkline, [0, 1, 5, 2, 0])

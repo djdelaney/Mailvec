@@ -77,6 +77,7 @@ struct OCRStatus: Codable, Equatable {
 
     var imagePendingCount: Int { imagePending ?? 0 }
     var pdfPendingCount: Int { max(0, pending - imagePendingCount) }
+    var imageRecoveredCount: Int { imageRecovered ?? 0 }
 
     /// Human phrase for the queued backlog: "3 scanned PDFs", "12 images", or
     /// "3 scanned PDFs + 12 images". Falls back to a generic "N items" only if
@@ -87,6 +88,14 @@ struct OCRStatus: Codable, Equatable {
         if imagePendingCount > 0 { parts.append("\(imagePendingCount) image\(imagePendingCount == 1 ? "" : "s")") }
         if parts.isEmpty { parts.append("\(pending) item\(pending == 1 ? "" : "s")") }
         return parts.joined(separator: " + ")
+    }
+
+    /// Persistent idle stat: "2,461 recovered · 2,153 from images". The image
+    /// tail is dropped when the split isn't known (older server) or is zero.
+    var recoveredLine: String {
+        var s = "\(recovered.formatted()) recovered"
+        if imageRecoveredCount > 0 { s += " · \(imageRecoveredCount.formatted()) from images" }
+        return s
     }
 }
 

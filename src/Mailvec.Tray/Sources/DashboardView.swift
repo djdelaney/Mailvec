@@ -123,6 +123,24 @@ private struct MiniStat: View {
     }
 }
 
+/// Persistent OCR-recovery total, shown when the actionable OcrCard is silent
+/// (queue drained, model present). Keeps the recovered / image counts visible
+/// without reintroducing the card's "there's work to do" semantics.
+private struct OcrRecoveredStat: View {
+    let ocr: OCRStatus
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "doc.viewfinder")
+                .foregroundStyle(.secondary).font(.system(size: 12))
+            Text("OCR · \(ocr.recoveredLine)")
+                .font(.system(size: 11)).monospacedDigit()
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+    }
+}
+
 // MARK: Body
 
 private struct BodyForState: View {
@@ -134,8 +152,14 @@ private struct BodyForState: View {
             case .syncing: ProgressCard(health: health)
             default:       ThroughputCard(health: health)
             }
-            if let ocr = health.ocr, ocr.shouldSurface {
-                OcrCard(ocr: ocr)
+            if let ocr = health.ocr {
+                if ocr.shouldSurface {
+                    OcrCard(ocr: ocr)
+                } else if ocr.recovered > 0 {
+                    // Idle stage: the actionable card stays silent, but keep the
+                    // recovered totals visible so the OCR work is never hidden.
+                    OcrRecoveredStat(ocr: ocr)
+                }
             }
             ServicesGrid(services: health.services, ollama: health.ollama)
             RecentActivity(events: Array(health.recentEvents.prefix(4)))
