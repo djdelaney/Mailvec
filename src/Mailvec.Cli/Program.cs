@@ -15,6 +15,7 @@ var root = new RootCommand("Mailvec admin CLI")
     PurgeDeletedCommand.Build(),
     RepairCommand.Build(),
     ExtractAttachmentsCommand.Build(),
+    BackfillInlineImagesCommand.Build(),
     EvalCommand.Build(),
     EvalAddCommand.Build(),
     EvalImportCommand.Build(),

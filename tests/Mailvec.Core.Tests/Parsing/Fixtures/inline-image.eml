@@ -1,0 +1,19 @@
+Message-ID: <inline-fixture@example.com>
+From: a@example.com
+To: b@example.com
+Subject: inline image
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="rel"
+
+--rel
+Content-Type: text/html; charset=utf-8
+
+<div><img src="cid:img1"></div>
+--rel
+Content-Type: image/png; name="photo.png"
+Content-Disposition: inline; filename="photo.png"
+Content-Transfer-Encoding: base64
+Content-ID: <img1>
+
+SU1HREFUQQ==
+--rel--
