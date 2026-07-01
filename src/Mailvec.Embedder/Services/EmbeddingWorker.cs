@@ -78,26 +78,32 @@ public sealed class EmbeddingWorker(
 
     private async Task<int> RunOcrIfEnabledAsync(CancellationToken ct)
     {
-        if (ocr is null || !embedderOptions.Value.OcrEnabled) return 0;
+        var opts = embedderOptions.Value;
+        if (ocr is null || (!opts.OcrEnabled && !opts.ImageOcrEnabled)) return 0;
 
         // The renderer is native and platform-gated; the inline OS check both
         // satisfies CA1416 and short-circuits on an unsupported platform.
-        if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
+        if (!(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return 0;
+
+        int ocred = 0;
+        try
         {
-            try
-            {
-                return await ocr.ProcessBatchAsync(embedderOptions.Value.OcrBatchSize, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // Per-item OCR failures are handled inside the pass; this guards
-                // the batch enumeration / availability probe so an OCR problem
-                // never stalls the embed pass.
-                logger.LogError(ex, "OCR pass failed; continuing with embedding.");
-                return 0;
-            }
+            // Scanned PDFs first (the original pass), then image attachments —
+            // both feed the same vision model and re-queue the message for embed.
+            if (opts.OcrEnabled)
+                ocred += await ocr.ProcessBatchAsync(opts.OcrBatchSize, ct).ConfigureAwait(false);
+            if (opts.ImageOcrEnabled)
+                ocred += await ocr.ProcessImageBatchAsync(opts.OcrBatchSize, ct).ConfigureAwait(false);
         }
-        return 0;
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Per-item OCR failures are handled inside the pass; this guards the
+            // batch enumeration / availability probe so an OCR problem never
+            // stalls the embed pass.
+            logger.LogError(ex, "OCR pass failed; continuing with embedding.");
+        }
+        return ocred;
     }
 
     internal async Task<int> ProcessOneBatchAsync(int batchSize, CancellationToken ct)
