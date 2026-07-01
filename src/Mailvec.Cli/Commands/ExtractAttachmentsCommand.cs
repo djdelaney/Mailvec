@@ -36,6 +36,18 @@ namespace Mailvec.Cli.Commands;
 /// Idempotent: only touches attachments whose <c>extraction_status</c> is
 /// still NULL. Safe to ^C and resume — uncommitted per-message transactions
 /// just roll back, the next run picks up where we left off.
+///
+/// <para><c>--reextract-calendar</c> switches the candidate predicate from
+/// "status IS NULL" to "looks like an iCalendar file (by content-type or
+/// .ics/.ical/.vcs extension), regardless of current status". This is the
+/// one-time backfill for the calendar-MIME routing fix: rows previously stamped
+/// <c>unsupported</c> (application/ics, application/calendar, or octet-stream
+/// .ics) get recovered, and rows already stamped <c>done</c> (raw text/calendar)
+/// get re-extracted through the new unfold/field-extraction path, fixing the
+/// RFC 5545 line-fold corruption. The coarse SQL gate is intentionally
+/// over-inclusive — <see cref="AttachmentTextExtractor"/> remains the authority
+/// on what actually is a calendar, so a false-positive row just re-stamps to
+/// whatever it was.</para>
 /// </summary>
 internal static class ExtractAttachmentsCommand
 {
@@ -44,29 +56,52 @@ internal static class ExtractAttachmentsCommand
         var limitOpt = new Option<int?>("--limit") { Description = "Cap the number of messages processed this run (useful for a dry-run on a slice before committing to the full backfill)." };
         var batchOpt = new Option<int>("--batch") { Description = "Messages fetched per DB roundtrip. Default 100.", DefaultValueFactory = _ => 100 };
         var noReembedOpt = new Option<bool>("--no-reembed") { Description = "Skip clearing chunks/embedded_at for messages that gained text. Faster, but the vector index won't reflect attachment content until you run the embedder against those messages explicitly (e.g. via `mailvec reindex --all`)." };
+        var reextractCalendarOpt = new Option<bool>("--reextract-calendar") { Description = "Re-extract calendar (.ics / text-calendar / application-ics) attachments regardless of current status, applying the ICS unfold + field-extraction pass. One-time backfill for the calendar-MIME routing fix." };
 
         var cmd = new Command("extract-attachments", "Backfill attachment-text extraction for messages where the indexer never ran the extractor (v3->v4 upgrade path or pre-Phase-4.5 ingest).")
         {
             limitOpt,
             batchOpt,
             noReembedOpt,
+            reextractCalendarOpt,
         };
 
         cmd.SetAction(parse => Run(
             limit: parse.GetValue(limitOpt),
             batch: Math.Max(1, parse.GetValue(batchOpt)),
-            noReembed: parse.GetValue(noReembedOpt)));
+            noReembed: parse.GetValue(noReembedOpt),
+            reextractCalendar: parse.GetValue(reextractCalendarOpt)));
         return cmd;
     }
 
-    private static int Run(int? limit, int batch, bool noReembed)
+    private static int Run(int? limit, int batch, bool noReembed, bool reextractCalendar)
     {
         using var sp = CliServices.Build();
-        return Execute(sp, limit, batch, noReembed, Console.Out, Console.Error);
+        return Execute(sp, limit, batch, noReembed, reextractCalendar, Console.Out, Console.Error);
+    }
+
+    /// <summary>
+    /// Coarse SQL gate for which attachment rows are re-extraction candidates.
+    /// Default mode targets never-extracted rows (status IS NULL); calendar
+    /// re-extract mode targets anything that looks like an .ics file regardless
+    /// of status. <paramref name="col"/> is the table alias/name to qualify the
+    /// columns with (e.g. "a" or "attachments").
+    /// </summary>
+    private static string CandidatePredicate(bool reextractCalendar, string col)
+    {
+        if (!reextractCalendar) return $"{col}.extraction_status IS NULL";
+        return $"""
+            (
+                lower({col}.content_type) IN ('text/calendar', 'application/ics', 'application/calendar', 'text/x-vcalendar')
+                OR lower({col}.filename) LIKE '%.ics'
+                OR lower({col}.filename) LIKE '%.ical'
+                OR lower({col}.filename) LIKE '%.vcs'
+            )
+            """;
     }
 
     /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
-    internal static int Execute(IServiceProvider sp, int? limit, int batch, bool noReembed, TextWriter @out, TextWriter err)
+    internal static int Execute(IServiceProvider sp, int? limit, int batch, bool noReembed, bool reextractCalendar, TextWriter @out, TextWriter err)
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
 
@@ -84,25 +119,26 @@ internal static class ExtractAttachmentsCommand
 
         // Pre-count so the progress line means something. Cheap — single
         // index scan on (extraction_status IS NULL).
+        var candidatePredicate = CandidatePredicate(reextractCalendar, "a");
         long totalCandidates;
         long affectedMessages;
         using (var conn = connections.Open())
         using (var count = conn.CreateCommand())
         {
-            count.CommandText = """
+            count.CommandText = $"""
                 SELECT COUNT(*)
                 FROM attachments a
                 JOIN messages m ON m.id = a.message_id
-                WHERE a.extraction_status IS NULL
+                WHERE {candidatePredicate}
                   AND m.deleted_at IS NULL;
                 """;
             totalCandidates = Convert.ToInt64(count.ExecuteScalar(), CultureInfo.InvariantCulture);
 
-            count.CommandText = """
+            count.CommandText = $"""
                 SELECT COUNT(DISTINCT a.message_id)
                 FROM attachments a
                 JOIN messages m ON m.id = a.message_id
-                WHERE a.extraction_status IS NULL
+                WHERE {candidatePredicate}
                   AND m.deleted_at IS NULL;
                 """;
             affectedMessages = Convert.ToInt64(count.ExecuteScalar(), CultureInfo.InvariantCulture);
@@ -134,7 +170,7 @@ internal static class ExtractAttachmentsCommand
         while (limit is null || messagesProcessed < limit)
         {
             var pageSize = limit is { } pl ? Math.Min(batch, pl - (int)messagesProcessed) : batch;
-            var candidates = LoadMessagePage(connections, cursor, pageSize);
+            var candidates = LoadMessagePage(connections, cursor, pageSize, reextractCalendar);
             if (candidates.Count == 0) break;
 
             foreach (var msg in candidates)
@@ -154,7 +190,7 @@ internal static class ExtractAttachmentsCommand
                     continue;
                 }
 
-                if (TryProcessMessage(connections, extractor, msg, maildirFile, statusCounts, err, out var newTextCount, out var attachmentsThisMessage))
+                if (TryProcessMessage(connections, extractor, msg, maildirFile, reextractCalendar, statusCounts, err, out var newTextCount, out var attachmentsThisMessage))
                 {
                     attachmentsExtracted += attachmentsThisMessage;
                     if (newTextCount > 0)
@@ -209,6 +245,7 @@ internal static class ExtractAttachmentsCommand
         AttachmentTextExtractor extractor,
         MessageRow msg,
         string maildirFile,
+        bool reextractCalendar,
         Dictionary<string, long> statusCounts,
         TextWriter err,
         out int newTextCount,
@@ -240,7 +277,7 @@ internal static class ExtractAttachmentsCommand
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
-        var candidates = LoadCandidatesForMessage(conn, tx, msg.Id);
+        var candidates = LoadCandidatesForMessage(conn, tx, msg.Id, reextractCalendar);
         if (candidates.Count == 0)
         {
             // Race or dup-call: another extract pass already stamped these.
@@ -302,18 +339,18 @@ internal static class ExtractAttachmentsCommand
         return true;
     }
 
-    private static IReadOnlyList<MessageRow> LoadMessagePage(ConnectionFactory connections, long cursor, int pageSize)
+    private static IReadOnlyList<MessageRow> LoadMessagePage(ConnectionFactory connections, long cursor, int pageSize, bool reextractCalendar)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = $"""
             SELECT m.id, m.maildir_path, m.maildir_filename
             FROM messages m
             WHERE m.deleted_at IS NULL
               AND m.id > $cursor
               AND EXISTS (
                   SELECT 1 FROM attachments a
-                  WHERE a.message_id = m.id AND a.extraction_status IS NULL
+                  WHERE a.message_id = m.id AND {CandidatePredicate(reextractCalendar, "a")}
               )
             ORDER BY m.id
             LIMIT $limit;
@@ -333,14 +370,14 @@ internal static class ExtractAttachmentsCommand
         return list;
     }
 
-    private static List<AttachmentCandidate> LoadCandidatesForMessage(SqliteConnection conn, SqliteTransaction tx, long messageId)
+    private static List<AttachmentCandidate> LoadCandidatesForMessage(SqliteConnection conn, SqliteTransaction tx, long messageId, bool reextractCalendar)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = """
+        cmd.CommandText = $"""
             SELECT id, part_index, filename, content_type, size_bytes
             FROM attachments
-            WHERE message_id = $mid AND extraction_status IS NULL
+            WHERE message_id = $mid AND {CandidatePredicate(reextractCalendar, "attachments")}
             ORDER BY part_index;
             """;
         cmd.Parameters.AddWithValue("$mid", messageId);
