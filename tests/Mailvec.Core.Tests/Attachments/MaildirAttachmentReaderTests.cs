@@ -1,6 +1,7 @@
 using System.Text;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Models;
+using MimeKit;
 using IngestOptions = Mailvec.Core.Options.IngestOptions;
 
 namespace Mailvec.Core.Tests.Attachments;
@@ -92,5 +93,69 @@ public class MaildirAttachmentReaderTests : IDisposable
     {
         var ex = Should.Throw<ArgumentOutOfRangeException>(() => Reader().ReadBytes(Stage("3.eml"), 5));
         ex.Message.ShouldContain("out of range");
+    }
+
+    // multipart/mixed [ multipart/related [ text/html, inline image/png ], attachment ].
+    // The inline PNG (base64 "IMGDATA") is not in mime.Attachments — it's only
+    // reachable via the shared MessageParts enumeration, at index 1 (after the
+    // attachment at index 0).
+    private const string EmlWithInlineImage = """
+        Message-ID: <inline-reader@example.com>
+        From: a@example.com
+        To: b@example.com
+        Subject: s
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="outer"
+
+        --outer
+        Content-Type: multipart/related; boundary="rel"
+
+        --rel
+        Content-Type: text/html; charset=utf-8
+
+        <div><img src="cid:img1"></div>
+        --rel
+        Content-Type: image/png; name="inline.png"
+        Content-Disposition: inline; filename="inline.png"
+        Content-Transfer-Encoding: base64
+        Content-ID: <img1>
+
+        SU1HREFUQQ==
+        --rel--
+        --outer
+        Content-Type: text/plain; name="note.txt"
+        Content-Disposition: attachment; filename="note.txt"
+
+        ATTACH-BYTES
+        --outer--
+        """;
+
+    private Message StageInline(string fileName, long id = 1)
+    {
+        File.WriteAllText(Path.Combine(_maildirRoot, "INBOX", "cur", fileName), EmlWithInlineImage);
+        return new Message
+        {
+            Id = id, MessageId = $"m{id}@example.com", MaildirPath = "INBOX/cur",
+            MaildirFilename = fileName, Folder = "INBOX", HasAttachments = true,
+        };
+    }
+
+    [Fact]
+    public void Attachment_keeps_part_index_zero_when_an_inline_image_is_present()
+    {
+        // Existing rows must not shift: the real attachment stays at index 0.
+        var data = Reader().Read(StageInline("inline0.eml"), partIndex: 0);
+        ((MimePart)data.Entity).FileName.ShouldBe("note.txt");
+        Encoding.UTF8.GetString(data.Bytes).Trim().ShouldBe("ATTACH-BYTES");
+    }
+
+    [Fact]
+    public void Inline_image_is_readable_at_the_appended_part_index()
+    {
+        // part_index 1 (what the backfill assigns the inline image) round-trips to
+        // the inline PNG's decoded bytes ("IMGDATA").
+        var data = Reader().Read(StageInline("inline1.eml"), partIndex: 1);
+        ((MimePart)data.Entity).ContentType.MediaType.ShouldBe("image");
+        Encoding.UTF8.GetString(data.Bytes).ShouldBe("IMGDATA");
     }
 }

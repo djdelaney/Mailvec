@@ -41,14 +41,16 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
         using var stream = File.OpenRead(maildirFile);
         var mime = MimeMessage.Load(stream);
 
-        var attachments = mime.Attachments.ToList();
-        if (partIndex < 0 || partIndex >= attachments.Count)
+        // MessageParts.Indexable — not mime.Attachments — so inline (cid:) image
+        // part_indexes resolve to bytes. Must match MessageParser's enumeration.
+        var parts = MessageParts.Indexable(mime);
+        if (partIndex < 0 || partIndex >= parts.Count)
         {
             throw new ArgumentOutOfRangeException(nameof(partIndex),
-                $"Message {message.Id} has {attachments.Count} attachment(s); partIndex {partIndex} is out of range.");
+                $"Message {message.Id} has {parts.Count} indexable part(s); partIndex {partIndex} is out of range.");
         }
 
-        var entity = attachments[partIndex];
+        var entity = parts[partIndex];
         // MimeMessage.Load parses content into memory, so the entity (and its
         // decoded bytes) stay valid after the file stream closes.
         return new AttachmentData(entity, Decode(entity));

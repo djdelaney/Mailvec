@@ -94,4 +94,19 @@ public class MessageParserTests
         parsed.Attachments.ShouldBeEmpty();
         parsed.HasAttachments.ShouldBeFalse();
     }
+
+    [Fact]
+    public void Captures_inline_cid_image_as_an_attachment()
+    {
+        // Inline (Content-Disposition: inline / cid:) images are excluded from
+        // MimeKit's mime.Attachments; MessageParts.Indexable pulls them in so
+        // they get a row and flow into extraction/OCR.
+        var parsed = _parser.ParseFile(Fixture("inline-image.eml"));
+
+        parsed.HasAttachments.ShouldBeTrue();
+        var att = parsed.Attachments.ShouldHaveSingleItem();
+        att.PartIndex.ShouldBe(0);
+        att.FileName.ShouldBe("photo.png");
+        att.ContentType.ShouldBe("image/png");
+    }
 }
