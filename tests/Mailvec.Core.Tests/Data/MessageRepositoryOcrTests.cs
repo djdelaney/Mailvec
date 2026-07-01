@@ -132,6 +132,26 @@ public class MessageRepositoryOcrTests
     }
 
     [Fact]
+    public void EnumerateImagesNeedingOcr_includes_images_mislabeled_as_octet_stream()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        // Real photos shipped with a generic content-type but an image filename.
+        Insert(repo, "octet-png@x", "IMG_5677.png", AttachmentTextExtractor.StatusUnsupported, contentType: "application/octet-stream", size: 200000);
+        Insert(repo, "octet-jpeg@x", "scan.jpeg", AttachmentTextExtractor.StatusUnsupported, contentType: "application/octet-stream", size: 200000);
+        // Generic content-type but a non-image extension → not a candidate.
+        Insert(repo, "octet-zip@x", "data.zip", AttachmentTextExtractor.StatusUnsupported, contentType: "application/octet-stream", size: 200000);
+        // Generic content-type + image extension but below the byte gate.
+        Insert(repo, "octet-tiny@x", "logo.png", AttachmentTextExtractor.StatusUnsupported, contentType: "application/octet-stream", size: 1000);
+        // GIF stays excluded even when mislabeled.
+        Insert(repo, "octet-gif@x", "anim.gif", AttachmentTextExtractor.StatusUnsupported, contentType: "application/octet-stream", size: 200000);
+
+        var pending = repo.EnumerateImagesNeedingOcr(50, minBytes: 50 * 1024);
+
+        pending.Select(p => p.MessageIdHeader).ShouldBe(["octet-png@x", "octet-jpeg@x"], ignoreOrder: true);
+    }
+
+    [Fact]
     public void EnumerateImagesNeedingOcr_excludes_soft_deleted()
     {
         using var db = new TempDatabase();

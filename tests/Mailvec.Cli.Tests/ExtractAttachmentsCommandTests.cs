@@ -45,7 +45,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
 
         var writer = new StringWriter();
         var err = new StringWriter();
-        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractCalendar: false, writer, err);
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
 
         exit.ShouldBe(2);
         err.ToString().ShouldContain("Maildir root not found");
@@ -58,7 +58,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
 
         var writer = new StringWriter();
         var err = new StringWriter();
-        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractCalendar: false, writer, err);
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("No attachments need extraction");
@@ -109,7 +109,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
 
         var writer = new StringWriter();
         var err = new StringWriter();
-        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractCalendar: false, writer, err);
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("Backfill candidates: 1");
@@ -146,7 +146,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
 
         var writer = new StringWriter();
         var err = new StringWriter();
-        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractCalendar: false, writer, err);
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
 
         exit.ShouldBe(0);
         err.ToString().ShouldContain("source not found");
@@ -222,7 +222,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
 
         var writer = new StringWriter();
         var err = new StringWriter();
-        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractCalendar: true, writer, err);
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: "calendar", writer, err);
 
         exit.ShouldBe(0);
 
@@ -288,7 +288,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
         var err = new StringWriter();
         // Default (NULL-only) mode: an already-stamped 'unsupported' row is not a
         // candidate — only --reextract-calendar reaches it.
-        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractCalendar: false, writer, err);
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("No attachments need extraction");
@@ -297,6 +297,68 @@ public class ExtractAttachmentsCommandTests : IDisposable
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT extraction_status FROM attachments WHERE message_id=(SELECT id FROM messages WHERE message_id='cal2@x')";
         (cmd.ExecuteScalar() as string).ShouldBe("unsupported");
+    }
+
+    [Fact]
+    public void Reextract_vcard_recovers_octet_stream_vcf_rows()
+    {
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "card.eml");
+        File.WriteAllText(emlPath, """
+            Message-ID: <card@x>
+            From: alice@example.com
+            Subject: Contact
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="b"
+
+            --b
+            Content-Type: text/plain
+
+            Body.
+            --b
+            Content-Type: application/octet-stream; name="jane.vcf"
+            Content-Disposition: attachment; filename="jane.vcf"
+
+            BEGIN:VCARD
+            VERSION:3.0
+            FN:Jane Roe
+            ORG:Acme Corp
+            TITLE:Engineer
+            EMAIL:jane@acme.example
+            TEL:+1-555-0100
+            END:VCARD
+            --b--
+            """);
+
+        var messages = sp.GetRequiredService<MessageRepository>();
+        var parsed = new ParsedMessage(
+            MessageId: "card@x", ThreadId: "card@x", Subject: "Contact",
+            FromAddress: "alice@example.com", FromName: null,
+            ToAddresses: [], CcAddresses: [],
+            DateSent: DateTimeOffset.UtcNow,
+            BodyText: "Body.", BodyHtml: null,
+            RawHeaders: "Message-ID: <card@x>\r\n",
+            SizeBytes: 200, ContentHash: "h",
+            // Mislabeled octet-stream .vcf, previously stamped 'unsupported'.
+            Attachments: [new ParsedAttachment(0, "jane.vcf", "application/octet-stream", 100L, ExtractedText: null, ExtractionStatus: "unsupported")]);
+        messages.Upsert(parsed, "INBOX", "INBOX/cur", "card.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: "vcard", writer, err);
+
+        exit.ShouldBe(0);
+
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT extraction_status, COALESCE(extracted_text,'') FROM attachments WHERE message_id=(SELECT id FROM messages WHERE message_id='card@x')";
+        using var reader = cmd.ExecuteReader();
+        reader.Read().ShouldBeTrue();
+        reader.GetString(0).ShouldBe("done");             // recovered from 'unsupported'
+        reader.GetString(1).ShouldContain("Jane Roe");
+        reader.GetString(1).ShouldContain("Org: Acme Corp");
+        reader.GetString(1).ShouldNotContain("BEGIN:VCARD");
     }
 
     private ServiceProvider BuildProvider(string maildirRoot)

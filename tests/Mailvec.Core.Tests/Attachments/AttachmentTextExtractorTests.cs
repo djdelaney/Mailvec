@@ -237,6 +237,109 @@ public class AttachmentTextExtractorTests
         result.Text.ShouldNotContain("mailto:");
     }
 
+    // vCard fixture: structured ORG/N/ADR values, an escaped comma in NOTE, and
+    // a base64 PHOTO blob that must be dropped rather than dumped into the index.
+    private const string SampleVCard =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n" +
+        "FN:Jane Q. Roe\r\n" +
+        "N:Roe;Jane;Q;;\r\n" +
+        "ORG:Acme Corp;Widgets Division\r\n" +
+        "TITLE:Chief Engineer\r\n" +
+        "EMAIL;TYPE=WORK:jane@acme.example\r\n" +
+        "TEL;TYPE=CELL:+1-555-0100\r\n" +
+        "ADR;TYPE=HOME:;;123 Main St;Springfield;IL;62704;USA\r\n" +
+        "NOTE:Met at the trade show\\, follow up in Q2\r\n" +
+        "PHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQAAAQABAAD\r\n" +
+        "END:VCARD\r\n";
+
+    [Theory]
+    [InlineData("text/vcard", "jane.vcf")]
+    [InlineData("text/x-vcard", "jane.vcf")]
+    [InlineData("application/vcard", "jane.vcf")]
+    [InlineData("application/octet-stream", "jane.vcf")]  // extension fallback
+    public void Extracts_vcard_fields_across_mislabeled_types(string contentType, string fileName)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(SampleVCard);
+        var part = BuildMimePart(bytes, contentType, fileName);
+
+        var result = BuildExtractor().Extract(part, fileName, contentType, bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("Jane Q. Roe");
+        result.Text.ShouldContain("Org: Acme Corp Widgets Division");
+        result.Text.ShouldContain("Title: Chief Engineer");
+        result.Text.ShouldContain("Email: jane@acme.example");
+        result.Text.ShouldContain("Tel: +1-555-0100");
+        result.Text.ShouldContain("Address: 123 Main St, Springfield, IL, 62704, USA");
+        result.Text.ShouldContain("Met at the trade show, follow up in Q2");  // \, unescaped
+        // The base64 PHOTO blob must be dropped, not leaked into the search text.
+        result.Text.ShouldNotContain("/9j/4AAQ");
+        result.Text.ShouldNotContain("BEGIN:VCARD");
+    }
+
+    [Fact]
+    public void VCard_decodes_quoted_printable_and_joins_soft_breaks()
+    {
+        // vCard 2.1 QUOTED-PRINTABLE NOTE: =0D=0A are CR/LF, and the trailing '='
+        // is a soft line break continuing the value onto the next physical line.
+        var vcf =
+            "BEGIN:VCARD\r\nVERSION:2.1\r\n" +
+            "FN:The Century House Hotel\r\n" +
+            "NOTE;ENCODING=QUOTED-PRINTABLE:Checkin Time: 15:00=0D=0ACheckout Time: 11:00=0D=0A=0D=0ADirec=\r\n" +
+            "tions: turn left at Main St\r\n" +
+            "END:VCARD\r\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(vcf);
+        var part = BuildMimePart(bytes, "text/vcard", "hotel.vcf");
+
+        var result = BuildExtractor().Extract(part, "hotel.vcf", "text/vcard", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("Checkin Time: 15:00");
+        result.Text.ShouldContain("Checkout Time: 11:00");
+        result.Text.ShouldContain("Directions: turn left at Main St");  // soft-break tail recovered
+        result.Text.ShouldNotContain("=0D=0A");                          // QP escapes decoded
+        result.Text.ShouldNotContain("Direc=");                          // no dangling soft-break marker
+    }
+
+    [Fact]
+    public void VCard_with_no_meaningful_properties_returns_no_text()
+    {
+        // Only VERSION + a PHOTO blob — nothing in our kept-field set, so there's
+        // no searchable text (the shape behind the lone 'no_text' vCard row).
+        var vcf =
+            "BEGIN:VCARD\r\nVERSION:3.0\r\n" +
+            "PHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQAAAQABAAD\r\n" +
+            "END:VCARD\r\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(vcf);
+        var part = BuildMimePart(bytes, "text/vcard", "photoonly.vcf");
+
+        var result = BuildExtractor().Extract(part, "photoonly.vcf", "text/vcard", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusNoText);
+        result.Text.ShouldBeNull();
+    }
+
+    [Fact]
+    public void VCard_falls_back_to_structured_name_when_fn_absent()
+    {
+        var vcf =
+            "BEGIN:VCARD\r\nVERSION:3.0\r\n" +
+            "N:Smith;John;;;\r\n" +
+            "EMAIL:john@smith.example\r\n" +
+            "END:VCARD\r\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(vcf);
+        var part = BuildMimePart(bytes, "text/vcard", "john.vcf");
+
+        var result = BuildExtractor().Extract(part, "john.vcf", "text/vcard", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text.ShouldContain("Smith John");   // N joined as the display-name fallback
+        result.Text.ShouldContain("Email: john@smith.example");
+    }
+
     /// <summary>
     /// PdfPig provides a builder we can use to synthesise a real PDF without
     /// shipping a binary fixture in the repo.
