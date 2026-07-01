@@ -15,8 +15,8 @@ namespace Mailvec.Core.Attachments;
 /// <summary>
 /// Recovers plain text from email attachments so it can be embedded for
 /// semantic search. Currently handles PDF (PdfPig), DOCX (DocumentFormat.OpenXml),
-/// iCalendar (.ics / VCALENDAR), and plain text (UTF-8 with Windows-1252
-/// fallback). Anything else returns
+/// iCalendar (.ics / VCALENDAR), vCard (.vcf / VCARD), and plain text (UTF-8 with
+/// Windows-1252 fallback). Anything else returns
 /// status='unsupported' with no text. The result is meant to feed the embedder,
 /// not to be displayed to the user — light normalization (whitespace,
 /// invisible chars) is good enough.
@@ -110,6 +110,7 @@ public sealed class AttachmentTextExtractor(
             AttachmentFormat.Pdf => ExtractPdf(bytes, fileName),
             AttachmentFormat.Docx => ExtractDocx(bytes, fileName),
             AttachmentFormat.Calendar => ExtractCalendar(bytes),
+            AttachmentFormat.VCard => ExtractVCard(bytes),
             AttachmentFormat.Text => ExtractText(bytes),
             _ => new ExtractionResult(null, StatusUnsupported),
         };
@@ -238,7 +239,7 @@ public sealed class AttachmentTextExtractor(
         if (decoded is null) return new ExtractionResult(null, StatusFailed);
 
         var sb = new StringBuilder(Math.Min(bytes.Length, 8_192));
-        foreach (var line in UnfoldCalendarLines(decoded))
+        foreach (var line in UnfoldContentLines(decoded))
         {
             var (name, parameters, value) = SplitContentLine(line);
             switch (name)
@@ -246,19 +247,19 @@ public sealed class AttachmentTextExtractor(
                 case "SUMMARY":
                 case "DESCRIPTION":
                 case "COMMENT":
-                    AppendCalendarField(sb, null, UnescapeCalendarText(value));
+                    AppendField(sb, null, UnescapeStructuredText(value));
                     break;
                 case "LOCATION":
-                    AppendCalendarField(sb, "Location", UnescapeCalendarText(value));
+                    AppendField(sb, "Location", UnescapeStructuredText(value));
                     break;
                 case "DTSTART":
-                    AppendCalendarField(sb, "When", value);
+                    AppendField(sb, "When", value);
                     break;
                 case "ORGANIZER":
-                    AppendCalendarField(sb, "Organizer", ParamValue(parameters, "CN") ?? StripMailto(value));
+                    AppendField(sb, "Organizer", ParamValue(parameters, "CN") ?? StripMailto(value));
                     break;
                 case "ATTENDEE":
-                    AppendCalendarField(sb, "Attendee", ParamValue(parameters, "CN") ?? StripMailto(value));
+                    AppendField(sb, "Attendee", ParamValue(parameters, "CN") ?? StripMailto(value));
                     break;
             }
         }
@@ -266,7 +267,7 @@ public sealed class AttachmentTextExtractor(
         return BuildResult(sb.ToString());
     }
 
-    private static void AppendCalendarField(StringBuilder sb, string? label, string? value)
+    private static void AppendField(StringBuilder sb, string? label, string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return;
         if (label is not null) sb.Append(label).Append(": ");
@@ -274,13 +275,213 @@ public sealed class AttachmentTextExtractor(
     }
 
     /// <summary>
-    /// RFC 5545 §3.1 line unfolding: a line beginning with a space or tab is a
+    /// Flattens a vCard (.vcf / VCARD) into clean searchable text. Same story as
+    /// <see cref="ExtractCalendar"/>: the raw text path "works" but leaks property
+    /// names and — worse — an embedded PHOTO/LOGO property dumps a multi-kilobyte
+    /// base64 blob into the search index. We unfold, then keep the human fields
+    /// (name / org / title / email / phone / address / note / url) and drop the
+    /// rest. FN is the display name; N is the structured fallback when FN is
+    /// absent. ORG/N/ADR are ';'-delimited structured values, joined readably.
+    /// </summary>
+    private static ExtractionResult ExtractVCard(byte[] bytes)
+    {
+        string? decoded = TryDecode(bytes, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
+        decoded ??= TryDecode(bytes, Windows1252);
+        if (decoded is null) return new ExtractionResult(null, StatusFailed);
+
+        var sb = new StringBuilder(Math.Min(bytes.Length, 4_096));
+        bool hasDisplayName = false;
+        string? structuredName = null;
+
+        foreach (var line in UnfoldVCardLines(decoded))
+        {
+            var (name, parameters, value) = SplitContentLine(line);
+            // vCard 2.1 Outlook/hotel cards encode text properties quoted-
+            // printable (=0D=0A etc.); decode before the field logic runs so the
+            // real characters — not the =XX escapes — reach the search index.
+            if (parameters.Contains("QUOTED-PRINTABLE", StringComparison.OrdinalIgnoreCase))
+            {
+                value = QpDecode(value);
+            }
+            switch (name)
+            {
+                case "FN":
+                    AppendField(sb, null, UnescapeStructuredText(value));
+                    hasDisplayName = true;
+                    break;
+                case "N":
+                    // family;given;additional;prefix;suffix — space-join for a name.
+                    structuredName = JoinStructured(value, " ");
+                    break;
+                case "NICKNAME":
+                    AppendField(sb, "Nickname", UnescapeStructuredText(value));
+                    break;
+                case "ORG":
+                    AppendField(sb, "Org", JoinStructured(value, " "));
+                    break;
+                case "TITLE":
+                    AppendField(sb, "Title", UnescapeStructuredText(value));
+                    break;
+                case "EMAIL":
+                    AppendField(sb, "Email", value.Trim());
+                    break;
+                case "TEL":
+                    AppendField(sb, "Tel", value.Trim());
+                    break;
+                case "ADR":
+                    // po-box;extended;street;locality;region;postal;country.
+                    AppendField(sb, "Address", JoinStructured(value, ", "));
+                    break;
+                case "URL":
+                    AppendField(sb, "URL", value.Trim());
+                    break;
+                case "NOTE":
+                    AppendField(sb, null, UnescapeStructuredText(value));
+                    break;
+            }
+        }
+
+        if (!hasDisplayName && !string.IsNullOrWhiteSpace(structuredName))
+        {
+            AppendField(sb, null, structuredName);
+        }
+
+        return BuildResult(sb.ToString());
+    }
+
+    /// <summary>
+    /// Split a structured vCard value on unescaped ';' component separators, then
+    /// unescape and join the non-empty parts with <paramref name="separator"/>.
+    /// Splitting before unescaping is what keeps a literal <c>\;</c> inside a
+    /// component from being mistaken for a separator.
+    /// </summary>
+    private static string JoinStructured(string value, string separator)
+    {
+        var components = new List<string>();
+        var current = new StringBuilder();
+        for (int i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c == '\\' && i + 1 < value.Length)
+            {
+                current.Append(c).Append(value[++i]);  // keep the escape pair intact
+            }
+            else if (c == ';')
+            {
+                components.Add(current.ToString());
+                current.Clear();
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+        components.Add(current.ToString());
+
+        return string.Join(separator, components
+            .Select(UnescapeStructuredText)
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0));
+    }
+
+    /// <summary>
+    /// Like <see cref="UnfoldContentLines"/> but also handles the vCard 2.1
+    /// quoted-printable soft line break: a physical line ending in a bare '='
+    /// on a QUOTED-PRINTABLE property continues onto the next line with the '='
+    /// and newline removed (RFC 2045 §6.7). This is a *different* mechanism from
+    /// RFC 6350 whitespace folding and is why iCalendar keeps using the plain
+    /// unfolder — ICS never uses QP, and a trailing '=' there is literal. Guarded
+    /// on the property head declaring QUOTED-PRINTABLE so a stray '=' at the end
+    /// of a URL or base64 line stays literal.
+    /// </summary>
+    private static List<string> UnfoldVCardLines(string text)
+    {
+        var normalised = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        var result = new List<string>();
+        var current = new StringBuilder();
+        bool awaitingQpContinuation = false;
+
+        foreach (var line in normalised.Split('\n'))
+        {
+            if (awaitingQpContinuation)
+            {
+                current.Append(line);                       // QP soft break: append verbatim
+            }
+            else if (line.Length > 0 && (line[0] == ' ' || line[0] == '\t'))
+            {
+                current.Append(line, 1, line.Length - 1);   // RFC 6350 whitespace fold
+            }
+            else
+            {
+                if (current.Length > 0) result.Add(current.ToString());
+                current.Clear();
+                current.Append(line);
+            }
+
+            awaitingQpContinuation = current.Length > 0
+                && current[current.Length - 1] == '='
+                && LineIsQuotedPrintable(current);
+            if (awaitingQpContinuation) current.Length -= 1;  // drop the soft-break '='
+        }
+        if (current.Length > 0) result.Add(current.ToString());
+        return result;
+    }
+
+    /// <summary>True if the property head (everything before the first ':') declares
+    /// a QUOTED-PRINTABLE encoding, so a trailing '=' is a soft break not a literal.</summary>
+    private static bool LineIsQuotedPrintable(StringBuilder line)
+    {
+        int colon = -1;
+        for (int i = 0; i < line.Length; i++)
+        {
+            if (line[i] == ':') { colon = i; break; }
+        }
+        var head = colon < 0 ? line.ToString() : line.ToString(0, colon);
+        return head.Contains("QUOTED-PRINTABLE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Decode a quoted-printable value (RFC 2045 §6.7): <c>=XX</c> hex escapes
+    /// become the byte 0xXX (so <c>=0D=0A</c> is a CR/LF pair), everything else is
+    /// literal. The resulting bytes are read as UTF-8, falling back to
+    /// Windows-1252 — the two charsets these legacy cards actually use. (Soft
+    /// line breaks are already resolved by <see cref="UnfoldVCardLines"/>.)
+    /// </summary>
+    private static string QpDecode(string value)
+    {
+        var bytes = new List<byte>(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c == '=' && i + 2 < value.Length && Uri.IsHexDigit(value[i + 1]) && Uri.IsHexDigit(value[i + 2]))
+            {
+                bytes.Add((byte)((Uri.FromHex(value[i + 1]) << 4) | Uri.FromHex(value[i + 2])));
+                i += 2;
+            }
+            else if (c < 128)
+            {
+                bytes.Add((byte)c);
+            }
+            else
+            {
+                bytes.AddRange(Encoding.UTF8.GetBytes(c.ToString()));
+            }
+        }
+
+        var arr = bytes.ToArray();
+        return TryDecode(arr, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true))
+               ?? Windows1252.GetString(arr);
+    }
+
+    /// <summary>
+    /// Line unfolding shared by iCalendar (RFC 5545 §3.1) and vCard (RFC 6350
+    /// §3.2), which fold identically: a line beginning with a space or tab is a
     /// continuation of the previous logical line, with that leading whitespace
     /// removed. Without this, folded values are corrupted mid-token.
     /// </summary>
-    private static List<string> UnfoldCalendarLines(string ics)
+    private static List<string> UnfoldContentLines(string text)
     {
-        var normalised = ics.Replace("\r\n", "\n").Replace('\r', '\n');
+        var normalised = text.Replace("\r\n", "\n").Replace('\r', '\n');
         var result = new List<string>();
         var current = new StringBuilder();
         foreach (var line in normalised.Split('\n'))
@@ -340,8 +541,9 @@ public sealed class AttachmentTextExtractor(
         return v.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) ? v[7..] : v;
     }
 
-    /// <summary>RFC 5545 §3.3.11 TEXT unescaping: \\n \\N -&gt; newline, \\, \\; \\\\ literal.</summary>
-    private static string UnescapeCalendarText(string value)
+    /// <summary>TEXT unescaping shared by iCalendar (RFC 5545 §3.3.11) and vCard
+    /// (RFC 6350 §3.4): \\n \\N -&gt; newline, \\, \\; \\\\ literal.</summary>
+    private static string UnescapeStructuredText(string value)
     {
         if (value.IndexOf('\\') < 0) return value;
         var sb = new StringBuilder(value.Length);
@@ -441,6 +643,14 @@ public sealed class AttachmentTextExtractor(
         if (ct is "text/calendar" or "application/ics" or "application/calendar" or "text/x-vcalendar"
             || ext is ".ics" or ".ical" or ".vcs")
             return AttachmentFormat.Calendar;
+        // vCard, same reasoning as calendar: text/vcard starts with "text/" and
+        // .vcf files get mislabeled application/octet-stream or text/plain, so
+        // both the content-type and extension checks precede the generic text/
+        // branch. A proper extractor also matters more here — a raw .vcf can
+        // carry a base64 PHOTO blob the field extractor drops.
+        if (ct is "text/vcard" or "text/x-vcard" or "application/vcard"
+            || ext is ".vcf" or ".vcard")
+            return AttachmentFormat.VCard;
         if (ct.StartsWith("text/")) return AttachmentFormat.Text;
 
         // Fall back to the extension when the sender declared
@@ -469,7 +679,7 @@ public sealed class AttachmentTextExtractor(
         return ms.ToArray();
     }
 
-    private enum AttachmentFormat { Unsupported, Pdf, Docx, Calendar, Text }
+    private enum AttachmentFormat { Unsupported, Pdf, Docx, Calendar, VCard, Text }
 }
 
 public sealed record ExtractionResult(string? Text, string Status);

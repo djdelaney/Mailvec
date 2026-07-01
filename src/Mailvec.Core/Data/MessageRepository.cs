@@ -567,17 +567,40 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// runs in <c>AttachmentOcrService</c> after the bytes are rendered. Mirrors
     /// <see cref="EnumerateAttachmentsNeedingOcr"/>; reuses <see cref="OcrCandidate"/>.
     /// </summary>
+    // Which attachments the image-OCR pass treats as candidate images. Primary
+    // signal is content_type image/* (minus GIF — animated/banner strips, low
+    // text yield). Senders also ship real photos as application/octet-stream or
+    // with no Content-Type at all (forwarded phone pics, "IMG_1234.jpeg" saved
+    // by a mailer that forgot the type), so a decodable image extension on a
+    // generic content-type qualifies too; ImageRenderer.TryNormalize is the
+    // backstop that marks any non-image binary 'failed'. GIF stays excluded in
+    // both arms. Shared verbatim by the OCR candidate query and the pending-count
+    // query so /health, the tray, and the embedder never disagree.
+    private const string ImageOcrMatch = """
+        (
+          (lower(a.content_type) LIKE 'image/%' AND lower(a.content_type) <> 'image/gif')
+          OR (
+            (a.content_type IS NULL OR lower(a.content_type) IN ('application/octet-stream', ''))
+            AND (
+              lower(a.filename) LIKE '%.png' OR lower(a.filename) LIKE '%.jpg'
+              OR lower(a.filename) LIKE '%.jpeg' OR lower(a.filename) LIKE '%.webp'
+              OR lower(a.filename) LIKE '%.bmp' OR lower(a.filename) LIKE '%.tif'
+              OR lower(a.filename) LIKE '%.tiff'
+            )
+          )
+        )
+        """;
+
     public IReadOnlyList<OcrCandidate> EnumerateImagesNeedingOcr(int batchSize, long minBytes)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = $"""
             SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder
             FROM attachments a
             JOIN messages m ON m.id = a.message_id
             WHERE a.extraction_status = $unsupported
-              AND lower(a.content_type) LIKE 'image/%'
-              AND lower(a.content_type) <> 'image/gif'
+              AND {ImageOcrMatch}
               AND a.size_bytes >= $minBytes
               AND m.deleted_at IS NULL
             ORDER BY a.id
@@ -639,20 +662,20 @@ public sealed class MessageRepository(ConnectionFactory connections)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = $"""
             SELECT
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
                  WHERE a.extraction_status = $noText AND lower(a.filename) LIKE '%.pdf'
                    AND m.deleted_at IS NULL),
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = $unsupported AND lower(a.content_type) LIKE 'image/%'
-                   AND lower(a.content_type) <> 'image/gif' AND a.size_bytes >= $minBytes
+                 WHERE a.extraction_status = $unsupported AND {ImageOcrMatch}
+                   AND a.size_bytes >= $minBytes
                    AND m.deleted_at IS NULL),
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = $ocr AND lower(a.content_type) NOT LIKE 'image/%'
+                 WHERE a.extraction_status = $ocr AND NOT {ImageOcrMatch}
                    AND m.deleted_at IS NULL),
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = $ocr AND lower(a.content_type) LIKE 'image/%'
+                 WHERE a.extraction_status = $ocr AND {ImageOcrMatch}
                    AND m.deleted_at IS NULL)
             """;
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
