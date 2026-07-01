@@ -11,13 +11,25 @@ namespace Mailvec.Core.Tests.Data;
 /// </summary>
 public class MessageRepositoryOcrTests
 {
-    private static long Insert(MessageRepository repo, string id, string fileName, string? status, string folder = "INBOX")
+    private static long Insert(MessageRepository repo, string id, string fileName, string? status,
+        string folder = "INBOX", string contentType = "application/pdf", long size = 100)
     {
         var parsed = new ParsedMessage(
             MessageId: id, ThreadId: id, Subject: "s", FromAddress: "a@x", FromName: null,
             ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
             BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 100, ContentHash: $"h-{id}",
-            Attachments: [new ParsedAttachment(0, fileName, "application/pdf", 100, ExtractedText: null, ExtractionStatus: status)]);
+            Attachments: [new ParsedAttachment(0, fileName, contentType, size, ExtractedText: null, ExtractionStatus: status)]);
+        return repo.Upsert(parsed, folder, $"{folder}/cur", id + ".eml", DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>Insert a message with no attachment rows — the inline-cid:-only shape the backfill targets.</summary>
+    private static long InsertBare(MessageRepository repo, string id, string folder = "INBOX")
+    {
+        var parsed = new ParsedMessage(
+            MessageId: id, ThreadId: id, Subject: "s", FromAddress: "a@x", FromName: null,
+            ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
+            BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 100, ContentHash: $"h-{id}",
+            Attachments: []);
         return repo.Upsert(parsed, folder, $"{folder}/cur", id + ".eml", DateTimeOffset.UtcNow);
     }
 
@@ -98,6 +110,147 @@ public class MessageRepositoryOcrTests
 
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusFailed);
         repo.EnumerateAttachmentsNeedingOcr(50).ShouldBeEmpty();
+    }
+
+    // ── Image OCR queue + inline-image backfill + split counts ───────────────
+
+    [Fact]
+    public void EnumerateImagesNeedingOcr_selects_only_unsupported_images_above_the_byte_gate()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        Insert(repo, "big@x", "photo.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);
+        Insert(repo, "small@x", "tiny.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 1000);   // below gate
+        Insert(repo, "gif@x", "anim.gif", AttachmentTextExtractor.StatusUnsupported, contentType: "image/gif", size: 60000);    // gif excluded
+        Insert(repo, "done@x", "ok.png", AttachmentTextExtractor.StatusDone, contentType: "image/png", size: 60000);            // wrong status
+        Insert(repo, "pdf@x", "scan.pdf", AttachmentTextExtractor.StatusNoText, contentType: "application/pdf", size: 60000);   // not an image
+
+        var pending = repo.EnumerateImagesNeedingOcr(50, minBytes: 50 * 1024);
+
+        pending.Count.ShouldBe(1);
+        pending[0].MessageIdHeader.ShouldBe("big@x");
+    }
+
+    [Fact]
+    public void EnumerateImagesNeedingOcr_excludes_soft_deleted()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "del@x", "photo.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);
+        repo.MarkDeleted([id], DateTimeOffset.UtcNow);
+
+        repo.EnumerateImagesNeedingOcr(50, 50 * 1024).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void MarkAttachmentImageNoText_moves_the_image_off_the_queue()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "img@x", "photo.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);
+        var attId = repo.GetById(id)!.Attachments[0].Id;
+
+        repo.MarkAttachmentImageNoText(attId);
+
+        repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusNoText);
+        repo.EnumerateImagesNeedingOcr(50, 50 * 1024).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void AddInlineAttachments_captures_an_inline_image_and_sets_has_attachments()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = InsertBare(repo, "inlineonly@x");   // the cid:-only shape: zero attachment rows
+        HasAttachments(db, id).ShouldBeFalse();
+
+        var inserted = repo.AddInlineAttachments(id,
+            [new ParsedAttachment(0, "IMG_8576.jpg", "image/jpeg", 60000, ExtractedText: null, ExtractionStatus: AttachmentTextExtractor.StatusUnsupported)]);
+
+        inserted.ShouldBe(1);
+        HasAttachments(db, id).ShouldBeTrue();
+        var att = repo.GetById(id)!.Attachments.ShouldHaveSingleItem();
+        att.PartIndex.ShouldBe(0);
+        att.ContentType.ShouldBe("image/jpeg");
+        att.ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusUnsupported);
+    }
+
+    [Fact]
+    public void AddInlineAttachments_appends_without_disturbing_existing_rows_and_is_idempotent()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "mixed@x", "real.pdf", AttachmentTextExtractor.StatusDone);   // row at part_index 0
+        ParsedAttachment Inline() => new(1, "inline.png", "image/png", 60000, null, AttachmentTextExtractor.StatusUnsupported);
+
+        repo.AddInlineAttachments(id, [Inline()]).ShouldBe(1);
+
+        var atts = repo.GetById(id)!.Attachments;
+        atts.Count.ShouldBe(2);
+        var existing = atts.Single(a => a.PartIndex == 0);
+        existing.FileName.ShouldBe("real.pdf");                                  // untouched
+        existing.ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusDone);
+
+        repo.AddInlineAttachments(id, [Inline()]).ShouldBe(0);                   // INSERT OR IGNORE — no dup
+        repo.GetById(id)!.Attachments.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public void AddInlineAttachments_with_recoverable_text_requeues_and_indexes_it()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = InsertBare(repo, "textinline@x");
+        SetEmbeddedAt(db, id);
+        FtsMatchCount(db, "spreadsheet").ShouldBe(0);
+
+        repo.AddInlineAttachments(id,
+            [new ParsedAttachment(0, "sheet.png", "image/png", 500, ExtractedText: "quarterly spreadsheet totals", ExtractionStatus: AttachmentTextExtractor.StatusOcr)]);
+
+        EmbeddedAt(db, id).ShouldBeNull();                                       // text added → re-queued
+        AttachmentTextCol(db, id)!.ShouldContain("quarterly spreadsheet");
+        FtsMatchCount(db, "spreadsheet").ShouldBe(1);
+    }
+
+    [Fact]
+    public void GetAttachmentPartIndexes_returns_existing_indexes()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "idx@x", "doc.pdf", AttachmentTextExtractor.StatusDone);   // index 0
+        repo.AddInlineAttachments(id, [new ParsedAttachment(1, "a.png", "image/png", 60000, null, AttachmentTextExtractor.StatusUnsupported)]);
+
+        repo.GetAttachmentPartIndexes(id).ShouldBe(new HashSet<int> { 0, 1 });
+    }
+
+    [Fact]
+    public void OcrCounts_splits_pending_and_recovered_by_source()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        Insert(repo, "pdfq@x", "scan.pdf", AttachmentTextExtractor.StatusNoText, contentType: "application/pdf", size: 60000);   // PdfPending
+        Insert(repo, "imgq@x", "photo.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);  // ImagePending
+        Insert(repo, "small@x", "tiny.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 1000);   // below gate — uncounted
+        Insert(repo, "pdfrec@x", "d.pdf", AttachmentTextExtractor.StatusOcr, contentType: "application/pdf", size: 60000);       // PdfRecovered
+        Insert(repo, "imgrec@x", "r.png", AttachmentTextExtractor.StatusOcr, contentType: "image/png", size: 60000);            // ImageRecovered
+
+        var c = repo.OcrCounts(imageMinBytes: 50 * 1024);
+
+        c.PdfPending.ShouldBe(1);
+        c.ImagePending.ShouldBe(1);
+        c.PdfRecovered.ShouldBe(1);
+        c.ImageRecovered.ShouldBe(1);
+        c.Pending.ShouldBe(2);
+        c.Recovered.ShouldBe(2);
+    }
+
+    private static bool HasAttachments(TempDatabase db, long messageId)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT has_attachments FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        return Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 1;
     }
 
     private static void SetEmbeddedAt(TempDatabase db, long messageId)
