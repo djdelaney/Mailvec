@@ -120,6 +120,123 @@ public class AttachmentTextExtractorTests
         result.Text!.ShouldContain("Hidden behind octet-stream");
     }
 
+    // RFC 5545 fixture: CRLF line endings, a folded DESCRIPTION whose fold
+    // splits "$225.00" into "$225.0" + " 0" (the corruption the raw text path
+    // produced), an escaped comma, and a CN-bearing ATTENDEE.
+    private const string SampleIcs =
+        "BEGIN:VCALENDAR\r\n" +
+        "VERSION:2.0\r\n" +
+        "PRODID:-//Example//EN\r\n" +
+        "BEGIN:VEVENT\r\n" +
+        "UID:1526757496@scheduling\r\n" +
+        "DTSTAMP:20250824T002332Z\r\n" +
+        "DTSTART;TZID=America/New_York:20251205T140000\r\n" +
+        "SUMMARY:Mini Session\r\n" +
+        "LOCATION:Taproot Studio\r\n" +
+        "ORGANIZER;CN=Taproot Photography:mailto:studio@example.com\r\n" +
+        "ATTENDEE;CN=\"Daniel Delaney\";ROLE=REQ-PARTICIPANT:mailto:dan@hactar.com\r\n" +
+        "DESCRIPTION:Name: Daniel Delaney\\nPrice: $225.0\r\n" +
+        " 0\\, paid online\r\n" +
+        "END:VEVENT\r\n" +
+        "END:VCALENDAR\r\n";
+
+    [Theory]
+    [InlineData("text/calendar", "invite.ics")]
+    [InlineData("application/ics", "invite.ics")]
+    [InlineData("application/calendar", "invite.ics")]
+    [InlineData("application/octet-stream", "invite.ics")]  // extension fallback
+    [InlineData("text/plain", "reservation.ics")]           // .ics must beat generic text/
+    public void Extracts_calendar_fields_across_mislabeled_types(string contentType, string fileName)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(SampleIcs);
+        var part = BuildMimePart(bytes, contentType, fileName);
+
+        var result = BuildExtractor().Extract(part, fileName, contentType, bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("Mini Session");
+        result.Text.ShouldContain("Location: Taproot Studio");
+        result.Text.ShouldContain("Daniel Delaney");
+        // Machine noise must be gone.
+        result.Text.ShouldNotContain("DTSTAMP");
+        result.Text.ShouldNotContain("1526757496@scheduling");
+    }
+
+    [Fact]
+    public void Calendar_unfolds_folded_lines_without_corrupting_tokens()
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(SampleIcs);
+        var part = BuildMimePart(bytes, "text/calendar", "invite.ics");
+
+        var result = BuildExtractor().Extract(part, "invite.ics", "text/calendar", bytes.Length);
+
+        // Unfolding rejoins "$225.0" + " 0" into "$225.00"; the raw text path
+        // left an injected space ("$225.0 0"). Escaped comma is unescaped.
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("$225.00");
+        result.Text.ShouldContain("$225.00, paid online");
+        result.Text.ShouldNotContain("$225.0 0");
+    }
+
+    [Fact]
+    public void Calendar_falls_back_to_windows1252_for_non_utf8_bytes()
+    {
+        // 0x92 is windows-1252 for a curly apostrophe and a lone (invalid)
+        // UTF-8 continuation byte, so strict UTF-8 decode fails and the 1252
+        // fallback engages. Regression: this used to throw ArgumentException
+        // because CodePagesEncodingProvider wasn't registered.
+        var ascii = System.Text.Encoding.ASCII;
+        var bytes = new List<byte>();
+        bytes.AddRange(ascii.GetBytes("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:Dan"));
+        bytes.Add(0x92);
+        bytes.AddRange(ascii.GetBytes("s Meeting\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"));
+        var part = BuildMimePart(bytes.ToArray(), "text/calendar", "invite.ics");
+
+        var result = BuildExtractor().Extract(part, "invite.ics", "text/calendar", bytes.Count);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("Dan’s Meeting");
+    }
+
+    [Fact]
+    public void Calendar_with_no_meaningful_properties_returns_no_text()
+    {
+        // VCALENDAR wrapper + VTIMEZONE only — no summary/location/dtstart/etc.
+        // (this is the shape behind the handful of 'no_text' calendar rows).
+        var ics =
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n" +
+            "BEGIN:VTIMEZONE\r\nTZID:UTC\r\nEND:VTIMEZONE\r\n" +
+            "END:VCALENDAR\r\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(ics);
+        var part = BuildMimePart(bytes, "text/calendar", "empty.ics");
+
+        var result = BuildExtractor().Extract(part, "empty.ics", "text/calendar", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusNoText);
+        result.Text.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Calendar_strips_mailto_when_participant_has_no_cn()
+    {
+        var ics =
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n" +
+            "SUMMARY:Standup\r\n" +
+            "ORGANIZER:mailto:boss@example.com\r\n" +
+            "END:VEVENT\r\nEND:VCALENDAR\r\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(ics);
+        var part = BuildMimePart(bytes, "text/calendar", "standup.ics");
+
+        var result = BuildExtractor().Extract(part, "standup.ics", "text/calendar", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull();
+        result.Text!.ShouldContain("Organizer: boss@example.com");  // bare mailto value, prefix stripped
+        result.Text.ShouldNotContain("mailto:");
+    }
+
     /// <summary>
     /// PdfPig provides a builder we can use to synthesise a real PDF without
     /// shipping a binary fixture in the repo.

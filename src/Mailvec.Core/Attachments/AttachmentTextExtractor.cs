@@ -15,7 +15,8 @@ namespace Mailvec.Core.Attachments;
 /// <summary>
 /// Recovers plain text from email attachments so it can be embedded for
 /// semantic search. Currently handles PDF (PdfPig), DOCX (DocumentFormat.OpenXml),
-/// and plain text (UTF-8 with Windows-1252 fallback). Anything else returns
+/// iCalendar (.ics / VCALENDAR), and plain text (UTF-8 with Windows-1252
+/// fallback). Anything else returns
 /// status='unsupported' with no text. The result is meant to feed the embedder,
 /// not to be displayed to the user — light normalization (whitespace,
 /// invisible chars) is good enough.
@@ -52,6 +53,20 @@ public sealed class AttachmentTextExtractor(
     public const string StatusFailed = "failed";
 
     private const int MaxExtractedTextChars = 2_000_000;
+
+    // .NET ships only UTF-*, ASCII, and Latin1 wired up by default — legacy
+    // codepages like windows-1252 need CodePagesEncodingProvider registered
+    // first (the type is in the shared framework on net10.0, no package needed),
+    // or Encoding.GetEncoding("windows-1252") throws ArgumentException. Do it
+    // once per process in the static ctor and cache the resolved encoding so the
+    // per-attachment decode fallback (text/plain + calendar) never re-resolves.
+    private static readonly Encoding Windows1252;
+
+    static AttachmentTextExtractor()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        Windows1252 = Encoding.GetEncoding("windows-1252");
+    }
 
     private readonly long _maxBytes = indexerOptions.Value.AttachmentMaxBytes;
 
@@ -94,6 +109,7 @@ public sealed class AttachmentTextExtractor(
         {
             AttachmentFormat.Pdf => ExtractPdf(bytes, fileName),
             AttachmentFormat.Docx => ExtractDocx(bytes, fileName),
+            AttachmentFormat.Calendar => ExtractCalendar(bytes),
             AttachmentFormat.Text => ExtractText(bytes),
             _ => new ExtractionResult(null, StatusUnsupported),
         };
@@ -197,9 +213,159 @@ public sealed class AttachmentTextExtractor(
         // covers the vast majority of remaining cases without dragging in a
         // full charset detector.
         string? decoded = TryDecode(bytes, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
-        decoded ??= TryDecode(bytes, Encoding.GetEncoding("windows-1252"));
+        decoded ??= TryDecode(bytes, Windows1252);
         if (decoded is null) return new ExtractionResult(null, StatusFailed);
         return BuildResult(decoded);
+    }
+
+    /// <summary>
+    /// Flattens an iCalendar (.ics / VCALENDAR) file into clean searchable text.
+    /// ICS is line-based text, so the generic text path "works" — but RFC 5545
+    /// line folding (a CRLF followed by a space continues the previous line)
+    /// splits words and numbers across lines ("$225.00" becomes "$225.0\n 0"),
+    /// and the raw form is dominated by machine noise (UID, DTSTAMP, SEQUENCE,
+    /// TZID blocks). We unfold first, then keep only the human-meaningful
+    /// properties and unescape RFC 5545 §3.3.11 text escapes, so search matches
+    /// the summary / location / description / dates / participant names instead
+    /// of protocol scaffolding.
+    /// </summary>
+    private static ExtractionResult ExtractCalendar(byte[] bytes)
+    {
+        // Same decode ladder as ExtractText — .ics is UTF-8 by spec but legacy
+        // exporters (Outlook .vcs) still emit Windows-1252.
+        string? decoded = TryDecode(bytes, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
+        decoded ??= TryDecode(bytes, Windows1252);
+        if (decoded is null) return new ExtractionResult(null, StatusFailed);
+
+        var sb = new StringBuilder(Math.Min(bytes.Length, 8_192));
+        foreach (var line in UnfoldCalendarLines(decoded))
+        {
+            var (name, parameters, value) = SplitContentLine(line);
+            switch (name)
+            {
+                case "SUMMARY":
+                case "DESCRIPTION":
+                case "COMMENT":
+                    AppendCalendarField(sb, null, UnescapeCalendarText(value));
+                    break;
+                case "LOCATION":
+                    AppendCalendarField(sb, "Location", UnescapeCalendarText(value));
+                    break;
+                case "DTSTART":
+                    AppendCalendarField(sb, "When", value);
+                    break;
+                case "ORGANIZER":
+                    AppendCalendarField(sb, "Organizer", ParamValue(parameters, "CN") ?? StripMailto(value));
+                    break;
+                case "ATTENDEE":
+                    AppendCalendarField(sb, "Attendee", ParamValue(parameters, "CN") ?? StripMailto(value));
+                    break;
+            }
+        }
+
+        return BuildResult(sb.ToString());
+    }
+
+    private static void AppendCalendarField(StringBuilder sb, string? label, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        if (label is not null) sb.Append(label).Append(": ");
+        sb.AppendLine(value.Trim());
+    }
+
+    /// <summary>
+    /// RFC 5545 §3.1 line unfolding: a line beginning with a space or tab is a
+    /// continuation of the previous logical line, with that leading whitespace
+    /// removed. Without this, folded values are corrupted mid-token.
+    /// </summary>
+    private static List<string> UnfoldCalendarLines(string ics)
+    {
+        var normalised = ics.Replace("\r\n", "\n").Replace('\r', '\n');
+        var result = new List<string>();
+        var current = new StringBuilder();
+        foreach (var line in normalised.Split('\n'))
+        {
+            if (line.Length > 0 && (line[0] == ' ' || line[0] == '\t'))
+            {
+                current.Append(line, 1, line.Length - 1);
+            }
+            else
+            {
+                if (current.Length > 0) result.Add(current.ToString());
+                current.Clear();
+                current.Append(line);
+            }
+        }
+        if (current.Length > 0) result.Add(current.ToString());
+        return result;
+    }
+
+    /// <summary>
+    /// Split a content line into (property name, raw parameter string, value):
+    /// <c>NAME;PARAM=x;PARAM=y:VALUE</c>. Best-effort — the first ':' wins as the
+    /// name/value separator, which is correct for the properties we care about
+    /// (a colon inside a quoted parameter value is vanishingly rare in real .ics
+    /// and only affects ORGANIZER/ATTENDEE CN lookup, which falls back cleanly).
+    /// </summary>
+    private static (string? Name, string Parameters, string Value) SplitContentLine(string line)
+    {
+        int colon = line.IndexOf(':');
+        if (colon < 0) return (null, string.Empty, string.Empty);
+
+        var head = line[..colon];
+        var value = line[(colon + 1)..];
+        int semi = head.IndexOf(';');
+        var name = (semi < 0 ? head : head[..semi]).Trim().ToUpperInvariant();
+        if (name.Length == 0) return (null, string.Empty, string.Empty);
+        var parameters = semi < 0 ? string.Empty : head[(semi + 1)..];
+        return (name, parameters, value);
+    }
+
+    private static string? ParamValue(string parameters, string key)
+    {
+        foreach (var part in parameters.Split(';'))
+        {
+            int eq = part.IndexOf('=');
+            if (eq < 0) continue;
+            if (!part[..eq].Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) continue;
+            var v = part[(eq + 1)..].Trim().Trim('"');
+            return v.Length == 0 ? null : v;
+        }
+        return null;
+    }
+
+    private static string StripMailto(string value)
+    {
+        var v = value.Trim();
+        return v.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) ? v[7..] : v;
+    }
+
+    /// <summary>RFC 5545 §3.3.11 TEXT unescaping: \\n \\N -&gt; newline, \\, \\; \\\\ literal.</summary>
+    private static string UnescapeCalendarText(string value)
+    {
+        if (value.IndexOf('\\') < 0) return value;
+        var sb = new StringBuilder(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c == '\\' && i + 1 < value.Length)
+            {
+                var next = value[++i];
+                sb.Append(next switch
+                {
+                    'n' or 'N' => '\n',
+                    ',' => ',',
+                    ';' => ';',
+                    '\\' => '\\',
+                    _ => next,
+                });
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
     }
 
     private static string? TryDecode(byte[] bytes, Encoding encoding)
@@ -259,15 +425,27 @@ public sealed class AttachmentTextExtractor(
     private static AttachmentFormat ResolveFormat(string? contentType, string? fileName)
     {
         var ct = (contentType ?? string.Empty).ToLowerInvariant();
+        var ext = string.IsNullOrEmpty(fileName) ? string.Empty : Path.GetExtension(fileName).ToLowerInvariant();
+
         if (ct == "application/pdf") return AttachmentFormat.Pdf;
         if (ct == "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             return AttachmentFormat.Docx;
+
+        // Calendar detection must precede the generic text/ branch. text/calendar
+        // starts with "text/" but needs the ICS-aware unfold/field extraction,
+        // not raw decode. Crucially the extension check also has to come first:
+        // senders mislabel .ics as text/plain (e.g. Tock reservations), and a
+        // bare "text/" test would route those to the raw-text path, leaving the
+        // VCALENDAR scaffolding in place. Trust either the calendar content-type
+        // or a calendar extension.
+        if (ct is "text/calendar" or "application/ics" or "application/calendar" or "text/x-vcalendar"
+            || ext is ".ics" or ".ical" or ".vcs")
+            return AttachmentFormat.Calendar;
         if (ct.StartsWith("text/")) return AttachmentFormat.Text;
 
         // Fall back to the extension when the sender declared
         // application/octet-stream or no Content-Type (extremely common for
         // PDFs/DOCX from older mailers).
-        var ext = string.IsNullOrEmpty(fileName) ? string.Empty : Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
             ".pdf" => AttachmentFormat.Pdf,
@@ -291,7 +469,7 @@ public sealed class AttachmentTextExtractor(
         return ms.ToArray();
     }
 
-    private enum AttachmentFormat { Unsupported, Pdf, Docx, Text }
+    private enum AttachmentFormat { Unsupported, Pdf, Docx, Calendar, Text }
 }
 
 public sealed record ExtractionResult(string? Text, string Status);
