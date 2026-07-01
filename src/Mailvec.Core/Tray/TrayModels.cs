@@ -40,11 +40,13 @@ public sealed record TrayOllamaStatus(
     string? Severity);
 
 /// <summary>
-/// Scanned-PDF OCR status for the dashboard. <c>Enabled</c> mirrors
-/// <c>Embedder:OcrEnabled</c>; <c>ModelAvailable</c> is null when OCR is off or
-/// the probe was skipped. <c>Pending</c> / <c>Recovered</c> are the OCR backlog
-/// and the count already transcribed. <c>Severity</c> is "warn" when the model
-/// isn't pulled while OCR is on, "syncing" when there's a backlog, else "ok".
+/// OCR status for the dashboard — the vision pass over both scanned PDFs and
+/// image attachments. <c>Enabled</c> is true when either OCR pass is on;
+/// <c>ModelAvailable</c> is null when OCR is off or the probe was skipped.
+/// <c>Pending</c> / <c>Recovered</c> are the pipeline totals; <c>ImagePending</c>
+/// / <c>ImageRecovered</c> are the image subset for the PDF-vs-image split.
+/// <c>Severity</c> is "warn" when the model isn't pulled while OCR is on,
+/// "syncing" when there's a backlog, else "ok".
 /// </summary>
 public sealed record TrayOcrStatus(
     bool Enabled,
@@ -52,6 +54,8 @@ public sealed record TrayOcrStatus(
     bool? ModelAvailable,
     long Pending,
     long Recovered,
+    long ImagePending,
+    long ImageRecovered,
     string? Severity);
 
 public sealed record TrayEmbedProgress(

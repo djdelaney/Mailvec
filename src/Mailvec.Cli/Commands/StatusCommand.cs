@@ -33,10 +33,11 @@ internal static class StatusCommand
         var ollama = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
         var metadata = sp.GetRequiredService<MetadataRepository>();
 
+        var embedder = sp.GetRequiredService<IOptions<EmbedderOptions>>().Value;
         var (total, deleted, embedded, chunkCount) = ReadCounts(conn);
         // OCR backlog via the shared predicate so this line can never disagree
         // with /health, the tray, or what the embedder actually OCRs.
-        var ocrPending = sp.GetRequiredService<MessageRepository>().OcrCounts().Pending;
+        var ocrCounts = sp.GetRequiredService<MessageRepository>().OcrCounts(embedder.ImageOcrMinBytes);
         var schemaModel = metadata.Get("embedding_model") ?? "(not set)";
         var schemaDim = metadata.Get("embedding_dimensions") ?? "(not set)";
 
@@ -45,9 +46,12 @@ internal static class StatusCommand
         @out.WriteLine();
         @out.WriteLine($"Messages:    {total:N0} total, {deleted:N0} deleted");
         @out.WriteLine($"Embeddings:  {embedded:N0} / {Math.Max(total - deleted, 0):N0} ({Coverage(embedded, total - deleted)})  [{chunkCount:N0} chunks]");
-        if (ocrPending > 0)
+        if (ocrCounts.Pending > 0)
         {
-            @out.WriteLine($"OCR pending: {ocrPending:N0} scanned PDF(s) awaiting text recovery");
+            var parts = new List<string>(2);
+            if (ocrCounts.PdfPending > 0) parts.Add($"{ocrCounts.PdfPending:N0} scanned PDF(s)");
+            if (ocrCounts.ImagePending > 0) parts.Add($"{ocrCounts.ImagePending:N0} image(s)");
+            @out.WriteLine($"OCR pending: {string.Join(" + ", parts)} awaiting text recovery");
         }
         @out.WriteLine();
         @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={ollama.EmbeddingModel} ({ollama.EmbeddingDimensions}d)");

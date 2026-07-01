@@ -211,7 +211,7 @@ private struct ThroughputCard: View {
     }
 }
 
-/// Surfaces the scanned-PDF OCR stage. Two shapes, by severity:
+/// Surfaces the OCR stage (scanned PDFs + image attachments). Two shapes, by severity:
 ///   • model missing → amber warn card with a one-click "Copy pull command"
 ///     (running it needs a terminal, but the embedder picks the model up on its
 ///     next pass automatically once it's pulled — no service restart needed).
@@ -236,7 +236,7 @@ private struct OcrCard: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Vision model not installed")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("\(ocr.pending) scanned PDF\(ocr.pending == 1 ? "" : "s") won't be searchable until you pull \(ocr.visionModel).")
+                    Text("\(ocr.pendingSummary) won't be searchable until you pull \(ocr.visionModel).")
                         .font(.system(size: 11.5)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
@@ -262,7 +262,7 @@ private struct OcrCard: View {
         HStack(spacing: 8) {
             Image(systemName: "doc.viewfinder")
                 .foregroundStyle(Brand.accent).font(.system(size: 13))
-            Text("OCR · \(ocr.pending) scanned PDF\(ocr.pending == 1 ? "" : "s") queued")
+            Text("OCR · \(ocr.pendingSummary) queued")
                 .font(.system(size: 11.5, weight: .semibold))
             Spacer()
             if ocr.recovered > 0 {

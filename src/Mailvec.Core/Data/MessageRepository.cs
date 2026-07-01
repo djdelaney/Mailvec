@@ -622,14 +622,20 @@ public sealed class MessageRepository(ConnectionFactory connections)
     }
 
     /// <summary>
-    /// Pipeline counts for the OCR stage, surfaced by <c>/health</c>, the tray,
-    /// and <c>mailvec status</c>. <c>Pending</c> uses the *same* predicate as
-    /// <see cref="EnumerateAttachmentsNeedingOcr"/> so the number the user sees
-    /// matches exactly what the embedder will actually OCR — keep them in
-    /// lockstep. <c>Recovered</c> is attachments whose text the vision pass has
-    /// already recovered (status='ocr'). Both exclude soft-deleted messages.
+    /// Pipeline counts for the OCR stage, split by source (scanned PDFs vs image
+    /// attachments), surfaced by <c>/health</c>, the tray, and
+    /// <c>mailvec status</c>. The pending predicates mirror
+    /// <see cref="EnumerateAttachmentsNeedingOcr"/> (PDFs) and
+    /// <see cref="EnumerateImagesNeedingOcr"/> (images) exactly, so the numbers
+    /// match what the embedder will actually select — keep them in lockstep.
+    /// <paramref name="imageMinBytes"/> is the image byte gate
+    /// (<c>Embedder:ImageOcrMinBytes</c>); pass the configured value. Note the
+    /// image pending count is an upper bound: the post-decode dimension/aspect
+    /// gate (not expressible in SQL) drops some of these to no_text at OCR time.
+    /// Recovered counts are attachments already transcribed (status='ocr'), split
+    /// image vs. not. All exclude soft-deleted messages.
     /// </summary>
-    public (long Pending, long Recovered) OcrCounts()
+    public OcrStageCounts OcrCounts(long imageMinBytes)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
@@ -639,13 +645,27 @@ public sealed class MessageRepository(ConnectionFactory connections)
                  WHERE a.extraction_status = $noText AND lower(a.filename) LIKE '%.pdf'
                    AND m.deleted_at IS NULL),
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = $ocr AND m.deleted_at IS NULL)
+                 WHERE a.extraction_status = $unsupported AND lower(a.content_type) LIKE 'image/%'
+                   AND lower(a.content_type) <> 'image/gif' AND a.size_bytes >= $minBytes
+                   AND m.deleted_at IS NULL),
+              (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
+                 WHERE a.extraction_status = $ocr AND lower(a.content_type) NOT LIKE 'image/%'
+                   AND m.deleted_at IS NULL),
+              (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
+                 WHERE a.extraction_status = $ocr AND lower(a.content_type) LIKE 'image/%'
+                   AND m.deleted_at IS NULL)
             """;
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
+        cmd.Parameters.AddWithValue("$minBytes", imageMinBytes);
         using var reader = cmd.ExecuteReader();
         reader.Read();
-        return (reader.GetInt64(0), reader.GetInt64(1));
+        return new OcrStageCounts(
+            PdfPending: reader.GetInt64(0),
+            ImagePending: reader.GetInt64(1),
+            PdfRecovered: reader.GetInt64(2),
+            ImageRecovered: reader.GetInt64(3));
     }
 
     /// <summary>
@@ -994,6 +1014,17 @@ public sealed class MessageRepository(ConnectionFactory connections)
         if (string.IsNullOrEmpty(json)) return [];
         return JsonSerializer.Deserialize<List<EmailAddress>>(json, JsonOpts) ?? [];
     }
+}
+
+/// <summary>
+/// OCR-stage counts split by source. <see cref="Pending"/> / <see cref="Recovered"/>
+/// are the pipeline totals; the per-source fields let the UI show the split
+/// (scanned PDFs vs image attachments).
+/// </summary>
+public sealed record OcrStageCounts(long PdfPending, long ImagePending, long PdfRecovered, long ImageRecovered)
+{
+    public long Pending => PdfPending + ImagePending;
+    public long Recovered => PdfRecovered + ImageRecovered;
 }
 
 /// <summary>

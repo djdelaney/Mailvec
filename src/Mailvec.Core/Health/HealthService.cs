@@ -45,7 +45,12 @@ public sealed class HealthService(
         // OCR (vision) is a separate, best-effort pipeline stage. Probe the
         // vision model concurrently with the embedding-Ollama ping so /health
         // (polled by the tray every 5s) doesn't pay two serial round-trips.
-        var ocrEnabled = (embedderOpts?.Value ?? new EmbedderOptions()).OcrEnabled;
+        var embOpts = embedderOpts?.Value ?? new EmbedderOptions();
+        // The vision model is shared by both OCR passes (scanned PDFs and image
+        // attachments); the stage is "on" if either is enabled.
+        var pdfOcrEnabled = embOpts.OcrEnabled;
+        var imageOcrEnabled = embOpts.ImageOcrEnabled;
+        var ocrEnabled = pdfOcrEnabled || imageOcrEnabled;
         var ollamaPing = ollama.PingAsync(ct);
         var visionProbe = ocrEnabled && vision is not null
             ? vision.IsModelAvailableAsync(ct)
@@ -56,13 +61,21 @@ public sealed class HealthService(
             ? null
             : await visionProbe.ConfigureAwait(false);
 
-        var (ocrPending, ocrRecovered) = messages?.OcrCounts() ?? (0L, 0L);
+        var counts = messages?.OcrCounts(embOpts.ImageOcrMinBytes)
+            ?? new OcrStageCounts(0, 0, 0, 0);
+        // A disabled sub-pass won't drain its backlog, so don't count it as
+        // pending (it would show a queue that never moves). Recovered is
+        // historical, shown regardless.
+        var pdfPending = pdfOcrEnabled ? counts.PdfPending : 0;
+        var imagePending = imageOcrEnabled ? counts.ImagePending : 0;
         var ocr = new OcrHealth(
             Enabled: ocrEnabled,
             VisionModel: ollamaOpts.Value.VisionModel,
             ModelAvailable: visionModelAvailable,
-            Pending: ocrPending,
-            Recovered: ocrRecovered);
+            Pending: pdfPending + imagePending,
+            Recovered: counts.Recovered,
+            ImagePending: imagePending,
+            ImageRecovered: counts.ImageRecovered);
 
         var live = Math.Max(total - deleted, 0);
         var coverage = live == 0 ? 0d : (double)embedded / live;
@@ -207,19 +220,22 @@ public sealed record HealthReport(
     OcrHealth Ocr);
 
 /// <summary>
-/// Snapshot of the scanned-PDF OCR stage (the embedder's vision pass). Purely
-/// informational on /health — it never flips Status to degraded. <c>Enabled</c>
-/// reflects <c>Embedder:OcrEnabled</c>; <c>ModelAvailable</c> is null when OCR
-/// is disabled or the probe was skipped, true/false otherwise. <c>Pending</c>
-/// is scanned PDFs awaiting OCR; <c>Recovered</c> is those already transcribed
-/// (extraction_status='ocr').
+/// Snapshot of the OCR stage (the embedder's vision pass over both scanned PDFs
+/// and image attachments). Purely informational on /health — it never flips
+/// Status to degraded. <c>Enabled</c> is true if either the PDF or image OCR
+/// pass is on; <c>ModelAvailable</c> is null when OCR is disabled or the probe
+/// was skipped, true/false otherwise. <c>Pending</c> / <c>Recovered</c> are
+/// pipeline totals; <c>ImagePending</c> / <c>ImageRecovered</c> are the image
+/// subset so clients can show the PDF-vs-image split.
 /// </summary>
 public sealed record OcrHealth(
     bool Enabled,
     string VisionModel,
     bool? ModelAvailable,
     long Pending,
-    long Recovered);
+    long Recovered,
+    long ImagePending,
+    long ImageRecovered);
 
 /// <summary>
 /// Dynamic "is the embedder making progress" signal — distinct from the

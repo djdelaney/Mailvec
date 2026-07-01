@@ -51,13 +51,18 @@ struct OllamaStatus: Codable, Equatable {
     var severity: TrayHealth.Severity?
 }
 
-/// Mirrors TrayOcrStatus in TrayModels.cs — the scanned-PDF OCR stage.
+/// Mirrors TrayOcrStatus in TrayModels.cs — the OCR stage (scanned PDFs + image
+/// attachments). `pending`/`recovered` are totals; `imagePending`/`imageRecovered`
+/// are the image subset. The image fields are optional so an older server that
+/// predates the split still decodes (they fall back to 0 → treated as all-PDF).
 struct OCRStatus: Codable, Equatable {
     var enabled: Bool
     var visionModel: String
     var modelAvailable: Bool?
     var pending: Int
     var recovered: Int
+    var imagePending: Int?
+    var imageRecovered: Int?
     var severity: TrayHealth.Severity?
 
     /// Show a dashboard card only when there's something actionable: the model
@@ -69,6 +74,20 @@ struct OCRStatus: Codable, Equatable {
     }
 
     var modelMissing: Bool { enabled && modelAvailable == false }
+
+    var imagePendingCount: Int { imagePending ?? 0 }
+    var pdfPendingCount: Int { max(0, pending - imagePendingCount) }
+
+    /// Human phrase for the queued backlog: "3 scanned PDFs", "12 images", or
+    /// "3 scanned PDFs + 12 images". Falls back to a generic "N items" only if
+    /// the split can't be reconstructed.
+    var pendingSummary: String {
+        var parts: [String] = []
+        if pdfPendingCount > 0 { parts.append("\(pdfPendingCount) scanned PDF\(pdfPendingCount == 1 ? "" : "s")") }
+        if imagePendingCount > 0 { parts.append("\(imagePendingCount) image\(imagePendingCount == 1 ? "" : "s")") }
+        if parts.isEmpty { parts.append("\(pending) item\(pending == 1 ? "" : "s")") }
+        return parts.joined(separator: " + ")
+    }
 }
 
 struct EmbedProgress: Codable, Equatable {

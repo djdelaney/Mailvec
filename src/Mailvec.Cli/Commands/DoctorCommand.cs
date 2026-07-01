@@ -477,7 +477,9 @@ internal static class DoctorCommand
                 VisionModel: ollama.VisionModel,
                 ModelAvailable: null,
                 Pending: 0,
-                Recovered: 0),
+                Recovered: 0,
+                ImagePending: 0,
+                ImageRecovered: 0),
             // Doctor's offline-mode HealthReport doesn't have access to the
             // embedder heartbeat metadata; leave the fields blank rather than
             // synthesising values. Doctor's own /health probe (further down)

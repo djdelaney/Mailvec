@@ -318,7 +318,9 @@ public class TrayStatusServiceTests
                 VisionModel: "qwen2.5vl:7b",
                 ModelAvailable: true,
                 Pending: 0,
-                Recovered: 0));
+                Recovered: 0,
+                ImagePending: 0,
+                ImageRecovered: 0));
     }
 
     private static HealthReport ReportWith(long messagesTotal, long messagesDeleted, long embedded)
