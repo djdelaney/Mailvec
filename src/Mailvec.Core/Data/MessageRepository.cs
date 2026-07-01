@@ -560,6 +560,68 @@ public sealed class MessageRepository(ConnectionFactory connections)
     }
 
     /// <summary>
+    /// Image attachments the indexer left at 'unsupported' that are worth a
+    /// vision-OCR attempt: a real image type (GIFs excluded — animated /
+    /// decorative), above the byte pre-filter, parent not soft-deleted. This is
+    /// stage 1 of the gate (cheap, in SQL); stage 2 (decode dimensions / aspect)
+    /// runs in <c>AttachmentOcrService</c> after the bytes are rendered. Mirrors
+    /// <see cref="EnumerateAttachmentsNeedingOcr"/>; reuses <see cref="OcrCandidate"/>.
+    /// </summary>
+    public IReadOnlyList<OcrCandidate> EnumerateImagesNeedingOcr(int batchSize, long minBytes)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder
+            FROM attachments a
+            JOIN messages m ON m.id = a.message_id
+            WHERE a.extraction_status = $unsupported
+              AND lower(a.content_type) LIKE 'image/%'
+              AND lower(a.content_type) <> 'image/gif'
+              AND a.size_bytes >= $minBytes
+              AND m.deleted_at IS NULL
+            ORDER BY a.id
+            LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
+        cmd.Parameters.AddWithValue("$minBytes", minBytes);
+        cmd.Parameters.AddWithValue("$limit", batchSize);
+
+        var list = new List<OcrCandidate>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new OcrCandidate(
+                AttachmentId: reader.GetInt64(0),
+                PartIndex: reader.GetInt32(1),
+                MessageId: reader.GetInt64(2),
+                MessageIdHeader: reader.GetString(3),
+                MaildirPath: reader.GetString(4),
+                MaildirFilename: reader.GetString(5),
+                Folder: reader.GetString(6)));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Mark an image attachment terminally as <c>no_text</c> after the OCR pass
+    /// decided it carries nothing useful — gated out by the post-decode
+    /// dimension/aspect check, or the vision model returned empty text. This
+    /// moves it off the 'unsupported' image queue so it isn't re-read and
+    /// re-decoded every cycle. (Decode *failures* go through
+    /// <see cref="MarkAttachmentOcrFailed"/> instead.)
+    /// </summary>
+    public void MarkAttachmentImageNoText(long attachmentId)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE attachments SET extraction_status = $noText WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$id", attachmentId);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Pipeline counts for the OCR stage, surfaced by <c>/health</c>, the tray,
     /// and <c>mailvec status</c>. <c>Pending</c> uses the *same* predicate as
     /// <see cref="EnumerateAttachmentsNeedingOcr"/> so the number the user sees
@@ -646,6 +708,120 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using var reader = cmd.ExecuteReader();
         while (reader.Read()) texts.Add(reader.GetString(0));
         return texts.Count == 0 ? null : string.Join(' ', texts);
+    }
+
+    /// <summary>Space-join of the message's attachment filenames, for messages.attachment_names (mirrors <see cref="BuildAttachmentNames"/> over persisted rows).</summary>
+    private static string? ConcatAttachmentNames(SqliteConnection conn, SqliteTransaction tx, long messageId)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            SELECT filename FROM attachments
+            WHERE message_id = $mid AND filename IS NOT NULL AND LENGTH(TRIM(filename)) > 0
+            ORDER BY part_index;
+            """;
+        cmd.Parameters.AddWithValue("$mid", messageId);
+
+        var names = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names.Count == 0 ? null : string.Join(' ', names);
+    }
+
+    /// <summary>
+    /// The set of <c>part_index</c> values already present for a message. The
+    /// inline-image backfill uses this to insert only the parts it's missing —
+    /// never re-extracting or disturbing rows that already exist (including
+    /// OCR-recovered text).
+    /// </summary>
+    public HashSet<int> GetAttachmentPartIndexes(long messageId)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT part_index FROM attachments WHERE message_id = $mid;";
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        var set = new HashSet<int>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) set.Add(reader.GetInt32(0));
+        return set;
+    }
+
+    /// <summary>
+    /// Insert-only attachment rows for the inline-image backfill: adds the given
+    /// rows (whose part_index the caller has confirmed are missing), then
+    /// rebuilds the denormalized <c>attachment_names</c> / <c>attachment_text</c>
+    /// and sets <c>has_attachments = 1</c> from the full row set. If any inserted
+    /// row carries text, also clears <c>embedded_at</c> so the message re-embeds.
+    /// <c>INSERT OR IGNORE</c> keeps it safe to re-run (UNIQUE(message_id,
+    /// part_index) collisions are skipped). One transaction; the messages UPDATE
+    /// fires the FTS sync trigger. Returns rows actually inserted.
+    /// </summary>
+    public int AddInlineAttachments(long messageId, IReadOnlyList<ParsedAttachment> rows)
+    {
+        if (rows.Count == 0) return 0;
+
+        using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+
+        int inserted = 0;
+        using (var ins = conn.CreateCommand())
+        {
+            ins.Transaction = tx;
+            ins.CommandText = """
+                INSERT OR IGNORE INTO attachments(
+                    message_id, part_index, filename, content_type, size_bytes,
+                    extracted_text, extracted_at, extraction_status)
+                VALUES ($mid, $idx, $name, $ct, $size, $text, $at, $status);
+                """;
+            var pMid = ins.Parameters.Add("$mid", SqliteType.Integer);
+            var pIdx = ins.Parameters.Add("$idx", SqliteType.Integer);
+            var pName = ins.Parameters.Add("$name", SqliteType.Text);
+            var pCt = ins.Parameters.Add("$ct", SqliteType.Text);
+            var pSize = ins.Parameters.Add("$size", SqliteType.Integer);
+            var pText = ins.Parameters.Add("$text", SqliteType.Text);
+            var pAt = ins.Parameters.Add("$at", SqliteType.Text);
+            var pStatus = ins.Parameters.Add("$status", SqliteType.Text);
+            pMid.Value = messageId;
+            var stamp = DateTimeOffset.UtcNow.ToString("O");
+
+            foreach (var a in rows)
+            {
+                pIdx.Value = a.PartIndex;
+                pName.Value = (object?)a.FileName ?? DBNull.Value;
+                pCt.Value = (object?)a.ContentType ?? DBNull.Value;
+                pSize.Value = (object?)a.SizeBytes ?? DBNull.Value;
+                pText.Value = (object?)a.ExtractedText ?? DBNull.Value;
+                pStatus.Value = (object?)a.ExtractionStatus ?? DBNull.Value;
+                pAt.Value = a.ExtractionStatus is null ? DBNull.Value : (object)stamp;
+                inserted += ins.ExecuteNonQuery();
+            }
+        }
+
+        if (inserted == 0)
+        {
+            tx.Commit();
+            return 0;
+        }
+
+        var anyText = rows.Any(r => !string.IsNullOrEmpty(r.ExtractedText));
+        var attachmentText = ConcatAttachmentText(conn, tx, messageId);
+        var attachmentNames = ConcatAttachmentNames(conn, tx, messageId);
+
+        using (var upd = conn.CreateCommand())
+        {
+            upd.Transaction = tx;
+            upd.CommandText =
+                "UPDATE messages SET has_attachments = 1, attachment_names = $names, attachment_text = $text"
+                + (anyText ? ", embedded_at = NULL" : "")
+                + " WHERE id = $id;";
+            upd.Parameters.AddWithValue("$names", (object?)attachmentNames ?? DBNull.Value);
+            upd.Parameters.AddWithValue("$text", (object?)attachmentText ?? DBNull.Value);
+            upd.Parameters.AddWithValue("$id", messageId);
+            upd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+        return inserted;
     }
 
     /// <summary>

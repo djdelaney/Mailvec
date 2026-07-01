@@ -86,7 +86,10 @@ public sealed class MessageParser
     {
         var list = new List<ParsedAttachment>();
         int index = 0;
-        foreach (var entity in mime.Attachments)
+        // MessageParts.Indexable — not mime.Attachments — so inline (cid:) images
+        // get rows too. Keep this in lockstep with MaildirAttachmentReader, which
+        // resolves part_index back through the same enumeration.
+        foreach (var entity in MessageParts.Indexable(mime))
         {
             var fileName = entity.ContentDisposition?.FileName ?? entity.ContentType?.Name;
             var contentType = entity.ContentType?.MimeType;
