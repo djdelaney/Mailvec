@@ -87,6 +87,52 @@ public class OllamaVisionClientTests
         (await client.IsModelAvailableAsync()).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task OcrImageAsync_maps_the_no_text_sentinel_to_empty()
+    {
+        // A textless photo makes the model emit the sentinel; OcrImageAsync
+        // collapses it to empty so the caller marks the attachment no_text.
+        var client = ClientWith(_ => Ok(new { response = "NO_TEXT_FOUND" }));
+        (await client.OcrImageAsync([1, 2, 3])).ShouldBe(string.Empty);
+    }
+
+    [Fact]
+    public async Task OcrImageAsync_returns_text_and_uses_the_sentinel_prompt()
+    {
+        HttpRequestMessage? captured = null;
+        var client = ClientWith(req => { captured = req; return Ok(new { response = "RECEIPT TOTAL $42" }); });
+
+        var text = await client.OcrImageAsync([1]);
+
+        text.ShouldBe("RECEIPT TOTAL $42");
+        // The image path uses its own prompt whose escape hatch names the sentinel —
+        // distinguishing it from the document-oriented OcrAsync prompt.
+        JsonDocument.Parse(await captured!.Content!.ReadAsStringAsync()).RootElement
+            .GetProperty("prompt").GetString()!.ShouldContain("NO_TEXT_FOUND");
+    }
+
+    [Fact]
+    public async Task OcrImageAsync_caps_output_tokens_via_num_predict()
+    {
+        HttpRequestMessage? captured = null;
+        await ClientWith(req => { captured = req; return Ok(new { response = "x" }); },
+            new OllamaOptions { VisionMaxTokens = 512 }).OcrImageAsync([1]);
+
+        JsonDocument.Parse(await captured!.Content!.ReadAsStringAsync()).RootElement
+            .GetProperty("options").GetProperty("num_predict").GetInt32().ShouldBe(512);
+    }
+
+    [Fact]
+    public async Task Vision_request_omits_num_predict_when_the_cap_is_disabled()
+    {
+        HttpRequestMessage? captured = null;
+        await ClientWith(req => { captured = req; return Ok(new { response = "x" }); },
+            new OllamaOptions { VisionMaxTokens = 0 }).OcrImageAsync([1]);
+
+        JsonDocument.Parse(await captured!.Content!.ReadAsStringAsync()).RootElement
+            .GetProperty("options").TryGetProperty("num_predict", out _).ShouldBeFalse();
+    }
+
     private static HttpResponseMessage Ok(object body) =>
         new(HttpStatusCode.OK) { Content = JsonContent.Create(body) };
 

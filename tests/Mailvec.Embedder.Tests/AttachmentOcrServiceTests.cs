@@ -8,6 +8,7 @@ using Mailvec.Core.Vision;
 using Mailvec.Embedder.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using SkiaSharp;
 
 namespace Mailvec.Embedder.Tests;
 
@@ -50,12 +51,16 @@ public class AttachmentOcrServiceTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private AttachmentOcrService Build(IVisionClient vision) =>
+    private AttachmentOcrService Build(IVisionClient vision, EmbedderOptions? opts = null) =>
         new(_messages,
             new MaildirAttachmentReader(Options.Create(new IngestOptions { MaildirRoot = _maildirRoot })),
             vision,
-            Options.Create(new EmbedderOptions()),
+            Options.Create(opts ?? new EmbedderOptions()),
             NullLogger<AttachmentOcrService>.Instance);
+
+    // Image tests use a tiny byte gate so a small generated PNG is still selected
+    // by the SQL candidate query (the default gate is 50KB).
+    private static EmbedderOptions ImageGate => new() { ImageOcrMinBytes = 1 };
 
     private long StageNoTextPdf(string id, byte[] pdfBytes)
     {
@@ -123,6 +128,135 @@ public class AttachmentOcrServiceTests : IDisposable
 
         done.ShouldBe(0);
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed); // poison PDF, not retried
+    }
+
+    // ── Image OCR pass (ProcessImageBatchAsync) ──────────────────────────────
+
+    private long StageUnsupportedImage(string id, byte[] imageBytes, string contentType = "image/png")
+    {
+        var b64 = Convert.ToBase64String(imageBytes);
+        var eml =
+            "Message-ID: <" + id + ">\nFrom: a@x\nTo: b@x\nSubject: s\nMIME-Version: 1.0\n" +
+            "Content-Type: multipart/mixed; boundary=\"outer\"\n\n" +
+            "--outer\nContent-Type: text/plain; charset=utf-8\n\nbody\n" +
+            "--outer\nContent-Type: " + contentType + "; name=\"photo.img\"\n" +
+            "Content-Disposition: attachment; filename=\"photo.img\"\nContent-Transfer-Encoding: base64\n\n" +
+            b64 + "\n--outer--\n";
+        File.WriteAllText(Path.Combine(_maildirRoot, "INBOX", "cur", id + ".eml"), eml);
+
+        var parsed = new ParsedMessage(
+            MessageId: id, ThreadId: id, Subject: "s", FromAddress: "a@x", FromName: null,
+            ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
+            BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 100, ContentHash: $"h-{id}",
+            Attachments: [new ParsedAttachment(0, "photo.img", contentType, imageBytes.LongLength,
+                ExtractedText: null, ExtractionStatus: AttachmentTextExtractor.StatusUnsupported)]);
+        return _messages.Upsert(parsed, "INBOX", "INBOX/cur", id + ".eml", DateTimeOffset.UtcNow);
+    }
+
+    private static byte[] MakePng(int w, int h)
+    {
+        using var bmp = new SKBitmap(w, h);
+        using var canvas = new SKCanvas(bmp);
+        canvas.Clear(SKColors.CornflowerBlue);
+        using var img = SKImage.FromBitmap(bmp);
+        using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    [Fact]
+    public async Task Ocrs_an_image_and_writes_text_with_ocr_status()
+    {
+        long id = StageUnsupportedImage("img@x", MakePng(300, 300));
+
+        var done = await Build(new FakeVision(true, _ => "IMAGE TEXT"), ImageGate).ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(1);
+        TextOf(id).ShouldBe("IMAGE TEXT");
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
+    public async Task Image_model_unavailable_leaves_it_unsupported()
+    {
+        long id = StageUnsupportedImage("img@x", MakePng(300, 300));
+
+        var done = await Build(new FakeVision(false, _ => "x"), ImageGate).ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(0);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported); // retried later
+    }
+
+    [Fact]
+    public async Task Marks_failed_when_the_image_cannot_be_decoded()
+    {
+        long id = StageUnsupportedImage("bad@x", Encoding.ASCII.GetBytes("this is not an image, just bytes past the tiny byte gate"));
+
+        var done = await Build(new FakeVision(true, _ => "x"), ImageGate).ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(0);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed); // undecodable, not retried
+    }
+
+    [Fact]
+    public async Task Gates_out_a_too_small_image_as_no_text()
+    {
+        long id = StageUnsupportedImage("tiny@x", MakePng(100, 100)); // < 200px min dimension
+
+        var done = await Build(new FakeVision(true, _ => "SHOULD NOT BE CALLED"), ImageGate).ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(0);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText); // gated, not OCR'd
+        TextOf(id).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Gates_out_an_extreme_aspect_image_as_no_text()
+    {
+        long id = StageUnsupportedImage("banner@x", MakePng(2000, 210)); // aspect 9.5 > 8
+
+        var done = await Build(new FakeVision(true, _ => "x"), ImageGate).ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(0);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
+    [Fact]
+    public async Task Empty_transcription_marks_the_image_no_text()
+    {
+        long id = StageUnsupportedImage("blank@x", MakePng(300, 300));
+
+        var done = await Build(new FakeVision(true, _ => "   "), ImageGate).ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(0);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText); // no text found, not an empty 'ocr' row
+    }
+
+    [Fact]
+    public async Task Vision_timeout_is_transient_leaving_the_image_for_retry()
+    {
+        long id = StageUnsupportedImage("slow@x", MakePng(300, 300));
+        // An HTTP timeout surfaces as TaskCanceledException (an OperationCanceledException)
+        // while the caller's token is NOT cancelled. It must be treated as transient —
+        // batch aborts, image left 'unsupported', nothing thrown to the worker.
+        var svc = Build(new FakeVision(true, _ => throw new TaskCanceledException("HttpClient.Timeout")), ImageGate);
+
+        var done = await svc.ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(0);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported); // NOT failed
+    }
+
+    [Fact]
+    public async Task Real_cancellation_propagates()
+    {
+        long id = StageUnsupportedImage("cancel@x", MakePng(300, 300));
+        using var cts = new CancellationTokenSource();
+        // Cancel mid-call, then throw OCE: with the token cancelled this is a real
+        // shutdown and must propagate (not be swallowed as transient).
+        var svc = Build(new FakeVision(true, _ => { cts.Cancel(); throw new OperationCanceledException(cts.Token); }), ImageGate);
+
+        await Should.ThrowAsync<OperationCanceledException>(() => svc.ProcessImageBatchAsync(10, cts.Token));
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported);
     }
 
     private sealed class FakeVision(bool available, Func<byte[], string> ocr) : IVisionClient
