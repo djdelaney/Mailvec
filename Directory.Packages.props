@@ -30,6 +30,13 @@
          fontconfig/freetype — ideal for a headless homelab box). -->
     <PackageVersion Include="PDFtoImage"                       Version="5.2.1" />
 
+    <!-- TIFF decode for the image-OCR pass. SkiaSharp's native build ships no
+         TIFF codec, so scanned-document TIFFs (common as email attachments) fail
+         to decode. BitMiracle.LibTiff.NET is a pure-managed (New BSD) port of
+         libtiff — no native dep, works on the Linux container target. HEIC is
+         intentionally not covered (would need native libheif). -->
+    <PackageVersion Include="BitMiracle.LibTiff.NET"           Version="2.4.660" />
+
     <!-- Generic Host / configuration / logging -->
     <PackageVersion Include="Microsoft.Extensions.Hosting"                  Version="10.0.9" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder"     Version="10.0.9" />
