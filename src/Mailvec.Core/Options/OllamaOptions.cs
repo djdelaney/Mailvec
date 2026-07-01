@@ -24,6 +24,14 @@ public sealed class OllamaOptions
     // vision HttpClient gets its own, longer ceiling.
     public int VisionRequestTimeoutSeconds { get; set; } = 120;
 
+    // Hard cap on OCR output tokens (Ollama num_predict). Without it, a vision
+    // model can repetition-loop on a noisy/blurry image and generate until the
+    // context fills — minutes per call, blowing VisionRequestTimeoutSeconds and
+    // stalling the batch. 2048 tokens (~8k chars) comfortably covers a dense
+    // page of text while bounding worst-case latency well under the timeout on
+    // both Apple Silicon and a discrete GPU. Set 0 to disable the cap.
+    public int VisionMaxTokens { get; set; } = 2048;
+
     // Prepended verbatim to SEARCH QUERIES (never documents) before
     // embedding. Instruction-tuned models like qwen3-embedding are trained
     // for asymmetric retrieval and bury relevant documents without it; for

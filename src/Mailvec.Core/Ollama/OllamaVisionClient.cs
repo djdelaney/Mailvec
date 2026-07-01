@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json.Serialization;
 using Mailvec.Core.Options;
 using Mailvec.Core.Vision;
@@ -19,24 +20,57 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
     private readonly OllamaOptions _opts = options.Value;
 
     // Prompt validated in the OCR spike (qwen2.5vl): verbatim transcription,
-    // structure preserved, no commentary.
+    // structure preserved, no commentary. Assumes the image is a document page
+    // that contains text.
     private const string OcrPrompt =
         "You are an OCR engine. Transcribe ALL text from this scanned document exactly as it " +
         "appears, preserving structure (headings, fields, labels, tables) as best you can. " +
         "Output only the transcribed text, no commentary.";
 
-    public async Task<string> OcrAsync(byte[] image, CancellationToken ct = default)
+    // Image-attachment variant: a photo/screenshot may legitimately contain no
+    // text. The escape hatch is a fixed sentinel rather than "output nothing" —
+    // asked to emit nothing, the model narrates the absence ("nothing here"),
+    // which would itself get indexed. A sentinel it *does* reliably emit, which
+    // OcrImageAsync maps back to empty, is deterministic (verified against a
+    // real corpus sample: textless photos that hallucinated a stray word under
+    // the document prompt now return the sentinel).
+    private const string ImageNoTextSentinel = "NO_TEXT_FOUND";
+    private const string ImageOcrPrompt =
+        "You are an OCR engine. Transcribe ALL text visible in this image exactly as it appears, " +
+        "preserving structure (headings, fields, labels, tables) as best you can. " +
+        "Output only the transcribed text, no commentary. " +
+        "If the image contains no readable text at all, reply with exactly " + ImageNoTextSentinel + " and nothing else.";
+
+    public Task<string> OcrAsync(byte[] image, CancellationToken ct = default) =>
+        GenerateAsync(image, OcrPrompt, ct);
+
+    public async Task<string> OcrImageAsync(byte[] image, CancellationToken ct = default)
+    {
+        var text = await GenerateAsync(image, ImageOcrPrompt, ct).ConfigureAwait(false);
+        // Collapse the "no readable text" sentinel to empty so the caller's
+        // empty-check marks the attachment no_text instead of indexing a marker.
+        return text.Trim() == ImageNoTextSentinel ? string.Empty : text;
+    }
+
+    private async Task<string> GenerateAsync(byte[] image, string prompt, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(image);
 
         var request = new GenerateRequest
         {
             Model = _opts.VisionModel,
-            Prompt = OcrPrompt,
+            Prompt = prompt,
             Images = [Convert.ToBase64String(image)],
             Stream = false,
             KeepAlive = string.IsNullOrEmpty(_opts.VisionKeepAlive) ? null : _opts.VisionKeepAlive,
-            Options = new GenerateOptions { Temperature = 0 },
+            Options = new GenerateOptions
+            {
+                Temperature = 0,
+                // Bound generation so a repetition-looping vision model can't run
+                // for minutes and blow the HttpClient timeout (which throws
+                // TaskCanceledException and stalls the OCR batch).
+                NumPredict = _opts.VisionMaxTokens > 0 ? _opts.VisionMaxTokens : null,
+            },
         };
 
         using var response = await http.PostAsJsonAsync("/api/generate", request, ct).ConfigureAwait(false);
@@ -50,10 +84,39 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
         var parsed = await response.Content.ReadFromJsonAsync<GenerateResponse>(ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Ollama returned an empty body.");
 
+        // Empty is a legitimate, handled outcome (blank page, or a textless
+        // photo hitting the image prompt's escape hatch) — the caller decides
+        // what to persist, so this is Debug, not a warning.
         if (string.IsNullOrWhiteSpace(parsed.Response))
-            logger.LogWarning("Vision OCR returned empty text from model {Model}.", _opts.VisionModel);
+            logger.LogDebug("Vision OCR returned empty text from model {Model}.", _opts.VisionModel);
 
-        return parsed.Response ?? string.Empty;
+        return CollapseRepeatedLines(parsed.Response ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Squash runs of an identical consecutive line down to one occurrence.
+    /// Vision models sometimes fall into a repetition loop on noisy images —
+    /// emitting the same line hundreds of times until num_predict cuts them off
+    /// (e.g. a photo of a banner producing "Colonial" ×2000). The num_predict cap
+    /// bounds the *time*; this keeps the degenerate output from bloating the
+    /// search index, while preserving the real text that usually precedes the
+    /// loop. Legitimate OCR almost never repeats a full line back-to-back, so
+    /// this is safe for good output.
+    /// </summary>
+    internal static string CollapseRepeatedLines(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+
+        var sb = new StringBuilder(text.Length);
+        string? prevKept = null;
+        foreach (var raw in text.Split('\n'))
+        {
+            var trimmed = raw.TrimEnd();
+            if (trimmed.Length > 0 && trimmed == prevKept) continue; // drop a repeat of the last kept line
+            sb.Append(raw).Append('\n');
+            if (trimmed.Length > 0) prevKept = trimmed;
+        }
+        return sb.ToString().TrimEnd('\n');
     }
 
     public async Task<bool> IsModelAvailableAsync(CancellationToken ct = default)
@@ -99,6 +162,10 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
     private sealed class GenerateOptions
     {
         [JsonPropertyName("temperature")] public double Temperature { get; init; }
+
+        [JsonPropertyName("num_predict")]
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        public int? NumPredict { get; init; }
     }
 
     private sealed class GenerateResponse
