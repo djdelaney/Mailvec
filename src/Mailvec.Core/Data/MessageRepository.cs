@@ -1031,11 +1031,19 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return affected;
     }
 
-    public int CountSoftDeleted()
+    /// <summary>
+    /// Counts soft-deleted messages; with <paramref name="deletedBefore"/>,
+    /// only those whose deleted_at is at or before the cutoff (matching what
+    /// <see cref="PurgeSoftDeleted"/> would remove with the same cutoff).
+    /// </summary>
+    public int CountSoftDeleted(DateTimeOffset? deletedBefore = null)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE deleted_at IS NOT NULL";
+        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE deleted_at IS NOT NULL"
+            + (deletedBefore is null ? "" : " AND datetime(deleted_at) <= datetime($cutoff)");
+        if (deletedBefore is { } cutoff)
+            cmd.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
@@ -1052,23 +1060,34 @@ public sealed class MessageRepository(ConnectionFactory connections)
     ///   delete (otherwise the chunks rows we'd JOIN through are gone).
     /// All three statements run in a single transaction so a partial purge
     /// can't leave orphan vectors.
+    ///
+    /// <paramref name="deletedBefore"/> restricts the purge to rows whose
+    /// deleted_at is at or before the cutoff. This grace period is what makes
+    /// purge safe against the scanner's transient-failure window: a live
+    /// message wrongly soft-deleted (its sync_state refresh failed mid-scan)
+    /// self-heals on the next scan, but a purge landing inside that window
+    /// would hard-delete it. Null purges everything regardless of age.
     /// </summary>
-    public int PurgeSoftDeleted()
+    public int PurgeSoftDeleted(DateTimeOffset? deletedBefore = null)
     {
+        var cutoffClause = deletedBefore is null ? "" : " AND datetime(m.deleted_at) <= datetime($cutoff)";
+
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
         using (var delEmbeddings = conn.CreateCommand())
         {
             delEmbeddings.Transaction = tx;
-            delEmbeddings.CommandText = """
+            delEmbeddings.CommandText = $"""
                 DELETE FROM chunk_embeddings
                 WHERE chunk_id IN (
                     SELECT c.id FROM chunks c
                     JOIN messages m ON m.id = c.message_id
-                    WHERE m.deleted_at IS NOT NULL
+                    WHERE m.deleted_at IS NOT NULL{cutoffClause}
                 )
                 """;
+            if (deletedBefore is { } embCutoff)
+                delEmbeddings.Parameters.AddWithValue("$cutoff", embCutoff.ToString("O"));
             delEmbeddings.ExecuteNonQuery();
         }
 
@@ -1076,7 +1095,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using (var delMessages = conn.CreateCommand())
         {
             delMessages.Transaction = tx;
-            delMessages.CommandText = "DELETE FROM messages WHERE deleted_at IS NOT NULL";
+            delMessages.CommandText =
+                "DELETE FROM messages AS m WHERE m.deleted_at IS NOT NULL" + cutoffClause;
+            if (deletedBefore is { } msgCutoff)
+                delMessages.Parameters.AddWithValue("$cutoff", msgCutoff.ToString("O"));
             affected = delMessages.ExecuteNonQuery();
         }
 

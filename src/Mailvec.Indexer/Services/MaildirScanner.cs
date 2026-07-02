@@ -45,6 +45,7 @@ public sealed class MaildirScanner(
         var seen = 0;
         var upserted = 0;
         var failed = 0;
+        var unrefreshed = 0;
 
         // One connection + a rolling transaction for the whole file walk.
         // The previous design opened a fresh connection for every Get/Upsert
@@ -73,13 +74,18 @@ public sealed class MaildirScanner(
                         cancellationToken.ThrowIfCancellationRequested();
                         seen++;
 
-                        if (TryIngest(ctx, file, folderName, scanStart))
+                        switch (TryIngest(ctx, file, folderName, scanStart))
                         {
-                            upserted++;
-                        }
-                        else
-                        {
-                            failed++;
+                            case IngestOutcome.Ok:
+                                upserted++;
+                                break;
+                            case IngestOutcome.Failed:
+                                failed++;
+                                break;
+                            case IngestOutcome.FailedAndUnrefreshed:
+                                failed++;
+                                unrefreshed++;
+                                break;
                         }
                     }
                 }
@@ -90,6 +96,21 @@ public sealed class MaildirScanner(
         {
             ctx.Abandon();
             throw;
+        }
+
+        if (unrefreshed > 0)
+        {
+            // At least one live file's sync_state row could not be refreshed,
+            // so the deletion-reconciliation pass would see it as stale and
+            // soft-delete a message whose file is alive on disk. Skip
+            // reconciliation entirely this scan — genuinely deleted files are
+            // simply caught one scan later.
+            logger.LogWarning(
+                "MaildirScanner: {Count} file(s) failed ingest AND their sync_state refresh failed; " +
+                "skipping deletion reconciliation this scan to avoid soft-deleting live messages. " +
+                "seen={Seen} upserted={Upserted} parseFailed={Failed}",
+                unrefreshed, seen, upserted, failed);
+            return new ScanResult(seen, upserted, failed, 0);
         }
 
         var stale = syncState.StaleEntries(olderThan: scanStart);
@@ -129,7 +150,19 @@ public sealed class MaildirScanner(
         return new ScanResult(seen, upserted, failed, softDeleted);
     }
 
-    private bool TryIngest(ScanContext ctx, string filePath, string folderName, DateTimeOffset indexedAt)
+    private enum IngestOutcome
+    {
+        Ok,
+        Failed,
+        /// <summary>
+        /// Ingest failed AND the catch handler's sync_state refresh also
+        /// failed — this file's row is now stale even though the file is
+        /// alive, so the caller must skip deletion reconciliation.
+        /// </summary>
+        FailedAndUnrefreshed,
+    }
+
+    private IngestOutcome TryIngest(ScanContext ctx, string filePath, string folderName, DateTimeOffset indexedAt)
     {
         // Hoisted so the catch below can preserve the existing message_id /
         // content_hash instead of nulling them (see the catch comment).
@@ -157,7 +190,7 @@ public sealed class MaildirScanner(
             {
                 syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash);
                 ctx.NoteWrite();
-                return true;
+                return IngestOutcome.Ok;
             }
 
             // Parse path: messages.Upsert opens its own connection. Release
@@ -184,7 +217,7 @@ public sealed class MaildirScanner(
             }
             syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash);
             ctx.NoteWrite();
-            return true;
+            return IngestOutcome.Ok;
         }
         catch (Exception ex)
         {
@@ -205,8 +238,15 @@ public sealed class MaildirScanner(
                 syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, contentHash: null);
                 ctx.NoteWrite();
             }
-            catch { /* ignore */ }
-            return false;
+            catch (Exception refreshEx)
+            {
+                // The row is now stale even though the file exists — surface
+                // it so ScanAll skips deletion reconciliation this scan
+                // instead of soft-deleting a live message.
+                logger.LogWarning(refreshEx, "Also failed to refresh sync_state for {Path}", filePath);
+                return IngestOutcome.FailedAndUnrefreshed;
+            }
+            return IngestOutcome.Failed;
         }
     }
 
