@@ -287,9 +287,14 @@ public sealed class MaildirScanner(
 /// <see cref="Flush"/> before invoking repositories on their own connections
 /// (e.g. MessageRepository.Upsert) to avoid blocking on the write lock.
 ///
-/// Uses BEGIN DEFERRED (Microsoft.Data.Sqlite default), so an empty tx
-/// holds no lock — Flush() is a no-op when nothing has been written and
-/// the next access lazily begins a fresh tx.
+/// NOTE: Microsoft.Data.Sqlite's BeginTransaction() issues BEGIN IMMEDIATE
+/// (its `deferred` parameter defaults to false in ≥5.0), so the write lock
+/// is taken at the FIRST statement in the tx and held until Flush(). That is
+/// why the parse path in TryIngest MUST call Flush() before invoking
+/// MessageRepository.Upsert — Upsert opens its own connection, and with our
+/// lock still held its BEGIN IMMEDIATE would block for the full busy_timeout
+/// on every parsed file. Don't remove that Flush(), and don't assume an open
+/// tx here is lock-free.
 /// </summary>
 internal sealed class ScanContext : IDisposable
 {
