@@ -295,7 +295,7 @@ public sealed record EmailHit(
         return Truncate(collapsed, 240);
     }
 
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+    private static string Truncate(string s, int max) => Mailvec.Core.Parsing.StringTruncation.Truncate(s, max);
 }
 
 /// <summary>
