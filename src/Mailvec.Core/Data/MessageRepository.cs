@@ -103,7 +103,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     to_addresses     = excluded.to_addresses,
                     cc_addresses     = excluded.cc_addresses,
                     date_sent        = excluded.date_sent,
-                    date_received    = excluded.date_received,
+                    -- date_received is "first indexed", so preserve it across
+                    -- reparses (an mtime bump from an mbsync flag rewrite would
+                    -- otherwise drift it to the current scan time). COALESCE
+                    -- backfills legacy rows that stored NULL.
+                    date_received    = COALESCE(messages.date_received, excluded.date_received),
                     size_bytes       = excluded.size_bytes,
                     has_attachments  = excluded.has_attachments,
                     -- Attachment-derived columns track the attachments table, which
