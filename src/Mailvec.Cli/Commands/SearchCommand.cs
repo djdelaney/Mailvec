@@ -65,8 +65,8 @@ internal static class SearchCommand
         DateTimeOffset? dateFrom, dateTo;
         try
         {
-            dateFrom = ParseDate(dateFromRaw, "--date-from");
-            dateTo = ParseDate(dateToRaw, "--date-to");
+            dateFrom = ParseDate(dateFromRaw, "--date-from", isUpperBound: false);
+            dateTo = ParseDate(dateToRaw, "--date-to", isUpperBound: true);
         }
         catch (FormatException ex)
         {
@@ -79,11 +79,10 @@ internal static class SearchCommand
         return await ExecuteAsync(sp, query, limit, semantic, hybrid, titlesOnly, withId, filters, @out);
     }
 
-    internal static DateTimeOffset? ParseDate(string? value, string flagName)
+    internal static DateTimeOffset? ParseDate(string? value, string flagName, bool isUpperBound = false)
     {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
-            return dto;
+        if (Mailvec.Core.Search.SearchDateParser.TryParse(value, isUpperBound, out var bound))
+            return bound;
         throw new FormatException($"{flagName} '{value}' is not a valid ISO 8601 date.");
     }
 

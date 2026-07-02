@@ -134,16 +134,13 @@ public sealed class TraySearchService(
 
     private static SearchFilters BuildFilters(TraySearchRequest req) => new(
         Folder: string.IsNullOrWhiteSpace(req.Folder) ? null : req.Folder.Trim(),
-        DateFrom: ParseDate(req.DateFrom),
-        DateTo: ParseDate(req.DateTo),
+        DateFrom: ParseDate(req.DateFrom, isUpperBound: false),
+        DateTo: ParseDate(req.DateTo, isUpperBound: true),
         FromContains: string.IsNullOrWhiteSpace(req.FromContains) ? null : req.FromContains.Trim(),
         FromExact: string.IsNullOrWhiteSpace(req.FromExact) ? null : req.FromExact.Trim());
 
-    private static DateTimeOffset? ParseDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var d) ? d : null;
-    }
+    private static DateTimeOffset? ParseDate(string? value, bool isUpperBound) =>
+        Search.SearchDateParser.TryParse(value, isUpperBound, out var bound) ? bound : null;
 
     private static string BuildBrowseSnippet(string? body)
     {
