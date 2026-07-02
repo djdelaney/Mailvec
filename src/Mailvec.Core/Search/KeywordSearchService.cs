@@ -1,11 +1,16 @@
 using System.Text;
 using Mailvec.Core.Data;
 using Mailvec.Core.Models;
+using Microsoft.Data.Sqlite;
 
 namespace Mailvec.Core.Search;
 
 public sealed class KeywordSearchService(ConnectionFactory connections)
 {
+    // SQLITE_ERROR — the generic result code SQLite raises for an FTS5 MATCH
+    // that fails to parse ("no such column: Re", "fts5: syntax error", …).
+    private const int SqliteError = 1;
+
     /// <summary>
     /// FTS5 MATCH query against subject/from/body, ordered by BM25 (lower is better).
     /// SearchHit.Bm25Score is the raw FTS5 score; smaller = more relevant.
@@ -21,6 +26,27 @@ public sealed class KeywordSearchService(ConnectionFactory connections)
         if (ftsQuery.Length == 0) return [];
 
         using var conn = connections.Open();
+        try
+        {
+            return RunQuery(conn, ftsQuery, limit, filters);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteError)
+        {
+            // The only user-controlled fragment in this SQL is the MATCH
+            // expression, so a SQLITE_ERROR here is an FTS5 parse failure — a
+            // natural-language query we mis-detected as advanced syntax (a
+            // colon in "Re: invoice", an unbalanced paren/quote, a stray "*").
+            // Fall back to the always-safe OR-of-quoted-tokens form so a plain
+            // query never surfaces to the caller as a raw SQLite exception.
+            var safe = TokenizeToOrQuery(query);
+            if (safe.Length == 0 || string.Equals(safe, ftsQuery, StringComparison.Ordinal))
+                return [];
+            return RunQuery(conn, safe, limit, filters);
+        }
+    }
+
+    private static IReadOnlyList<SearchHit> RunQuery(SqliteConnection conn, string ftsQuery, int limit, SearchFilters filters)
+    {
         using var cmd = conn.CreateCommand();
         var sql = new StringBuilder("""
             SELECT
@@ -68,7 +94,17 @@ public sealed class KeywordSearchService(ConnectionFactory connections)
     private static string BuildFtsQuery(string raw)
     {
         if (LooksLikeAdvancedSyntax(raw)) return raw.Trim();
+        return TokenizeToOrQuery(raw);
+    }
 
+    /// <summary>
+    /// The always-safe rendering: extract alphanumeric tokens and OR-join them,
+    /// each wrapped in double quotes so no token can carry FTS5 syntax. Used
+    /// both for ordinary queries and as the fallback when an advanced-looking
+    /// query fails to parse.
+    /// </summary>
+    private static string TokenizeToOrQuery(string raw)
+    {
         var tokens = new List<string>();
         var current = new StringBuilder();
         foreach (var ch in raw)

@@ -88,6 +88,43 @@ public class KeywordSearchServiceTests
         hits.Single().MessageIdHeader.ShouldBe("a@x");
     }
 
+    [Theory]
+    [InlineData("Re: invoice")]      // colon → mis-detected as a column filter
+    [InlineData("meeting at 3:30pm")] // colon inside a time
+    [InlineData("what's (up")]        // unbalanced paren + quote
+    [InlineData("wildcard *")]        // bare prefix operator
+    public void Falls_back_gracefully_on_unparseable_advanced_syntax(string query)
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("a@x", "Re: invoice", "the invoice is attached, meeting at 3:30pm"), "INBOX", "INBOX/cur", "a", now);
+        repo.Upsert(M("b@x", "unrelated", "nothing to see"), "INBOX", "INBOX/cur", "b", now);
+
+        // Before the fix these queries threw a raw SqliteException ("no such
+        // column: Re", "fts5: syntax error"). Now they degrade to a token search.
+        var hits = search.Search(query);
+        hits.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Colon_query_returns_the_expected_message_via_fallback()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("a@x", "Re: invoice", "please pay the invoice"), "INBOX", "INBOX/cur", "a", now);
+        repo.Upsert(M("b@x", "lunch", "ramen friday"), "INBOX", "INBOX/cur", "b", now);
+
+        var hits = search.Search("Re: invoice");
+        hits.Select(h => h.MessageIdHeader).ShouldContain("a@x");
+        hits.Select(h => h.MessageIdHeader).ShouldNotContain("b@x");
+    }
+
     [Fact]
     public void Matches_messages_by_attachment_filename()
     {
