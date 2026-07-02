@@ -112,6 +112,21 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     raw_headers      = excluded.raw_headers,
                     indexed_at       = excluded.indexed_at,
                     deleted_at       = NULL,
+                    -- Re-queue for embedding IN THE SAME TRANSACTION that writes
+                    -- the new body_text + content_hash + FTS. The scanner also
+                    -- calls ClearEmbeddingsForMessage to drop the stale chunks
+                    -- promptly, but that runs in a separate transaction — if the
+                    -- indexer crashed or hit SQLITE_BUSY between the two, the row
+                    -- would keep a non-NULL embedded_at whose content_hash now
+                    -- matches the new body, so no later rescan would ever detect
+                    -- a change and the old vectors would shadow the new FTS text
+                    -- forever. Clearing embedded_at here makes the re-queue
+                    -- atomic with the body write; the embedder's delete-then-
+                    -- insert then rebuilds the vectors. Gated on the same
+                    -- $attachments_reset flag so a no-op rescan (which must keep
+                    -- embedded_at to avoid re-embedding the whole archive every
+                    -- scan) leaves it untouched.
+                    embedded_at      = CASE WHEN $attachments_reset THEN NULL ELSE messages.embedded_at END,
                     content_hash     = excluded.content_hash
                 RETURNING id;
                 """;
@@ -502,11 +517,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // Fetch the message rows first, then load attachment payloads in a
         // second query per message. Two-step is simpler than a single GROUP_CONCAT
         // and avoids the per-row cost on the (common) bodies-only path.
-        var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames)>();
+        var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames, string? ContentHash)>();
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = """
-                SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names
+                SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names, content_hash
                 FROM messages
                 WHERE embedded_at IS NULL
                   AND deleted_at IS NULL
@@ -522,14 +537,19 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     reader.GetInt64(0),
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3)));
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    // Snapshot content_hash so the embedder can detect a body
+                    // change committed by the indexer during the (slow) embed
+                    // call and refuse to write stale vectors. See
+                    // ChunkRepository.ReplaceChunksForMessage's guard.
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
             }
         }
 
         foreach (var row in rows)
         {
             var attachmentTexts = LoadAttachmentTexts(conn, row.Id);
-            yield return new UnembeddedMessage(row.Id, row.BodyText, row.Subject, row.AttachmentNames, attachmentTexts);
+            yield return new UnembeddedMessage(row.Id, row.BodyText, row.Subject, row.AttachmentNames, attachmentTexts, row.ContentHash);
         }
     }
 
@@ -1072,7 +1092,12 @@ public sealed record UnembeddedMessage(
     string BodyText,
     string? Subject,
     string? AttachmentNames,
-    IReadOnlyList<AttachmentEmbeddingPayload> Attachments);
+    IReadOnlyList<AttachmentEmbeddingPayload> Attachments,
+    // content_hash at the moment the message was snapshotted for embedding.
+    // The embedder passes it back to ReplaceChunksForMessage's guard so a
+    // concurrent body change (which bumps content_hash) discards the stale
+    // embed instead of stamping it. Nullable for legacy pre-v3 rows.
+    string? ContentHash = null);
 
 public sealed record AttachmentEmbeddingPayload(
     long AttachmentId,
