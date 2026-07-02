@@ -156,17 +156,18 @@ public sealed class SearchEmailsTool(
     {
         return new SearchFilters(
             Folder: string.IsNullOrWhiteSpace(folder) ? null : folder.Trim(),
-            DateFrom: ParseDate(dateFrom, nameof(dateFrom)),
-            DateTo: ParseDate(dateTo, nameof(dateTo)),
+            DateFrom: ParseDate(dateFrom, nameof(dateFrom), isUpperBound: false),
+            DateTo: ParseDate(dateTo, nameof(dateTo), isUpperBound: true),
             FromContains: string.IsNullOrWhiteSpace(fromContains) ? null : fromContains.Trim(),
             FromExact: string.IsNullOrWhiteSpace(fromExact) ? null : fromExact.Trim());
     }
 
-    private static DateTimeOffset? ParseDate(string? value, string fieldName)
+    // Delegates to the shared Core parser so the "date-only dateTo means end
+    // of that day" rule stays identical across MCP / tray / CLI.
+    private static DateTimeOffset? ParseDate(string? value, string fieldName, bool isUpperBound)
     {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
-            return dto;
+        if (Mailvec.Core.Search.SearchDateParser.TryParse(value, isUpperBound, out var bound))
+            return bound;
         throw new McpException($"{fieldName} '{value}' is not a valid ISO 8601 date.");
     }
 }
