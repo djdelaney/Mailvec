@@ -51,21 +51,30 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
         // Read the prior row's content_hash inside the same transaction so
         // there's no race against another writer mutating it underneath us.
-        // priorHash is null for fresh inserts and for rows recorded before
-        // schema v3 (where content_hash hadn't been backfilled yet) — both
-        // mean "treat as unchanged" so we don't churn embeddings on every
-        // first re-scan after migration.
+        // "Row exists with NULL hash" (pre-v3 legacy rows) must be
+        // distinguished from "no row": both used to collapse to priorHash ==
+        // null via ExecuteScalar, which misclassified legacy rows as fresh
+        // inserts — AttachmentsReset then wiped their attachment rows
+        // (destroying OCR-recovered text until a wasted re-OCR) and cleared
+        // embedded_at, exactly the migration churn the NULL-means-unchanged
+        // rule exists to prevent. A NULL prior hash on an EXISTING row means
+        // "treat as unchanged".
         string? priorHash = null;
+        var rowExists = false;
         using (var probe = conn.CreateCommand())
         {
             probe.Transaction = tx;
             probe.CommandText = "SELECT content_hash FROM messages WHERE message_id = $mid";
             probe.Parameters.AddWithValue("$mid", parsed.MessageId);
-            var raw = probe.ExecuteScalar();
-            priorHash = raw is string s ? s : null;
+            using var reader = probe.ExecuteReader();
+            if (reader.Read())
+            {
+                rowExists = true;
+                priorHash = reader.IsDBNull(0) ? null : reader.GetString(0);
+            }
         }
-        var contentChanged = priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);
-        var isNewInsert = priorHash is null;
+        var contentChanged = rowExists && priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);
+        var isNewInsert = !rowExists;
 
         long id;
         using (var cmd = conn.CreateCommand())
