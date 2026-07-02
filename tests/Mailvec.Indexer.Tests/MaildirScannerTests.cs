@@ -284,6 +284,41 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    public void Reconciliation_is_skipped_when_a_live_files_sync_refresh_fails()
+    {
+        var path = WriteEml("INBOX", "cur", "wedge.host:2,S", "wedge body", "wedge@x");
+        _scanner.ScanAll();
+        _messages.GetByMessageId("wedge@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+
+        // Inject a persistent write failure for this file's sync_state row:
+        // both the ingest attempt AND the catch handler's refresh now fail,
+        // mimicking sustained SQLITE_BUSY / I/O trouble. The row goes stale,
+        // so without the reconciliation guard the live message would be
+        // soft-deleted this scan (and purge-able).
+        Exec($"CREATE TRIGGER wedge_guard BEFORE UPDATE ON sync_state WHEN new.maildir_full_path = '{path}' BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+
+        var failing = _scanner.ScanAll();
+        failing.FailedToParse.ShouldBe(1);
+        failing.SoftDeleted.ShouldBe(0);
+        _messages.GetByMessageId("wedge@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+
+        // Failure clears -> subsequent scans are back to normal.
+        Exec("DROP TRIGGER wedge_guard");
+        var recovered = _scanner.ScanAll();
+        recovered.FailedToParse.ShouldBe(0);
+        recovered.SoftDeleted.ShouldBe(0);
+        _messages.GetByMessageId("wedge@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
+    private void Exec(string sql)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
     public void Mbsync_new_to_cur_rename_does_not_create_a_duplicate()
     {
         var path = WriteEml("INBOX", "new", "x.host", "first pass", "rename@x");

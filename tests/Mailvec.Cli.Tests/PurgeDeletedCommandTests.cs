@@ -25,7 +25,7 @@ public class PurgeDeletedCommandTests
         using var ctx = new TestServiceProvider();
         var messages = ctx.Services.GetRequiredService<MessageRepository>();
         long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
-        messages.MarkDeleted([id], DateTimeOffset.UtcNow);
+        messages.MarkDeleted([id], DateTimeOffset.UtcNow.AddHours(-2));
 
         var writer = new StringWriter();
         var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: false, dryRun: true, writer, readLine: () => null);
@@ -42,7 +42,7 @@ public class PurgeDeletedCommandTests
         using var ctx = new TestServiceProvider();
         var messages = ctx.Services.GetRequiredService<MessageRepository>();
         long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
-        messages.MarkDeleted([id], DateTimeOffset.UtcNow);
+        messages.MarkDeleted([id], DateTimeOffset.UtcNow.AddHours(-2));
 
         var writer = new StringWriter();
         var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: false, dryRun: false, writer, readLine: () => "n");
@@ -58,7 +58,7 @@ public class PurgeDeletedCommandTests
         using var ctx = new TestServiceProvider();
         var messages = ctx.Services.GetRequiredService<MessageRepository>();
         long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
-        messages.MarkDeleted([id], DateTimeOffset.UtcNow);
+        messages.MarkDeleted([id], DateTimeOffset.UtcNow.AddHours(-2));
 
         var writer = new StringWriter();
         var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: false, dryRun: false, writer, readLine: () => "");
@@ -74,7 +74,7 @@ public class PurgeDeletedCommandTests
         var messages = ctx.Services.GetRequiredService<MessageRepository>();
         long keep = messages.Upsert(Sample("keep@x"), "INBOX", "INBOX/cur", "k", DateTimeOffset.UtcNow);
         long drop = messages.Upsert(Sample("drop@x"), "INBOX", "INBOX/cur", "d", DateTimeOffset.UtcNow);
-        messages.MarkDeleted([drop], DateTimeOffset.UtcNow);
+        messages.MarkDeleted([drop], DateTimeOffset.UtcNow.AddHours(-2));
 
         var writer = new StringWriter();
         var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: true, dryRun: false, writer, readLine: () => null);
@@ -94,13 +94,70 @@ public class PurgeDeletedCommandTests
         using var ctx = new TestServiceProvider();
         var messages = ctx.Services.GetRequiredService<MessageRepository>();
         long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
-        messages.MarkDeleted([id], DateTimeOffset.UtcNow);
+        messages.MarkDeleted([id], DateTimeOffset.UtcNow.AddHours(-2));
 
         var writer = new StringWriter();
         var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: false, dryRun: false, writer, readLine: () => " Y ");
 
         exit.ShouldBe(0);
         messages.CountSoftDeleted().ShouldBe(0);
+    }
+
+    [Fact]
+    public void Recent_soft_deletes_are_skipped_by_the_default_grace_period()
+    {
+        // A struggling scan can briefly soft-delete a live message (it
+        // self-heals on the next scan); the default grace period keeps a
+        // purge inside that window from hard-deleting it.
+        using var ctx = new TestServiceProvider();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        long id = messages.Upsert(Sample("fresh@x"), "INBOX", "INBOX/cur", "f", DateTimeOffset.UtcNow);
+        messages.MarkDeleted([id], DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: true, dryRun: false, writer, readLine: () => null);
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldContain("skipped");
+        messages.CountSoftDeleted().ShouldBe(1);
+        messages.GetByMessageId("fresh@x").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Min_age_zero_purges_recent_soft_deletes_too()
+    {
+        using var ctx = new TestServiceProvider();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        long id = messages.Upsert(Sample("fresh@x"), "INBOX", "INBOX/cur", "f", DateTimeOffset.UtcNow);
+        messages.MarkDeleted([id], DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: true, dryRun: false, writer, readLine: () => null, minAgeMinutes: 0);
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldContain("Purged 1");
+        messages.CountSoftDeleted().ShouldBe(0);
+    }
+
+    [Fact]
+    public void Mixed_ages_purges_only_the_old_ones_and_reports_the_skip()
+    {
+        using var ctx = new TestServiceProvider();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        long old = messages.Upsert(Sample("old@x"), "INBOX", "INBOX/cur", "o", DateTimeOffset.UtcNow);
+        long fresh = messages.Upsert(Sample("fresh@x"), "INBOX", "INBOX/cur", "f", DateTimeOffset.UtcNow);
+        messages.MarkDeleted([old], DateTimeOffset.UtcNow.AddHours(-2));
+        messages.MarkDeleted([fresh], DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: true, dryRun: false, writer, readLine: () => null);
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldContain("Purged 1");
+        writer.ToString().ShouldContain("skipped");
+        messages.GetByMessageId("old@x").ShouldBeNull();
+        messages.GetByMessageId("fresh@x").ShouldNotBeNull();
+        messages.CountSoftDeleted().ShouldBe(1);
     }
 
     private static ParsedMessage Sample(string id) => new(
