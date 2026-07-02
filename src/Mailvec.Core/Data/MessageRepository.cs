@@ -543,7 +543,14 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// those separately with <c>source='attachment'</c> so search hits can
     /// be traced back to the document that matched.
     /// </summary>
-    public IEnumerable<UnembeddedMessage> EnumerateUnembedded(int batchSize = 50)
+    /// <param name="batchSize">Max messages returned.</param>
+    /// <param name="excludeIds">
+    /// Message ids to skip — the embedder's in-memory quarantine for messages
+    /// whose embed calls permanently fail. Excluding in SQL matters: these
+    /// are head-of-line (ORDER BY id), so filtering after the LIMIT would
+    /// starve everything behind them.
+    /// </param>
+    public IEnumerable<UnembeddedMessage> EnumerateUnembedded(int batchSize = 50, IReadOnlyCollection<long>? excludeIds = null)
     {
         using var conn = connections.Open();
 
@@ -553,11 +560,19 @@ public sealed class MessageRepository(ConnectionFactory connections)
         var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames, string? ContentHash, long EmbedEpoch)>();
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = """
+            var exclusion = "";
+            if (excludeIds is { Count: > 0 })
+            {
+                var names = excludeIds.Select((_, i) => $"$ex{i}").ToList();
+                exclusion = $" AND id NOT IN ({string.Join(", ", names)})";
+                var i = 0;
+                foreach (var id in excludeIds) cmd.Parameters.AddWithValue($"$ex{i++}", id);
+            }
+            cmd.CommandText = $"""
                 SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names, content_hash, embed_epoch
                 FROM messages
                 WHERE embedded_at IS NULL
-                  AND deleted_at IS NULL
+                  AND deleted_at IS NULL{exclusion}
                 ORDER BY id
                 LIMIT $limit;
                 """;
