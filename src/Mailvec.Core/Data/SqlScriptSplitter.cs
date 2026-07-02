@@ -58,8 +58,12 @@ internal static class SqlScriptSplitter
 
             sb.Append(c);
 
-            if (IsKeywordEndingAt(sb, "BEGIN")) beginDepth++;
-            else if (beginDepth > 0 && IsKeywordEndingAt(sb, "END")) beginDepth--;
+            // `next` is the char after the just-appended one, so it gives the
+            // trailing word boundary the keyword check can't see from `sb` alone
+            // (otherwise "BEGINNING"/"ENDS"/a column named `ending_at` would
+            // mis-trigger the depth counter and re-fuse the whole script).
+            if (IsKeywordEndingAt(sb, "BEGIN", next)) beginDepth++;
+            else if (beginDepth > 0 && IsKeywordEndingAt(sb, "END", next)) beginDepth--;
 
             if (c == ';' && beginDepth == 0)
             {
@@ -75,7 +79,7 @@ internal static class SqlScriptSplitter
         return statements;
     }
 
-    private static bool IsKeywordEndingAt(StringBuilder sb, string keyword)
+    private static bool IsKeywordEndingAt(StringBuilder sb, string keyword, char after)
     {
         if (sb.Length < keyword.Length) return false;
         // The character just appended is the last of the keyword candidate.
@@ -84,12 +88,17 @@ internal static class SqlScriptSplitter
             var c = char.ToUpperInvariant(sb[sb.Length - keyword.Length + k]);
             if (c != keyword[k]) return false;
         }
-        // Must be a whole-word match: char before the keyword (if any) is non-alphanumeric/underscore.
+        // Must be a whole-word match: the char before the keyword (if any) and
+        // the char after it (\0 at end-of-script) are both non-word chars.
+        // NOTE: this still treats a bare CASE...END inside a trigger body as a
+        // depth-decrementing END; no current schema has one, but add CASE
+        // tracking here before introducing one.
         if (sb.Length > keyword.Length)
         {
             var before = sb[sb.Length - keyword.Length - 1];
             if (char.IsLetterOrDigit(before) || before == '_') return false;
         }
+        if (after != '\0' && (char.IsLetterOrDigit(after) || after == '_')) return false;
         return true;
     }
 }

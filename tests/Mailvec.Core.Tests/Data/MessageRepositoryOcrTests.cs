@@ -40,13 +40,29 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
         Insert(repo, "scan@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
         Insert(repo, "done@x", "ok.pdf", AttachmentTextExtractor.StatusDone);          // already extracted
-        Insert(repo, "img@x", "photo.png", AttachmentTextExtractor.StatusNoText);      // not a PDF
+        Insert(repo, "img@x", "photo.png", AttachmentTextExtractor.StatusNoText, contentType: "image/png"); // not a PDF
 
         var pending = repo.EnumerateAttachmentsNeedingOcr(50);
 
         pending.Count.ShouldBe(1);
         pending[0].MessageIdHeader.ShouldBe("scan@x");
         pending[0].MaildirFilename.ShouldBe("scan@x.eml");
+    }
+
+    [Fact]
+    public void EnumerateAttachmentsNeedingOcr_matches_pdf_content_type_without_pdf_filename()
+    {
+        // A scanned PDF sent as application/pdf with an empty/non-.pdf filename
+        // still lands at 'no_text' and must be OCR'd — the filename-suffix gate
+        // alone stranded these.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        Insert(repo, "ct@x", "attachment", AttachmentTextExtractor.StatusNoText, contentType: "application/pdf");
+
+        var pending = repo.EnumerateAttachmentsNeedingOcr(50);
+
+        pending.Count.ShouldBe(1);
+        pending[0].MessageIdHeader.ShouldBe("ct@x");
     }
 
     [Fact]
@@ -163,6 +179,26 @@ public class MessageRepositoryOcrTests
 
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusFailed);
         repo.EnumerateAttachmentsNeedingOcr(50).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void SaveOcrText_is_a_noop_when_the_attachment_is_no_longer_a_candidate()
+    {
+        // Rowid-reuse guard: if the row was replaced/reprocessed since the OCR
+        // pass selected it (now 'done'), SaveOcrText must not overwrite it or
+        // re-queue the message off a stale assumption.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "done@x", "ok.pdf", AttachmentTextExtractor.StatusDone);
+        var att = repo.GetById(id)!.Attachments[0];
+        SetEmbeddedAt(db, id);
+
+        repo.SaveOcrText(att.Id, id, "SHOULD NOT BE WRITTEN");
+
+        var after = repo.GetById(id)!.Attachments[0];
+        after.ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusDone);
+        (after.ExtractedText ?? "").ShouldNotContain("SHOULD NOT");
+        EmbeddedAt(db, id).ShouldNotBeNull(); // guard bailed → no re-queue
     }
 
     // ── Image OCR queue + inline-image backfill + split counts ───────────────

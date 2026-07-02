@@ -53,7 +53,14 @@ public sealed class MaildirWatcher : IDisposable
         _fsw.Deleted  += (_, e) => OnEvent(e.FullPath);
         _fsw.Renamed  += (_, e) => OnEvent(e.FullPath);
         _fsw.Changed  += (_, e) => OnEvent(e.FullPath);
-        _fsw.Error    += (_, e) => _logger.LogWarning(e.GetException(), "FileSystemWatcher reported an error");
+        _fsw.Error    += (_, e) =>
+        {
+            // A buffer overflow means events were dropped — we don't know which
+            // files changed. Force a pulse so the scanner does a full pass
+            // instead of waiting up to a full timer interval for the next one.
+            _logger.LogWarning(e.GetException(), "FileSystemWatcher reported an error; forcing a rescan");
+            _pulses.Writer.TryWrite(0);
+        };
 
         _logger.LogInformation("MaildirWatcher started on {Path} (debounce {Ms}ms)", _root, _debounce.TotalMilliseconds);
     }

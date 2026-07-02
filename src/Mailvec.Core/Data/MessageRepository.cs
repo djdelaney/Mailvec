@@ -361,7 +361,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
             WHERE m.deleted_at IS NULL
             """);
         SearchFilterSql.Append(sql, cmd, filters);
-        sql.Append("\nORDER BY m.date_sent IS NULL, m.date_sent DESC\nLIMIT $limit;");
+        // datetime() normalises the mixed-offset ISO-8601 stored via ToString("O")
+        // so a +HH:mm sender doesn't sort as if it were UTC. A raw string sort
+        // silently mis-orders "recent" across timezones.
+        sql.Append("\nORDER BY m.date_sent IS NULL, datetime(m.date_sent) DESC\nLIMIT $limit;");
         cmd.CommandText = sql.ToString();
         cmd.Parameters.AddWithValue("$limit", limit);
 
@@ -412,7 +415,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.CommandText = """
                 SELECT * FROM messages
                 WHERE thread_id = $tid AND deleted_at IS NULL
-                ORDER BY date_sent IS NULL, date_sent ASC, id ASC
+                ORDER BY date_sent IS NULL, datetime(date_sent) ASC, id ASC
                 """;
             cmd.Parameters.AddWithValue("$tid", threadId);
         }
@@ -432,16 +435,25 @@ public sealed class MessageRepository(ConnectionFactory connections)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
+        // oldest/latest via ORDER BY datetime() LIMIT 1 rather than MIN/MAX on
+        // the raw string: date_sent mixes UTC 'Z' and '+HH:mm' offsets, so a
+        // lexical MIN/MAX can pick the wrong extreme. The subquery returns the
+        // original offset-bearing string so the caller still parses a correct
+        // DateTimeOffset.
         cmd.CommandText = """
             SELECT
-                folder,
-                COUNT(*)         AS msg_count,
-                MIN(date_sent)   AS oldest_date,
-                MAX(date_sent)   AS latest_date
-            FROM messages
-            WHERE deleted_at IS NULL
-            GROUP BY folder
-            ORDER BY folder;
+                m.folder,
+                COUNT(*) AS msg_count,
+                (SELECT o.date_sent FROM messages o
+                   WHERE o.folder = m.folder AND o.deleted_at IS NULL AND o.date_sent IS NOT NULL
+                   ORDER BY datetime(o.date_sent) ASC LIMIT 1) AS oldest_date,
+                (SELECT n.date_sent FROM messages n
+                   WHERE n.folder = m.folder AND n.deleted_at IS NULL AND n.date_sent IS NOT NULL
+                   ORDER BY datetime(n.date_sent) DESC LIMIT 1) AS latest_date
+            FROM messages m
+            WHERE m.deleted_at IS NULL
+            GROUP BY m.folder
+            ORDER BY m.folder;
             """;
 
         var results = new List<FolderStats>();
@@ -479,13 +491,18 @@ public sealed class MessageRepository(ConnectionFactory connections)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
+        // See FolderStats: datetime()-ordered subqueries instead of MIN/MAX so
+        // mixed-offset timestamps compare chronologically, returning the
+        // original offset-bearing string for the caller to parse.
         cmd.CommandText = """
             SELECT
-                COUNT(*)       AS total,
-                MIN(date_sent) AS oldest,
-                MAX(date_sent) AS latest
-            FROM messages
-            WHERE deleted_at IS NULL;
+                (SELECT COUNT(*) FROM messages WHERE deleted_at IS NULL) AS total,
+                (SELECT date_sent FROM messages
+                   WHERE deleted_at IS NULL AND date_sent IS NOT NULL
+                   ORDER BY datetime(date_sent) ASC LIMIT 1) AS oldest,
+                (SELECT date_sent FROM messages
+                   WHERE deleted_at IS NULL AND date_sent IS NOT NULL
+                   ORDER BY datetime(date_sent) DESC LIMIT 1) AS latest;
             """;
 
         using var reader = cmd.ExecuteReader();
@@ -559,16 +576,26 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// locate the bytes in the Maildir. Materialised (not streamed) because the
     /// caller does slow async OCR between items.
     /// </summary>
+    // Which 'no_text' attachments the scanned-PDF OCR pass treats as candidates.
+    // The indexer classifies PDFs by content-type OR extension
+    // (AttachmentTextExtractor.ResolveFormat), so a scanned PDF sent as
+    // application/pdf with an empty/missing filename also lands at 'no_text' —
+    // keying on the '.pdf' suffix alone stranded those, permanently unsearchable
+    // and uncounted. Shared verbatim by the candidate query and OcrCounts so the
+    // pending count matches what the embedder actually selects.
+    private const string PdfOcrMatch =
+        "(lower(a.content_type) = 'application/pdf' OR lower(a.filename) LIKE '%.pdf')";
+
     public IReadOnlyList<OcrCandidate> EnumerateAttachmentsNeedingOcr(int batchSize)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = $"""
             SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder
             FROM attachments a
             JOIN messages m ON m.id = a.message_id
             WHERE a.extraction_status = $noText
-              AND lower(a.filename) LIKE '%.pdf'
+              AND {PdfOcrMatch}
               AND m.deleted_at IS NULL
             ORDER BY a.id
             LIMIT $limit;
@@ -671,8 +698,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE attachments SET extraction_status = $noText WHERE id = $id;";
+        // Only move a still-'unsupported' row (guards against rowid reuse — see
+        // SaveOcrText). A row that changed underneath us shouldn't be retyped.
+        cmd.CommandText = "UPDATE attachments SET extraction_status = $noText WHERE id = $id AND extraction_status = $unsupported;";
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         cmd.Parameters.AddWithValue("$id", attachmentId);
         cmd.ExecuteNonQuery();
     }
@@ -698,17 +728,21 @@ public sealed class MessageRepository(ConnectionFactory connections)
         cmd.CommandText = $"""
             SELECT
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = $noText AND lower(a.filename) LIKE '%.pdf'
+                 WHERE a.extraction_status = $noText AND {PdfOcrMatch}
                    AND m.deleted_at IS NULL),
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
                  WHERE a.extraction_status = $unsupported AND {ImageOcrMatch}
                    AND a.size_bytes >= $minBytes
                    AND m.deleted_at IS NULL),
+              -- COALESCE the image predicate to 0: for an 'ocr' row with NULL
+              -- content_type and a non-image filename it evaluates to NULL, and
+              -- both `AND NOT NULL` and `AND NULL` are NULL, so the row would
+              -- fall into neither recovered bucket. Treat it as non-image (PDF).
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = $ocr AND NOT {ImageOcrMatch}
+                 WHERE a.extraction_status = $ocr AND NOT COALESCE(({ImageOcrMatch}), 0)
                    AND m.deleted_at IS NULL),
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
-                 WHERE a.extraction_status = $ocr AND {ImageOcrMatch}
+                 WHERE a.extraction_status = $ocr AND COALESCE(({ImageOcrMatch}), 0)
                    AND m.deleted_at IS NULL)
             """;
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
@@ -736,19 +770,37 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
+        int updated;
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
+            // Guard on the candidate statuses. attachments.id is a rowid without
+            // AUTOINCREMENT, so a concurrent indexer content-change that
+            // DELETE+INSERTs the row can reuse this id for a *different*
+            // attachment between candidate selection and this write. Stamping
+            // OCR text onto a row that's no longer a pending OCR candidate would
+            // marry the old bytes' transcription to the new attachment (and mark
+            // it searchable). If the row moved on, write nothing.
             cmd.CommandText = """
                 UPDATE attachments
                 SET extracted_text = $text, extraction_status = $ocr, extracted_at = $now
-                WHERE id = $id;
+                WHERE id = $id AND extraction_status IN ($noText, $unsupported);
                 """;
             cmd.Parameters.AddWithValue("$text", text);
             cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
+            cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+            cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
             cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
             cmd.Parameters.AddWithValue("$id", attachmentId);
-            cmd.ExecuteNonQuery();
+            updated = cmd.ExecuteNonQuery();
+        }
+
+        if (updated == 0)
+        {
+            // Row was replaced/reprocessed since selection — don't rewrite the
+            // message's FTS/embedding state off a stale assumption.
+            tx.Rollback();
+            return;
         }
 
         var attachmentText = ConcatAttachmentText(conn, tx, messageId);
@@ -908,8 +960,12 @@ public sealed class MessageRepository(ConnectionFactory connections)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE attachments SET extraction_status = $failed WHERE id = $id;";
+        // Guard on candidate statuses (rowid reuse — see SaveOcrText); only a
+        // row still pending OCR should be retired to 'failed'.
+        cmd.CommandText = "UPDATE attachments SET extraction_status = $failed WHERE id = $id AND extraction_status IN ($noText, $unsupported);";
         cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
+        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         cmd.Parameters.AddWithValue("$id", attachmentId);
         cmd.ExecuteNonQuery();
     }

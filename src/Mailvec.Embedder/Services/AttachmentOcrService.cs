@@ -34,6 +34,24 @@ public sealed class AttachmentOcrService(
     private readonly int _maxPages = Math.Max(1, options.Value.OcrMaxPagesPerPdf);
     private readonly EmbedderOptions _opts = options.Value;
 
+    // Per-attachment vision-failure counts, in-memory for this process. A vision
+    // call that fails every cycle for one document would otherwise head-of-line
+    // block the whole OCR queue forever (candidates are ordered by id, so the
+    // same low-id poison doc is re-selected first each cycle). After this many
+    // consecutive failed cycles we retire it to 'failed' and move on. Only the
+    // single embedder worker touches this, sequentially, so a plain dict is safe.
+    private const int MaxVisionAttempts = 5;
+    private readonly Dictionary<long, int> _visionFailures = new();
+
+    // Returns true when the attachment has failed enough times to retire.
+    private bool RecordVisionFailure(long attachmentId)
+    {
+        var n = _visionFailures.GetValueOrDefault(attachmentId) + 1;
+        if (n >= MaxVisionAttempts) { _visionFailures.Remove(attachmentId); return true; }
+        _visionFailures[attachmentId] = n;
+        return false;
+    }
+
     /// <summary>
     /// OCR up to <paramref name="batchSize"/> scanned PDFs. Returns the number
     /// successfully OCR'd (0 when there's nothing to do, or the vision model
@@ -107,14 +125,28 @@ public sealed class AttachmentOcrService(
             {
                 // Transient: Ollama down, or an HTTP timeout (which surfaces as
                 // TaskCanceledException — an OperationCanceledException — while ct
-                // is NOT cancelled). Leave 'no_text' for retry and stop the batch;
-                // no point hammering a wedged model this cycle.
+                // is NOT cancelled). Back off this cycle rather than hammering a
+                // wedged model. But bound it: a document that fails every cycle
+                // would otherwise block the whole queue behind it forever, so
+                // once it has failed MaxVisionAttempts times, retire it to
+                // 'failed' and continue past it. (The model-availability probe
+                // above already short-circuits a fully-down Ollama, so repeated
+                // failures here point at this specific document.)
+                if (RecordVisionFailure(c.AttachmentId))
+                {
+                    logger.LogWarning(ex,
+                        "OCR: vision call failed {Max}x for attachment {AttachmentId}; marking failed to unblock the queue.",
+                        MaxVisionAttempts, c.AttachmentId);
+                    messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                    continue;
+                }
                 logger.LogWarning(ex,
-                    "OCR: vision call failed for attachment {AttachmentId}; will retry. Aborting OCR batch.", c.AttachmentId);
+                    "OCR: vision call failed for attachment {AttachmentId}; will retry. Aborting OCR batch this cycle.", c.AttachmentId);
                 break;
             }
 
             messages.SaveOcrText(c.AttachmentId, c.MessageId, sb.ToString());
+            _visionFailures.Remove(c.AttachmentId);
             done++;
             logger.LogInformation(
                 "OCR'd attachment {AttachmentId} ({Pages} page(s), {Chars} chars); re-queued message {MessageId}.",
@@ -203,9 +235,19 @@ public sealed class AttachmentOcrService(
             catch (Exception ex)
             {
                 // Transient: Ollama down, or an HTTP timeout (TaskCanceledException,
-                // an OperationCanceledException, while ct is NOT cancelled).
+                // an OperationCanceledException, while ct is NOT cancelled). Bound
+                // the retries so one poison image can't block the queue forever
+                // (see ProcessBatchAsync for the rationale).
+                if (RecordVisionFailure(c.AttachmentId))
+                {
+                    logger.LogWarning(ex,
+                        "Image OCR: vision call failed {Max}x for attachment {AttachmentId}; marking failed to unblock the queue.",
+                        MaxVisionAttempts, c.AttachmentId);
+                    messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                    continue;
+                }
                 logger.LogWarning(ex,
-                    "Image OCR: vision call failed for attachment {AttachmentId}; will retry. Aborting image OCR batch.",
+                    "Image OCR: vision call failed for attachment {AttachmentId}; will retry. Aborting image OCR batch this cycle.",
                     c.AttachmentId);
                 break;
             }
@@ -221,6 +263,7 @@ public sealed class AttachmentOcrService(
             }
 
             messages.SaveOcrText(c.AttachmentId, c.MessageId, text);
+            _visionFailures.Remove(c.AttachmentId);
             done++;
             logger.LogInformation(
                 "OCR'd image attachment {AttachmentId} ({W}x{H}, {Chars} chars); re-queued message {MessageId}.",

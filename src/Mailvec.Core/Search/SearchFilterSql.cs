@@ -45,8 +45,17 @@ internal static class SearchFilterSql
         {
             // Match either the address or the display name; users say "from
             // Acme" without knowing whether that's the name or the local-part.
-            sql.Append("\n  AND (LOWER(m.from_address) LIKE $from_like OR LOWER(m.from_name) LIKE $from_like)");
-            cmd.Parameters.AddWithValue("$from_like", "%" + filters.FromContains.ToLowerInvariant() + "%");
+            // Escape LIKE metacharacters in the value so a literal % or _ in a
+            // sender ("a_b@x") matches literally instead of acting as a wildcard.
+            sql.Append("\n  AND (LOWER(m.from_address) LIKE $from_like ESCAPE '\\' OR LOWER(m.from_name) LIKE $from_like ESCAPE '\\')");
+            cmd.Parameters.AddWithValue("$from_like", "%" + EscapeLike(filters.FromContains.ToLowerInvariant()) + "%");
         }
     }
+
+    // Escape the LIKE wildcards (% and _) and the escape char itself so a
+    // user-supplied substring is matched literally under `ESCAPE '\'`.
+    private static string EscapeLike(string value) => value
+        .Replace("\\", "\\\\")
+        .Replace("%", "\\%")
+        .Replace("_", "\\_");
 }
