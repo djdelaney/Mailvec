@@ -241,6 +241,49 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public void Transient_ingest_failure_on_a_changed_file_does_not_mask_the_change()
+    {
+        // A file's body changes, but the scan that should pick it up fails
+        // transiently (I/O blip, SQLITE_BUSY past the timeout, ...). The
+        // catch path stamps last_seen_at to the scan start — which is LATER
+        // than the file's mtime — so without the NULL-content_hash retry
+        // marker the mtime fast path would skip the file on every future
+        // scan and the change would be silently masked forever.
+        var path = WriteEml("INBOX", "cur", "flaky.host:2,S", "original body", "flaky@x");
+        _scanner.ScanAll();
+        _messages.GetByMessageId("flaky@x").ShouldNotBeNull().BodyText.ShouldNotBeNull().ShouldContain("original body");
+
+        // Body changes on disk...
+        WriteEml("INBOX", "cur", "flaky.host:2,S", "updated body", "flaky@x");
+
+        // ...but the next scan can't read the file (simulated transient failure).
+        var mode = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var failing = _scanner.ScanAll();
+            failing.FailedToParse.ShouldBe(1);
+            failing.SoftDeleted.ShouldBe(0);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, mode);
+        }
+
+        // The message survived the failed scan and the NEXT scan retries the
+        // parse (instead of trusting the fresh last_seen_at stamp) and picks
+        // up the changed body.
+        _messages.GetByMessageId("flaky@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+
+        var retry = _scanner.ScanAll();
+        retry.FailedToParse.ShouldBe(0);
+        retry.Upserted.ShouldBe(1);
+        _messages.GetByMessageId("flaky@x").ShouldNotBeNull().BodyText.ShouldNotBeNull().ShouldContain("updated body");
+    }
+
+    [Fact]
     public void Mbsync_new_to_cur_rename_does_not_create_a_duplicate()
     {
         var path = WriteEml("INBOX", "new", "x.host", "first pass", "rename@x");
