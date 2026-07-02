@@ -97,8 +97,16 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     date_received    = excluded.date_received,
                     size_bytes       = excluded.size_bytes,
                     has_attachments  = excluded.has_attachments,
-                    attachment_names = excluded.attachment_names,
-                    attachment_text  = excluded.attachment_text,
+                    -- Attachment-derived columns track the attachments table, which
+                    -- ReplaceAttachments only rewrites when the row is new or the body
+                    -- changed. On a no-op rescan we must KEEP the stored values: the
+                    -- fresh parse of a scanned PDF is 'no_text' (empty attachment_text),
+                    -- so blindly taking excluded here would wipe OCR-recovered text that
+                    -- the embedder wrote via SaveOcrText — silently breaking keyword/FTS
+                    -- search for that document. Gate on the same $attachments_reset the
+                    -- ReplaceAttachments call below uses so the two stay in lockstep.
+                    attachment_names = CASE WHEN $attachments_reset THEN excluded.attachment_names ELSE messages.attachment_names END,
+                    attachment_text  = CASE WHEN $attachments_reset THEN excluded.attachment_text  ELSE messages.attachment_text  END,
                     body_text        = excluded.body_text,
                     body_html        = excluded.body_html,
                     raw_headers      = excluded.raw_headers,
@@ -127,6 +135,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.Parameters.AddWithValue("$has_attachments", parsed.HasAttachments ? 1 : 0);
             cmd.Parameters.AddWithValue("$attachment_names", (object?)attachmentNames ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$attachment_text", (object?)attachmentText ?? DBNull.Value);
+            // On INSERT the attachment_* values above are used directly; on
+            // ON CONFLICT this flag decides whether to refresh them from the fresh
+            // parse (attachments being replaced) or preserve the stored values
+            // (no-op rescan — mirrors the ReplaceAttachments guard below).
+            cmd.Parameters.AddWithValue("$attachments_reset", (isNewInsert || contentChanged) ? 1 : 0);
             cmd.Parameters.AddWithValue("$body_text", (object?)parsed.BodyText ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$body_html", (object?)parsed.BodyHtml ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$raw_headers", parsed.RawHeaders);

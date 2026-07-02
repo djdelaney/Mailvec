@@ -137,6 +137,30 @@ echo "==> Installing snapshot"
 mkdir -p "$DB_DIR"
 cp "$SNAP" "$DB"
 
+# Rebuild the denormalized messages.attachment_text (the 6th messages_fts column)
+# from the persisted attachments rows, which still carry OCR-recovered text. This
+# is defense-in-depth: an older indexer binary on this machine re-derives
+# attachment_text from a fresh .eml parse on its first re-point rescan, and a
+# scanned PDF parses back as 'no_text' (empty) — silently wiping OCR text from
+# keyword/FTS search. The UPDATE fires messages_au, which resyncs messages_fts.
+# Harmless (idempotent) when the snapshot is already consistent.
+echo "==> Rebuilding attachment_text (FTS) from persisted extraction rows"
+FIXED="$(sqlite3 "$DB" "
+  UPDATE messages
+  SET attachment_text = (
+      SELECT group_concat(extracted_text, ' ')
+      FROM attachments
+      WHERE attachments.message_id = messages.id
+        AND attachments.extracted_text IS NOT NULL
+        AND length(attachments.extracted_text) > 0
+  )
+  WHERE id IN (
+      SELECT DISTINCT message_id FROM attachments
+      WHERE extracted_text IS NOT NULL AND length(extracted_text) > 0
+  );
+  SELECT changes();")"
+echo "  refreshed attachment_text for $FIXED message(s)"
+
 echo
 echo "Snapshot installed at: $DB"
 echo "Services resuming. Then verify with:"
