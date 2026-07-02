@@ -35,6 +35,33 @@ public class SchemaMigratorTests
     }
 
     [Fact]
+    public void ExecuteScript_skips_re_apply_when_guard_version_is_already_met()
+    {
+        // The concurrent-starter loser: the DB is already migrated, so a guarded
+        // ExecuteScript must NOT re-run its non-idempotent DDL. This CREATE would
+        // throw "table messages already exists" if the guard didn't skip it.
+        using var db = new TempDatabase(); // fresh DB at LatestSchemaVersion
+        using var conn = db.Connections.Open();
+
+        Should.NotThrow(() => SchemaMigrator.ExecuteScript(
+            conn, "CREATE TABLE messages (dup INTEGER);", stampVersion: null, guardAtLeast: 1));
+    }
+
+    [Fact]
+    public void ExecuteScript_applies_when_guard_version_is_not_yet_met()
+    {
+        using var db = new TempDatabase();
+        using var conn = db.Connections.Open();
+
+        // guardAtLeast above the current version -> guard not met -> DDL runs.
+        SchemaMigrator.ExecuteScript(conn, "CREATE TABLE guard_probe (x INTEGER);", guardAtLeast: 9999);
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='guard_probe'";
+        Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture).ShouldBe(1);
+    }
+
+    [Fact]
     public void Fresh_database_has_messages_content_hash_column()
     {
         using var db = new TempDatabase();
