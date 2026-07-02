@@ -129,6 +129,40 @@ public class MessageParserTests
         other.MessageId.ShouldEndWith("@synthetic.mailvec.local");
     }
 
+    [Fact]
+    public void Attachment_size_bytes_is_the_decoded_length_not_the_encoded_length()
+    {
+        // base64 inflates ~33%, so the encoded MIME stream length over-reported
+        // the payload size. size_bytes must be the decoded length.
+        var payload = new byte[90];                       // decoded size we assert
+        for (int i = 0; i < payload.Length; i++) payload[i] = (byte)(i % 251);
+        var b64 = Convert.ToBase64String(payload);        // 120 chars encoded
+
+        var raw =
+            "Date: Mon, 13 Jan 2025 10:15:00 -0500\r\n" +
+            "From: alice@example.com\r\n" +
+            "To: bob@example.com\r\n" +
+            "Subject: with base64 attachment\r\n" +
+            "Message-ID: <b64@example.com>\r\n" +
+            "MIME-Version: 1.0\r\n" +
+            "Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\r\n" +
+            "--BOUND\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n\r\nsee attachment\r\n" +
+            "--BOUND\r\n" +
+            "Content-Type: application/octet-stream; name=\"blob.bin\"\r\n" +
+            "Content-Disposition: attachment; filename=\"blob.bin\"\r\n" +
+            "Content-Transfer-Encoding: base64\r\n\r\n" +
+            b64 + "\r\n" +
+            "--BOUND--\r\n";
+
+        using var stream = new MemoryStream(System.Text.Encoding.ASCII.GetBytes(raw));
+        var mime = MimeKit.MimeMessage.Load(stream);
+        var parsed = _parser.Parse(mime, sizeBytes: raw.Length);
+
+        var att = parsed.Attachments.ShouldHaveSingleItem();
+        att.SizeBytes.ShouldBe(90);   // decoded; the encoded base64 would be 120
+    }
+
     private ParsedMessage ParseRaw(string raw)
     {
         using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(raw.Replace("\r\n", "\n").Replace("\n", "\r\n")));

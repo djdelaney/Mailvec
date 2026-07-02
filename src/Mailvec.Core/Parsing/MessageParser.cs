@@ -92,8 +92,8 @@ public sealed class MessageParser
         {
             var fileName = entity.ContentDisposition?.FileName ?? entity.ContentType?.Name;
             var contentType = entity.ContentType?.MimeType;
-            long? size = entity is MimePart part && part.Content is { Stream: { } s } && s.CanSeek
-                ? s.Length
+            long? size = entity is MimePart part && part.Content is not null
+                ? DecodedContentLength(part.Content)
                 : null;
 
             string? extractedText = null;
@@ -115,6 +115,34 @@ public sealed class MessageParser
             index++;
         }
         return list;
+    }
+
+    /// <summary>
+    /// The DECODED payload length (what <c>Open()</c> yields), not the encoded
+    /// MIME stream length. size_bytes feeds the oversize cap and the image-OCR
+    /// min-bytes gate, which want the real payload size — base64 inflates the
+    /// encoded stream ~33%, so the encoded length over-reported and could
+    /// over-skip. Streamed with a pooled buffer so a large attachment never
+    /// materialises in memory, and it also fixes the old CanSeek gap (a
+    /// non-seekable content stream previously stored NULL and dropped the
+    /// attachment out of the image-OCR gate entirely).
+    /// </summary>
+    private static long DecodedContentLength(IMimeContent content)
+    {
+        using var stream = content.Open();
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
+        {
+            long total = 0;
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                total += read;
+            return total;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static IReadOnlyList<EmailAddress> ToAddressList(InternetAddressList addresses)
