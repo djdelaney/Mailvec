@@ -4,6 +4,7 @@
 
 ## Build choices
 
+- **Single-arch: Apple Silicon as shipped.** The `RID="osx-arm64"` in `build-mcpb.sh` means the bundle (both the apphost and the bundled `vec0.dylib`) is arm64-only. An Intel-Mac user must change it to `osx-x64` before building — an arm64 bundle installs fine but the connector never appears, with the only clue buried in `~/Library/Logs/Claude/mcp-server-mailvec.log`. If the bundle is ever distributed rather than built per-machine, this needs either two artifacts or a universal build.
 - **Self-contained, NOT single-file.** `PublishSingleFile=true` would still leave `vec0.dylib` outside the apphost (added via `<None CopyToOutputDirectory>`, not as a managed dep), but turning it off keeps the layout debuggable: `server/Mailvec.Mcp` and `server/runtimes/osx-arm64/native/vec0.dylib` are visibly co-located, and `ConnectionFactory.ResolveVecExtension` resolves the relative path against `AppContext.BaseDirectory` exactly as it does in dev builds. Single-file would also make `xattr`/Gatekeeper triage harder.
 - **The bundle is large (tens of MB).** The self-contained .NET 10 runtime is the bulk, and the native PDFtoImage/PDFium + SkiaSharp assets (added for `get_attachment_page_image` and OCR-adjacent rendering) grew it further. Fine for a personal install. Don't switch to framework-dependent — that brings back the `DOTNET_ROOT` / PATH problem the bundle was built to eliminate.
 - **The bundle is the read-side only.** Indexer + embedder still run as your own processes against the same DB. Updating the bundle does not require restarting them.
