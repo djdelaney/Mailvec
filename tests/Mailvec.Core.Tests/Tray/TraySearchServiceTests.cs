@@ -63,6 +63,29 @@ public class TraySearchServiceTests
     }
 
     [Fact]
+    public async Task Keyword_scores_are_normalized_into_unit_range_with_best_hit_at_one()
+    {
+        // FTS5 bm25() is negative (more negative = better). The tray's score
+        // bar multiplies by Score, so values must land in (0,1] with the top
+        // hit at 1.0 — dividing by the WORST score used to give every row a
+        // ratio >= 1 and all bars rendered full.
+        await using var ctx = new Setup();
+
+        ctx.InsertMessage("a@x", "ramen ramen ramen", "ramen ramen ramen ramen", null); // strong match
+        ctx.InsertMessage("b@x", "Hello", "one mention of ramen in a much longer body about other things entirely", null);
+
+        var resp = await ctx.Service.SearchAsync(new TraySearchRequest(
+            Query: "ramen", Mode: "keyword", Limit: 10,
+            Folder: null, DateFrom: null, DateTo: null,
+            FromContains: null, FromExact: null));
+
+        resp.Count.ShouldBe(2);
+        resp.Results.ShouldAllBe(r => r.Score > 0 && r.Score <= 1.0);
+        resp.Results[0].Score.ShouldBe(1.0, tolerance: 1e-9);       // best hit pegs the bar
+        resp.Results[1].Score.ShouldBeLessThan(resp.Results[0].Score); // weaker hit scales down
+    }
+
+    [Fact]
     public async Task Limit_is_clamped_to_McpOptions_bounds()
     {
         await using var ctx = new Setup();

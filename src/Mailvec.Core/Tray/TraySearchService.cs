@@ -63,7 +63,12 @@ public sealed class TraySearchService(
 
     private IReadOnlyList<TraySearchHit> MapKeyword(IReadOnlyList<SearchHit> hits)
     {
-        var max = hits.Count == 0 ? 1 : hits.Max(h => h.Bm25Score);
+        // FTS5 bm25() is NEGATIVE (more negative = better match). Normalize
+        // to (0,1] by dividing by the BEST (most negative) score, so the top
+        // hit renders a full score bar and weaker hits scale down. Dividing
+        // by Max() — the score closest to zero, i.e. the WORST hit — produced
+        // ratios >= 1 for every row, so keyword mode drew all-full bars.
+        var best = hits.Count == 0 ? -1.0 : hits.Min(h => h.Bm25Score);
         return [..
             hits.Select(h => new TraySearchHit(
                 Id: h.MessageId,
@@ -74,7 +79,7 @@ public sealed class TraySearchService(
                 FromName: h.FromName,
                 DateSent: h.DateSent,
                 Snippet: h.Snippet,
-                Score: max == 0 ? 0 : h.Bm25Score / max,
+                Score: best == 0 ? 0 : Math.Clamp(h.Bm25Score / best, 0, 1),
                 Bm25Score: h.Bm25Score,
                 VectorScore: null,
                 MatchedAttachment: null,
