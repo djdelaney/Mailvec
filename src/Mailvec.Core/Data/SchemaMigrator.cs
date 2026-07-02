@@ -72,8 +72,7 @@ public sealed class SchemaMigrator(
         {
             var (fileName, sql) = LoadMigrationForVersion(v);
             logger.LogInformation("Applying migration {File} ({From} -> {To})", fileName, v - 1, v);
-            ExecuteScript(conn, sql);
-            BumpSchemaVersion(conn, v);
+            ExecuteScript(conn, sql, stampVersion: v);
         }
     }
 
@@ -105,7 +104,15 @@ public sealed class SchemaMigrator(
         return (FileName: resource, Sql: reader.ReadToEnd());
     }
 
-    private static void ExecuteScript(Microsoft.Data.Sqlite.SqliteConnection conn, string script)
+    // The schema_version stamp must commit in the SAME transaction as the
+    // migration statements. A crash after the script committed but before a
+    // separate bump would leave the version unbumped, so the (non-idempotent,
+    // ALTER-based) migration re-runs on the next start and throws "duplicate
+    // column name" — permanently wedging every service until metadata is
+    // hand-edited. Internal (not private) so tests can exercise the
+    // rollback semantics directly.
+    internal static void ExecuteScript(
+        Microsoft.Data.Sqlite.SqliteConnection conn, string script, int? stampVersion = null)
     {
         // PRAGMA journal_mode = WAL must run outside a transaction, so we run
         // PRAGMA-only statements first and the rest inside a transaction.
@@ -126,18 +133,18 @@ public sealed class SchemaMigrator(
             cmd.CommandText = stmt;
             cmd.ExecuteNonQuery();
         }
+        if (stampVersion is int version)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO metadata(key, value) VALUES('schema_version', $v)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """;
+            cmd.Parameters.AddWithValue("$v", version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            cmd.ExecuteNonQuery();
+        }
         tx.Commit();
-    }
-
-    private static void BumpSchemaVersion(Microsoft.Data.Sqlite.SqliteConnection conn, int version)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO metadata(key, value) VALUES('schema_version', $v)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """;
-        cmd.Parameters.AddWithValue("$v", version.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        cmd.ExecuteNonQuery();
     }
 
     private static int ReadSchemaVersion(Microsoft.Data.Sqlite.SqliteConnection conn)
