@@ -95,6 +95,27 @@ public class MaildirAttachmentReaderTests : IDisposable
         ex.Message.ShouldContain("out of range");
     }
 
+    [Fact]
+    public void Refuses_to_read_through_a_symlinked_directory_that_escapes_the_root()
+    {
+        // A secret dir OUTSIDE the Maildir root, reachable only via a symlink
+        // planted inside it. The lexical containment check passes (the target
+        // string is under the root), so only symlink resolution catches it.
+        var secret = Path.Combine(_root, "secret");
+        Directory.CreateDirectory(secret);
+        File.WriteAllText(Path.Combine(secret, "outside.eml"), Eml);
+        Directory.CreateSymbolicLink(Path.Combine(_maildirRoot, "escape"), secret);
+
+        var msg = new Message
+        {
+            Id = 7, MessageId = "escape@x", MaildirPath = "escape",
+            MaildirFilename = "outside.eml", Folder = "INBOX", HasAttachments = true,
+        };
+
+        var ex = Should.Throw<InvalidOperationException>(() => Reader().ReadBytes(msg, 0));
+        ex.Message.ShouldContain("outside Maildir root");
+    }
+
     // multipart/mixed [ multipart/related [ text/html, inline image/png ], attachment ].
     // The inline PNG (base64 "IMGDATA") is not in mime.Attachments — it's only
     // reachable via the shared MessageParts enumeration, at index 1 (after the
