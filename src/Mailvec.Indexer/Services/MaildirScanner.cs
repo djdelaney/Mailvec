@@ -144,8 +144,15 @@ public sealed class MaildirScanner(
             // reconciliation pass doesn't soft-delete it. Mbsync flag rewrites
             // bump mtime, so the optimization is robust against IMAP flag
             // changes that don't actually mutate body content.
+            //
+            // ContentHash must be non-null to take the fast path: a NULL hash
+            // is the "last ingest attempt failed" marker written by the catch
+            // below. Without it, a single transient failure (SQLITE_BUSY, I/O
+            // blip) on a *changed* file would stamp last_seen_at past the
+            // file's mtime and the change would be skipped on every future
+            // scan — permanently masking the new content.
             prior = syncState.Get(ctx.Connection, ctx.Transaction, filePath);
-            if (prior is { MessageId: not null }
+            if (prior is { MessageId: not null, ContentHash: not null }
                 && File.GetLastWriteTimeUtc(filePath) <= prior.LastSeenAt.UtcDateTime)
             {
                 syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash);
@@ -183,15 +190,19 @@ public sealed class MaildirScanner(
         {
             logger.LogWarning(ex, "Failed to parse {Path}", filePath);
             // Refresh last_seen_at so we don't treat the file as deleted next
-            // pass, but PRESERVE the prior message_id / content_hash. Nulling
-            // message_id would drop this path out of the deletion-reconciliation
-            // mapping (it filters on message_id != null), so if the file is later
-            // removed, its message would be stranded "live" forever. Keeping the
-            // prior id means a transient parse failure (I/O blip, DB busy, file
-            // replaced mid-read) doesn't corrupt the sync_state association.
+            // pass, but PRESERVE the prior message_id. Nulling message_id
+            // would drop this path out of the deletion-reconciliation mapping
+            // (it filters on message_id != null), so if the file is later
+            // removed, its message would be stranded "live" forever.
+            //
+            // content_hash is deliberately NULLed as a "retry me" marker: the
+            // mtime fast path requires a non-null hash, so the next scan
+            // re-parses this file instead of trusting the fresh last_seen_at
+            // stamp. Preserving the prior hash here would let a transient
+            // failure on a changed file silently mask the change forever.
             try
             {
-                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, prior?.ContentHash);
+                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, contentHash: null);
                 ctx.NoteWrite();
             }
             catch { /* ignore */ }
