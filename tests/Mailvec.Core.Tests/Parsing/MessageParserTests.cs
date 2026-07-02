@@ -96,6 +96,47 @@ public class MessageParserTests
     }
 
     [Fact]
+    public void Message_without_message_id_gets_stable_synthetic_id()
+    {
+        // Message-ID-less mail is rare but real (old imports, drafts, some
+        // automated senders). Throwing made these permanently unsearchable
+        // AND re-parsed (attachments re-extracted) on every 5-minute scan,
+        // since the mtime fast-path needs a stored message_id.
+        const string raw = """
+            Date: Mon, 13 Jan 2025 10:15:00 -0500
+            From: alice@example.com
+            To: bob@example.com
+            Subject: no message id here
+            MIME-Version: 1.0
+            Content-Type: text/plain; charset=utf-8
+
+            body without an id
+
+            """;
+
+        var first = ParseRaw(raw);
+        var second = ParseRaw(raw);
+
+        first.MessageId.ShouldEndWith("@synthetic.mailvec.local");
+        // Deterministic: the same file rescanned (or renamed by mbsync) maps
+        // to the same id, so it upserts instead of duplicating.
+        second.MessageId.ShouldBe(first.MessageId);
+        first.ThreadId.ShouldBe(first.MessageId);
+
+        // A different message (changed body) must get a different id.
+        var other = ParseRaw(raw.Replace("body without an id", "different body"));
+        other.MessageId.ShouldNotBe(first.MessageId);
+        other.MessageId.ShouldEndWith("@synthetic.mailvec.local");
+    }
+
+    private ParsedMessage ParseRaw(string raw)
+    {
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(raw.Replace("\r\n", "\n").Replace("\n", "\r\n")));
+        var mime = MimeKit.MimeMessage.Load(stream);
+        return _parser.Parse(mime, sizeBytes: raw.Length);
+    }
+
+    [Fact]
     public void Captures_inline_cid_image_as_an_attachment()
     {
         // Inline (Content-Disposition: inline / cid:) images are excluded from
