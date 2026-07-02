@@ -1,9 +1,11 @@
 # Design proposal — OCR for scanned (image-only) PDFs
 
-**Status:** feature-complete in code (steps 1–6 + step-7 docs). Scanned PDFs are
-OCR'd by the embedder and fully searchable (semantic + keyword), `mailvec doctor`
-checks the vision model, and the docs are updated. Remaining is operational only
-(step 7): pull `qwen2.5vl:7b`, drain the backfill, re-baseline `mailvec eval`.
+**Status:** shipped and live. Scanned PDFs (and, in a follow-up, standalone
+images) are OCR'd by the embedder and fully searchable (semantic + keyword),
+`mailvec doctor` checks the vision model, and the docs are updated. This file is
+kept as the design record; the operator setup (pull `qwen2.5vl:7b`) is in the
+README Quickstart. Implementation details that have since drifted from this
+proposal are noted inline below.
 
 ## Goal
 
@@ -86,7 +88,7 @@ pass re-OCRs it.
 - `Embedder:OcrEnabled` (default **true**).
 - `Embedder:OcrMaxPagesPerPdf` (cap cost on huge scans, e.g. 20).
 - `Ollama:VisionKeepAlive` (default Ollama's own ~5 min — **not** pinned; see below).
-- Reuses the renderer's 150-DPI / 1536px cap.
+- Uses the shared `PdfRenderer` (as shipped: downscale-only, long edge capped at 1536px, JPEG q85 on a white background — not a fixed DPI).
 
 ## Model lifetime: load on demand, do NOT pin
 

@@ -376,8 +376,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
     /// <summary>
     /// All messages in a thread, oldest first. Looks up by either the SQLite
-    /// internal id or the RFC Message-ID header. Returns an empty list if the
-    /// id/Message-ID matches a message with no thread_id (lone message).
+    /// internal id or the RFC Message-ID header. When the matched message has no
+    /// thread_id (a lone message — notifications, marketing), returns just that
+    /// one message, NOT an empty list. Returns empty only when no message
+    /// matches the id/Message-ID at all. (Don't "fix" this to require a non-null
+    /// thread_id — singletons are common; see CLAUDE.md.)
     /// </summary>
     public IReadOnlyList<Message> GetThreadByMessageId(long? id, string? messageId)
     {
