@@ -20,6 +20,18 @@ public static class HtmlToText
 {
     private static readonly HtmlParser Parser = new();
 
+    // Hostile-input bounds. AngleSharp's parser is iterative and handles any
+    // nesting depth, but our Walk recursion is one stack frame per DOM level —
+    // a few tens of thousands of nested tags (a few hundred KB of text) would
+    // StackOverflowException, which is uncatchable and kills the process; on
+    // restart the indexer re-parses the same file and crash-loops forever.
+    // Real mail rarely nests past ~100 levels (Outlook table soup); 256 is
+    // comfortably above that, and subtrees beyond it are dropped. The input
+    // cap bounds parse cost on pathological megabyte-scale HTML — 1MB of
+    // markup is far beyond any legitimate email body.
+    private const int MaxDepth = 256;
+    private const int MaxInputChars = 1_048_576;
+
     private static readonly HashSet<string> DropTags = new(StringComparer.OrdinalIgnoreCase)
     {
         "script", "style", "head", "meta", "link", "title", "noscript", "template",
@@ -46,23 +58,26 @@ public static class HtmlToText
     public static string Convert(string html)
     {
         if (string.IsNullOrEmpty(html)) return string.Empty;
+        if (html.Length > MaxInputChars) html = html[..MaxInputChars];
 
         var doc = Parser.ParseDocument(html);
         var sb = new StringBuilder(html.Length);
         if (doc.Body is { } body)
         {
-            Walk(body, sb);
+            Walk(body, sb, depth: 0);
         }
         else
         {
-            Walk(doc.DocumentElement, sb);
+            Walk(doc.DocumentElement, sb, depth: 0);
         }
         var normalized = TextNormalize.Apply(sb.ToString());
         return BoilerplateFilter.Apply(normalized);
     }
 
-    private static void Walk(INode node, StringBuilder sb)
+    private static void Walk(INode node, StringBuilder sb, int depth)
     {
+        if (depth > MaxDepth) return; // pathological nesting — drop the subtree
+
         if (node is IElement el)
         {
             var tag = el.LocalName;
@@ -79,19 +94,21 @@ public static class HtmlToText
 
                 // Image-only links (no visible text) are usually social icons,
                 // sponsor logos, or "tap to view" wrappers — drop them.
-                if (string.IsNullOrWhiteSpace(el.TextContent)) return;
+                // (Iterative check, not el.TextContent — we must not depend on
+                // library traversal recursion over hostile-depth subtrees.)
+                if (!HasAnyText(el)) return;
 
                 // Otherwise keep the visible text and drop the href. Tracking
                 // URLs are noise; link text carries the meaning ("Click here
                 // to confirm" vs the actual URL).
-                AppendChildren(el, sb);
+                AppendChildren(el, sb, depth);
                 return;
             }
 
             if (string.Equals(tag, "li", StringComparison.OrdinalIgnoreCase))
             {
                 sb.Append('\n').Append("- ");
-                AppendChildren(el, sb);
+                AppendChildren(el, sb, depth);
                 return;
             }
 
@@ -104,7 +121,7 @@ public static class HtmlToText
             if (BlockTags.Contains(tag))
             {
                 sb.Append('\n');
-                AppendChildren(el, sb);
+                AppendChildren(el, sb, depth);
                 sb.Append('\n');
                 return;
             }
@@ -112,12 +129,12 @@ public static class HtmlToText
             if (string.Equals(tag, "td", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(tag, "th", StringComparison.OrdinalIgnoreCase))
             {
-                AppendChildren(el, sb);
+                AppendChildren(el, sb, depth);
                 sb.Append(' ');
                 return;
             }
 
-            AppendChildren(el, sb);
+            AppendChildren(el, sb, depth);
             return;
         }
 
@@ -127,12 +144,31 @@ public static class HtmlToText
         }
     }
 
-    private static void AppendChildren(IElement el, StringBuilder sb)
+    private static void AppendChildren(IElement el, StringBuilder sb, int depth)
     {
         foreach (var child in el.ChildNodes)
         {
-            Walk(child, sb);
+            Walk(child, sb, depth + 1);
         }
+    }
+
+    /// <summary>
+    /// True if the subtree contains any non-whitespace text. Explicit-stack
+    /// DFS with early exit — equivalent to checking <c>TextContent</c> but
+    /// guaranteed not to recurse, so a hostile 100k-deep subtree can't blow
+    /// the stack through a library traversal.
+    /// </summary>
+    private static bool HasAnyText(IElement root)
+    {
+        var stack = new Stack<INode>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (node is IText t && !string.IsNullOrWhiteSpace(t.Data)) return true;
+            foreach (var child in node.ChildNodes) stack.Push(child);
+        }
+        return false;
     }
 
     private static bool IsHidden(IElement el)
