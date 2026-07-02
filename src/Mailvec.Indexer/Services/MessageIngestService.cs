@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Hosting;
@@ -10,6 +11,19 @@ namespace Mailvec.Indexer.Services;
 /// Top-level worker. On startup: applies any pending schema migrations, then
 /// runs an initial full scan. After that: scans on every watcher pulse, and
 /// also on a recurring timer as a safety net (in case events were missed).
+///
+/// Scans are serialized. The watcher pulse and the periodic timer are both
+/// producers into a coalescing single-slot channel; one consumer runs
+/// <see cref="MaildirScanner.ScanAll"/>. Two scans must never overlap: each
+/// scan stamps every seen file's <c>sync_state.last_seen_at</c> to its own
+/// start time (last-writer-wins) and reconciles deletions against that same
+/// start time, so a slower older scan overwriting a file's timestamp after a
+/// newer scan already recorded it makes the newer scan's reconciliation treat
+/// the live file as stale and soft-delete it. Serializing also removes the
+/// doubled attachment-extraction cost and the write-lock contention two
+/// concurrent scans would otherwise create. The bounded/drop-write channel
+/// coalesces a burst of triggers arriving mid-scan into exactly one follow-up
+/// scan.
 /// </summary>
 public sealed class MessageIngestService(
     SchemaMigrator migrator,
@@ -31,8 +45,20 @@ public sealed class MessageIngestService(
         var rescanInterval = TimeSpan.FromSeconds(Math.Max(1, indexerOptions.Value.ScanIntervalSeconds));
         using var rescanTimer = new PeriodicTimer(rescanInterval);
 
-        var pulseTask = ReadPulsesAsync(stoppingToken);
-        var timerTask = ReadTimerAsync(rescanTimer, stoppingToken);
+        // Single-slot, drop-write: at most one scan runs and at most one is
+        // queued behind it. Extra triggers that arrive while a scan is in
+        // flight collapse into that single queued run (the next scan sees the
+        // whole filesystem regardless of how many pulses fired).
+        var scanRequests = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
+        {
+            FullMode = BoundedChannelFullMode.DropWrite,
+            SingleReader = true,
+            SingleWriter = false,
+        });
+
+        var scanTask = RunScansAsync(scanRequests.Reader, stoppingToken);
+        var pulseTask = ReadPulsesAsync(scanRequests.Writer, stoppingToken);
+        var timerTask = ReadTimerAsync(rescanTimer, scanRequests.Writer, stoppingToken);
 
         try
         {
@@ -40,13 +66,29 @@ public sealed class MessageIngestService(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            logger.LogInformation("MessageIngestService stopping");
+            // expected on shutdown
         }
+        finally
+        {
+            // Let the consumer drain and exit once no more triggers can arrive.
+            scanRequests.Writer.TryComplete();
+        }
+
+        try
+        {
+            await scanTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // expected on shutdown
+        }
+
+        logger.LogInformation("MessageIngestService stopping");
     }
 
-    private async Task ReadPulsesAsync(CancellationToken ct)
+    private async Task RunScansAsync(ChannelReader<byte> requests, CancellationToken ct)
     {
-        await foreach (var _ in watcher.Pulses.ReadAllAsync(ct).ConfigureAwait(false))
+        await foreach (var _ in requests.ReadAllAsync(ct).ConfigureAwait(false))
         {
             try
             {
@@ -54,25 +96,28 @@ public sealed class MessageIngestService(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Watcher-triggered scan failed");
+                logger.LogError(ex, "Scan failed");
             }
         }
     }
 
-    private async Task ReadTimerAsync(PeriodicTimer timer, CancellationToken ct)
+    private async Task ReadPulsesAsync(ChannelWriter<byte> requests, CancellationToken ct)
+    {
+        await foreach (var _ in watcher.Pulses.ReadAllAsync(ct).ConfigureAwait(false))
+        {
+            // Coalesced by the bounded channel — a dropped write just means a
+            // scan is already pending, which will cover this change too.
+            requests.TryWrite(0);
+        }
+    }
+
+    private async Task ReadTimerAsync(PeriodicTimer timer, ChannelWriter<byte> requests, CancellationToken ct)
     {
         try
         {
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
-                try
-                {
-                    scanner.ScanAll(ct);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogError(ex, "Timer-triggered scan failed");
-                }
+                requests.TryWrite(0);
             }
         }
         catch (OperationCanceledException) { }
