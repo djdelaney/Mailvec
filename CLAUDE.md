@@ -30,6 +30,8 @@ dotnet run --project src/Mailvec.Mcp
 dotnet run --project src/Mailvec.Cli -- <args>
 ops/redeploy.sh [indexer|embedder|mcp|cli ...]   # republish + kickstart launchd agents after a code change
 ops/stop.sh                                      # bootout the launchd agents without uninstalling
+ops/export-db.sh [--out path] [--to host]        # consistent DB snapshot for backup / machine migration
+ops/import-db.sh <snapshot.sqlite>               # install a snapshot on this machine (read its header first)
 ops/install-all.sh [--no-tray|--no-fetch]        # single-command bootstrap for a new machine
 ops/install-tray.sh                              # build + copy to /Applications + launch (calls build-tray.sh)
 ops/build-tray.sh                                # XcodeGen → xcodebuild archive → build/Mailvec.Tray.app
