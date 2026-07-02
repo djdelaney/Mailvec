@@ -5,7 +5,7 @@
 Claude Desktop's Custom Connectors UI accepts an MCPB bundle directly, which packages a self-contained binary and the `vec0.dylib` in one file. The MCPB path is preferred over `~/.local/bin/mailvec-mcp-stdio` here because:
 
 - The bundle is self-contained — bakes in the .NET runtime and `vec0.dylib`, so it works on a fresh machine without a separate Mailvec install on PATH.
-- The bundle's binary lives at `~/Library/Application Support/Claude/extensions/<id>/`, which is a non-TCC location — Claude Desktop's spawned children can't read `~/Documents`, so a launcher there would silently fail.
+- The bundle's binary lives at `~/Library/Application Support/Claude/Claude Extensions/<id>/` (older builds: `Connectors/`), which is a non-TCC location — Claude Desktop's spawned children can't read `~/Documents`, so a launcher there would silently fail.
 
 ## Install
 
@@ -15,6 +15,8 @@ ops/install.sh            # writes shared user-config; required before MCPB
 ops/build-mcpb.sh         # produces dist/mailvec-<version>.mcpb
 open dist/mailvec-*.mcpb  # hands it to Claude Desktop
 ```
+
+> **Apple Silicon only as shipped**: the bundle is a self-contained `osx-arm64` build (`RID=` in `ops/build-mcpb.sh`). On an Intel Mac, change that to `osx-x64` before building — an arm64 bundle installs fine but its binary won't start, and the only symptom is a missing connector.
 
 `ops/install.sh` writes `~/Library/Application Support/Mailvec/appsettings.Local.json` with your DB path, Maildir root, Ollama endpoint, and Fastmail account id. The bundled MCP reads from the same file, so the only setting in Claude Desktop's install dialog is the **Log tool calls** debug toggle — everything else flows from the shared config and reinstalling the bundle never asks you to re-enter your account id.
 
@@ -32,7 +34,7 @@ Claude Desktop captures the bundle's stderr to `~/Library/Logs/Claude/mcp-server
 
 ## Known quirks
 
-- **`~/Documents` is unreadable** by Claude Desktop's spawned children even with Full Disk Access. The bundle avoids this by extracting to `~/Library/Application Support/Claude/extensions/`. If you ever see "file not found" for a path that obviously exists, this is why — keep your archive out of `~/Documents`.
+- **`~/Documents` is unreadable** by Claude Desktop's spawned children even with Full Disk Access. The bundle avoids this by extracting to `~/Library/Application Support/Claude/Claude Extensions/`. If you ever see "file not found" for a path that obviously exists, this is why — keep your archive out of `~/Documents`.
 - **PATH excludes `/usr/local/share/dotnet`.** The bundle dodges this by being self-contained (the .NET runtime is baked in). The generic stdio launcher (`~/.local/bin/mailvec-mcp-stdio`) handles the same issue by exporting `DOTNET_ROOT`, which is why we don't use the launcher here — the bundle is simpler.
 - **Don't use `dotnet run` or any wrapper script that builds at start time** — its build chatter goes to stdout, which is the JSON-RPC channel. The bundle exec-s the compiled binary directly.
 

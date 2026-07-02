@@ -43,7 +43,10 @@ public static class TrayEndpoints
         group.MapGet("/email/{id:long}", (long id, MessageRepository messages, IOptions<FastmailOptions> fastmail) =>
         {
             var msg = messages.GetById(id);
-            if (msg is null) return Results.NotFound(new { error = $"message {id} not found" });
+            // Soft-deleted = gone from disk; every MCP tool refuses these, and
+            // a stale popover id shouldn't get a body preview either.
+            if (msg is null || msg.DeletedAt is not null)
+                return Results.NotFound(new { error = $"message {id} not found" });
             var to = string.Join(", ", msg.ToAddresses.Select(a =>
                 string.IsNullOrEmpty(a.Name) ? a.Address : $"{a.Name} <{a.Address}>"));
             var atts = msg.Attachments.Select(a => new TrayEmailAttachment(
@@ -112,6 +115,11 @@ public static class TrayEndpoints
         // Restricted to the four mailvec labels inside LaunchdInspector.
         group.MapPost("/control", async (TrayControlRequest body, LaunchdInspector inspector, CancellationToken ct) =>
         {
+            // The tray always sends both fields; guard anyway so a malformed
+            // body is a 400, not a 500 from a null dereference.
+            if (string.IsNullOrWhiteSpace(body.Service) || string.IsNullOrWhiteSpace(body.Action))
+                return Results.BadRequest(new TrayControlResponse(false, "Both 'service' and 'action' are required."));
+
             var label = body.Service.StartsWith("com.mailvec.", StringComparison.Ordinal)
                 ? body.Service
                 : $"com.mailvec.{body.Service}";

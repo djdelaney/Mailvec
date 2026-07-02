@@ -18,10 +18,10 @@ This publishes `~/.local/share/mailvec/mcp/Mailvec.Mcp.dll` and writes a launche
 Smoke-test it before pasting the path into a config:
 
 ```sh
-~/.local/bin/mailvec-mcp-stdio </dev/null
+~/.local/bin/mailvec-mcp-stdio
 ```
 
-You should see a few stderr log lines, then the process waits for JSON-RPC on stdin. ^C to exit. If it crashes, fix that before debugging a client config — the client's logs will be vague compared to running the launcher directly.
+You should see a few stderr log lines, then the process waits for JSON-RPC on stdin — that quiet hang is success; ^C to exit. (Don't redirect stdin from `/dev/null` — the server exits immediately on stdin EOF, which looks like a crash.) If it actually crashes, fix that before debugging a client config — the client's logs will be vague compared to running the launcher directly.
 
 ## Install the HTTP service (one-time, prerequisite for HTTP clients)
 

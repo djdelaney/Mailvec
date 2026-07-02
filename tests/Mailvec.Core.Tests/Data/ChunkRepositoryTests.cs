@@ -353,6 +353,135 @@ public class ChunkRepositoryTests
         chunks.CountForMessage(999_999).ShouldBe(0);
     }
 
+    [Fact]
+    public void ReplaceChunksForMessage_skips_when_embed_epoch_moved()
+    {
+        // The attachment-axis regression: a re-queue that does NOT change
+        // content_hash (extract-attachments --reembed, backfill-inline-images,
+        // OCR write-back) clears embedded_at while the embedder is mid-embed.
+        // The hash guard alone can't see it — the write would stamp over the
+        // re-queue and the new attachment text would never be vector-embedded.
+        // embed_epoch is bumped by every re-queue path, so the guard catches it.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now); // hash "hash-a@x", epoch 0
+        var snapshotEpoch = EmbedEpoch(db, id);
+
+        // Hash-preserving re-queue lands while the embedder is in Ollama.
+        chunks.ClearEmbeddingsForMessage(id);
+        EmbedEpoch(db, id).ShouldBe(snapshotEpoch + 1);
+
+        // Embedder's guarded write from the pre-re-queue snapshot: hash still
+        // matches, but the epoch moved — must abandon everything.
+        var written = chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "stale", 1)], [Hot(0)], now.AddMinutes(1),
+            expectedContentHash: "hash-a@x", checkContentHash: true, expectedEmbedEpoch: snapshotEpoch);
+
+        written.ShouldBeFalse();
+        chunks.CountForMessage(id).ShouldBe(0);
+        EmbeddedAt(db, id).ShouldBeNull();     // still re-queued for the next poll
+    }
+
+    [Fact]
+    public void ReplaceChunksForMessage_writes_when_epoch_and_hash_both_match()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+
+        var written = chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedContentHash: "hash-a@x", checkContentHash: true, expectedEmbedEpoch: EmbedEpoch(db, id));
+
+        written.ShouldBeTrue();
+        chunks.CountForMessage(id).ShouldBe(1);
+        EmbeddedAt(db, id).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Bulk_clear_paths_bump_embed_epoch()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+        var epoch0 = EmbedEpoch(db, id);
+
+        chunks.ClearEmbeddings();                       // reindex --all path
+        EmbedEpoch(db, id).ShouldBe(epoch0 + 1);
+
+        chunks.ClearEmbeddings(folderFilter: "INBOX");  // reindex --folder path
+        EmbedEpoch(db, id).ShouldBe(epoch0 + 2);
+    }
+
+    [Fact]
+    public void Upsert_bumps_embed_epoch_on_content_change_but_not_on_noop_rescan()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+        var epoch0 = EmbedEpoch(db, id);
+
+        // No-op rescan: same content hash — epoch untouched.
+        messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now.AddMinutes(1));
+        EmbedEpoch(db, id).ShouldBe(epoch0);
+
+        // Content change: epoch bumps in the same transaction as the re-queue.
+        messages.Upsert(Sample("a@x") with { BodyText = "new body", ContentHash = "hash-changed" },
+            "INBOX", "INBOX/cur", "fa", now.AddMinutes(2));
+        EmbedEpoch(db, id).ShouldBe(epoch0 + 1);
+    }
+
+    [Fact]
+    public void ReplaceChunksForMessage_skips_when_embedding_model_switched()
+    {
+        // A same-dimension `mailvec switch-model` while the embedder runs:
+        // metadata.embedding_model no longer matches the model this worker
+        // embeds with. The write must abandon, or old-model vectors would be
+        // silently mixed into the new vector space with plausible scores.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+
+        // The DB's metadata says 'mxbai-embed-large' (fresh-DB default); this
+        // worker still thinks it's embedding with 'old-model'.
+        var written = chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedEmbeddingModel: "old-model");
+
+        written.ShouldBeFalse();
+        chunks.CountForMessage(id).ShouldBe(0);
+        EmbeddedAt(db, id).ShouldBeNull();
+
+        // Matching model writes normally.
+        chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedEmbeddingModel: "mxbai-embed-large").ShouldBeTrue();
+        chunks.CountForMessage(id).ShouldBe(1);
+    }
+
+    private static long EmbedEpoch(TempDatabase db, long messageId)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT embed_epoch FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        return Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     private static int TotalVectorCount(TempDatabase db)
     {
         using var conn = db.Connections.Open();

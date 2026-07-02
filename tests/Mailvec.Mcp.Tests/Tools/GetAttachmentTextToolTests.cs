@@ -100,6 +100,39 @@ public class GetAttachmentTextToolTests
     }
 
     [Fact]
+    public void Ocr_status_returns_recovered_text_like_done()
+    {
+        // OCR-recovered text is searchable (FTS + vectors include it) and
+        // get_email reports it IndexedForSearch — this tool must serve it too.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Seed(repo, "ocr@x", "Total amount due: $42.00", "ocr", fileName: "scan.pdf");
+
+        var result = Build(db).GetAttachmentText(partIndex: 0, id: id);
+
+        result.Content.Count.ShouldBe(2);
+        var summary = result.Content[0].ShouldBeOfType<TextContentBlock>();
+        summary.Text.ShouldContain("scan.pdf");
+        summary.Text.ShouldContain("OCR");
+        result.Content[1].ShouldBeOfType<TextContentBlock>().Text.ShouldContain("Total amount due: $42.00");
+    }
+
+    [Fact]
+    public void Ocr_status_with_empty_text_reports_blank_scan()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Seed(repo, "blankocr@x", text: "", status: "ocr", fileName: "blank.pdf");
+
+        var result = Build(db).GetAttachmentText(partIndex: 0, id: id);
+
+        result.Content.Count.ShouldBe(1);
+        var msg = result.Content[0].ShouldBeOfType<TextContentBlock>().Text;
+        msg.ShouldContain("blank.pdf");
+        msg.ShouldContain("no text was recovered");
+    }
+
+    [Fact]
     public void Lookup_by_messageId_works_identically()
     {
         using var db = new TempDatabase();

@@ -6,7 +6,11 @@ public sealed class IndexerOptions
 
     public int ScanIntervalSeconds { get; set; } = 300;
     public int DebounceMilliseconds { get; set; } = 500;
-    public int MaxHtmlBodyBytes { get; set; } = 1_048_576;
+    // NOTE: there is deliberately no MaxHtmlBodyBytes option. The HTML input
+    // cap (and the DOM recursion depth cap) are constants inside HtmlToText —
+    // crash-safety bounds, not tuning knobs — and they must apply identically
+    // to the indexer and `mailvec rebuild-bodies`. The option that used to
+    // sit here was never wired to anything.
 
     // Cap on per-attachment bytes for text extraction. Anything larger is
     // stamped extraction_status='oversize' and skipped — protects the indexer

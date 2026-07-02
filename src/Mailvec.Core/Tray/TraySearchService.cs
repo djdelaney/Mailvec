@@ -63,7 +63,12 @@ public sealed class TraySearchService(
 
     private IReadOnlyList<TraySearchHit> MapKeyword(IReadOnlyList<SearchHit> hits)
     {
-        var max = hits.Count == 0 ? 1 : hits.Max(h => h.Bm25Score);
+        // FTS5 bm25() is NEGATIVE (more negative = better match). Normalize
+        // to (0,1] by dividing by the BEST (most negative) score, so the top
+        // hit renders a full score bar and weaker hits scale down. Dividing
+        // by Max() — the score closest to zero, i.e. the WORST hit — produced
+        // ratios >= 1 for every row, so keyword mode drew all-full bars.
+        var best = hits.Count == 0 ? -1.0 : hits.Min(h => h.Bm25Score);
         return [..
             hits.Select(h => new TraySearchHit(
                 Id: h.MessageId,
@@ -74,7 +79,7 @@ public sealed class TraySearchService(
                 FromName: h.FromName,
                 DateSent: h.DateSent,
                 Snippet: h.Snippet,
-                Score: max == 0 ? 0 : h.Bm25Score / max,
+                Score: best == 0 ? 0 : Math.Clamp(h.Bm25Score / best, 0, 1),
                 Bm25Score: h.Bm25Score,
                 VectorScore: null,
                 MatchedAttachment: null,
@@ -134,16 +139,13 @@ public sealed class TraySearchService(
 
     private static SearchFilters BuildFilters(TraySearchRequest req) => new(
         Folder: string.IsNullOrWhiteSpace(req.Folder) ? null : req.Folder.Trim(),
-        DateFrom: ParseDate(req.DateFrom),
-        DateTo: ParseDate(req.DateTo),
+        DateFrom: ParseDate(req.DateFrom, isUpperBound: false),
+        DateTo: ParseDate(req.DateTo, isUpperBound: true),
         FromContains: string.IsNullOrWhiteSpace(req.FromContains) ? null : req.FromContains.Trim(),
         FromExact: string.IsNullOrWhiteSpace(req.FromExact) ? null : req.FromExact.Trim());
 
-    private static DateTimeOffset? ParseDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var d) ? d : null;
-    }
+    private static DateTimeOffset? ParseDate(string? value, bool isUpperBound) =>
+        Search.SearchDateParser.TryParse(value, isUpperBound, out var bound) ? bound : null;
 
     private static string BuildBrowseSnippet(string? body)
     {
@@ -152,5 +154,5 @@ public sealed class TraySearchService(
         return Truncate(collapsed, 240);
     }
 
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+    private static string Truncate(string s, int max) => Parsing.StringTruncation.Truncate(s, max);
 }

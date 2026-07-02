@@ -121,7 +121,7 @@ public sealed class HybridSearchService(KeywordSearchService keyword, VectorSear
     }
 
     private static string Truncate(string s, int maxLen) =>
-        s.Length <= maxLen ? s : s[..maxLen] + "…";
+        Parsing.StringTruncation.Truncate(s, maxLen);
 
     private struct FusedRow
     {

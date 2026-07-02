@@ -11,28 +11,44 @@ public sealed class ChunkRepository(ConnectionFactory connections)
     /// never visible to search with a partial vector set.
     ///
     /// When <paramref name="checkContentHash"/> is set, the write is guarded:
-    /// the message's current content_hash is re-read inside this transaction
-    /// (a BEGIN IMMEDIATE, so it's consistent with the writes that follow) and
-    /// the whole write is abandoned — nothing committed, returns false — if the
-    /// row is gone or its hash no longer equals <paramref name="expectedContentHash"/>.
-    /// The embedder snapshots content_hash before its minutes-long Ollama call
-    /// and passes it here so that a body change committed by the indexer in the
-    /// meantime (which sets embedded_at back to NULL and bumps content_hash in a
-    /// single transaction) is not clobbered: without the guard the embedder
-    /// would write vectors built from the OLD body and stamp a fresh
-    /// embedded_at, leaving the message with old-body vectors against new-body
-    /// FTS and no content-hash delta to trigger a re-embed — permanent silent
-    /// divergence. Skipped messages keep embedded_at = NULL and are re-embedded
-    /// (against the new body) on the next poll. Returns true when the chunks
-    /// were written, false when the guard skipped the write.
+    /// the message's current content_hash (and, when
+    /// <paramref name="expectedEmbedEpoch"/> is supplied, its embed_epoch) is
+    /// re-read inside this transaction (a BEGIN IMMEDIATE, so it's consistent
+    /// with the writes that follow) and the whole write is abandoned — nothing
+    /// committed, returns false — if the row is gone or either value moved.
+    /// The embedder snapshots both before its minutes-long Ollama call and
+    /// passes them here so a re-queue committed in the meantime is not
+    /// clobbered. content_hash catches body changes; embed_epoch catches
+    /// hash-preserving re-queues (attachment re-extraction, OCR write-back,
+    /// inline-image backfill — writers that clear embedded_at without touching
+    /// the body). Without the guard the embedder would write vectors built
+    /// from the OLD content and stamp a fresh embedded_at, leaving stale
+    /// vectors against new FTS text with nothing to trigger a re-embed —
+    /// permanent silent divergence. Skipped messages keep embedded_at = NULL
+    /// and are re-embedded (against the new content) on the next poll.
+    /// Returns true when the chunks were written, false when the guard
+    /// skipped the write.
     /// </summary>
+    /// <para>
+    /// <paramref name="expectedEmbeddingModel"/> guards against a mid-run
+    /// `mailvec switch-model`: the write re-reads `metadata.embedding_model`
+    /// inside the same transaction and skips when it no longer matches the
+    /// model this embedder was configured (and startup-verified) against.
+    /// Without it, a still-running embedder would re-embed the entire
+    /// re-queued archive with the OLD model after a same-dimension switch —
+    /// the inserts succeed, the startup check never re-runs, and the vector
+    /// space is silently mixed. The startup check alone can't catch this;
+    /// only a check inside the write transaction can.
+    /// </para>
     public bool ReplaceChunksForMessage(
         long messageId,
         IReadOnlyList<TextChunk> chunks,
         IReadOnlyList<float[]> vectors,
         DateTimeOffset embeddedAt,
         string? expectedContentHash = null,
-        bool checkContentHash = false)
+        bool checkContentHash = false,
+        long? expectedEmbedEpoch = null,
+        string? expectedEmbeddingModel = null)
     {
         if (chunks.Count != vectors.Count)
             throw new ArgumentException($"Chunk/vector count mismatch: {chunks.Count} vs {vectors.Count}");
@@ -40,7 +56,10 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
-        if (checkContentHash && !ContentHashMatches(conn, tx, messageId, expectedContentHash))
+        if (checkContentHash && !SnapshotStillCurrent(conn, tx, messageId, expectedContentHash, expectedEmbedEpoch))
+            return false;
+
+        if (expectedEmbeddingModel is not null && !EmbeddingModelMatches(conn, tx, expectedEmbeddingModel))
             return false;
 
         DeleteChunks(conn, tx, messageId);
@@ -57,21 +76,34 @@ public sealed class ChunkRepository(ConnectionFactory connections)
     }
 
     /// <summary>
-    /// True if the message still exists and its content_hash equals the
-    /// snapshot the caller captured (both may be NULL for legacy pre-v3 rows,
-    /// which compare equal). A missing row (deleted since the snapshot) returns
-    /// false so we don't resurrect vectors for a purged message.
+    /// True if the message still exists, its content_hash equals the snapshot
+    /// the caller captured (both may be NULL for legacy pre-v3 rows, which
+    /// compare equal), and — when an expected embed_epoch is supplied — its
+    /// re-queue counter hasn't moved either. A missing row (deleted since the
+    /// snapshot) returns false so we don't resurrect vectors for a purged
+    /// message.
     /// </summary>
-    private static bool ContentHashMatches(SqliteConnection conn, SqliteTransaction tx, long messageId, string? expected)
+    private static bool SnapshotStillCurrent(
+        SqliteConnection conn, SqliteTransaction tx, long messageId, string? expectedHash, long? expectedEmbedEpoch)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = "SELECT content_hash FROM messages WHERE id = $id";
+        cmd.CommandText = "SELECT content_hash, embed_epoch FROM messages WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", messageId);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return false;
-        var current = reader.IsDBNull(0) ? null : reader.GetString(0);
-        return string.Equals(current, expected, StringComparison.Ordinal);
+        var currentHash = reader.IsDBNull(0) ? null : reader.GetString(0);
+        if (!string.Equals(currentHash, expectedHash, StringComparison.Ordinal)) return false;
+        return expectedEmbedEpoch is null || reader.GetInt64(1) == expectedEmbedEpoch.Value;
+    }
+
+    private static bool EmbeddingModelMatches(SqliteConnection conn, SqliteTransaction tx, string expectedModel)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = 'embedding_model'";
+        var current = cmd.ExecuteScalar() as string;
+        return string.Equals(current, expectedModel, StringComparison.Ordinal);
     }
 
     public int CountForMessage(long messageId)
@@ -155,8 +187,8 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         {
             clearStamp.Transaction = tx;
             clearStamp.CommandText = folderFilter is null
-                ? "UPDATE messages SET embedded_at = NULL"
-                : "UPDATE messages SET embedded_at = NULL WHERE folder = $f";
+                ? "UPDATE messages SET embedded_at = NULL, embed_epoch = embed_epoch + 1"
+                : "UPDATE messages SET embedded_at = NULL, embed_epoch = embed_epoch + 1 WHERE folder = $f";
             if (folderFilter is not null) clearStamp.Parameters.AddWithValue("$f", folderFilter);
             affected = clearStamp.ExecuteNonQuery();
         }
@@ -179,7 +211,7 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
-            cmd.CommandText = "UPDATE messages SET embedded_at = NULL WHERE id = $id";
+            cmd.CommandText = "UPDATE messages SET embedded_at = NULL, embed_epoch = embed_epoch + 1 WHERE id = $id";
             cmd.Parameters.AddWithValue("$id", messageId);
             cmd.ExecuteNonQuery();
         }

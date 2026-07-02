@@ -45,6 +45,7 @@ public sealed class MaildirScanner(
         var seen = 0;
         var upserted = 0;
         var failed = 0;
+        var unrefreshed = 0;
 
         // One connection + a rolling transaction for the whole file walk.
         // The previous design opened a fresh connection for every Get/Upsert
@@ -73,13 +74,18 @@ public sealed class MaildirScanner(
                         cancellationToken.ThrowIfCancellationRequested();
                         seen++;
 
-                        if (TryIngest(ctx, file, folderName, scanStart))
+                        switch (TryIngest(ctx, file, folderName, scanStart))
                         {
-                            upserted++;
-                        }
-                        else
-                        {
-                            failed++;
+                            case IngestOutcome.Ok:
+                                upserted++;
+                                break;
+                            case IngestOutcome.Failed:
+                                failed++;
+                                break;
+                            case IngestOutcome.FailedAndUnrefreshed:
+                                failed++;
+                                unrefreshed++;
+                                break;
                         }
                     }
                 }
@@ -90,6 +96,21 @@ public sealed class MaildirScanner(
         {
             ctx.Abandon();
             throw;
+        }
+
+        if (unrefreshed > 0)
+        {
+            // At least one live file's sync_state row could not be refreshed,
+            // so the deletion-reconciliation pass would see it as stale and
+            // soft-delete a message whose file is alive on disk. Skip
+            // reconciliation entirely this scan — genuinely deleted files are
+            // simply caught one scan later.
+            logger.LogWarning(
+                "MaildirScanner: {Count} file(s) failed ingest AND their sync_state refresh failed; " +
+                "skipping deletion reconciliation this scan to avoid soft-deleting live messages. " +
+                "seen={Seen} upserted={Upserted} parseFailed={Failed}",
+                unrefreshed, seen, upserted, failed);
+            return new ScanResult(seen, upserted, failed, 0);
         }
 
         var stale = syncState.StaleEntries(olderThan: scanStart);
@@ -117,6 +138,42 @@ public sealed class MaildirScanner(
             }
         }
 
+        // Stale entries whose Message-ID IS fresh are renames or deleted
+        // duplicate copies — the message stays live via another path. But the
+        // messages row may still point at the path that just vanished: the
+        // surviving copy rides the mtime fast-path and never re-upserts, so
+        // the dangling path would persist forever (get_attachment fails, the
+        // OCR pass re-selects and skips those attachments every cycle).
+        // Repoint the row at a live fresh path for the same Message-ID.
+        var repaired = 0;
+        foreach (var entry in stale)
+        {
+            if (entry.MessageId is null || !freshMessageIds.Contains(entry.MessageId)) continue;
+
+            var msg = messages.GetByMessageId(entry.MessageId);
+            if (msg is null || msg.DeletedAt is not null) continue;
+
+            var currentAbs = Path.Combine(_maildirRoot, msg.MaildirPath, msg.MaildirFilename);
+            if (!string.Equals(Path.GetFullPath(currentAbs), Path.GetFullPath(entry.MaildirFullPath), StringComparison.Ordinal))
+                continue; // row already points at a different (live) copy
+
+            var freshPath = syncState.FreshPathForMessageId(entry.MessageId, since: scanStart);
+            if (freshPath is null) continue;
+
+            var folderDir = Path.GetDirectoryName(Path.GetDirectoryName(freshPath));
+            if (folderDir is null) continue;
+            messages.UpdateMaildirLocation(
+                msg.Id,
+                MaildirPaths.FolderNameFor(_maildirRoot, folderDir),
+                MaildirPaths.RelativeFolderPath(_maildirRoot, freshPath),
+                Path.GetFileName(freshPath));
+            repaired++;
+        }
+        if (repaired > 0)
+        {
+            logger.LogInformation("MaildirScanner: repointed {Count} message(s) from a deleted duplicate copy to a live path.", repaired);
+        }
+
         if (stale.Count > 0)
         {
             syncState.Remove(stale.Select(e => e.MaildirFullPath));
@@ -129,7 +186,19 @@ public sealed class MaildirScanner(
         return new ScanResult(seen, upserted, failed, softDeleted);
     }
 
-    private bool TryIngest(ScanContext ctx, string filePath, string folderName, DateTimeOffset indexedAt)
+    private enum IngestOutcome
+    {
+        Ok,
+        Failed,
+        /// <summary>
+        /// Ingest failed AND the catch handler's sync_state refresh also
+        /// failed — this file's row is now stale even though the file is
+        /// alive, so the caller must skip deletion reconciliation.
+        /// </summary>
+        FailedAndUnrefreshed,
+    }
+
+    private IngestOutcome TryIngest(ScanContext ctx, string filePath, string folderName, DateTimeOffset indexedAt)
     {
         // Hoisted so the catch below can preserve the existing message_id /
         // content_hash instead of nulling them (see the catch comment).
@@ -144,13 +213,20 @@ public sealed class MaildirScanner(
             // reconciliation pass doesn't soft-delete it. Mbsync flag rewrites
             // bump mtime, so the optimization is robust against IMAP flag
             // changes that don't actually mutate body content.
+            //
+            // ContentHash must be non-null to take the fast path: a NULL hash
+            // is the "last ingest attempt failed" marker written by the catch
+            // below. Without it, a single transient failure (SQLITE_BUSY, I/O
+            // blip) on a *changed* file would stamp last_seen_at past the
+            // file's mtime and the change would be skipped on every future
+            // scan — permanently masking the new content.
             prior = syncState.Get(ctx.Connection, ctx.Transaction, filePath);
-            if (prior is { MessageId: not null }
+            if (prior is { MessageId: not null, ContentHash: not null }
                 && File.GetLastWriteTimeUtc(filePath) <= prior.LastSeenAt.UtcDateTime)
             {
                 syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash);
                 ctx.NoteWrite();
-                return true;
+                return IngestOutcome.Ok;
             }
 
             // Parse path: messages.Upsert opens its own connection. Release
@@ -177,25 +253,36 @@ public sealed class MaildirScanner(
             }
             syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash);
             ctx.NoteWrite();
-            return true;
+            return IngestOutcome.Ok;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to parse {Path}", filePath);
             // Refresh last_seen_at so we don't treat the file as deleted next
-            // pass, but PRESERVE the prior message_id / content_hash. Nulling
-            // message_id would drop this path out of the deletion-reconciliation
-            // mapping (it filters on message_id != null), so if the file is later
-            // removed, its message would be stranded "live" forever. Keeping the
-            // prior id means a transient parse failure (I/O blip, DB busy, file
-            // replaced mid-read) doesn't corrupt the sync_state association.
+            // pass, but PRESERVE the prior message_id. Nulling message_id
+            // would drop this path out of the deletion-reconciliation mapping
+            // (it filters on message_id != null), so if the file is later
+            // removed, its message would be stranded "live" forever.
+            //
+            // content_hash is deliberately NULLed as a "retry me" marker: the
+            // mtime fast path requires a non-null hash, so the next scan
+            // re-parses this file instead of trusting the fresh last_seen_at
+            // stamp. Preserving the prior hash here would let a transient
+            // failure on a changed file silently mask the change forever.
             try
             {
-                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, prior?.ContentHash);
+                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, contentHash: null);
                 ctx.NoteWrite();
             }
-            catch { /* ignore */ }
-            return false;
+            catch (Exception refreshEx)
+            {
+                // The row is now stale even though the file exists — surface
+                // it so ScanAll skips deletion reconciliation this scan
+                // instead of soft-deleting a live message.
+                logger.LogWarning(refreshEx, "Also failed to refresh sync_state for {Path}", filePath);
+                return IngestOutcome.FailedAndUnrefreshed;
+            }
+            return IngestOutcome.Failed;
         }
     }
 
@@ -236,9 +323,14 @@ public sealed class MaildirScanner(
 /// <see cref="Flush"/> before invoking repositories on their own connections
 /// (e.g. MessageRepository.Upsert) to avoid blocking on the write lock.
 ///
-/// Uses BEGIN DEFERRED (Microsoft.Data.Sqlite default), so an empty tx
-/// holds no lock — Flush() is a no-op when nothing has been written and
-/// the next access lazily begins a fresh tx.
+/// NOTE: Microsoft.Data.Sqlite's BeginTransaction() issues BEGIN IMMEDIATE
+/// (its `deferred` parameter defaults to false in ≥5.0), so the write lock
+/// is taken at the FIRST statement in the tx and held until Flush(). That is
+/// why the parse path in TryIngest MUST call Flush() before invoking
+/// MessageRepository.Upsert — Upsert opens its own connection, and with our
+/// lock still held its BEGIN IMMEDIATE would block for the full busy_timeout
+/// on every parsed file. Don't remove that Flush(), and don't assume an open
+/// tx here is lock-free.
 /// </summary>
 internal sealed class ScanContext : IDisposable
 {

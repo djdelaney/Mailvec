@@ -31,7 +31,14 @@ A committed baseline means changes that look like "just renaming a parameter"
 or "just tweaking a description" can be evaluated against ground truth before
 they ship.
 
-If `baselines/` is empty when you read this, capture one before opening the
-Phase 5 branch — it's a few minutes of `mailvec eval --json` against your
-archive, and it's the only way to detect a quality regression introduced by a
-change you didn't think affected ranking.
+## A note on the committed snapshots
+
+The snapshots in this directory were captured against the **author's**
+archive with the author's labeled query set. They are useful history for
+changes made on that machine, but they are **not reproducible against your
+archive** — `queries.json` references Message-IDs that only exist in the
+archive it was curated on. If you're contributing a ranking-affecting change,
+curate a small query set of your own (`mailvec eval-add`), capture your own
+baseline before the change, and compare against *that* — a few minutes of
+`mailvec eval --json`, and the only way to detect a quality regression
+introduced by a change you didn't think affected ranking.

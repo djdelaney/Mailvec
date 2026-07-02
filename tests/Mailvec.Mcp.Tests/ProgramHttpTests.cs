@@ -102,10 +102,71 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 }
 
+public class TrayEndpointsHttpTests : IClassFixture<MailvecMcpFactory>
+{
+    private readonly MailvecMcpFactory _factory;
+
+    public TrayEndpointsHttpTests(MailvecMcpFactory factory) => _factory = factory;
+
+    private Mailvec.Core.Data.MessageRepository Repo() => new(
+        new Mailvec.Core.Data.ConnectionFactory(
+            Microsoft.Extensions.Options.Options.Create(
+                new Mailvec.Core.Options.ArchiveOptions { DatabasePath = _factory.DatabasePath })));
+
+    private static Mailvec.Core.Parsing.ParsedMessage Sample(string id) => new(
+        MessageId: id, ThreadId: id, Subject: id, FromAddress: "a@x", FromName: null,
+        ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
+        BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 10,
+        ContentHash: $"h-{id}", Attachments: []);
+
+    [Fact]
+    public async Task Tray_email_returns_404_for_soft_deleted_message()
+    {
+        // Soft-deleted = gone from disk. Every MCP tool refuses these; the
+        // tray preview endpoint must too (a stale popover id used to get the
+        // full body back).
+        // Ensure the server (and its startup migration) ran before touching the DB.
+        using var client = _factory.CreateClient();
+        var repo = Repo();
+        var id = repo.Upsert(Sample("traydel@x"), "INBOX", "INBOX/cur", "td", DateTimeOffset.UtcNow).Id;
+        repo.MarkDeleted([id], DateTimeOffset.UtcNow);
+
+        var response = await client.GetAsync($"/tray/email/{id}");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Tray_email_returns_live_message()
+    {
+        using var client = _factory.CreateClient();
+        var repo = Repo();
+        var id = repo.Upsert(Sample("traylive@x"), "INBOX", "INBOX/cur", "tl", DateTimeOffset.UtcNow).Id;
+
+        var response = await client.GetAsync($"/tray/email/{id}");
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await response.Content.ReadAsStringAsync()).ShouldContain("traylive@x");
+    }
+
+    [Fact]
+    public async Task Tray_control_with_missing_fields_is_a_400_not_a_500()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsync("/tray/control",
+            new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+    }
+}
+
 public sealed class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
 {
     private readonly string _tempDir;
     private readonly string _dbPath;
+
+    public string DatabasePath => _dbPath;
 
     public MailvecMcpFactory()
     {

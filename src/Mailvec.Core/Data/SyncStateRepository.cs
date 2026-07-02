@@ -102,6 +102,26 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         return set;
     }
 
+    /// <summary>
+    /// The most recently seen live path for a Message-ID (fresh as of the
+    /// cutoff), or null. Used by the scanner's reconciliation to repair a
+    /// messages row that still points at a just-deleted duplicate copy.
+    /// </summary>
+    public string? FreshPathForMessageId(string messageId, DateTimeOffset since)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT maildir_full_path FROM sync_state
+            WHERE message_id = $mid AND last_seen_at >= $cutoff
+            ORDER BY last_seen_at DESC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        cmd.Parameters.AddWithValue("$cutoff", since.ToString("O"));
+        return cmd.ExecuteScalar() as string;
+    }
+
     public int Remove(IEnumerable<string> maildirFullPaths)
     {
         using var conn = connections.Open();

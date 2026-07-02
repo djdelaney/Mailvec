@@ -241,6 +241,115 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public void Transient_ingest_failure_on_a_changed_file_does_not_mask_the_change()
+    {
+        // A file's body changes, but the scan that should pick it up fails
+        // transiently (I/O blip, SQLITE_BUSY past the timeout, ...). The
+        // catch path stamps last_seen_at to the scan start — which is LATER
+        // than the file's mtime — so without the NULL-content_hash retry
+        // marker the mtime fast path would skip the file on every future
+        // scan and the change would be silently masked forever.
+        var path = WriteEml("INBOX", "cur", "flaky.host:2,S", "original body", "flaky@x");
+        _scanner.ScanAll();
+        _messages.GetByMessageId("flaky@x").ShouldNotBeNull().BodyText.ShouldNotBeNull().ShouldContain("original body");
+
+        // Body changes on disk...
+        WriteEml("INBOX", "cur", "flaky.host:2,S", "updated body", "flaky@x");
+
+        // ...but the next scan can't read the file (simulated transient failure).
+        var mode = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var failing = _scanner.ScanAll();
+            failing.FailedToParse.ShouldBe(1);
+            failing.SoftDeleted.ShouldBe(0);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, mode);
+        }
+
+        // The message survived the failed scan and the NEXT scan retries the
+        // parse (instead of trusting the fresh last_seen_at stamp) and picks
+        // up the changed body.
+        _messages.GetByMessageId("flaky@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+
+        var retry = _scanner.ScanAll();
+        retry.FailedToParse.ShouldBe(0);
+        retry.Upserted.ShouldBe(1);
+        _messages.GetByMessageId("flaky@x").ShouldNotBeNull().BodyText.ShouldNotBeNull().ShouldContain("updated body");
+    }
+
+    [Fact]
+    public void Reconciliation_is_skipped_when_a_live_files_sync_refresh_fails()
+    {
+        var path = WriteEml("INBOX", "cur", "wedge.host:2,S", "wedge body", "wedge@x");
+        _scanner.ScanAll();
+        _messages.GetByMessageId("wedge@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+
+        // Inject a persistent write failure for this file's sync_state row:
+        // both the ingest attempt AND the catch handler's refresh now fail,
+        // mimicking sustained SQLITE_BUSY / I/O trouble. The row goes stale,
+        // so without the reconciliation guard the live message would be
+        // soft-deleted this scan (and purge-able).
+        Exec($"CREATE TRIGGER wedge_guard BEFORE UPDATE ON sync_state WHEN new.maildir_full_path = '{path}' BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+
+        var failing = _scanner.ScanAll();
+        failing.FailedToParse.ShouldBe(1);
+        failing.SoftDeleted.ShouldBe(0);
+        _messages.GetByMessageId("wedge@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+
+        // Failure clears -> subsequent scans are back to normal.
+        Exec("DROP TRIGGER wedge_guard");
+        var recovered = _scanner.ScanAll();
+        recovered.FailedToParse.ShouldBe(0);
+        recovered.SoftDeleted.ShouldBe(0);
+        _messages.GetByMessageId("wedge@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
+    private void Exec(string sql)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Deleting_the_referenced_duplicate_copy_repoints_maildir_path_to_the_survivor()
+    {
+        // Fastmail labels: the same Message-ID lives in two folders. The
+        // messages row records whichever copy scanned last; if THAT copy is
+        // deleted, rename-detection correctly keeps the message alive — but
+        // the survivor rides the mtime fast-path and never re-upserts, so the
+        // row's maildir_path used to dangle forever (get_attachment fails,
+        // OCR skips its attachments every cycle).
+        WriteEml("INBOX", "cur", "dup.host:2,S", "same body", "dup@x");
+        WriteEml("Archive.2024", "cur", "dup.host:2,S", "same body", "dup@x");
+        _scanner.ScanAll();
+        _messages.CountAll().ShouldBe(1);
+
+        var before = _messages.GetByMessageId("dup@x").ShouldNotBeNull();
+        // Delete exactly the copy the row references.
+        var referenced = Path.Combine(_root, before.MaildirPath, before.MaildirFilename);
+        File.Exists(referenced).ShouldBeTrue();
+        File.Delete(referenced);
+        var survivorFolder = before.MaildirPath.StartsWith("INBOX", StringComparison.Ordinal) ? "Archive.2024" : "INBOX";
+
+        var second = _scanner.ScanAll();
+
+        second.SoftDeleted.ShouldBe(0);
+        var after = _messages.GetByMessageId("dup@x").ShouldNotBeNull();
+        after.DeletedAt.ShouldBeNull();
+        after.Folder.ShouldBe(survivorFolder);
+        after.MaildirPath.ShouldBe($"{survivorFolder}/cur");
+        File.Exists(Path.Combine(_root, after.MaildirPath, after.MaildirFilename)).ShouldBeTrue();
+    }
+
+    [Fact]
     public void Mbsync_new_to_cur_rename_does_not_create_a_duplicate()
     {
         var path = WriteEml("INBOX", "new", "x.host", "first pass", "rename@x");

@@ -23,6 +23,24 @@ public sealed class EmbeddingWorker(
 {
     private int _processedThisRun;
 
+    // Poison-message quarantine. A message whose embed call permanently draws
+    // a non-400 error is re-selected head-of-line (ORDER BY id) and fails the
+    // whole batch every poll — all embedding halts indefinitely. After
+    // ConsecutiveFailuresBeforeIsolation straight batch failures we switch to
+    // one-message-at-a-time isolation to attribute the failure; a message
+    // that fails QuarantineStrikes counted times is excluded from enumeration
+    // until the process restarts. Failures only COUNT in isolation passes
+    // where at least one other message embedded fine — the same evidence rule
+    // as the OCR pass, so a broken/wedged Ollama (everything failing) never
+    // quarantines anything. Quarantined messages keep embedded_at = NULL
+    // (honest coverage numbers, retried on restart or content change) and
+    // stay keyword-searchable.
+    private const int ConsecutiveFailuresBeforeIsolation = 2;
+    private const int QuarantineStrikes = 3;
+    private int _consecutiveBatchFailures;
+    private readonly Dictionary<long, int> _embedStrikes = new();
+    private readonly HashSet<long> _quarantined = new();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         migrator.EnsureUpToDate();
@@ -46,7 +64,7 @@ public sealed class EmbeddingWorker(
                 // OCR scanned PDFs first (re-queues their messages), then embed.
                 var ocred = await RunOcrIfEnabledAsync(stoppingToken).ConfigureAwait(false);
 
-                var processed = await ProcessOneBatchAsync(batchSize, stoppingToken).ConfigureAwait(false);
+                var processed = await ProcessNextBatchAsync(batchSize, stoppingToken).ConfigureAwait(false);
                 if (processed > 0)
                 {
                     RecordBatchSuccess();
@@ -68,7 +86,7 @@ public sealed class EmbeddingWorker(
             catch (Exception ex)
             {
                 RecordBatchFailure(ex);
-                logger.LogError(ex, "Embedding batch failed; will retry after poll interval");
+                logger.LogError(ex, "Embedding batch failed ({Consecutive} consecutive); will retry after poll interval", _consecutiveBatchFailures);
                 await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
             }
         }
@@ -106,9 +124,132 @@ public sealed class EmbeddingWorker(
         return ocred;
     }
 
+    /// <summary>
+    /// Picks the processing mode for this cycle: the normal batched path, or
+    /// — after repeated consecutive batch failures — one-message-at-a-time
+    /// isolation that can attribute the failure and quarantine a poison
+    /// message instead of letting it halt all embedding forever.
+    /// </summary>
+    internal async Task<int> ProcessNextBatchAsync(int batchSize, CancellationToken ct)
+    {
+        try
+        {
+            var processed = _consecutiveBatchFailures >= ConsecutiveFailuresBeforeIsolation
+                ? await ProcessIsolationBatchAsync(batchSize, ct).ConfigureAwait(false)
+                : await ProcessOneBatchAsync(batchSize, ct).ConfigureAwait(false);
+            _consecutiveBatchFailures = 0;
+            return processed;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            _consecutiveBatchFailures++;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Isolation mode: embed each message individually so a failure is
+    /// attributable. Messages that fail while at least one other succeeded in
+    /// the same pass collect a strike; at <see cref="QuarantineStrikes"/> the
+    /// message is quarantined (excluded from enumeration until restart). With
+    /// zero successes we can't tell a poison message from a broken Ollama, so
+    /// nothing is counted and the cycle registers as a failure.
+    /// </summary>
+    internal async Task<int> ProcessIsolationBatchAsync(int batchSize, CancellationToken ct)
+    {
+        VerifyEmbeddingModelMatchesSchema();
+
+        var messageBatch = messages.EnumerateUnembedded(batchSize, _quarantined).ToList();
+        if (messageBatch.Count == 0) return 0;
+
+        logger.LogWarning(
+            "Embedding in isolation mode after {Failures} consecutive batch failures ({Count} candidate(s), {Quarantined} quarantined).",
+            _consecutiveBatchFailures, messageBatch.Count, _quarantined.Count);
+
+        var embeddedAt = DateTimeOffset.UtcNow;
+        var successes = 0;
+        var failed = new List<(long Id, Exception Ex)>();
+        foreach (var m in messageBatch)
+        {
+            ct.ThrowIfCancellationRequested();
+            var msgChunks = BuildChunksForMessage(m);
+            try
+            {
+                var texts = msgChunks.Select(c => c.Text).ToList();
+                var vecs = texts.Count == 0
+                    ? Array.Empty<float[]>()
+                    : await EmbedInBatchesAsync(texts, batchSize, ct).ConfigureAwait(false);
+                chunks.ReplaceChunksForMessage(m.Id, msgChunks, vecs, embeddedAt, m.ContentHash,
+                    checkContentHash: true, expectedEmbedEpoch: m.EmbedEpoch,
+                    expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel);
+                successes++;
+                _processedThisRun++;
+                _embedStrikes.Remove(m.Id);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failed.Add((m.Id, ex));
+            }
+        }
+
+        if (successes == 0)
+        {
+            // Everything failed — indistinguishable from an Ollama-side
+            // problem. Count nothing; surface as a batch failure so the
+            // health beat keeps escalating and we retry next poll.
+            throw new InvalidOperationException(
+                $"All {failed.Count} message(s) failed to embed in isolation mode; Ollama may be unable to serve the model.",
+                failed[0].Ex);
+        }
+
+        foreach (var (id, ex) in failed)
+        {
+            var strikes = _embedStrikes.GetValueOrDefault(id) + 1;
+            if (strikes >= QuarantineStrikes)
+            {
+                _embedStrikes.Remove(id);
+                _quarantined.Add(id);
+                logger.LogError(ex,
+                    "Message {Id} failed to embed {Strikes}x in cycles where other messages embedded fine; " +
+                    "quarantining it until the embedder restarts. It stays keyword-searchable (FTS) but has no vectors; " +
+                    "`mailvec status` counts it as unembedded.",
+                    id, strikes);
+            }
+            else
+            {
+                _embedStrikes[id] = strikes;
+                logger.LogWarning(ex, "Message {Id} failed to embed in isolation ({Strikes}/{Max} strikes).", id, strikes, QuarantineStrikes);
+            }
+        }
+
+        logger.LogInformation(
+            "Isolation pass: {Successes} embedded, {Failed} failed, {Quarantined} quarantined total.",
+            successes, failed.Count, _quarantined.Count);
+        return successes;
+    }
+
     internal async Task<int> ProcessOneBatchAsync(int batchSize, CancellationToken ct)
     {
-        var messageBatch = messages.EnumerateUnembedded(batchSize).ToList();
+        // Re-verify every poll, not just at startup: `mailvec switch-model`
+        // can rewrite metadata.embedding_model while we're running, and a
+        // same-dimension switch would otherwise let this (old-config) worker
+        // re-embed the whole re-queued archive into the new vector table.
+        // Throwing here surfaces through RecordBatchFailure -> /health
+        // (degraded after consecutive failures) until the embedder is
+        // redeployed with matching config. The per-write guard in
+        // ReplaceChunksForMessage is the transactional backstop for a switch
+        // that lands mid-batch.
+        VerifyEmbeddingModelMatchesSchema();
+
+        var messageBatch = messages.EnumerateUnembedded(batchSize, _quarantined).ToList();
         if (messageBatch.Count == 0) return 0;
 
         // Build a combined chunk list per message: body chunks (source='body')
@@ -122,7 +263,7 @@ public sealed class EmbeddingWorker(
         // re-fetched by EnumerateUnembedded next batch, and inflate
         // _processedThisRun by re-counting on every appearance.
         var perMessageChunks = messageBatch
-            .Select(m => (m.Id, m.ContentHash, Chunks: BuildChunksForMessage(m)))
+            .Select(m => (m.Id, m.ContentHash, m.EmbedEpoch, Chunks: BuildChunksForMessage(m)))
             .ToList();
 
         var allTexts = perMessageChunks.SelectMany(x => x.Chunks.Select(c => c.Text)).ToList();
@@ -145,7 +286,7 @@ public sealed class EmbeddingWorker(
         var attachmentChunkCount = 0;
         var nonEmptyMessageCount = 0;
         var skipped = 0;
-        foreach (var (id, contentHash, msgChunks) in perMessageChunks)
+        foreach (var (id, contentHash, embedEpoch, msgChunks) in perMessageChunks)
         {
             if (msgChunks.Count == 0)
             {
@@ -153,7 +294,8 @@ public sealed class EmbeddingWorker(
                 // attachment) so EnumerateUnembedded stops returning them.
                 // Guarded like the non-empty path: if the body grew (content
                 // changed) mid-batch, don't stamp it embedded-with-no-chunks.
-                if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true))
+                if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true,
+                        expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel))
                     skipped++;
                 continue;
             }
@@ -161,10 +303,12 @@ public sealed class EmbeddingWorker(
             // Advance the cursor regardless — these vectors belong to this
             // message whether or not the guarded write commits.
             cursor += msgChunks.Count;
-            if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true))
+            if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true,
+                    expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel))
             {
-                // The indexer changed this message's body during the embed call;
-                // leave embedded_at = NULL so we re-embed the new body next poll.
+                // This message was re-queued during the embed call (body
+                // change or attachment-text change); leave embedded_at = NULL
+                // so we re-embed the new content next poll.
                 skipped++;
                 continue;
             }

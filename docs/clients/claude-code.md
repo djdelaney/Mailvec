@@ -53,4 +53,4 @@ The launchd plist sets `MAILVEC_LAUNCHD=1` to suppress Serilog's Console sink in
 
 ## Verifying
 
-In a fresh Claude Code session: `mcp list` should show `mailvec` with the version string from `manifest.json` / `Mailvec.Mcp.csproj <Version>`. Asking the agent something archive-specific should trigger a `search_emails` call.
+Run `claude mcp list` in a shell (or `/mcp` inside a Claude Code session): `mailvec` should be listed as connected, with the version string from `manifest.json` / `Mailvec.Mcp.csproj <Version>`. Asking the agent something archive-specific should trigger a `search_emails` call.
