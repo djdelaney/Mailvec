@@ -93,6 +93,98 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessOneBatchAsync_throws_when_model_switched_mid_run()
+    {
+        // `mailvec switch-model` rewrites metadata.embedding_model while the
+        // embedder runs. The per-poll re-verify must stop the (old-config)
+        // worker from re-embedding the re-queued archive with the old model —
+        // the startup check alone would never see the switch.
+        InsertMessage("msg-1@x", subject: "Hello", body: new string('a', 300));
+        var worker = BuildWorker(_ => Ok([HotVector(0)]));
+        worker.VerifyEmbeddingModelMatchesSchema();   // startup check passes
+
+        _metadata.Set("embedding_model", "qwen3-embedding:4b"); // switch-model lands
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(
+            () => worker.ProcessOneBatchAsync(batchSize: 16, ct: default));
+        ex.Message.ShouldContain("mismatch");
+        _chunks.CountForMessage(GetMessageId("msg-1@x")).ShouldBe(0);   // nothing written
+    }
+
+    [Fact]
+    public async Task Poison_message_is_quarantined_and_embedding_continues()
+    {
+        // A message whose embed call permanently fails (non-400) is
+        // re-selected head-of-line and used to fail every batch — halting ALL
+        // embedding forever. After repeated batch failures the worker now
+        // isolates, attributes the failure, and quarantines the message once
+        // it has failed repeatedly while other messages embedded fine.
+        InsertMessage("poison@x", "bad", "POISONMARKER " + new string('p', 300));
+        var worker = BuildWorker(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().Result;
+            if (body.Contains("POISONMARKER", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("boom") };
+            return Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))]);
+        });
+
+        // Drive the worker the way ExecuteAsync does (swallowing per-cycle
+        // failures), with fresh mail arriving so isolation passes have the
+        // same-cycle successes that make failures count toward quarantine.
+        for (int cycle = 0; cycle < 12; cycle++)
+        {
+            InsertMessage($"good-{cycle}@x", "ok", new string('g', 300));
+            try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
+            catch (InvalidOperationException) { }
+            catch (HttpRequestException) { }
+        }
+
+        // Every healthy message made it through despite the poison one...
+        for (int cycle = 0; cycle < 12; cycle++)
+        {
+            EmbeddedAt(GetMessageId($"good-{cycle}@x")).ShouldNotBeNull($"good-{cycle}@x should be embedded");
+        }
+        // ...the poison message is honestly unembedded (no fake stamp)...
+        EmbeddedAt(GetMessageId("poison@x")).ShouldBeNull();
+
+        // ...and once quarantined it no longer fails batches: a fresh message
+        // embeds in a single clean cycle with no exception.
+        InsertMessage("after@x", "ok", new string('a', 300));
+        var processed = await worker.ProcessNextBatchAsync(batchSize: 16, ct: default);
+        processed.ShouldBeGreaterThan(0);
+        EmbeddedAt(GetMessageId("after@x")).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task Broken_ollama_never_quarantines_messages()
+    {
+        // When EVERY embed call fails there's no way to tell a poison message
+        // from a broken Ollama — nothing may be quarantined, or an outage
+        // would permanently strip messages out of the embedding queue.
+        InsertMessage("m1@x", "one", new string('a', 300));
+        InsertMessage("m2@x", "two", new string('b', 300));
+        var healthy = false;
+        var worker = BuildWorker(req => healthy
+            ? Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))])
+            : new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("down") });
+
+        for (int cycle = 0; cycle < 8; cycle++)   // batch failures + all-fail isolation passes
+        {
+            try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
+            catch (InvalidOperationException) { }
+            catch (HttpRequestException) { }
+        }
+        EmbeddedAt(GetMessageId("m1@x")).ShouldBeNull();
+        EmbeddedAt(GetMessageId("m2@x")).ShouldBeNull();
+
+        // Ollama recovers: BOTH messages embed — proof neither was quarantined.
+        healthy = true;
+        while (await worker.ProcessNextBatchAsync(batchSize: 16, ct: default) > 0) { }
+        EmbeddedAt(GetMessageId("m1@x")).ShouldNotBeNull();
+        EmbeddedAt(GetMessageId("m2@x")).ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task ProcessOneBatchAsync_returns_zero_when_no_unembedded_messages()
     {
         var called = 0;

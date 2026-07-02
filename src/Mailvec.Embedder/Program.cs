@@ -36,7 +36,14 @@ builder.Services
     {
         var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OllamaOptions>>().Value;
         client.BaseAddress = new Uri(opts.BaseUrl);
-        client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
+        // The resilience handler below owns ALL timeouts. HttpClient.Timeout
+        // wraps the entire handler chain — retries included — so a finite
+        // value here silently caps the pipeline: with the old 60s default,
+        // the widened 120s/300s resilience timeouts were dead config, cold
+        // model loads threw TaskCanceledException at 60s, and the retry
+        // attempts never ran. (PingAsync stays bounded by its own 2s linked
+        // CTS regardless.)
+        client.Timeout = Timeout.InfiniteTimeSpan;
     })
     .AddStandardResilienceHandler(o =>
     {

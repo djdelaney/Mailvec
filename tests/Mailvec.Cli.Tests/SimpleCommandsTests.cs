@@ -106,7 +106,7 @@ public class SimpleCommandsTests
     public void Reindex_with_neither_all_nor_folder_returns_exit_2_and_writes_to_stderr()
     {
         var err = new StringWriter();
-        var exit = ReindexCommand.ValidateAndRun(all: false, folder: null, new StringWriter(), err);
+        var exit = ReindexCommand.ValidateAndRun(all: false, folder: null, yes: false, new StringWriter(), err, readLine: () => null);
 
         exit.ShouldBe(2);
         err.ToString().ShouldContain("--all");
@@ -125,7 +125,7 @@ public class SimpleCommandsTests
         chunks.ReplaceChunksForMessage(arch, [new TextChunk(0, "b", 1)], [HotVec(1)], DateTimeOffset.UtcNow);
 
         var writer = new StringWriter();
-        var exit = ReindexCommand.Execute(ctx.Services, folder: null, writer);
+        var exit = ReindexCommand.Execute(ctx.Services, folder: null, yes: true, writer, readLine: () => null);
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("Cleared embeddings on 2");
@@ -146,12 +146,45 @@ public class SimpleCommandsTests
         chunks.ReplaceChunksForMessage(arch, [new TextChunk(0, "b", 1)], [HotVec(1)], DateTimeOffset.UtcNow);
 
         var writer = new StringWriter();
-        var exit = ReindexCommand.Execute(ctx.Services, folder: "INBOX", writer);
+        var exit = ReindexCommand.Execute(ctx.Services, folder: "INBOX", yes: true, writer, readLine: () => null);
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("folder 'INBOX'");
         chunks.CountForMessage(inbox).ShouldBe(0);
         chunks.CountForMessage(arch).ShouldBe(1);  // archive untouched
+    }
+
+    [Fact]
+    public void Reindex_aborts_when_user_declines_the_prompt()
+    {
+        using var ctx = new TestServiceProvider();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        var chunks = ctx.Services.GetRequiredService<ChunkRepository>();
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
+        chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "a", 1)], [HotVec(0)], DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var exit = ReindexCommand.Execute(ctx.Services, folder: null, yes: false, writer, readLine: () => "n");
+
+        exit.ShouldBe(1);
+        writer.ToString().ShouldContain("Aborted");
+        chunks.CountForMessage(id).ShouldBe(1);   // nothing cleared
+    }
+
+    [Fact]
+    public void Reindex_proceeds_when_user_confirms_at_prompt()
+    {
+        using var ctx = new TestServiceProvider();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        var chunks = ctx.Services.GetRequiredService<ChunkRepository>();
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
+        chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "a", 1)], [HotVec(0)], DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var exit = ReindexCommand.Execute(ctx.Services, folder: null, yes: false, writer, readLine: () => " Y ");
+
+        exit.ShouldBe(0);
+        chunks.CountForMessage(id).ShouldBe(0);
     }
 
     // ---------------- RepairCommand ----------------

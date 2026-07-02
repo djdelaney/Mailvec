@@ -372,6 +372,44 @@ public class MessageRepositoryTests
     }
 
     [Fact]
+    public void Upsert_treats_legacy_null_hash_row_as_unchanged_not_as_fresh_insert()
+    {
+        // Pre-v3 rows have content_hash = NULL. The documented rule is
+        // "legacy NULL hash = unchanged", but the old ExecuteScalar probe
+        // couldn't tell a NULL-hash row from a missing row, so the rescan
+        // was misclassified as a fresh insert: AttachmentsReset wiped the
+        // attachment rows (including OCR-recovered text) and cleared
+        // embedded_at — the exact migration churn the rule exists to prevent.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        var attachments = new[] { new ParsedAttachment(0, "doc.pdf", "application/pdf", 100L, "recovered text", "ocr") };
+        var id = repo.Upsert(Sample(attachments: attachments), "INBOX", "INBOX/cur", "f1", now).Id;
+        chunks.ReplaceChunksForMessage(id, [], [], now);
+
+        // Simulate the legacy state: existing row, NULL content_hash.
+        using (var conn = db.Connections.Open())
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE messages SET content_hash = NULL WHERE id = $id";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.ExecuteNonQuery();
+        }
+
+        var outcome = repo.Upsert(Sample(attachments: attachments), "INBOX", "INBOX/cur", "f1", now.AddMinutes(1));
+
+        outcome.IsNewInsert.ShouldBeFalse();
+        outcome.ContentChanged.ShouldBeFalse();
+        outcome.AttachmentsReset.ShouldBeFalse();
+        EmbeddedAt(db, id).ShouldNotBeNull();                                     // no re-embed churn
+        var att = repo.GetById(id).ShouldNotBeNull().Attachments.ShouldHaveSingleItem();
+        att.ExtractionStatus.ShouldBe("ocr");                                     // OCR text survived the rescan
+        att.ExtractedText.ShouldBe("recovered text");
+    }
+
+    [Fact]
     public void Upsert_persists_content_hash_for_subsequent_change_detection()
     {
         using var db = new TempDatabase();

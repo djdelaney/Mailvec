@@ -51,21 +51,30 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
         // Read the prior row's content_hash inside the same transaction so
         // there's no race against another writer mutating it underneath us.
-        // priorHash is null for fresh inserts and for rows recorded before
-        // schema v3 (where content_hash hadn't been backfilled yet) — both
-        // mean "treat as unchanged" so we don't churn embeddings on every
-        // first re-scan after migration.
+        // "Row exists with NULL hash" (pre-v3 legacy rows) must be
+        // distinguished from "no row": both used to collapse to priorHash ==
+        // null via ExecuteScalar, which misclassified legacy rows as fresh
+        // inserts — AttachmentsReset then wiped their attachment rows
+        // (destroying OCR-recovered text until a wasted re-OCR) and cleared
+        // embedded_at, exactly the migration churn the NULL-means-unchanged
+        // rule exists to prevent. A NULL prior hash on an EXISTING row means
+        // "treat as unchanged".
         string? priorHash = null;
+        var rowExists = false;
         using (var probe = conn.CreateCommand())
         {
             probe.Transaction = tx;
             probe.CommandText = "SELECT content_hash FROM messages WHERE message_id = $mid";
             probe.Parameters.AddWithValue("$mid", parsed.MessageId);
-            var raw = probe.ExecuteScalar();
-            priorHash = raw is string s ? s : null;
+            using var reader = probe.ExecuteReader();
+            if (reader.Read())
+            {
+                rowExists = true;
+                priorHash = reader.IsDBNull(0) ? null : reader.GetString(0);
+            }
         }
-        var contentChanged = priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);
-        var isNewInsert = priorHash is null;
+        var contentChanged = rowExists && priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);
+        var isNewInsert = !rowExists;
 
         long id;
         using (var cmd = conn.CreateCommand())
@@ -127,6 +136,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     -- embedded_at to avoid re-embedding the whole archive every
                     -- scan) leaves it untouched.
                     embedded_at      = CASE WHEN $attachments_reset THEN NULL ELSE messages.embedded_at END,
+                    -- Bump the re-queue counter whenever we re-queue, so an
+                    -- embedder mid-write against the old content abandons its
+                    -- stamp (see ChunkRepository.ReplaceChunksForMessage).
+                    embed_epoch      = CASE WHEN $attachments_reset THEN messages.embed_epoch + 1 ELSE messages.embed_epoch END,
                     content_hash     = excluded.content_hash
                 RETURNING id;
                 """;
@@ -530,21 +543,36 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// those separately with <c>source='attachment'</c> so search hits can
     /// be traced back to the document that matched.
     /// </summary>
-    public IEnumerable<UnembeddedMessage> EnumerateUnembedded(int batchSize = 50)
+    /// <param name="batchSize">Max messages returned.</param>
+    /// <param name="excludeIds">
+    /// Message ids to skip — the embedder's in-memory quarantine for messages
+    /// whose embed calls permanently fail. Excluding in SQL matters: these
+    /// are head-of-line (ORDER BY id), so filtering after the LIMIT would
+    /// starve everything behind them.
+    /// </param>
+    public IEnumerable<UnembeddedMessage> EnumerateUnembedded(int batchSize = 50, IReadOnlyCollection<long>? excludeIds = null)
     {
         using var conn = connections.Open();
 
         // Fetch the message rows first, then load attachment payloads in a
         // second query per message. Two-step is simpler than a single GROUP_CONCAT
         // and avoids the per-row cost on the (common) bodies-only path.
-        var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames, string? ContentHash)>();
+        var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames, string? ContentHash, long EmbedEpoch)>();
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = """
-                SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names, content_hash
+            var exclusion = "";
+            if (excludeIds is { Count: > 0 })
+            {
+                var names = excludeIds.Select((_, i) => $"$ex{i}").ToList();
+                exclusion = $" AND id NOT IN ({string.Join(", ", names)})";
+                var i = 0;
+                foreach (var id in excludeIds) cmd.Parameters.AddWithValue($"$ex{i++}", id);
+            }
+            cmd.CommandText = $"""
+                SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names, content_hash, embed_epoch
                 FROM messages
                 WHERE embedded_at IS NULL
-                  AND deleted_at IS NULL
+                  AND deleted_at IS NULL{exclusion}
                 ORDER BY id
                 LIMIT $limit;
                 """;
@@ -558,18 +586,20 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
                     reader.IsDBNull(3) ? null : reader.GetString(3),
-                    // Snapshot content_hash so the embedder can detect a body
-                    // change committed by the indexer during the (slow) embed
-                    // call and refuse to write stale vectors. See
-                    // ChunkRepository.ReplaceChunksForMessage's guard.
-                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+                    // Snapshot content_hash + embed_epoch so the embedder can
+                    // detect a body change OR a hash-preserving re-queue
+                    // (attachment re-extraction, OCR write-back) committed
+                    // during the (slow) embed call and refuse to write stale
+                    // vectors. See ChunkRepository.ReplaceChunksForMessage.
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetInt64(5)));
             }
         }
 
         foreach (var row in rows)
         {
             var attachmentTexts = LoadAttachmentTexts(conn, row.Id);
-            yield return new UnembeddedMessage(row.Id, row.BodyText, row.Subject, row.AttachmentNames, attachmentTexts, row.ContentHash);
+            yield return new UnembeddedMessage(row.Id, row.BodyText, row.Subject, row.AttachmentNames, attachmentTexts, row.ContentHash, row.EmbedEpoch);
         }
     }
 
@@ -806,11 +836,22 @@ public sealed class MessageRepository(ConnectionFactory connections)
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            // A blank transcription (empty/illegible scan). status='ocr' with
+            // empty text is the terminal marker — the OCR pass won't
+            // re-select it — but there is nothing new to search, so skip the
+            // attachment_text rebuild and the embedded_at clear: re-queueing
+            // would burn a full re-embed of the message for zero new content.
+            tx.Commit();
+            return;
+        }
+
         var attachmentText = ConcatAttachmentText(conn, tx, messageId);
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
-            cmd.CommandText = "UPDATE messages SET attachment_text = $at, embedded_at = NULL WHERE id = $id;";
+            cmd.CommandText = "UPDATE messages SET attachment_text = $at, embedded_at = NULL, embed_epoch = embed_epoch + 1 WHERE id = $id;";
             cmd.Parameters.AddWithValue("$at", (object?)attachmentText ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$id", messageId);
             cmd.ExecuteNonQuery();
@@ -943,7 +984,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             upd.Transaction = tx;
             upd.CommandText =
                 "UPDATE messages SET has_attachments = 1, attachment_names = $names, attachment_text = $text"
-                + (anyText ? ", embedded_at = NULL" : "")
+                + (anyText ? ", embedded_at = NULL, embed_epoch = embed_epoch + 1" : "")
                 + " WHERE id = $id;";
             upd.Parameters.AddWithValue("$names", (object?)attachmentNames ?? DBNull.Value);
             upd.Parameters.AddWithValue("$text", (object?)attachmentText ?? DBNull.Value);
@@ -1010,6 +1051,30 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Repoint a message's Maildir location without touching its content,
+    /// hashes, or embedding state. Used by the scanner's reconciliation when
+    /// a duplicate copy the row referenced is deleted: the surviving copy
+    /// rides the mtime fast-path and never re-upserts, so without this the
+    /// row's path would dangle forever — get_attachment fails and the OCR
+    /// pass skips the message's attachments on every cycle.
+    /// </summary>
+    public void UpdateMaildirLocation(long id, string folder, string maildirRelativePath, string maildirFilename)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE messages
+            SET folder = $folder, maildir_path = $path, maildir_filename = $file
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$folder", folder);
+        cmd.Parameters.AddWithValue("$path", maildirRelativePath);
+        cmd.Parameters.AddWithValue("$file", maildirFilename);
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.ExecuteNonQuery();
+    }
+
     public int MarkDeleted(IEnumerable<long> ids, DateTimeOffset deletedAt)
     {
         using var conn = connections.Open();
@@ -1031,11 +1096,19 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return affected;
     }
 
-    public int CountSoftDeleted()
+    /// <summary>
+    /// Counts soft-deleted messages; with <paramref name="deletedBefore"/>,
+    /// only those whose deleted_at is at or before the cutoff (matching what
+    /// <see cref="PurgeSoftDeleted"/> would remove with the same cutoff).
+    /// </summary>
+    public int CountSoftDeleted(DateTimeOffset? deletedBefore = null)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE deleted_at IS NOT NULL";
+        cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE deleted_at IS NOT NULL"
+            + (deletedBefore is null ? "" : " AND datetime(deleted_at) <= datetime($cutoff)");
+        if (deletedBefore is { } cutoff)
+            cmd.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
@@ -1052,23 +1125,34 @@ public sealed class MessageRepository(ConnectionFactory connections)
     ///   delete (otherwise the chunks rows we'd JOIN through are gone).
     /// All three statements run in a single transaction so a partial purge
     /// can't leave orphan vectors.
+    ///
+    /// <paramref name="deletedBefore"/> restricts the purge to rows whose
+    /// deleted_at is at or before the cutoff. This grace period is what makes
+    /// purge safe against the scanner's transient-failure window: a live
+    /// message wrongly soft-deleted (its sync_state refresh failed mid-scan)
+    /// self-heals on the next scan, but a purge landing inside that window
+    /// would hard-delete it. Null purges everything regardless of age.
     /// </summary>
-    public int PurgeSoftDeleted()
+    public int PurgeSoftDeleted(DateTimeOffset? deletedBefore = null)
     {
+        var cutoffClause = deletedBefore is null ? "" : " AND datetime(m.deleted_at) <= datetime($cutoff)";
+
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
         using (var delEmbeddings = conn.CreateCommand())
         {
             delEmbeddings.Transaction = tx;
-            delEmbeddings.CommandText = """
+            delEmbeddings.CommandText = $"""
                 DELETE FROM chunk_embeddings
                 WHERE chunk_id IN (
                     SELECT c.id FROM chunks c
                     JOIN messages m ON m.id = c.message_id
-                    WHERE m.deleted_at IS NOT NULL
+                    WHERE m.deleted_at IS NOT NULL{cutoffClause}
                 )
                 """;
+            if (deletedBefore is { } embCutoff)
+                delEmbeddings.Parameters.AddWithValue("$cutoff", embCutoff.ToString("O"));
             delEmbeddings.ExecuteNonQuery();
         }
 
@@ -1076,7 +1160,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using (var delMessages = conn.CreateCommand())
         {
             delMessages.Transaction = tx;
-            delMessages.CommandText = "DELETE FROM messages WHERE deleted_at IS NOT NULL";
+            delMessages.CommandText =
+                "DELETE FROM messages AS m WHERE m.deleted_at IS NOT NULL" + cutoffClause;
+            if (deletedBefore is { } msgCutoff)
+                delMessages.Parameters.AddWithValue("$cutoff", msgCutoff.ToString("O"));
             affected = delMessages.ExecuteNonQuery();
         }
 
@@ -1156,7 +1243,10 @@ public sealed record UnembeddedMessage(
     // The embedder passes it back to ReplaceChunksForMessage's guard so a
     // concurrent body change (which bumps content_hash) discards the stale
     // embed instead of stamping it. Nullable for legacy pre-v3 rows.
-    string? ContentHash = null);
+    string? ContentHash = null,
+    // embed_epoch at snapshot time — the re-queue counter that catches
+    // invalidations content_hash can't see (attachment text changes).
+    long EmbedEpoch = 0);
 
 public sealed record AttachmentEmbeddingPayload(
     long AttachmentId,

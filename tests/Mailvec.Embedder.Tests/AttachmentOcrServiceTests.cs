@@ -247,6 +247,60 @@ public class AttachmentOcrServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Wedged_ollama_never_retires_documents_no_matter_how_many_cycles()
+    {
+        // /api/tags answers 200 even when Ollama can't actually load the model
+        // (GPU OOM, dead runner), so the availability probe passes while every
+        // vision call times out. Those failures must NOT count toward poison-
+        // document retirement — an hours-long wedge used to permanently mark
+        // perfectly good scans 'failed', one head-of-queue doc per few cycles.
+        long a = StageNoTextPdf("wedge-a@x", MinimalPdf(1));
+        long b = StageNoTextPdf("wedge-b@x", MinimalPdf(1));
+        var svc = Build(new FakeVision(true, _ => throw new TaskCanceledException("HttpClient.Timeout")));
+
+        for (int cycle = 0; cycle < 8; cycle++) // well past MaxVisionAttempts
+        {
+            (await svc.ProcessBatchAsync(10, default)).ShouldBe(0);
+        }
+
+        StatusOf(a).ShouldBe(AttachmentTextExtractor.StatusNoText); // untouched, retried when Ollama recovers
+        StatusOf(b).ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
+    [Fact]
+    public async Task Poison_document_retires_after_repeated_failures_alongside_successes()
+    {
+        // The poison doc (lowest attachment id, so always selected first)
+        // fails every cycle while other documents OCR fine — proof the model
+        // is healthy, so its failures count and it retires after
+        // MaxVisionAttempts cycles. Meanwhile the failure must not block the
+        // documents behind it in the queue.
+        long poison = StageNoTextPdf("poison@x", MinimalPdf(1));
+        var calls = 0;
+        // Candidates are ordered by attachment id: the poison doc's call is
+        // always the first of each cycle (odd call numbers).
+        var svc = Build(new FakeVision(true, _ =>
+            ++calls % 2 == 1 ? throw new TaskCanceledException("poison render hangs the model") : "GOOD TEXT"));
+
+        var healthy = new List<long>();
+        for (int cycle = 0; cycle < 5; cycle++) // MaxVisionAttempts
+        {
+            healthy.Add(StageNoTextPdf($"fresh-{cycle}@x", MinimalPdf(1)));
+            await svc.ProcessBatchAsync(10, default);
+        }
+
+        // Head-of-line liveness: every healthy doc behind the poison one got
+        // OCR'd in its own cycle.
+        foreach (var id in healthy)
+        {
+            StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusOcr);
+            TextOf(id).ShouldBe("GOOD TEXT");
+        }
+        // And the poison doc is retired so it stops costing a timeout per cycle.
+        StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
     public async Task Real_cancellation_propagates()
     {
         long id = StageUnsupportedImage("cancel@x", MakePng(300, 300));

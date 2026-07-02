@@ -276,6 +276,37 @@ public class SchemaMigratorTests
     }
 
     [Fact]
+    public void ExecuteScript_stamps_version_in_the_same_transaction()
+    {
+        using var db = new TempDatabase();
+        using var conn = db.Connections.Open();
+
+        SchemaMigrator.ExecuteScript(conn, "CREATE TABLE stamp_probe (x INTEGER);", stampVersion: 99);
+
+        TableExists(db.Connections, "stamp_probe").ShouldBeTrue();
+        ReadSchemaVersion(db).ShouldBe(99);
+    }
+
+    [Fact]
+    public void ExecuteScript_rolls_back_version_stamp_when_a_statement_fails()
+    {
+        // A migration that fails partway must leave BOTH the schema changes
+        // and the version stamp unapplied — otherwise a partially-applied
+        // ALTER-based migration re-runs (or is skipped) on the next start.
+        using var db = new TempDatabase();
+        using var conn = db.Connections.Open();
+
+        Should.Throw<Microsoft.Data.Sqlite.SqliteException>(() =>
+            SchemaMigrator.ExecuteScript(
+                conn,
+                "CREATE TABLE atomic_probe (x INTEGER); INSERT INTO no_such_table VALUES (1);",
+                stampVersion: 99));
+
+        TableExists(db.Connections, "atomic_probe").ShouldBeFalse();
+        ReadSchemaVersion(db).ShouldBe(SchemaMigrator.LatestSchemaVersion);
+    }
+
+    [Fact]
     public void Migrator_is_idempotent_when_already_at_latest()
     {
         using var db = new TempDatabase();

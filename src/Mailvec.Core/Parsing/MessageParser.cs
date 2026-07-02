@@ -60,8 +60,7 @@ public sealed class MessageParser
         var fromMailbox = mime.From.Mailboxes.FirstOrDefault();
         var attachments = ExtractAttachments(mime);
 
-        var messageId = StripAngleBrackets(mime.MessageId)
-            ?? throw new InvalidOperationException("Message has no Message-ID header.");
+        var messageId = StripAngleBrackets(mime.MessageId) ?? SyntheticMessageId(mime);
 
         var threadId = ResolveThreadId(mime, messageId);
 
@@ -131,6 +130,33 @@ public sealed class MessageParser
 
     private static string? NormalizeName(string? name) =>
         string.IsNullOrWhiteSpace(name) ? null : name;
+
+    /// <summary>
+    /// Deterministic fallback id for mail with no Message-ID header (old
+    /// imports, drafts, some automated senders). Throwing here used to make
+    /// these messages permanently unindexable — silently absent from all
+    /// search — and, because the mtime fast-path requires a stored
+    /// message_id, they were fully re-parsed (attachments re-extracted) on
+    /// every periodic scan forever.
+    ///
+    /// Derived from stable content — originator headers plus the body-section
+    /// hash — NOT the Maildir path, so an mbsync rename maps to the same id
+    /// (rename detection keeps working) and every rescan of the same file
+    /// upserts the same row instead of duplicating. Distinct messages that
+    /// are identical in (date, from, subject, body) collapse to one row —
+    /// the same semantics duplicate server-side Message-IDs already get.
+    /// </summary>
+    private static string SyntheticMessageId(MimeMessage mime)
+    {
+        var seed = string.Join('\n',
+            mime.Date.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            mime.From.ToString(),
+            mime.Subject ?? string.Empty,
+            MessageBodyHasher.Hash(mime));
+        var hex = System.Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(seed)));
+        return $"{hex.ToLowerInvariant()}@synthetic.mailvec.local";
+    }
 
     private static string? StripAngleBrackets(string? messageId)
     {
