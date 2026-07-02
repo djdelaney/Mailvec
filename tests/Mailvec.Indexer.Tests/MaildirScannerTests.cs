@@ -319,6 +319,37 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    public void Deleting_the_referenced_duplicate_copy_repoints_maildir_path_to_the_survivor()
+    {
+        // Fastmail labels: the same Message-ID lives in two folders. The
+        // messages row records whichever copy scanned last; if THAT copy is
+        // deleted, rename-detection correctly keeps the message alive — but
+        // the survivor rides the mtime fast-path and never re-upserts, so the
+        // row's maildir_path used to dangle forever (get_attachment fails,
+        // OCR skips its attachments every cycle).
+        WriteEml("INBOX", "cur", "dup.host:2,S", "same body", "dup@x");
+        WriteEml("Archive.2024", "cur", "dup.host:2,S", "same body", "dup@x");
+        _scanner.ScanAll();
+        _messages.CountAll().ShouldBe(1);
+
+        var before = _messages.GetByMessageId("dup@x").ShouldNotBeNull();
+        // Delete exactly the copy the row references.
+        var referenced = Path.Combine(_root, before.MaildirPath, before.MaildirFilename);
+        File.Exists(referenced).ShouldBeTrue();
+        File.Delete(referenced);
+        var survivorFolder = before.MaildirPath.StartsWith("INBOX", StringComparison.Ordinal) ? "Archive.2024" : "INBOX";
+
+        var second = _scanner.ScanAll();
+
+        second.SoftDeleted.ShouldBe(0);
+        var after = _messages.GetByMessageId("dup@x").ShouldNotBeNull();
+        after.DeletedAt.ShouldBeNull();
+        after.Folder.ShouldBe(survivorFolder);
+        after.MaildirPath.ShouldBe($"{survivorFolder}/cur");
+        File.Exists(Path.Combine(_root, after.MaildirPath, after.MaildirFilename)).ShouldBeTrue();
+    }
+
+    [Fact]
     public void Mbsync_new_to_cur_rename_does_not_create_a_duplicate()
     {
         var path = WriteEml("INBOX", "new", "x.host", "first pass", "rename@x");
