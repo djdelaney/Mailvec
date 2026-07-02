@@ -1,11 +1,11 @@
 # MCPB release notes
 
-`ops/build-mcpb.sh` produces `dist/mailvec-<version>.mcpb`. It runs `dotnet publish -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=false`, copies `manifest.json` next to the published `server/` directory, and zips the result. The bundle extracts to `~/Library/Application Support/Claude/extensions/<id>/` — not under `~/Documents`, so it sidesteps the TCC read block (see Phase 3 gotchas in `CLAUDE.md`).
+`ops/build-mcpb.sh` produces `dist/mailvec-<version>.mcpb`. It runs `dotnet publish -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=false`, copies `manifest.json` next to the published `server/` directory, and zips the result. Claude Desktop unpacks the bundle to `~/Library/Application Support/Claude/Claude Extensions/local.mcpb.<author>.mailvec/` (older builds used `.../Connectors/`) — not under `~/Documents`, so it sidesteps the TCC read block (see the MCP transport quirks in `CLAUDE.md`).
 
 ## Build choices
 
 - **Self-contained, NOT single-file.** `PublishSingleFile=true` would still leave `vec0.dylib` outside the apphost (added via `<None CopyToOutputDirectory>`, not as a managed dep), but turning it off keeps the layout debuggable: `server/Mailvec.Mcp` and `server/runtimes/osx-arm64/native/vec0.dylib` are visibly co-located, and `ConnectionFactory.ResolveVecExtension` resolves the relative path against `AppContext.BaseDirectory` exactly as it does in dev builds. Single-file would also make `xattr`/Gatekeeper triage harder.
-- **Bundle size is ~50 MB.** The .NET 10 runtime is the bulk. Fine for personal install. Don't switch to framework-dependent — that brings back the `DOTNET_ROOT` / PATH problem the bundle was built to eliminate.
+- **The bundle is large (tens of MB).** The self-contained .NET 10 runtime is the bulk, and the native PDFtoImage/PDFium + SkiaSharp assets (added for `get_attachment_page_image` and OCR-adjacent rendering) grew it further. Fine for a personal install. Don't switch to framework-dependent — that brings back the `DOTNET_ROOT` / PATH problem the bundle was built to eliminate.
 - **The bundle is the read-side only.** Indexer + embedder still run as your own processes against the same DB. Updating the bundle does not require restarting them.
 
 ## Updating an installed bundle
@@ -21,4 +21,4 @@ This patch-bumps `manifest.json`, rebuilds, and `open`s the new `.mcpb` (which C
 
 ## Manifest authoring
 
-The two manifest gotchas that bite at code-edit time (`~/...` defaults, `required: false` on new fields) live in `CLAUDE.md` under "MCPB bundle (code-relevant gotchas)" so they're loaded into every session.
+The manifest gotchas that bite at code-edit time (`~/...` defaults, `required: false` on new fields, tool-shape rules that break the install) live in [`docs/contributing/mcpb.md`](../docs/contributing/mcpb.md).

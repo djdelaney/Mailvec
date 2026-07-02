@@ -28,7 +28,7 @@ In Claude Desktop: Settings → Extensions → Mailvec → toggle off, accept th
 
 ## Logs
 
-Claude Desktop captures the bundle's stderr to `~/Library/Logs/Claude/mcp-server-mailvec.log`. The bundled binary also writes the same Serilog rolling file as the standalone server (`~/Library/Logs/Mailvec/mailvec-mcp-<date>.log`). Either is fine; the Serilog file is more durable across days.
+Claude Desktop captures the bundle's stderr to `~/Library/Logs/Claude/mcp-server-mailvec.log` — that's the log for this client. The bundle runs in stdio mode, which **disables** the Serilog rolling file (`~/Library/Logs/Mailvec/mailvec-mcp-<date>.log`) to avoid multiple stdio children racing on it, so don't look there for the bundle's output — that file only reflects the separate launchd HTTP MCP service used by Claude Code.
 
 ## Known quirks
 

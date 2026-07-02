@@ -45,4 +45,4 @@ Fastmail exposes labels as IMAP folders, so a message with two labels lives in t
 
 ## Scheduling
 
-Once the manual sync is working, [`ops/install.sh`](../ops/install.sh) installs a launchd plist that runs `mbsync -c ~/.mbsyncrc -a` once at load and every 5 minutes thereafter. See the README's [Running unattended](../README.md#running-unattended) section.
+Once the manual sync is working, [`ops/install.sh`](../ops/install.sh) (run by `ops/install-all.sh` in the [README Quickstart](../README.md#quickstart)) installs a launchd plist that runs `mbsync -c ~/.mbsyncrc -a` once at load and every 5 minutes thereafter.

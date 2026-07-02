@@ -34,7 +34,7 @@ mbsync ──► ~/Mail/<account>/  (Maildir)
 
 ## Quickstart
 
-Requires macOS 14+, the .NET 10 SDK, and a few brews. Embeddings are local-only via Ollama.
+Requires macOS 14+, the .NET 10 SDK, and a few brews. Embeddings are local-only via Ollama. Building the menu-bar tray additionally needs a full **Xcode** (not just the Command Line Tools) for `xcodebuild` — if you don't have it, run `./ops/install-all.sh --no-tray` for the headless pipeline (it skips the tray with a clear message rather than failing).
 
 ```sh
 # 1. Prereqs
@@ -67,6 +67,8 @@ open dist/mailvec-*.mcpb                         # one-click install into Claude
 
 ## Validating the install
 
+The installer drops the `mailvec` CLI shim at `~/.local/bin/mailvec`. That directory isn't on the default macOS `PATH`, so add it if `mailvec` isn't found (e.g. `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc` then restart the shell).
+
 ```sh
 mailvec doctor          # one-stop preflight: DB, schema, vec0, Maildir, Ollama, launchd, /health
 mailvec status          # message count, embedding coverage, schema/model match
@@ -85,12 +87,12 @@ Operations and dev:
 
 Client wiring:
 
-- **[docs/clients/](docs/clients/)** — per-client snippets (Claude Desktop, Claude Code, Gemini CLI, Codex CLI, ChatGPT desktop)
+- **[docs/clients/](docs/clients/)** — per-client setup: Claude Desktop and Claude Code today (Gemini CLI / Codex CLI / ChatGPT desktop are Phase 5 placeholders, not yet written)
 - **[docs/tray.md](docs/tray.md)** — menu-bar app
 - **[docs/attachments.md](docs/attachments.md)** — reading attachments three ways (`get_attachment` file, `get_attachment_text`, `get_attachment_page_image`) + filesystem-MCP wiring
 - **[docs/fastmail-deep-links.md](docs/fastmail-deep-links.md)** — optional `webmailUrl` field
 - **[docs/security.md](docs/security.md)** — threat model: what's exposed, what's accepted, what's out of scope
-- **[docs/future-ideas.md](docs/future-ideas.md)** — deferred work (cloud-LLM access, tailnet, OCR)
+- **[docs/future-ideas.md](docs/future-ideas.md)** — deferred work (cloud-LLM access, tailnet/remote access)
 
 Project:
 

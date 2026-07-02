@@ -17,13 +17,13 @@ export MAILVEC_LAUNCHD=1                  # silence stdout, even outside launchd
 
 ## Claude Desktop MCPB bundle
 
-The bundled MCP binary writes to the same rolling file (it's the same binary). It additionally emits to stderr, which Claude Desktop's own log capture preserves at:
+The bundled MCP binary runs in **stdio** mode, and in stdio mode it does **not** write the rolling `~/Library/Logs/Mailvec/mailvec-mcp-*.log` file — the file sink is disabled (`SerilogSetup.Configure(..., stdioMode: true)`) so multiple Claude Desktop-spawned children don't race on it. All of its output goes to **stderr**, which Claude Desktop captures at:
 
 ```
 ~/Library/Logs/Claude/mcp-server-mailvec.log
 ```
 
-Handy when triaging extension-install issues, since that's the file Claude Desktop's UI will surface in error toasts.
+That's the file to tail when triaging a Claude Desktop / extension-install issue — the rolling `mailvec-mcp-*.log` only reflects the separate launchd HTTP MCP service (used by Claude Code), not the stdio bundle.
 
 ## mbsync
 

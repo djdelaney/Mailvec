@@ -1,6 +1,6 @@
 # Tray app (menu-bar UI)
 
-Optional. A SwiftUI menu-bar app at [`src/Mailvec.Tray/`](../src/Mailvec.Tray/) that surfaces a status dashboard, an inline search popover, and a Preferences window. It's a thin client over the same `127.0.0.1:3333` MCP server the launchd agents run — talks to a dedicated `/tray/*` REST surface (`/tray/status`, `/tray/system`, `/tray/search`, `/tray/control`, `/tray/folders`, `/tray/email/{id}`, `/tray/attachment`) so it never depends on the LLM-facing MCP framing.
+Optional. A SwiftUI menu-bar app at [`src/Mailvec.Tray/`](../src/Mailvec.Tray/) that surfaces a status dashboard, an inline search popover, and a Preferences window. It's a thin client over the same `127.0.0.1:3333` MCP server the launchd agents run — talks to a dedicated `/tray/*` REST surface (`/tray/status`, `/tray/system`, `/tray/search`, `/tray/warm`, `/tray/control`, `/tray/folders`, `/tray/email/{id}`, `/tray/attachment`) so it never depends on the LLM-facing MCP framing.
 
 ```sh
 brew install xcodegen           # required (XcodeGen generates the .xcodeproj from project.yml)

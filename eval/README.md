@@ -189,8 +189,12 @@ same labeling flow as `eval-add` with the **query and filters pre-filled**.
 ```sh
 # One-time: turn on tool-call logging on the MCP server. Without this, the
 # log only records timing, not the args/results that eval-import needs.
+# NOTE: `>` overwrites — if you already have a src/Mailvec.Mcp/appsettings.Local.json,
+# merge this key in by hand instead of clobbering it. This only affects a
+# `dotnet run` / redeployed HTTP server; for the Claude Desktop MCPB bundle,
+# flip Mcp__LogToolCalls in Claude Desktop's connector settings instead.
 echo '{ "Mcp": { "LogToolCalls": true } }' > src/Mailvec.Mcp/appsettings.Local.json
-# Restart the MCP server (or rebuild the MCPB bundle and toggle the extension).
+# Restart the MCP server (redeploy it) to pick up the change.
 
 # Use Claude as you normally would for a few days. Each search_emails call
 # lands in ~/Library/Logs/Mailvec/mailvec-mcp-*.log as a structured line.
