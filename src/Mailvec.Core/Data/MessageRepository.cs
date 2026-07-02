@@ -821,6 +821,17 @@ public sealed class MessageRepository(ConnectionFactory connections)
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            // A blank transcription (empty/illegible scan). status='ocr' with
+            // empty text is the terminal marker — the OCR pass won't
+            // re-select it — but there is nothing new to search, so skip the
+            // attachment_text rebuild and the embedded_at clear: re-queueing
+            // would burn a full re-embed of the message for zero new content.
+            tx.Commit();
+            return;
+        }
+
         var attachmentText = ConcatAttachmentText(conn, tx, messageId);
         using (var cmd = conn.CreateCommand())
         {
