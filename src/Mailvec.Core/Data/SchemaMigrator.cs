@@ -67,7 +67,8 @@ public sealed class SchemaMigrator(
                 "Applying initial schema (stamping version {Version}, embedding model {Model} @{Dim}d)",
                 LatestSchemaVersion, opts.EmbeddingModel, opts.EmbeddingDimensions);
             ExecuteScript(conn, SubstituteEmbeddingConfig(
-                LoadEmbeddedSql("001_initial.sql"), opts.EmbeddingModel, opts.EmbeddingDimensions));
+                LoadEmbeddedSql("001_initial.sql"), opts.EmbeddingModel, opts.EmbeddingDimensions),
+                guardAtLeast: 1); // skip if another starter already initialized the schema
             return;
         }
 
@@ -75,7 +76,7 @@ public sealed class SchemaMigrator(
         {
             var (fileName, sql) = LoadMigrationForVersion(v);
             logger.LogInformation("Applying migration {File} ({From} -> {To})", fileName, v - 1, v);
-            ExecuteScript(conn, sql, stampVersion: v);
+            ExecuteScript(conn, sql, stampVersion: v, guardAtLeast: v);
         }
     }
 
@@ -115,10 +116,12 @@ public sealed class SchemaMigrator(
     // hand-edited. Internal (not private) so tests can exercise the
     // rollback semantics directly.
     internal static void ExecuteScript(
-        Microsoft.Data.Sqlite.SqliteConnection conn, string script, int? stampVersion = null)
+        Microsoft.Data.Sqlite.SqliteConnection conn, string script, int? stampVersion = null, int? guardAtLeast = null)
     {
         // PRAGMA journal_mode = WAL must run outside a transaction, so we run
         // PRAGMA-only statements first and the rest inside a transaction.
+        // (PRAGMAs here are idempotent, so a concurrent starter running them too
+        // is harmless.)
         var statements = SqlScriptSplitter.Split(script);
 
         foreach (var stmt in statements.Where(s => s.TrimStart().StartsWith("PRAGMA", StringComparison.OrdinalIgnoreCase)))
@@ -128,7 +131,20 @@ public sealed class SchemaMigrator(
             cmd.ExecuteNonQuery();
         }
 
-        using var tx = conn.BeginTransaction();
+        // BEGIN IMMEDIATE takes the write lock now, so two services cold-starting
+        // against the same DB serialize here rather than both walking into the
+        // (non-idempotent, CREATE/ALTER-based) DDL below and one crashing on
+        // "table exists"/"duplicate column".
+        using var tx = conn.BeginTransaction(deferred: false);
+
+        // Whoever loses the race for the lock re-reads the version inside the
+        // transaction: if the winner already applied this, skip — the empty
+        // transaction rolls back on dispose. This closes the concurrent
+        // double-apply crash-loop window (the read in EnsureUpToDate is outside
+        // any lock, so both callers can see "needs migration").
+        if (guardAtLeast is int guard && ReadSchemaVersionInTx(conn, tx) >= guard)
+            return;
+
         foreach (var stmt in statements.Where(s => !s.TrimStart().StartsWith("PRAGMA", StringComparison.OrdinalIgnoreCase)))
         {
             using var cmd = conn.CreateCommand();
@@ -165,6 +181,25 @@ public sealed class SchemaMigrator(
         {
             // "no such table: metadata" -> fresh DB, schema not yet applied.
             return 0;
+        }
+    }
+
+    // Same read, but enlisted in the caller's write transaction so the value is
+    // consistent with the lock ExecuteScript already holds.
+    private static int ReadSchemaVersionInTx(
+        Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = 'schema_version';";
+        try
+        {
+            var raw = cmd.ExecuteScalar() as string;
+            return raw is null ? 0 : int.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 1)
+        {
+            return 0; // no metadata table yet (fresh DB)
         }
     }
 
