@@ -32,7 +32,10 @@ public sealed class SchemaMigrator(
     // v6 adds an index on messages.indexed_at so HealthService can resolve
     // MAX(indexed_at) in O(log n) instead of full-scanning the table — fixes
     // multi-second /health latency on real-sized archives.
-    public const int LatestSchemaVersion = 6;
+    // v7 adds messages.embed_epoch, the monotonic re-queue counter that lets
+    // the embedder's guarded chunk write detect re-queues that don't change
+    // content_hash (attachment re-extraction, OCR write-back, backfills).
+    public const int LatestSchemaVersion = 7;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying
@@ -251,7 +254,7 @@ public sealed class SchemaMigrator(
         // vec0 DDL can't take parameters; dimensions is range-validated above.
         Exec($"CREATE VIRTUAL TABLE chunk_embeddings USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[{dimensions.ToString(CultureInfo.InvariantCulture)}])");
         var chunksDeleted = Exec("DELETE FROM chunks");
-        var messagesReset = Exec("UPDATE messages SET embedded_at = NULL");
+        var messagesReset = Exec("UPDATE messages SET embedded_at = NULL, embed_epoch = embed_epoch + 1");
 
         using (var cmd = conn.CreateCommand())
         {

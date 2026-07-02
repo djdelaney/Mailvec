@@ -127,6 +127,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     -- embedded_at to avoid re-embedding the whole archive every
                     -- scan) leaves it untouched.
                     embedded_at      = CASE WHEN $attachments_reset THEN NULL ELSE messages.embedded_at END,
+                    -- Bump the re-queue counter whenever we re-queue, so an
+                    -- embedder mid-write against the old content abandons its
+                    -- stamp (see ChunkRepository.ReplaceChunksForMessage).
+                    embed_epoch      = CASE WHEN $attachments_reset THEN messages.embed_epoch + 1 ELSE messages.embed_epoch END,
                     content_hash     = excluded.content_hash
                 RETURNING id;
                 """;
@@ -537,11 +541,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // Fetch the message rows first, then load attachment payloads in a
         // second query per message. Two-step is simpler than a single GROUP_CONCAT
         // and avoids the per-row cost on the (common) bodies-only path.
-        var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames, string? ContentHash)>();
+        var rows = new List<(long Id, string BodyText, string? Subject, string? AttachmentNames, string? ContentHash, long EmbedEpoch)>();
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = """
-                SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names, content_hash
+                SELECT id, COALESCE(body_text, '') AS body_text, subject, attachment_names, content_hash, embed_epoch
                 FROM messages
                 WHERE embedded_at IS NULL
                   AND deleted_at IS NULL
@@ -558,18 +562,20 @@ public sealed class MessageRepository(ConnectionFactory connections)
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
                     reader.IsDBNull(3) ? null : reader.GetString(3),
-                    // Snapshot content_hash so the embedder can detect a body
-                    // change committed by the indexer during the (slow) embed
-                    // call and refuse to write stale vectors. See
-                    // ChunkRepository.ReplaceChunksForMessage's guard.
-                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+                    // Snapshot content_hash + embed_epoch so the embedder can
+                    // detect a body change OR a hash-preserving re-queue
+                    // (attachment re-extraction, OCR write-back) committed
+                    // during the (slow) embed call and refuse to write stale
+                    // vectors. See ChunkRepository.ReplaceChunksForMessage.
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetInt64(5)));
             }
         }
 
         foreach (var row in rows)
         {
             var attachmentTexts = LoadAttachmentTexts(conn, row.Id);
-            yield return new UnembeddedMessage(row.Id, row.BodyText, row.Subject, row.AttachmentNames, attachmentTexts, row.ContentHash);
+            yield return new UnembeddedMessage(row.Id, row.BodyText, row.Subject, row.AttachmentNames, attachmentTexts, row.ContentHash, row.EmbedEpoch);
         }
     }
 
@@ -810,7 +816,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
-            cmd.CommandText = "UPDATE messages SET attachment_text = $at, embedded_at = NULL WHERE id = $id;";
+            cmd.CommandText = "UPDATE messages SET attachment_text = $at, embedded_at = NULL, embed_epoch = embed_epoch + 1 WHERE id = $id;";
             cmd.Parameters.AddWithValue("$at", (object?)attachmentText ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$id", messageId);
             cmd.ExecuteNonQuery();
@@ -943,7 +949,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             upd.Transaction = tx;
             upd.CommandText =
                 "UPDATE messages SET has_attachments = 1, attachment_names = $names, attachment_text = $text"
-                + (anyText ? ", embedded_at = NULL" : "")
+                + (anyText ? ", embedded_at = NULL, embed_epoch = embed_epoch + 1" : "")
                 + " WHERE id = $id;";
             upd.Parameters.AddWithValue("$names", (object?)attachmentNames ?? DBNull.Value);
             upd.Parameters.AddWithValue("$text", (object?)attachmentText ?? DBNull.Value);
@@ -1178,7 +1184,10 @@ public sealed record UnembeddedMessage(
     // The embedder passes it back to ReplaceChunksForMessage's guard so a
     // concurrent body change (which bumps content_hash) discards the stale
     // embed instead of stamping it. Nullable for legacy pre-v3 rows.
-    string? ContentHash = null);
+    string? ContentHash = null,
+    // embed_epoch at snapshot time — the re-queue counter that catches
+    // invalidations content_hash can't see (attachment text changes).
+    long EmbedEpoch = 0);
 
 public sealed record AttachmentEmbeddingPayload(
     long AttachmentId,

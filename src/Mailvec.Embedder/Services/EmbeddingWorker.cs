@@ -122,7 +122,7 @@ public sealed class EmbeddingWorker(
         // re-fetched by EnumerateUnembedded next batch, and inflate
         // _processedThisRun by re-counting on every appearance.
         var perMessageChunks = messageBatch
-            .Select(m => (m.Id, m.ContentHash, Chunks: BuildChunksForMessage(m)))
+            .Select(m => (m.Id, m.ContentHash, m.EmbedEpoch, Chunks: BuildChunksForMessage(m)))
             .ToList();
 
         var allTexts = perMessageChunks.SelectMany(x => x.Chunks.Select(c => c.Text)).ToList();
@@ -145,7 +145,7 @@ public sealed class EmbeddingWorker(
         var attachmentChunkCount = 0;
         var nonEmptyMessageCount = 0;
         var skipped = 0;
-        foreach (var (id, contentHash, msgChunks) in perMessageChunks)
+        foreach (var (id, contentHash, embedEpoch, msgChunks) in perMessageChunks)
         {
             if (msgChunks.Count == 0)
             {
@@ -153,7 +153,7 @@ public sealed class EmbeddingWorker(
                 // attachment) so EnumerateUnembedded stops returning them.
                 // Guarded like the non-empty path: if the body grew (content
                 // changed) mid-batch, don't stamp it embedded-with-no-chunks.
-                if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true))
+                if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true, expectedEmbedEpoch: embedEpoch))
                     skipped++;
                 continue;
             }
@@ -161,10 +161,11 @@ public sealed class EmbeddingWorker(
             // Advance the cursor regardless — these vectors belong to this
             // message whether or not the guarded write commits.
             cursor += msgChunks.Count;
-            if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true))
+            if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true, expectedEmbedEpoch: embedEpoch))
             {
-                // The indexer changed this message's body during the embed call;
-                // leave embedded_at = NULL so we re-embed the new body next poll.
+                // This message was re-queued during the embed call (body
+                // change or attachment-text change); leave embedded_at = NULL
+                // so we re-embed the new content next poll.
                 skipped++;
                 continue;
             }

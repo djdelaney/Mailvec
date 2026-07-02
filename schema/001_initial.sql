@@ -49,7 +49,17 @@ CREATE TABLE messages (
     -- Populated by the indexer on every parse so we can detect when an upstream
     -- body mutation should invalidate existing embeddings. NULL means "fresh
     -- insert with no prior row" (treated as unchanged for embedding purposes).
-    content_hash      TEXT
+    content_hash      TEXT,
+    -- Monotonic re-queue counter: every write path that clears embedded_at
+    -- (content change, OCR write-back, attachment re-extraction, inline-image
+    -- backfill, reindex, switch-model) increments it in the same transaction.
+    -- The embedder snapshots it before its minutes-long Ollama call and the
+    -- guarded chunk write (ChunkRepository.ReplaceChunksForMessage) abandons
+    -- the write if it moved. content_hash alone can't catch re-queues that
+    -- don't touch the body (attachment text changes), so without this a
+    -- mid-embed re-queue would be silently stamped over — new text keyword-
+    -- searchable but never vector-embedded, permanently.
+    embed_epoch       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_messages_thread     ON messages(thread_id);
@@ -161,6 +171,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '6'),
+    ('schema_version',       '7'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');

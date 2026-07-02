@@ -1,0 +1,11 @@
+-- v7: messages.embed_epoch — monotonic re-queue counter.
+--
+-- Every write path that clears embedded_at (content change, OCR write-back,
+-- attachment re-extraction, inline-image backfill, reindex, switch-model)
+-- increments this in the same transaction. The embedder snapshots it before
+-- its minutes-long Ollama call, and ChunkRepository.ReplaceChunksForMessage's
+-- guard abandons the write if it moved. content_hash alone can't catch
+-- re-queues that don't touch the body (attachment text changes), so without
+-- this a mid-embed re-queue would be silently stamped over — the new text
+-- keyword-searchable but never vector-embedded, with nothing to re-trigger.
+ALTER TABLE messages ADD COLUMN embed_epoch INTEGER NOT NULL DEFAULT 0;
