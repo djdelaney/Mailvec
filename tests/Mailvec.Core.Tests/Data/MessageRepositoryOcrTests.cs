@@ -99,6 +99,59 @@ public class MessageRepositoryOcrTests
     }
 
     [Fact]
+    public void Upsert_noop_rescan_does_not_clobber_ocr_recovered_attachment_text()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        // Indexer sees a scanned PDF as no_text; the embedder's OCR pass then
+        // recovers the text and rebuilds attachment_text so keyword search works.
+        long id = Insert(repo, "scan@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+        var attId = repo.GetById(id)!.Attachments[0].Id;
+        repo.SaveOcrText(attId, id, "Quarterly revenue was 12345 dollars");
+        FtsMatchCount(db, "quarterly").ShouldBe(1);
+
+        // A periodic rescan re-parses the .eml: a scanned PDF still extracts as
+        // no_text (empty text) and the body content_hash is unchanged (same id →
+        // same "h-{id}"). ReplaceAttachments is skipped, so the attachments row
+        // keeps its OCR text — the message's attachment_text must NOT be wiped to
+        // match the empty fresh parse. This is the regression that silently broke
+        // keyword search for OCR'd docs after a cross-machine DB import.
+        Insert(repo, "scan@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+
+        AttachmentTextCol(db, id)!.ShouldContain("Quarterly revenue");
+        FtsMatchCount(db, "quarterly").ShouldBe(1);
+        repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
+    public void Upsert_content_change_refreshes_attachment_text_from_the_new_parse()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        long id = Insert(repo, "doc@x", "old.pdf", AttachmentTextExtractor.StatusNoText);
+        repo.SaveOcrText(repo.GetById(id)!.Attachments[0].Id, id, "obsolete recovered text");
+        AttachmentTextCol(db, id)!.ShouldContain("obsolete");
+
+        // The .eml genuinely changed (new content_hash) and the fresh parse
+        // carries real extracted text. ReplaceAttachments runs, so attachment_text
+        // must be rebuilt from the new parse — the preserve-on-no-op fix must not
+        // freeze it forever.
+        var changed = new ParsedMessage(
+            MessageId: "doc@x", ThreadId: "doc@x", Subject: "s", FromAddress: "a@x", FromName: null,
+            ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
+            BodyHtml: null, RawHeaders: "Message-ID: <doc@x>\r\n", SizeBytes: 100, ContentHash: "h-doc@x-v2",
+            Attachments: [new ParsedAttachment(0, "new.pdf", "application/pdf", 100,
+                ExtractedText: "brand new invoice text", ExtractionStatus: AttachmentTextExtractor.StatusDone)]);
+        repo.Upsert(changed, "INBOX", "INBOX/cur", "doc@x.eml", DateTimeOffset.UtcNow);
+
+        var text = AttachmentTextCol(db, id)!;
+        text.ShouldContain("brand new invoice");
+        text.ShouldNotContain("obsolete");
+    }
+
+    [Fact]
     public void MarkAttachmentOcrFailed_sets_failed_so_it_is_not_re_selected()
     {
         using var db = new TempDatabase();
