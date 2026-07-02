@@ -29,7 +29,9 @@ enum CliRunner {
     /// already running, not running, and with multiple windows open.
     static func runInTerminal(_ args: [String]) {
         let cmd = ([resolvedBinary()] + args)
-            .map { "\"\($0.replacingOccurrences(of: "\"", with: "\\\""))\"" }
+            // Escape backslashes before double-quotes so a literal backslash in an
+            // arg survives shell double-quoting instead of consuming the next char.
+            .map { "\"\($0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\"" }
             .joined(separator: " ")
         let script = """
         tell application "Terminal"
@@ -57,8 +59,8 @@ enum CliRunner {
 
     private static func asAppleScriptString(_ s: String) -> String {
         // Wrap the inner shell command as an AppleScript string literal.
-        // Inner double-quotes have already been escaped above; here we just
-        // wrap the whole thing in another pair of double-quotes.
-        "\"\(s.replacingOccurrences(of: "\"", with: "\\\""))\""
+        // Backslash and double-quote are both special inside an AppleScript
+        // string literal, so escape backslashes first, then quotes.
+        "\"\(s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 }
