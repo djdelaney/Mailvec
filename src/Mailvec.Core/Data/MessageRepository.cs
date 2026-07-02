@@ -1036,6 +1036,30 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Repoint a message's Maildir location without touching its content,
+    /// hashes, or embedding state. Used by the scanner's reconciliation when
+    /// a duplicate copy the row referenced is deleted: the surviving copy
+    /// rides the mtime fast-path and never re-upserts, so without this the
+    /// row's path would dangle forever — get_attachment fails and the OCR
+    /// pass skips the message's attachments on every cycle.
+    /// </summary>
+    public void UpdateMaildirLocation(long id, string folder, string maildirRelativePath, string maildirFilename)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE messages
+            SET folder = $folder, maildir_path = $path, maildir_filename = $file
+            WHERE id = $id
+            """;
+        cmd.Parameters.AddWithValue("$folder", folder);
+        cmd.Parameters.AddWithValue("$path", maildirRelativePath);
+        cmd.Parameters.AddWithValue("$file", maildirFilename);
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.ExecuteNonQuery();
+    }
+
     public int MarkDeleted(IEnumerable<long> ids, DateTimeOffset deletedAt)
     {
         using var conn = connections.Open();

@@ -138,6 +138,42 @@ public sealed class MaildirScanner(
             }
         }
 
+        // Stale entries whose Message-ID IS fresh are renames or deleted
+        // duplicate copies — the message stays live via another path. But the
+        // messages row may still point at the path that just vanished: the
+        // surviving copy rides the mtime fast-path and never re-upserts, so
+        // the dangling path would persist forever (get_attachment fails, the
+        // OCR pass re-selects and skips those attachments every cycle).
+        // Repoint the row at a live fresh path for the same Message-ID.
+        var repaired = 0;
+        foreach (var entry in stale)
+        {
+            if (entry.MessageId is null || !freshMessageIds.Contains(entry.MessageId)) continue;
+
+            var msg = messages.GetByMessageId(entry.MessageId);
+            if (msg is null || msg.DeletedAt is not null) continue;
+
+            var currentAbs = Path.Combine(_maildirRoot, msg.MaildirPath, msg.MaildirFilename);
+            if (!string.Equals(Path.GetFullPath(currentAbs), Path.GetFullPath(entry.MaildirFullPath), StringComparison.Ordinal))
+                continue; // row already points at a different (live) copy
+
+            var freshPath = syncState.FreshPathForMessageId(entry.MessageId, since: scanStart);
+            if (freshPath is null) continue;
+
+            var folderDir = Path.GetDirectoryName(Path.GetDirectoryName(freshPath));
+            if (folderDir is null) continue;
+            messages.UpdateMaildirLocation(
+                msg.Id,
+                MaildirPaths.FolderNameFor(_maildirRoot, folderDir),
+                MaildirPaths.RelativeFolderPath(_maildirRoot, freshPath),
+                Path.GetFileName(freshPath));
+            repaired++;
+        }
+        if (repaired > 0)
+        {
+            logger.LogInformation("MaildirScanner: repointed {Count} message(s) from a deleted duplicate copy to a live path.", repaired);
+        }
+
         if (stale.Count > 0)
         {
             syncState.Remove(stale.Select(e => e.MaildirFullPath));
