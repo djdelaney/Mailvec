@@ -96,6 +96,25 @@ public class MessageRepositoryOcrTests
     }
 
     [Fact]
+    public void SaveOcrText_with_blank_text_marks_terminal_but_does_not_requeue()
+    {
+        // A blank scan: status='ocr' with empty text is the terminal marker
+        // (the OCR pass stops re-selecting it), but there's nothing new to
+        // search, so the message must NOT be re-queued for a no-op re-embed.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "blank@x", "blank.pdf", AttachmentTextExtractor.StatusNoText);
+        var attId = repo.GetById(id)!.Attachments[0].Id;
+        SetEmbeddedAt(db, id);
+
+        repo.SaveOcrText(attId, id, "   ");
+
+        var att = repo.GetById(id)!.Attachments[0];
+        att.ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusOcr);   // terminal, not re-selected
+        EmbeddedAt(db, id).ShouldNotBeNull();                               // no re-embed churn
+    }
+
+    [Fact]
     public void SaveOcrText_makes_the_recovered_text_keyword_searchable()
     {
         using var db = new TempDatabase();
