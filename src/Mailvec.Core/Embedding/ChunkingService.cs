@@ -41,18 +41,31 @@ public sealed class ChunkingService(IOptions<EmbedderOptions> options)
         var paragraphs = SplitParagraphs(text);
 
         var current = new System.Text.StringBuilder(_maxChars);
+        // Tracks whether `current` holds real paragraph content since the last
+        // flush, or only the overlap tail Flush carries forward. We must never
+        // emit a chunk that is nothing but that carried-over overlap — it would
+        // be a verbatim duplicate of the previous chunk's tail as its own chunk.
+        bool hasContent = false;
         foreach (var para in paragraphs)
         {
-            // If adding the paragraph would overflow, flush.
-            if (current.Length > 0 && current.Length + 2 + para.Length > _maxChars)
+            // If adding the paragraph would overflow, flush — but only when
+            // there's real content to flush (a lone overlap tail keeps
+            // accumulating instead of being emitted on its own).
+            if (hasContent && current.Length + 2 + para.Length > _maxChars)
             {
                 Flush(chunks, current);
+                hasContent = false;
             }
 
             // A single paragraph longer than maxChars must be hard-split.
             if (para.Length > _maxChars)
             {
-                if (current.Length > 0) Flush(chunks, current);
+                if (hasContent) Flush(chunks, current);
+                // Drop any carried-over overlap: HardSplit's slices already
+                // carry their own internal overlap, and emitting the lone tail
+                // here would duplicate the previous chunk's ending.
+                current.Clear();
+                hasContent = false;
                 foreach (var slice in HardSplit(para))
                 {
                     chunks.Add(new TextChunk(chunks.Count, slice, EstimateTokens(slice)));
@@ -62,8 +75,9 @@ public sealed class ChunkingService(IOptions<EmbedderOptions> options)
 
             if (current.Length > 0) current.Append("\n\n");
             current.Append(para);
+            hasContent = true;
         }
-        if (current.Length > 0) Flush(chunks, current);
+        if (hasContent) Flush(chunks, current);
 
         return chunks;
     }

@@ -35,6 +35,27 @@ public class ChunkingServiceTests
     }
 
     [Fact]
+    public void Does_not_emit_a_duplicate_overlap_only_chunk_before_a_hard_split()
+    {
+        // A normal paragraph followed by an unbroken block longer than the chunk
+        // size: the paragraph flushes (seeding an overlap tail), then the block
+        // is hard-split. The carried-over overlap must NOT be emitted as its own
+        // chunk (a verbatim duplicate of the previous chunk's ending).
+        var svc = MakeService(chunkTokens: 50, overlapTokens: 10);  // 200 chars, 40-char overlap
+        var para = new string('a', 150);
+        var block = new string('b', 500);   // > 200 → hard-split
+        var body = $"{para}\n\n{block}";
+
+        var chunks = svc.Chunk(body);
+
+        // Exactly one all-'a' chunk (the paragraph). Before the fix a second
+        // ~40-char all-'a' chunk (the orphaned overlap tail) was emitted.
+        chunks.Count(c => c.Text.Length > 0 && c.Text.All(ch => ch == 'a')).ShouldBe(1);
+        // Indices stay contiguous after the fix.
+        chunks.Select(c => c.Index).ShouldBe(Enumerable.Range(0, chunks.Count));
+    }
+
+    [Fact]
     public void Long_body_splits_across_paragraphs()
     {
         var svc = MakeService(chunkTokens: 50, overlapTokens: 0);   // ~200 chars per chunk

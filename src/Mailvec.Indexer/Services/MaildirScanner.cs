@@ -131,6 +131,9 @@ public sealed class MaildirScanner(
 
     private bool TryIngest(ScanContext ctx, string filePath, string folderName, DateTimeOffset indexedAt)
     {
+        // Hoisted so the catch below can preserve the existing message_id /
+        // content_hash instead of nulling them (see the catch comment).
+        SyncStateEntry? prior = null;
         try
         {
             // Fast path: if sync_state remembers this exact path AND the file
@@ -141,7 +144,7 @@ public sealed class MaildirScanner(
             // reconciliation pass doesn't soft-delete it. Mbsync flag rewrites
             // bump mtime, so the optimization is robust against IMAP flag
             // changes that don't actually mutate body content.
-            var prior = syncState.Get(ctx.Connection, ctx.Transaction, filePath);
+            prior = syncState.Get(ctx.Connection, ctx.Transaction, filePath);
             if (prior is { MessageId: not null }
                 && File.GetLastWriteTimeUtc(filePath) <= prior.LastSeenAt.UtcDateTime)
             {
@@ -179,10 +182,16 @@ public sealed class MaildirScanner(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to parse {Path}", filePath);
-            // Refresh sync_state with no message_id so we don't treat the file as deleted next pass.
+            // Refresh last_seen_at so we don't treat the file as deleted next
+            // pass, but PRESERVE the prior message_id / content_hash. Nulling
+            // message_id would drop this path out of the deletion-reconciliation
+            // mapping (it filters on message_id != null), so if the file is later
+            // removed, its message would be stranded "live" forever. Keeping the
+            // prior id means a transient parse failure (I/O blip, DB busy, file
+            // replaced mid-read) doesn't corrupt the sync_state association.
             try
             {
-                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, messageId: null, indexedAt);
+                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, prior?.ContentHash);
                 ctx.NoteWrite();
             }
             catch { /* ignore */ }

@@ -162,6 +162,23 @@ public class SearchFilterTests
     }
 
     [Fact]
+    public void Keyword_from_contains_treats_underscore_as_a_literal_not_a_wildcard()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("lit@x",  from: "a_b@example.com"), "INBOX", "INBOX/cur", "l", now);
+        repo.Upsert(M("wild@x", from: "axb@example.com"), "INBOX", "INBOX/cur", "w", now);
+
+        // "_" is a LIKE wildcard; without escaping this would also match "axb".
+        var hits = search.Search("ramen", filters: new SearchFilters(FromContains: "a_b"));
+
+        hits.Select(h => h.MessageIdHeader).ShouldBe(new[] { "lit@x" });
+    }
+
+    [Fact]
     public void Keyword_from_exact_takes_precedence_over_from_contains()
     {
         // CLAUDE.md gotcha: when both are set, FromExact wins (strictly narrower).

@@ -760,6 +760,21 @@ public sealed class AttachmentTextExtractor(
         if (ct is "text/vcard" or "text/x-vcard" or "application/vcard"
             || ext is ".vcf" or ".vcard")
             return AttachmentFormat.VCard;
+
+        // A binary-format extension overrides a lying text/* content-type before
+        // the generic text/ branch below — same precedence as calendar/vCard.
+        // Some mailers slap text/plain on every attachment; without this a
+        // .pdf/.docx/.xlsx/.pptx would be raw-decoded (the windows-1252 fallback
+        // never throws) into mojibake and indexed with status='done', polluting
+        // FTS attachment_text and the embedding space.
+        switch (ext)
+        {
+            case ".pdf": return AttachmentFormat.Pdf;
+            case ".docx": return AttachmentFormat.Docx;
+            case ".xlsx": return AttachmentFormat.Xlsx;
+            case ".pptx": return AttachmentFormat.Pptx;
+        }
+
         if (ct.StartsWith("text/")) return AttachmentFormat.Text;
 
         // Fall back to the extension when the sender declared
