@@ -410,6 +410,25 @@ public class MessageRepositoryTests
     }
 
     [Fact]
+    public void Upsert_preserves_date_received_across_reparses()
+    {
+        // date_received is "first indexed" — an mtime-bump reparse must not
+        // drift it to the current scan time.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var first = DateTimeOffset.UtcNow.AddDays(-3);
+        var later = DateTimeOffset.UtcNow;
+
+        var id = repo.Upsert(Sample(contentHash: "h1"), "INBOX", "INBOX/cur", "f1", first).Id;
+        var original = repo.GetById(id)!.DateReceived;
+        original.ShouldNotBeNull();
+
+        repo.Upsert(Sample(contentHash: "h2-changed"), "INBOX", "INBOX/cur", "f1", later);
+
+        repo.GetById(id)!.DateReceived.ShouldBe(original);
+    }
+
+    [Fact]
     public void Upsert_persists_content_hash_for_subsequent_change_detection()
     {
         using var db = new TempDatabase();
