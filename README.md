@@ -38,21 +38,27 @@ Requires macOS 14+, the .NET 10 SDK, and a few brews. Embeddings are local-only 
 
 ```sh
 # 1. Prereqs
-brew install dotnet isync xcodegen
+brew install --cask dotnet-sdk   # the .NET 10 SDK (the cask; see the dotnet note below)
+brew install isync xcodegen
 brew install --cask ollama-app   # the cask, NOT `brew install ollama` — see note below
 open -a Ollama                   # launch once; enable "Open at Login" to survive reboot
 ollama pull mxbai-embed-large
-ollama pull qwen2.5vl:7b         # vision model for OCR'ing scanned PDFs (Embedder:OcrEnabled, on by default)
+ollama pull qwen2.5vl:7b         # vision model for OCR'ing scanned PDFs (~6 GB; Embedder:OcrEnabled, on by default)
 
-# 2. Configure mbsync (see docs/imap-setup.md for the Fastmail / Keychain dance)
+# 2. Configure mbsync — full walkthrough in docs/imap-setup.md; the short version:
+mkdir -p ~/Mail/Fastmail                             # the Maildir mbsync fills
+security add-generic-password -a you@fastmail.com -s mbsync -w   # stash the IMAP app password in the Keychain
 cp ops/mbsyncrc.example ~/.mbsyncrc && chmod 600 ~/.mbsyncrc
-$EDITOR ~/.mbsyncrc                              # set User + PassCmd
+$EDITOR ~/.mbsyncrc                              # set User + PassCmd to the same account you used above
 mbsync -aV                                       # first sync — may take hours for a big archive
 
-# 3. Build + install everything
-./ops/fetch-sqlite-vec.sh                        # one-time: pulls vec0.dylib
+# 3. Build + install everything (fetches vec0.dylib itself; --no-fetch to skip)
 ./ops/install-all.sh                             # services + tray app, launchd-managed
 ```
+
+> **Fastmail/Gmail/iCloud all need an app-specific password**, not your account password — [docs/imap-setup.md](docs/imap-setup.md) has the per-provider pointers and explains the `-a`/`-s` values, which must match your `PassCmd` line exactly. Skipping the `security add-generic-password` step is the #1 way to make `mbsync -aV` fail on first contact.
+
+> **Install the .NET SDK via the cask (`dotnet-sdk`)**, which puts the runtime at `/usr/local/share/dotnet` — the path the CLI shim and stdio launcher default to. The `dotnet` *formula* installs under `/opt/homebrew` and may not track .NET 10; it mostly works via PATH fallbacks, but the cask is the tested path.
 
 > **Install Ollama via the cask (`ollama-app`), not the `ollama` formula.** The Homebrew *formula* bottle has shipped incomplete builds that bundle only the MLX runner and no `llama-server`, so GGML models like `mxbai-embed-large` fail to load (`llama-server binary not found`) — Ollama answers HTTP but every `/api/embed` hangs. The cask is Ollama's own complete prebuilt app, auto-updates, keeps the `ollama` CLI on your PATH, and is what the tray's "Start Ollama" button launches. If you previously installed the formula: `brew services stop ollama && brew uninstall ollama`, then install the cask.
 
@@ -61,9 +67,19 @@ mbsync -aV                                       # first sync — may take hours
 Then connect Claude Desktop:
 
 ```sh
-./ops/build-mcpb.sh                              # writes dist/mailvec-<version>.mcpb
+./ops/build-mcpb.sh                              # writes dist/mailvec-<version>.mcpb (Apple Silicon only — see note)
 open dist/mailvec-*.mcpb                         # one-click install into Claude Desktop
 ```
+
+> The MCPB bundle is built self-contained for **Apple Silicon** (`RID="osx-arm64"` in `ops/build-mcpb.sh`). On an Intel Mac, edit that line to `osx-x64` before building — an arm64 bundle won't run there, and nothing else will tell you why.
+
+### What to expect on first run
+
+- **The first embed pass takes hours to days** on a multi-year archive — every message is chunked and run through Ollama locally. `mailvec status` shows embedding coverage ticking up; the archive is keyword-searchable long before vector coverage completes, and the tray's coverage ring tracks progress.
+- **Scanned-PDF OCR runs after that**, also locally, via the ~6 GB vision model. It loads on demand, so expect Ollama memory spikes during OCR cycles.
+- **Disk**: plan on roughly 4–5 GB of `archive.sqlite` per ~75k messages (vectors dominate), on top of the Maildir itself.
+
+Nothing is stuck if the numbers are still moving — `mailvec status` is the progress bar.
 
 ## Validating the install
 
@@ -77,6 +93,37 @@ curl -s http://127.0.0.1:3333/health | jq .
 
 `doctor` rolls all of the above into one checklist, returning exit 1 if any check fails. `--no-net` skips Ollama and HTTP probes for offline diagnosis; `--json` produces a machine-readable dump for bug reports.
 
+## Backup & moving machines
+
+The expensive part of the archive is the *derived* data — OCR'd text and embeddings that took hours to compute. Two scripts move it safely (a raw `cp` of a live SQLite file, or copying the `-wal` sidecar, can corrupt the copy):
+
+```sh
+ops/export-db.sh                      # consistent snapshot → ~/mailvec-archive-snapshot.sqlite
+ops/export-db.sh --to you@newmac      # ...and scp it over
+ops/import-db.sh /path/snapshot.sqlite  # on the destination, AFTER install-all.sh + mbsync there
+```
+
+Both scripts pause the writers, checkpoint the WAL, and restart the services when done; their header comments document the ordering requirements (on the destination: install first, sync mail first, then import). The Maildir itself is not backed up by these — mbsync can always re-pull it from the server.
+
+## Uninstall
+
+```sh
+ops/stop.sh                  # just stop the launchd agents (keeps everything installed)
+ops/install.sh --uninstall   # boot out the agents and remove their plists
+```
+
+`--uninstall` intentionally preserves the published binaries, your database, and the logs. For full removal afterwards:
+
+```sh
+rm -rf ~/.local/share/mailvec                          # published binaries
+rm -f  ~/.local/bin/mailvec ~/.local/bin/mailvec-mcp-stdio   # CLI + stdio-launcher shims
+rm -rf "$HOME/Library/Application Support/Mailvec"     # archive.sqlite + shared config + eval queries
+rm -rf ~/Library/Logs/Mailvec                          # logs
+# plus your Maildir (~/Mail/...) and ~/.mbsyncrc if you're done with mbsync too
+```
+
+The tray app, if installed, is a normal app bundle: quit it and delete `/Applications/Mailvec.Tray.app`. The Claude Desktop extension is removed from Claude Desktop's Settings → Extensions.
+
 ## Documentation
 
 Operations and dev:
@@ -84,6 +131,7 @@ Operations and dev:
 - **[docs/imap-setup.md](docs/imap-setup.md)** — mbsync config, Keychain, first-sync, Fastmail label-filtering gotcha
 - **[docs/dev-walkthrough.md](docs/dev-walkthrough.md)** — point the pipeline at a throwaway DB for debugging without touching production
 - **[docs/logs.md](docs/logs.md)** — log paths, rotation, dev overrides
+- **[ops/export-db.sh](ops/export-db.sh)** / **[ops/import-db.sh](ops/import-db.sh)** — consistent archive snapshots for backup / machine migration (see "Backup & moving machines" above)
 
 Client wiring:
 
