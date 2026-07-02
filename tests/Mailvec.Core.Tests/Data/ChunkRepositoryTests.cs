@@ -442,6 +442,37 @@ public class ChunkRepositoryTests
         EmbedEpoch(db, id).ShouldBe(epoch0 + 1);
     }
 
+    [Fact]
+    public void ReplaceChunksForMessage_skips_when_embedding_model_switched()
+    {
+        // A same-dimension `mailvec switch-model` while the embedder runs:
+        // metadata.embedding_model no longer matches the model this worker
+        // embeds with. The write must abandon, or old-model vectors would be
+        // silently mixed into the new vector space with plausible scores.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+
+        // The DB's metadata says 'mxbai-embed-large' (fresh-DB default); this
+        // worker still thinks it's embedding with 'old-model'.
+        var written = chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedEmbeddingModel: "old-model");
+
+        written.ShouldBeFalse();
+        chunks.CountForMessage(id).ShouldBe(0);
+        EmbeddedAt(db, id).ShouldBeNull();
+
+        // Matching model writes normally.
+        chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedEmbeddingModel: "mxbai-embed-large").ShouldBeTrue();
+        chunks.CountForMessage(id).ShouldBe(1);
+    }
+
     private static long EmbedEpoch(TempDatabase db, long messageId)
     {
         using var conn = db.Connections.Open();

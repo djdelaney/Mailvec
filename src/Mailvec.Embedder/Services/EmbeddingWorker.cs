@@ -108,6 +108,17 @@ public sealed class EmbeddingWorker(
 
     internal async Task<int> ProcessOneBatchAsync(int batchSize, CancellationToken ct)
     {
+        // Re-verify every poll, not just at startup: `mailvec switch-model`
+        // can rewrite metadata.embedding_model while we're running, and a
+        // same-dimension switch would otherwise let this (old-config) worker
+        // re-embed the whole re-queued archive into the new vector table.
+        // Throwing here surfaces through RecordBatchFailure -> /health
+        // (degraded after consecutive failures) until the embedder is
+        // redeployed with matching config. The per-write guard in
+        // ReplaceChunksForMessage is the transactional backstop for a switch
+        // that lands mid-batch.
+        VerifyEmbeddingModelMatchesSchema();
+
         var messageBatch = messages.EnumerateUnembedded(batchSize).ToList();
         if (messageBatch.Count == 0) return 0;
 
@@ -153,7 +164,8 @@ public sealed class EmbeddingWorker(
                 // attachment) so EnumerateUnembedded stops returning them.
                 // Guarded like the non-empty path: if the body grew (content
                 // changed) mid-batch, don't stamp it embedded-with-no-chunks.
-                if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true, expectedEmbedEpoch: embedEpoch))
+                if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true,
+                        expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel))
                     skipped++;
                 continue;
             }
@@ -161,7 +173,8 @@ public sealed class EmbeddingWorker(
             // Advance the cursor regardless — these vectors belong to this
             // message whether or not the guarded write commits.
             cursor += msgChunks.Count;
-            if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true, expectedEmbedEpoch: embedEpoch))
+            if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true,
+                    expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel))
             {
                 // This message was re-queued during the embed call (body
                 // change or attachment-text change); leave embedded_at = NULL

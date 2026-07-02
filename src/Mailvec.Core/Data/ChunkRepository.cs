@@ -29,6 +29,17 @@ public sealed class ChunkRepository(ConnectionFactory connections)
     /// Returns true when the chunks were written, false when the guard
     /// skipped the write.
     /// </summary>
+    /// <para>
+    /// <paramref name="expectedEmbeddingModel"/> guards against a mid-run
+    /// `mailvec switch-model`: the write re-reads `metadata.embedding_model`
+    /// inside the same transaction and skips when it no longer matches the
+    /// model this embedder was configured (and startup-verified) against.
+    /// Without it, a still-running embedder would re-embed the entire
+    /// re-queued archive with the OLD model after a same-dimension switch —
+    /// the inserts succeed, the startup check never re-runs, and the vector
+    /// space is silently mixed. The startup check alone can't catch this;
+    /// only a check inside the write transaction can.
+    /// </para>
     public bool ReplaceChunksForMessage(
         long messageId,
         IReadOnlyList<TextChunk> chunks,
@@ -36,7 +47,8 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         DateTimeOffset embeddedAt,
         string? expectedContentHash = null,
         bool checkContentHash = false,
-        long? expectedEmbedEpoch = null)
+        long? expectedEmbedEpoch = null,
+        string? expectedEmbeddingModel = null)
     {
         if (chunks.Count != vectors.Count)
             throw new ArgumentException($"Chunk/vector count mismatch: {chunks.Count} vs {vectors.Count}");
@@ -45,6 +57,9 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         using var tx = conn.BeginTransaction();
 
         if (checkContentHash && !SnapshotStillCurrent(conn, tx, messageId, expectedContentHash, expectedEmbedEpoch))
+            return false;
+
+        if (expectedEmbeddingModel is not null && !EmbeddingModelMatches(conn, tx, expectedEmbeddingModel))
             return false;
 
         DeleteChunks(conn, tx, messageId);
@@ -80,6 +95,15 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         var currentHash = reader.IsDBNull(0) ? null : reader.GetString(0);
         if (!string.Equals(currentHash, expectedHash, StringComparison.Ordinal)) return false;
         return expectedEmbedEpoch is null || reader.GetInt64(1) == expectedEmbedEpoch.Value;
+    }
+
+    private static bool EmbeddingModelMatches(SqliteConnection conn, SqliteTransaction tx, string expectedModel)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = 'embedding_model'";
+        var current = cmd.ExecuteScalar() as string;
+        return string.Equals(current, expectedModel, StringComparison.Ordinal);
     }
 
     public int CountForMessage(long messageId)
