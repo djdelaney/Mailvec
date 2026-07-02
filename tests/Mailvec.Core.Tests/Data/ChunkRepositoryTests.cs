@@ -290,6 +290,69 @@ public class ChunkRepositoryTests
         EmbeddedAt(db, id).ShouldBeNull();
     }
 
+    [Fact]
+    public void ReplaceChunksForMessage_writes_when_content_hash_matches()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now); // hash "hash-a@x"
+
+        var written = chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedContentHash: "hash-a@x", checkContentHash: true);
+
+        written.ShouldBeTrue();
+        chunks.CountForMessage(id).ShouldBe(1);
+        EmbeddedAt(db, id).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void ReplaceChunksForMessage_skips_and_preserves_state_when_content_hash_changed()
+    {
+        // H2 regression: the embedder snapshots content_hash before its slow
+        // Ollama call. If the indexer commits a body change meanwhile (new
+        // hash), the guarded write must abandon everything — not delete the
+        // freshly re-queued state and stamp stale vectors.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now); // hash "hash-a@x"
+        // Existing committed state we must not clobber.
+        chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "current", 1)], [Hot(0)], now);
+        var stampBefore = EmbeddedAt(db, id);
+
+        // Embedder wrote from an older snapshot whose hash no longer matches.
+        var written = chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "stale-a", 1), new TextChunk(1, "stale-b", 1)], [Hot(1), Hot(2)], now.AddMinutes(1),
+            expectedContentHash: "stale-hash", checkContentHash: true);
+
+        written.ShouldBeFalse();
+        // Nothing in the transaction ran: the prior single chunk and its
+        // original embedded_at stamp are intact.
+        chunks.CountForMessage(id).ShouldBe(1);
+        VectorCount(db, id).ShouldBe(1);
+        EmbeddedAt(db, id).ShouldBe(stampBefore);
+    }
+
+    [Fact]
+    public void ReplaceChunksForMessage_skips_when_message_deleted()
+    {
+        using var db = new TempDatabase();
+        var chunks = new ChunkRepository(db.Connections);
+
+        var written = chunks.ReplaceChunksForMessage(
+            messageId: 999_999, [new TextChunk(0, "x", 1)], [Hot(0)], DateTimeOffset.UtcNow,
+            expectedContentHash: null, checkContentHash: true);
+
+        written.ShouldBeFalse();
+        chunks.CountForMessage(999_999).ShouldBe(0);
+    }
+
     private static int TotalVectorCount(TempDatabase db)
     {
         using var conn = db.Connections.Open();

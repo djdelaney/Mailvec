@@ -321,6 +321,57 @@ public class MessageRepositoryTests
     }
 
     [Fact]
+    public void Upsert_clears_embedded_at_atomically_on_content_change()
+    {
+        // H1 regression: the re-queue must happen inside the Upsert transaction,
+        // not only in the scanner's separate ClearEmbeddingsForMessage call. If
+        // it didn't, a crash between the two transactions would leave a stamped
+        // embedded_at whose content_hash matches the new body — permanently
+        // shadowing the new FTS text with old vectors. Here we deliberately do
+        // NOT call ClearEmbeddingsForMessage; the Upsert alone must clear it.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        var id = repo.Upsert(Sample(contentHash: "h1"), "INBOX", "INBOX/cur", "f1", now).Id;
+        chunks.ReplaceChunksForMessage(id, [], [], now); // stamp embedded_at
+        EmbeddedAt(db, id).ShouldNotBeNull();
+
+        repo.Upsert(Sample(contentHash: "h2-changed"), "INBOX", "INBOX/cur", "f1", now);
+
+        EmbeddedAt(db, id).ShouldBeNull();
+    }
+
+    [Fact]
+    public void Upsert_preserves_embedded_at_on_noop_rescan()
+    {
+        // The flip side: an unchanged rescan must NOT clear embedded_at, or the
+        // embedder would re-embed the entire archive on every 5-minute scan.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        var id = repo.Upsert(Sample(contentHash: "stable"), "INBOX", "INBOX/cur", "f1", now).Id;
+        chunks.ReplaceChunksForMessage(id, [], [], now);
+        EmbeddedAt(db, id).ShouldNotBeNull();
+
+        repo.Upsert(Sample(contentHash: "stable"), "INBOX", "INBOX/cur", "f1", now);
+
+        EmbeddedAt(db, id).ShouldNotBeNull();
+    }
+
+    private static string? EmbeddedAt(TempDatabase db, long messageId)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT embedded_at FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        return cmd.ExecuteScalar() is string s ? s : null;
+    }
+
+    [Fact]
     public void Upsert_persists_content_hash_for_subsequent_change_detection()
     {
         using var db = new TempDatabase();

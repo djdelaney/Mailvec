@@ -9,14 +9,39 @@ public sealed class ChunkRepository(ConnectionFactory connections)
     /// Replaces all chunks (and their vectors) for a message and stamps embedded_at.
     /// Chunks and vectors are written in a single transaction so the message is
     /// never visible to search with a partial vector set.
+    ///
+    /// When <paramref name="checkContentHash"/> is set, the write is guarded:
+    /// the message's current content_hash is re-read inside this transaction
+    /// (a BEGIN IMMEDIATE, so it's consistent with the writes that follow) and
+    /// the whole write is abandoned — nothing committed, returns false — if the
+    /// row is gone or its hash no longer equals <paramref name="expectedContentHash"/>.
+    /// The embedder snapshots content_hash before its minutes-long Ollama call
+    /// and passes it here so that a body change committed by the indexer in the
+    /// meantime (which sets embedded_at back to NULL and bumps content_hash in a
+    /// single transaction) is not clobbered: without the guard the embedder
+    /// would write vectors built from the OLD body and stamp a fresh
+    /// embedded_at, leaving the message with old-body vectors against new-body
+    /// FTS and no content-hash delta to trigger a re-embed — permanent silent
+    /// divergence. Skipped messages keep embedded_at = NULL and are re-embedded
+    /// (against the new body) on the next poll. Returns true when the chunks
+    /// were written, false when the guard skipped the write.
     /// </summary>
-    public void ReplaceChunksForMessage(long messageId, IReadOnlyList<TextChunk> chunks, IReadOnlyList<float[]> vectors, DateTimeOffset embeddedAt)
+    public bool ReplaceChunksForMessage(
+        long messageId,
+        IReadOnlyList<TextChunk> chunks,
+        IReadOnlyList<float[]> vectors,
+        DateTimeOffset embeddedAt,
+        string? expectedContentHash = null,
+        bool checkContentHash = false)
     {
         if (chunks.Count != vectors.Count)
             throw new ArgumentException($"Chunk/vector count mismatch: {chunks.Count} vs {vectors.Count}");
 
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
+
+        if (checkContentHash && !ContentHashMatches(conn, tx, messageId, expectedContentHash))
+            return false;
 
         DeleteChunks(conn, tx, messageId);
 
@@ -28,6 +53,25 @@ public sealed class ChunkRepository(ConnectionFactory connections)
 
         UpdateEmbeddedAt(conn, tx, messageId, embeddedAt);
         tx.Commit();
+        return true;
+    }
+
+    /// <summary>
+    /// True if the message still exists and its content_hash equals the
+    /// snapshot the caller captured (both may be NULL for legacy pre-v3 rows,
+    /// which compare equal). A missing row (deleted since the snapshot) returns
+    /// false so we don't resurrect vectors for a purged message.
+    /// </summary>
+    private static bool ContentHashMatches(SqliteConnection conn, SqliteTransaction tx, long messageId, string? expected)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT content_hash FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return false;
+        var current = reader.IsDBNull(0) ? null : reader.GetString(0);
+        return string.Equals(current, expected, StringComparison.Ordinal);
     }
 
     public int CountForMessage(long messageId)

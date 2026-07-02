@@ -122,7 +122,7 @@ public sealed class EmbeddingWorker(
         // re-fetched by EnumerateUnembedded next batch, and inflate
         // _processedThisRun by re-counting on every appearance.
         var perMessageChunks = messageBatch
-            .Select(m => (m.Id, Chunks: BuildChunksForMessage(m)))
+            .Select(m => (m.Id, m.ContentHash, Chunks: BuildChunksForMessage(m)))
             .ToList();
 
         var allTexts = perMessageChunks.SelectMany(x => x.Chunks.Select(c => c.Text)).ToList();
@@ -144,27 +144,39 @@ public sealed class EmbeddingWorker(
         int cursor = 0;
         var attachmentChunkCount = 0;
         var nonEmptyMessageCount = 0;
-        foreach (var (id, msgChunks) in perMessageChunks)
+        var skipped = 0;
+        foreach (var (id, contentHash, msgChunks) in perMessageChunks)
         {
             if (msgChunks.Count == 0)
             {
                 // Stamp empty-chunk messages (short body AND no extractable
                 // attachment) so EnumerateUnembedded stops returning them.
-                chunks.ReplaceChunksForMessage(id, [], [], embeddedAt);
+                // Guarded like the non-empty path: if the body grew (content
+                // changed) mid-batch, don't stamp it embedded-with-no-chunks.
+                if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true))
+                    skipped++;
                 continue;
             }
             var vecs = allVectors.Skip(cursor).Take(msgChunks.Count).ToArray();
-            chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt);
+            // Advance the cursor regardless — these vectors belong to this
+            // message whether or not the guarded write commits.
             cursor += msgChunks.Count;
+            if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true))
+            {
+                // The indexer changed this message's body during the embed call;
+                // leave embedded_at = NULL so we re-embed the new body next poll.
+                skipped++;
+                continue;
+            }
             attachmentChunkCount += msgChunks.Count(c => c.Source == "attachment");
             nonEmptyMessageCount++;
         }
 
-        _processedThisRun += messageBatch.Count;
+        _processedThisRun += messageBatch.Count - skipped;
         logger.LogInformation(
-            "Embedded {Messages} messages ({Chunks} chunks, {AttachmentChunks} from attachments) in {Ms}ms — {Done} done this run, {Remaining} remaining",
+            "Embedded {Messages} messages ({Chunks} chunks, {AttachmentChunks} from attachments) in {Ms}ms — {Skipped} re-queued (changed mid-embed), {Done} done this run, {Remaining} remaining",
             nonEmptyMessageCount, allTexts.Count, attachmentChunkCount, sw.ElapsedMilliseconds,
-            _processedThisRun, messages.CountUnembedded());
+            skipped, _processedThisRun, messages.CountUnembedded());
 
         return messageBatch.Count;
     }
