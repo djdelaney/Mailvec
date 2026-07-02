@@ -75,12 +75,17 @@ public sealed class GetAttachmentTextTool(
         var content = new List<ContentBlock>();
         var name = attachment.FileName ?? "attachment";
 
-        if (attachment.ExtractionStatus == AttachmentTextExtractor.StatusDone
+        // 'ocr' is searchable text like 'done' — it's a scanned document the
+        // embedder recovered via vision-model OCR. Refusing it here would
+        // contradict search (which matches on that text) and get_email
+        // (which reports it IndexedForSearch).
+        if (attachment.ExtractionStatus is AttachmentTextExtractor.StatusDone or AttachmentTextExtractor.StatusOcr
             && !string.IsNullOrEmpty(attachment.ExtractedText))
         {
+            var how = attachment.ExtractionStatus == AttachmentTextExtractor.StatusOcr ? "OCR text" : "Extracted text";
             content.Add(new TextContentBlock
             {
-                Text = $"Extracted text from {name} (partIndex {partIndex}, {attachment.ExtractedText.Length:N0} chars):",
+                Text = $"{how} from {name} (partIndex {partIndex}, {attachment.ExtractedText.Length:N0} chars):",
             });
             content.Add(new TextContentBlock { Text = attachment.ExtractedText });
             callLog.LogResult(ToolName, new { id = msg.Id, partIndex, status = attachment.ExtractionStatus, chars = attachment.ExtractedText.Length }, startTs);
@@ -107,6 +112,9 @@ public sealed class GetAttachmentTextTool(
             $"'{name}' is a type Mailvec does not extract text from. Use get_attachment to fetch the file.",
         AttachmentTextExtractor.StatusFailed =>
             $"Text extraction failed for '{name}'. Use get_attachment to fetch the file.",
+        AttachmentTextExtractor.StatusOcr =>
+            $"'{name}' was OCR-processed but no text was recovered (likely a blank scan). " +
+            "Use get_attachment_page_image to view the pages.",
         null =>
             $"'{name}' has no extraction record yet (it predates attachment text extraction, or the embedder hasn't " +
             "processed it). Use get_attachment to fetch the file.",
