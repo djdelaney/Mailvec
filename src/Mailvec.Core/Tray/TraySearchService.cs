@@ -154,5 +154,5 @@ public sealed class TraySearchService(
         return Truncate(collapsed, 240);
     }
 
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+    private static string Truncate(string s, int max) => Parsing.StringTruncation.Truncate(s, max);
 }

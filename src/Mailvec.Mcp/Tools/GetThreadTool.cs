@@ -88,7 +88,7 @@ public sealed class GetThreadTool(
     {
         if (string.IsNullOrWhiteSpace(body)) return string.Empty;
         var collapsed = System.Text.RegularExpressions.Regex.Replace(body.Trim(), @"\s+", " ");
-        return collapsed.Length <= 200 ? collapsed : collapsed[..200] + "…";
+        return Mailvec.Core.Parsing.StringTruncation.Truncate(collapsed, 200);
     }
 }
 
