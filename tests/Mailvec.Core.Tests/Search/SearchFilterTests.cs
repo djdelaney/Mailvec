@@ -153,8 +153,8 @@ public class SearchFilterTests
         var now = DateTimeOffset.UtcNow;
 
         repo.Upsert(M("addr@x", from: "acme@law.example", fromName: "Counsel"), "INBOX", "INBOX/cur", "a", now);
-        repo.Upsert(M("name@x", from: "noreply@x.com", fromName: "Jed Acme"),    "INBOX", "INBOX/cur", "n", now);
-        repo.Upsert(M("none@x", from: "carol@example.com", fromName: "Carol"),       "INBOX", "INBOX/cur", "o", now);
+        repo.Upsert(M("name@x", from: "noreply@x.com", fromName: "Pat Acme"),    "INBOX", "INBOX/cur", "n", now);
+        repo.Upsert(M("none@x", from: "carol@example.com", fromName: "Carol"),   "INBOX", "INBOX/cur", "o", now);
 
         var hits = search.Search("ramen", filters: new SearchFilters(FromContains: "acme"));
 

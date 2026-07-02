@@ -17,11 +17,11 @@ on the same machinery; not in this proposal.
 ## Spike result (why this is worth doing)
 
 Render page → local Ollama `qwen2.5vl:7b` produced production-grade text on 8
-real samples (scanned statement, mortgage statement, invoice, form,
-fax, architectural drawing): names, dollar amounts, account/loan numbers, dates,
+real samples (scanned statements, invoices, forms, receipts, a fax, an
+architectural drawing): names, dollar amounts, account/loan numbers, dates,
 addresses all captured, tables preserved as markdown. ~22 s/page, fully offline
-(important — these hold SSNs and financials). A couple of cosmetic OCR slips,
-fine for fuzzy search.
+(important — scanned documents like these routinely hold SSNs and financials).
+A couple of cosmetic OCR slips, fine for fuzzy search.
 
 ## Placement: extend the embedder
 

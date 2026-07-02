@@ -4,14 +4,6 @@ Local-first IMAP archive with keyword (FTS5) and semantic (sqlite-vec) search, e
 
 Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server works — Fastmail, iCloud, Gmail (with an app password), self-hosted Dovecot, etc. The shipped `ops/mbsyncrc.example` and reference design use Fastmail; swap the `Host` / `User` / `PassCmd` lines and the rest of the pipeline is unchanged.
 
-<table>
-  <tr>
-    <td align="center"><img src="assets/screenshots/tray-dashboard.png" alt="Tray dashboard" width="320"/><br/><em>Tray dashboard</em></td>
-    <td align="center"><img src="assets/screenshots/search-popover.png" alt="Search popover" width="320"/><br/><em>Inline search popover</em></td>
-    <td align="center"><img src="assets/screenshots/claude-desktop-answer.png" alt="Claude Desktop answering from the archive" width="320"/><br/><em>Claude Desktop using Mailvec</em></td>
-  </tr>
-</table>
-
 ## What you get
 
 - **A local searchable archive** of your IMAP account on disk — keyword (FTS5/BM25), semantic (sqlite-vec, mxbai-embed-large), and hybrid (RRF fusion) search.

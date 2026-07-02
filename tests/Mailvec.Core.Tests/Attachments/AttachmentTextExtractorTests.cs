@@ -180,8 +180,8 @@ public class AttachmentTextExtractorTests
         "SUMMARY:Mini Session\r\n" +
         "LOCATION:Example Studio\r\n" +
         "ORGANIZER;CN=Example Photography:mailto:studio@example.com\r\n" +
-        "ATTENDEE;CN=\"Daniel Delaney\";ROLE=REQ-PARTICIPANT:mailto:user@example.com\r\n" +
-        "DESCRIPTION:Name: Daniel Delaney\\nPrice: $225.0\r\n" +
+        "ATTENDEE;CN=\"Test User\";ROLE=REQ-PARTICIPANT:mailto:user@example.com\r\n" +
+        "DESCRIPTION:Name: Test User\\nPrice: $225.0\r\n" +
         " 0\\, paid online\r\n" +
         "END:VEVENT\r\n" +
         "END:VCALENDAR\r\n";
@@ -203,7 +203,7 @@ public class AttachmentTextExtractorTests
         result.Text.ShouldNotBeNull();
         result.Text!.ShouldContain("Mini Session");
         result.Text.ShouldContain("Location: Example Studio");
-        result.Text.ShouldContain("Daniel Delaney");
+        result.Text.ShouldContain("Test User");
         // Machine noise must be gone.
         result.Text.ShouldNotContain("DTSTAMP");
         result.Text.ShouldNotContain("1526757496@scheduling");

@@ -12,16 +12,16 @@ public class ReplyTrimmerTests
 
             Added to the website.
 
-            Dan
+            Sam
 
             On Tue, Jan 27, 2026 at 2:46 PM Jordan Lee <jordan.lee@example.com> wrote:
 
             Minutes from the January 20, 2026 Board Meeting
 
-            Held at Jordan Lee's house
+            Held at the community center
             """;
 
-        var result = ReplyTrimmer.Trim(body, subject: "Re: HME Board minutes from January");
+        var result = ReplyTrimmer.Trim(body, subject: "Re: Board minutes from January");
 
         result.ShouldContain("Thanks Jordan!");
         result.ShouldContain("Added to the website.");
@@ -33,9 +33,9 @@ public class ReplyTrimmerTests
     public void Cuts_at_outlook_style_header_when_subject_is_a_reply()
     {
         var body = """
-            Alex Morgan lives at 100 Example Street, between a neighbor and the neighbors.
+            Alex Morgan lives at 100 Example Street, near the community park.
 
-            From: Dan Delaney <user@example.com>
+            From: Sam Rivers <sam.rivers@example.com>
 
             Sent: Tuesday, February 3, 2026 9:45 AM
 
@@ -49,7 +49,7 @@ public class ReplyTrimmerTests
         var result = ReplyTrimmer.Trim(body, subject: "Re: PLEASE RUSH** 0000000000 EXAMPLE 24 MONTH LEDGER");
 
         result.ShouldContain("Alex Morgan lives at 100 Example Street");
-        result.ShouldNotContain("From: Dan Delaney");
+        result.ShouldNotContain("From: Sam Rivers");
         result.ShouldNotContain("Original quoted content");
     }
 
