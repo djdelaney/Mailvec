@@ -93,6 +93,25 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessOneBatchAsync_throws_when_model_switched_mid_run()
+    {
+        // `mailvec switch-model` rewrites metadata.embedding_model while the
+        // embedder runs. The per-poll re-verify must stop the (old-config)
+        // worker from re-embedding the re-queued archive with the old model —
+        // the startup check alone would never see the switch.
+        InsertMessage("msg-1@x", subject: "Hello", body: new string('a', 300));
+        var worker = BuildWorker(_ => Ok([HotVector(0)]));
+        worker.VerifyEmbeddingModelMatchesSchema();   // startup check passes
+
+        _metadata.Set("embedding_model", "qwen3-embedding:4b"); // switch-model lands
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(
+            () => worker.ProcessOneBatchAsync(batchSize: 16, ct: default));
+        ex.Message.ShouldContain("mismatch");
+        _chunks.CountForMessage(GetMessageId("msg-1@x")).ShouldBe(0);   // nothing written
+    }
+
+    [Fact]
     public async Task ProcessOneBatchAsync_returns_zero_when_no_unembedded_messages()
     {
         var called = 0;
