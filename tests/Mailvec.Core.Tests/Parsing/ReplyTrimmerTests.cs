@@ -12,13 +12,13 @@ public class ReplyTrimmerTests
 
             Added to the website.
 
-            Dan
+            Sam
 
             On Tue, Jan 27, 2026 at 2:46 PM Jordan Lee <jordan.lee@example.com> wrote:
 
             Minutes from the January 20, 2026 Board Meeting
 
-            Held at Jordan Lee's house
+            Held at the community center
             """;
 
         var result = ReplyTrimmer.Trim(body, subject: "Re: Board minutes from January");
@@ -33,7 +33,7 @@ public class ReplyTrimmerTests
     public void Cuts_at_outlook_style_header_when_subject_is_a_reply()
     {
         var body = """
-            Alex Morgan lives at 100 Example Street, between a neighbor and the neighbors.
+            Alex Morgan lives at 100 Example Street, near the community park.
 
             From: Sam Rivers <sam.rivers@example.com>
 
