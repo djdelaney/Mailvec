@@ -24,6 +24,19 @@ All seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`,
 
 `AttachmentDownloadDir` is intentionally `~/Downloads/mailvec/` (visible to the user). Don't move it to a hidden directory or `~/Library/Caches/` — that hides forensic evidence if a tool ever does write something unexpected.
 
+## Host / origin validation (DNS-rebinding guard)
+
+Loopback binding stops other *hosts* on the network from routing to `:3333`, but it does **not** stop a web page the user visits from reaching it. A page on `evil.com` can hold a connection, let its DNS TTL expire, re-resolve `evil.com` to `127.0.0.1`, and then issue requests the browser treats as *same-origin* — at which point page JavaScript could read `/tray/email/<id>` (mail bodies), `/tray/system` (IMAP username), or POST to the mutating `/tray/control` and `/tray/attachment` endpoints.
+
+Every HTTP request (MCP, `/health`, and all `/tray/*`) therefore passes through a guard ([`HostGuard`](../src/Mailvec.Mcp/HostGuard.cs), wired in [`Program.cs`](../src/Mailvec.Mcp/Program.cs) `RunHttp`) that returns **403** unless:
+
+- the `Host` header's hostname is an allowed name (`localhost` / `127.0.0.1` / `::1` always, plus anything in `Mcp:AllowedHosts`), and
+- the `Origin` header, when present, also resolves to an allowed name.
+
+After a rebind the browser still sends `Host: evil.com`, so the request is refused before reaching any handler. Native clients (Claude Code's MCP transport, the tray's `URLSession`) connect to loopback and send no `Origin`, so they're unaffected. This is **not** authentication — a hostile local process can still spoof the `Host` header; it defends specifically against the browser-mediated cross-origin vector.
+
+**When fronting the server with a real hostname** (a Cloudflare tunnel or container ingress — see [remote-access-cloudflare.md](remote-access-cloudflare.md)), add that hostname to `Mcp:AllowedHosts` or its requests are rejected. This guard is defense-in-depth only: the tunnel ingress must still route the MCP path exclusively and never expose `/health` or `/tray/*`.
+
 ## What's accepted
 
 These are explicit decisions, not oversights:

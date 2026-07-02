@@ -8,6 +8,7 @@ using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
 using Mailvec.Core.Tray;
+using Mailvec.Mcp;
 using Mailvec.Mcp.Tray;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,6 +80,22 @@ static async Task RunHttp(string[] args)
 
     var app = builder.Build();
     app.Services.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
+
+    // DNS-rebinding / same-origin guard. Runs before every route (MCP, /health,
+    // /tray/*) so a browser rebound to 127.0.0.1 can't read mail or POST to the
+    // mutating /tray endpoints. Loopback Host names are always allowed; add a
+    // fronting hostname via Mcp:AllowedHosts. See HostGuard.
+    var allowedHosts = HostGuard.BuildAllowedHosts(mcpOpts.AllowedHosts);
+    app.Use(async (context, next) =>
+    {
+        if (!HostGuard.IsAllowed(context.Request.Host.Host, context.Request.Headers["Origin"].ToString(), allowedHosts))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+        await next().ConfigureAwait(false);
+    });
+
     // /health returns a structured snapshot of DB / embedding / Ollama state.
     // Returns 503 when degraded so monitors can alert without parsing the body.
     app.MapGet("/health", async (HealthService health, CancellationToken ct) =>

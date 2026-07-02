@@ -47,6 +47,46 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task Rejects_request_with_foreign_host_header()
+    {
+        // DNS-rebinding guard: a browser rebound to 127.0.0.1 still sends the
+        // attacker's hostname in Host. Must be refused before reaching /health.
+        using var client = _factory.CreateClient();
+        var req = new HttpRequestMessage(HttpMethod.Get, "/health");
+        req.Headers.Host = "evil.com";
+
+        var response = await client.SendAsync(req);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Rejects_request_with_foreign_origin_header()
+    {
+        using var client = _factory.CreateClient();
+        var req = new HttpRequestMessage(HttpMethod.Get, "/health");
+        // Host defaults to localhost (allowed); Origin reveals the cross-site caller.
+        req.Headers.Add("Origin", "http://evil.com");
+
+        var response = await client.SendAsync(req);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Allows_loopback_request_through_the_guard()
+    {
+        // Default WebApplicationFactory client sends Host: localhost and no
+        // Origin — the guard must let it through (503 here only because Ollama
+        // is unreachable in tests, not 403).
+        using var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/health");
+
+        response.StatusCode.ShouldNotBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
     public async Task Health_endpoint_responds_quickly_thanks_to_ping_timeout()
     {
         // CLAUDE.md gotcha: the OllamaClient.PingAsync wraps the call in a 2s

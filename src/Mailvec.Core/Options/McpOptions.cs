@@ -6,6 +6,15 @@ public sealed class McpOptions
 
     public string BindAddress { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 3333;
+
+    /// <summary>
+    /// Extra Host-header hostnames accepted by the DNS-rebinding guard, on top
+    /// of the always-allowed loopback names (localhost / 127.0.0.1 / ::1).
+    /// Leave empty for the loopback-only deployment; when fronting the server
+    /// with a real hostname (a Cloudflare tunnel / container ingress), add that
+    /// hostname here so its requests aren't rejected. See HostGuard.
+    /// </summary>
+    public string[] AllowedHosts { get; set; } = [];
     public int SearchDefaultLimit { get; set; } = 20;
     public int SearchMaxLimit { get; set; } = 100;
 
