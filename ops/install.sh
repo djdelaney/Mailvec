@@ -221,23 +221,43 @@ echo
 # Sanity warnings (non-fatal; user can fix later).
 [[ -d "$MAILDIR_ROOT" ]] || echo "warning: Maildir root '$MAILDIR_ROOT' does not exist yet."
 [[ -f "$MBSYNCRC" ]]     || echo "warning: mbsync config '$MBSYNCRC' does not exist yet."
+
+# Is Ollama local (loopback) or a remote server on the network? The guidance
+# below differs: for a local install we can nudge the user to install/autostart
+# the app; for a remote server none of that applies (autostart, the cask, and
+# brew services are all the remote host's concern, not this machine's).
+OLLAMA_HOST="$(printf '%s' "$OLLAMA_URL" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')"
+case "$OLLAMA_HOST" in
+    localhost|127.0.0.1|::1|"") OLLAMA_IS_LOCAL=1 ;;
+    *)                          OLLAMA_IS_LOCAL=0 ;;
+esac
+
 if ! curl -fsS --max-time 2 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
     echo "warning: Ollama not reachable at $OLLAMA_URL (start it later; embedder will retry)."
-    echo "         Install the cask if you haven't: brew install --cask ollama-app && open -a Ollama"
+    if [[ "$OLLAMA_IS_LOCAL" == 1 ]]; then
+        echo "         Install the cask if you haven't: brew install --cask ollama-app && open -a Ollama"
+    else
+        echo "         This is a remote server ($OLLAMA_HOST). Confirm it's running and"
+        echo "         that it listens on all interfaces (OLLAMA_HOST=0.0.0.0 on that host),"
+        echo "         and that no firewall blocks its port. The embedder will keep retrying."
+    fi
 fi
-# Reachable now ≠ reachable after reboot. The recommended cask (ollama-app)
-# auto-starts via its own Login Item, so /Applications/Ollama.app surviving
-# reboot is the app's job, not ours — skip the check entirely for cask installs.
-# Only the legacy `ollama` *formula* relies on brew services for autostart, so
-# the warning below is scoped to that case.
-if [[ ! -d /Applications/Ollama.app ]] \
-   && command -v brew >/dev/null 2>&1 \
-   && command -v ollama >/dev/null 2>&1 \
-   && [[ "$(command -v ollama)" == "$(brew --prefix)/bin/ollama" ]] \
-   && ! brew services list 2>/dev/null | awk '$1=="ollama"{print $2}' | grep -qx started; then
-    echo "warning: formula-installed Ollama is not registered with brew services."
-    echo "         Either switch to the cask (brew install --cask ollama-app) or, to"
-    echo "         make the formula survive reboot: brew services start ollama"
+
+if [[ "$OLLAMA_IS_LOCAL" == 1 ]]; then
+    # Reachable now ≠ reachable after reboot. The recommended cask (ollama-app)
+    # auto-starts via its own Login Item, so /Applications/Ollama.app surviving
+    # reboot is the app's job, not ours — skip the check entirely for cask installs.
+    # Only the legacy `ollama` *formula* relies on brew services for autostart, so
+    # the warning below is scoped to that case.
+    if [[ ! -d /Applications/Ollama.app ]] \
+       && command -v brew >/dev/null 2>&1 \
+       && command -v ollama >/dev/null 2>&1 \
+       && [[ "$(command -v ollama)" == "$(brew --prefix)/bin/ollama" ]] \
+       && ! brew services list 2>/dev/null | awk '$1=="ollama"{print $2}' | grep -qx started; then
+        echo "warning: formula-installed Ollama is not registered with brew services."
+        echo "         Either switch to the cask (brew install --cask ollama-app) or, to"
+        echo "         make the formula survive reboot: brew services start ollama"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
