@@ -400,10 +400,28 @@ internal static class DoctorCommand
         }
         else
         {
+            // Local vs remote get different remediation hints: a loopback URL
+            // means the Ollama app/service on THIS machine is down; a remote URL
+            // means the network host is down or unreachable (firewall / not
+            // listening on 0.0.0.0), where `brew services` on this box is useless.
+            var hint = IsLocalOllama(report.Ollama.BaseUrl)
+                ? "Check `brew services list | grep ollama` (or that /Applications/Ollama.app is running)."
+                : "It's a remote host: confirm it's up, listening on all interfaces (OLLAMA_HOST=0.0.0.0), and reachable through any firewall.";
             checks.Add(DoctorCheck.Warn("Ollama",
-                $"unreachable at {report.Ollama.BaseUrl}. Embedder is stuck and semantic / hybrid search is degraded; keyword search still works. Check `brew services list | grep ollama`.",
+                $"unreachable at {report.Ollama.BaseUrl}. Embedder is stuck and semantic / hybrid search is degraded; keyword search still works. {hint}",
                 "pipeline"));
         }
+    }
+
+    /// <summary>
+    /// True when the Ollama base URL points at this machine (loopback), so
+    /// remediation hints can differ between a local app and a remote host.
+    /// </summary>
+    private static bool IsLocalOllama(string baseUrl)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)) return true;
+        var h = uri.Host;
+        return h is "localhost" or "127.0.0.1" or "::1" or "[::1]";
     }
 
     /// <summary>
