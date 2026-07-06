@@ -26,7 +26,7 @@ dotnet restore && dotnet build
 A TFM bump (e.g. `net10.0` → `net11.0`) has fanout:
 
 1. Install the matching SDK on the build host — `ops/build-mcpb.sh` runs `dotnet publish -c Release -r osx-arm64 --self-contained true` and ships the runtime inside the bundle.
-2. Re-run `ops/publish-mcp-stdio.sh` so the stdio launcher at `~/.local/bin/mailvec-mcp-stdio` (which exports `DOTNET_ROOT`) resolves to a runtime that exists.
+2. Re-run `ops/install-stdio-launcher.sh` so the stdio launcher at `~/.local/bin/mailvec-mcp-stdio` (which exports `DOTNET_ROOT`) resolves to a runtime that exists. (It republishes AND re-signs; `ops/publish-mcp-stdio.sh` alone also works now that it signs, but doesn't rewrite the launcher.)
 3. Rebuild + reinstall the MCPB with `--bump` so end-users' Claude Desktop instances pick up the new self-contained runtime.
 
 Bundle size grows roughly with each runtime major.
@@ -47,7 +47,7 @@ The `get_attachment_page_image` MCP tool rasterises PDF pages via `PDFtoImage` (
 
 - Referenced by `Mailvec.Mcp` (`get_attachment_page_image`) and `Mailvec.Embedder` (the scanned-PDF / image OCR pass) — and **only** those two (keep Core / Indexer / Cli native-dep-free). The test projects also reference `SkiaSharp` directly to decode rendered images.
 - After a bump: `dotnet test tests/Mailvec.Mcp.Tests` — the page-image tests do a real PDFium render, so they fail loudly if the native lib doesn't load on the current RID. Then rebuild the MCPB; the natives ship inside the self-contained bundle and grow it by a few MB.
-- The Linux assets come via `SkiaSharp.NativeAssets.Linux.NoDependencies` (transitive), so no system `fontconfig`/`freetype` is needed on a headless box. Don't add the plain `SkiaSharp.NativeAssets.Linux` (it pulls those system deps) and keep its version matched to the resolved `SkiaSharp`.
+- The Linux assets come via `SkiaSharp.NativeAssets.Linux.NoDependencies` (transitive), so no system `fontconfig`/`freetype` would be needed on a headless box. (Carried for a *possible future* Linux target only — macOS is the sole supported platform today; nothing fetches a Linux `vec0` and there's no non-launchd service story.) Don't add the plain `SkiaSharp.NativeAssets.Linux` (it pulls those system deps) and keep its version matched to the resolved `SkiaSharp`.
 - `PdfRenderer` is `[SupportedOSPlatform]`-gated to macOS/Linux/Windows; if a bump changes those annotations, the build fails with CA1416 (warnings-as-errors).
 
 ## SQLite itself

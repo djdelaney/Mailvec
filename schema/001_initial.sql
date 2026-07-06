@@ -16,7 +16,8 @@ PRAGMA foreign_keys = ON;
 --
 -- attachment_text is the same idea applied to extracted document content:
 -- a denormalized space-joined concatenation of attachments.extracted_text for
--- every attachment whose extraction_status='done'. Fed into messages_fts so
+-- every attachment with non-empty extracted_text (status 'done' or 'ocr' —
+-- BuildAttachmentText keys off text presence, not status). Fed into messages_fts so
 -- BM25 keyword search can match terms from PDF / DOCX bodies (otherwise a
 -- message with body_text="Sent from my iPhone" + a PFAS-quote PDF attachment
 -- is keyword-invisible). attachments.extracted_text remains the source of
@@ -98,11 +99,15 @@ END;
 
 -- Per-attachment metadata. Replaced wholesale on every message upsert that
 -- detects body content changes; preserved across no-op rescans so extracted
--- text isn't thrown away. part_index is the order within mime.Attachments and
--- is what get_attachment(id, partIndex) keys on. extracted_text holds the
--- plain text recovered from PDF/DOCX/TXT bodies; extraction_status records
--- whether extraction was attempted and how it ended ('done', 'unsupported',
--- 'oversize', 'no_text', 'failed', or NULL = not yet attempted).
+-- text isn't thrown away. part_index maps to a MIME part via
+-- MessageParts.Indexable (mime.Attachments FIRST, then inline images
+-- appended — the single enumeration shared by writer and readers; see
+-- CLAUDE.md) and is what get_attachment(id, partIndex) keys on.
+-- extracted_text holds the plain text recovered from PDF/DOCX/TXT bodies;
+-- extraction_status records whether extraction was attempted and how it
+-- ended ('done', 'ocr', 'unsupported', 'oversize', 'no_text', 'encrypted',
+-- 'failed', or NULL = not yet attempted) — the stable enum on
+-- AttachmentTextExtractor.
 CREATE TABLE attachments (
     id                 INTEGER PRIMARY KEY,
     message_id         INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
