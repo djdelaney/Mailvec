@@ -37,7 +37,19 @@ is used only for OCR rasterisation in the embedder/MCP, never the indexer.)
 | DOCX / XLSX / PPTX | DocumentFormat.OpenXml (MIT) | DOCX paragraphs; XLSX sheet names + shared-string table; PPTX slide text runs |
 | iCalendar (.ics) | hand-rolled | unfolded SUMMARY / LOCATION / DTSTART / ORGANIZER / ATTENDEE, machine noise dropped |
 | vCard (.vcf) | hand-rolled | unfolded name / org / title / email / phone / address / note; QP-decoded; PHOTO blob dropped |
-| plain text | — | UTF-8, Windows-1252 fallback |
+| plain text | — | declared MIME charset first (strict), then UTF-8, then Windows-1252 |
+
+**Charset ladder** (`AttachmentTextExtractor.DecodeTextBytes`, shared by the
+plain-text / iCalendar / vCard paths): a declared **non-Latin** charset
+(ISO-2022-JP, Shift-JIS, GB2312, EUC-KR, KOI8-R, …) is tried first, strictly —
+those byte streams also "decode" under UTF-8 or 1252 (ISO-2022-JP is pure
+7-bit), so the old UTF-8→1252 ladder silently indexed them as mojibake stamped
+`done`. Declared **Latin-family** charsets (utf-8, us-ascii, iso-8859-1,
+windows-1252) do *not* get first slot: single-byte Latin maps accept every byte
+so "decoded without error" proves nothing, and the one common mislabel there —
+real UTF-8 marked iso-8859-1 — is exactly what strict-UTF-8-first catches.
+Unknown charset names fall through to the UTF-8→1252 ladder. Rows mojibake'd
+before this fix are recovered by `mailvec extract-attachments --reextract-text`.
 
 **Routing** (`AttachmentTextExtractor.ResolveFormat`) trusts the content-type
 first, then falls back to the filename extension — senders mislabel constantly

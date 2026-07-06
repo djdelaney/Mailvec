@@ -38,15 +38,18 @@ namespace Mailvec.Cli.Commands;
 /// just roll back, the next run picks up where we left off.
 ///
 /// <para>The <c>--reextract-*</c> flags (<c>calendar</c> / <c>vcard</c> /
-/// <c>office</c>) switch the candidate predicate from "status IS NULL" to "looks
-/// like that format (by content-type or extension), regardless of current
-/// status". These are the one-time backfills for the routing/format additions:
-/// rows previously stamped <c>unsupported</c> (e.g. octet-stream .ics / .vcf, or
-/// any .xlsx/.pptx) get recovered, and rows already stamped through an old raw
-/// path get re-extracted through the new handler. The coarse SQL gate is
-/// intentionally over-inclusive — <see cref="AttachmentTextExtractor"/> remains
-/// the authority on the actual format, so a false-positive row just re-stamps to
-/// whatever it was.</para>
+/// <c>office</c> / <c>text</c>) switch the candidate predicate from "status IS
+/// NULL" to "looks like that format (by content-type or extension), regardless
+/// of current status". These are the one-time backfills for the routing/format
+/// additions: rows previously stamped <c>unsupported</c> (e.g. octet-stream
+/// .ics / .vcf, or any .xlsx/.pptx) get recovered, and rows already stamped
+/// through an old raw path get re-extracted through the new handler
+/// (<c>--reextract-text</c> is the backfill for the declared-charset decode
+/// fix — rows whose non-Latin text was mojibake'd through the old UTF-8→1252
+/// ladder and stamped 'done'). The coarse SQL gate is intentionally
+/// over-inclusive — <see cref="AttachmentTextExtractor"/> remains the authority
+/// on the actual format, so a false-positive row just re-stamps to whatever it
+/// was.</para>
 /// </summary>
 internal static class ExtractAttachmentsCommand
 {
@@ -58,6 +61,7 @@ internal static class ExtractAttachmentsCommand
         var reextractCalendarOpt = new Option<bool>("--reextract-calendar") { Description = "Re-extract calendar (.ics / text-calendar / application-ics) attachments regardless of current status, applying the unfold + field-extraction pass. One-time backfill for the calendar-MIME routing fix." };
         var reextractVCardOpt = new Option<bool>("--reextract-vcard") { Description = "Re-extract vCard (.vcf / text-vcard) attachments regardless of current status. One-time backfill for the vCard-MIME routing fix. Mutually exclusive with the other --reextract-* flags; run one at a time." };
         var reextractOfficeOpt = new Option<bool>("--reextract-office") { Description = "Re-extract Office Open XML spreadsheets (.xlsx) and presentations (.pptx) regardless of current status. One-time backfill for the xlsx/pptx extractor. Mutually exclusive with the other --reextract-* flags; run one at a time." };
+        var reextractTextOpt = new Option<bool>("--reextract-text") { Description = "Re-extract text-shaped attachments (text/* content types, .txt/.md/.csv/.log) regardless of current status. One-time backfill for the declared-charset decode fix — recovers non-Latin (ISO-2022-JP, Shift-JIS, GB2312, …) text that the old UTF-8→Windows-1252 ladder indexed as mojibake. Mutually exclusive with the other --reextract-* flags; run one at a time." };
 
         var cmd = new Command("extract-attachments", "Backfill attachment-text extraction for messages where the indexer never ran the extractor (v3->v4 upgrade path or pre-Phase-4.5 ingest).")
         {
@@ -67,6 +71,7 @@ internal static class ExtractAttachmentsCommand
             reextractCalendarOpt,
             reextractVCardOpt,
             reextractOfficeOpt,
+            reextractTextOpt,
         };
 
         cmd.SetAction(parse => Run(
@@ -77,6 +82,7 @@ internal static class ExtractAttachmentsCommand
             reextractKind: parse.GetValue(reextractCalendarOpt) ? "calendar"
                 : parse.GetValue(reextractVCardOpt) ? "vcard"
                 : parse.GetValue(reextractOfficeOpt) ? "office"
+                : parse.GetValue(reextractTextOpt) ? "text"
                 : null));
         return cmd;
     }
@@ -119,6 +125,18 @@ internal static class ExtractAttachmentsCommand
                     'application/vnd.openxmlformats-officedocument.presentationml.presentation')
                 OR lower({col}.filename) LIKE '%.xlsx'
                 OR lower({col}.filename) LIKE '%.pptx'
+            )
+            """,
+        // Over-inclusive on purpose: text/% also catches text/calendar and
+        // text/vcard, which just re-route through their own handlers and
+        // re-stamp identically. The extractor is the authority.
+        "text" => $"""
+            (
+                lower({col}.content_type) LIKE 'text/%'
+                OR lower({col}.filename) LIKE '%.txt'
+                OR lower({col}.filename) LIKE '%.md'
+                OR lower({col}.filename) LIKE '%.csv'
+                OR lower({col}.filename) LIKE '%.log'
             )
             """,
         _ => $"{col}.extraction_status IS NULL",
@@ -294,7 +312,13 @@ internal static class ExtractAttachmentsCommand
             return false;
         }
 
-        var entitiesByPart = mime.Attachments
+        // MessageParts.Indexable — not mime.Attachments — per the part_index
+        // invariant: the writer (MessageParser) enumerates attachments first,
+        // then appends inline images, so an inline-image row's part_index only
+        // resolves through the same enumeration. With mime.Attachments alone,
+        // any candidate row pointing at an inline part would be mis-stamped
+        // 'failed' as "part doesn't exist".
+        var entitiesByPart = MessageParts.Indexable(mime)
             .Select((entity, index) => (PartIndex: index, Entity: entity))
             .ToDictionary(x => x.PartIndex, x => x.Entity);
 

@@ -154,6 +154,84 @@ public class AttachmentTextExtractorTests
         result.Text.ShouldBeNull();
     }
 
+    // ---------- Declared-charset decode ladder ----------
+    // Legacy multi-byte encodings whose bytes ALSO "decode" under the old
+    // UTF-8→Windows-1252 ladder: ISO-2022-JP is pure 7-bit (valid UTF-8),
+    // Shift-JIS bytes map under 1252 — both produced mojibake stamped 'done'.
+
+    private static System.Text.Encoding Legacy(string name)
+    {
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        return System.Text.Encoding.GetEncoding(name);
+    }
+
+    [Fact]
+    public void Decodes_iso2022jp_text_via_declared_charset()
+    {
+        // ISO-2022-JP is 7-bit: without honoring the declared charset, strict
+        // UTF-8 "succeeds" and indexes the raw escape-sequence bytes.
+        var bytes = Legacy("iso-2022-jp").GetBytes("会議の議事録 meeting notes");
+        var part = BuildMimePart(bytes, "text/plain; charset=iso-2022-jp", "notes.txt");
+
+        var result = BuildExtractor().Extract(part, "notes.txt", "text/plain", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text!.ShouldContain("会議の議事録");
+        result.Text!.ShouldContain("meeting notes");
+    }
+
+    [Fact]
+    public void Decodes_shift_jis_text_via_declared_charset()
+    {
+        var bytes = Legacy("shift_jis").GetBytes("請求書を添付します");
+        var part = BuildMimePart(bytes, "text/plain; charset=shift_jis", "invoice.txt");
+
+        var result = BuildExtractor().Extract(part, "invoice.txt", "text/plain", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text!.ShouldContain("請求書");
+    }
+
+    [Fact]
+    public void Utf8_content_mislabeled_as_latin1_still_decodes_as_utf8()
+    {
+        // The one common Latin-family lie: real UTF-8 marked iso-8859-1.
+        // Declared-first would mojibake it (8859-1 never fails), so the
+        // Latin family is excluded from declared-first and strict UTF-8 wins.
+        var bytes = System.Text.Encoding.UTF8.GetBytes("Café naïve résumé");
+        var part = BuildMimePart(bytes, "text/plain; charset=iso-8859-1", "memo.txt");
+
+        var result = BuildExtractor().Extract(part, "memo.txt", "text/plain", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text!.ShouldContain("Café naïve résumé");
+    }
+
+    [Fact]
+    public void Unknown_charset_falls_back_to_utf8_ladder()
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes("plain enough text");
+        var part = BuildMimePart(bytes, "text/plain; charset=x-no-such-charset", "odd.txt");
+
+        var result = BuildExtractor().Extract(part, "odd.txt", "text/plain", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text!.ShouldContain("plain enough text");
+    }
+
+    [Fact]
+    public void Calendar_honors_declared_charset()
+    {
+        var ics = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:新年会 New Year party\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        var bytes = Legacy("shift_jis").GetBytes(ics);
+        var part = BuildMimePart(bytes, "text/calendar; charset=shift_jis", "invite.ics");
+
+        var result = BuildExtractor().Extract(part, "invite.ics", "text/calendar", bytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text!.ShouldContain("新年会");
+    }
+
     [Fact]
     public void Falls_back_to_extension_when_content_type_is_octet_stream()
     {

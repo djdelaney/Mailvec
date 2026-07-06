@@ -108,15 +108,19 @@ public sealed class AttachmentTextExtractor(
             return new ExtractionResult(null, StatusOversize);
         }
 
+        // The declared MIME charset only matters for the three text-shaped
+        // formats — the office/PDF containers carry their own encoding.
+        var declaredCharset = entity.ContentType?.Charset;
+
         return format switch
         {
             AttachmentFormat.Pdf => ExtractPdf(bytes, fileName),
             AttachmentFormat.Docx => ExtractDocx(bytes, fileName),
             AttachmentFormat.Xlsx => ExtractXlsx(bytes, fileName),
             AttachmentFormat.Pptx => ExtractPptx(bytes, fileName),
-            AttachmentFormat.Calendar => ExtractCalendar(bytes),
-            AttachmentFormat.VCard => ExtractVCard(bytes),
-            AttachmentFormat.Text => ExtractText(bytes),
+            AttachmentFormat.Calendar => ExtractCalendar(bytes, declaredCharset),
+            AttachmentFormat.VCard => ExtractVCard(bytes, declaredCharset),
+            AttachmentFormat.Text => ExtractText(bytes, declaredCharset),
             _ => new ExtractionResult(null, StatusUnsupported),
         };
     }
@@ -312,16 +316,78 @@ public sealed class AttachmentTextExtractor(
         }
     }
 
-    private static ExtractionResult ExtractText(byte[] bytes)
+    private static ExtractionResult ExtractText(byte[] bytes, string? declaredCharset)
     {
-        // Strict UTF-8 first; many "text/plain" attachments are actually
-        // Windows-1252 (legacy mailers, exported notes). Falling back to that
-        // covers the vast majority of remaining cases without dragging in a
-        // full charset detector.
-        string? decoded = TryDecode(bytes, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
-        decoded ??= TryDecode(bytes, Windows1252);
+        string? decoded = DecodeTextBytes(bytes, declaredCharset);
         if (decoded is null) return new ExtractionResult(null, StatusFailed);
         return BuildResult(decoded);
+    }
+
+    /// <summary>
+    /// Shared decode ladder for text-shaped attachments (plain text, iCalendar,
+    /// vCard). Order:
+    ///
+    ///   1. The declared MIME charset (strict), when it names a non-Latin
+    ///      encoding. ISO-2022-JP is pure 7-bit (its escape sequences are
+    ///      ASCII), so it decodes "successfully" as UTF-8; Shift-JIS / GB2312 /
+    ///      EUC-KR / KOI8-R bytes decode "successfully" as Windows-1252 — in
+    ///      both cases the old UTF-8→1252 ladder produced mojibake stamped
+    ///      'done': silent quality corruption with nothing to ever trigger
+    ///      re-extraction (`extract-attachments --reextract-text` is the
+    ///      backfill once this is fixed).
+    ///   2. Strict UTF-8 — the de-facto default, and the correct reading for
+    ///      the one common mislabel in the Latin family (UTF-8 content marked
+    ///      iso-8859-1/windows-1252): genuine Latin-1 text is essentially
+    ///      never valid multi-byte UTF-8, which is why a declared Latin
+    ///      charset does NOT take slot 1.
+    ///   3. The declared charset even if Latin (distinguishes 8859-1 from
+    ///      1252 in the 0x80–0x9F range), then Windows-1252, which never
+    ///      fails — every byte maps.
+    /// </summary>
+    private static string? DecodeTextBytes(byte[] bytes, string? declaredCharset)
+    {
+        var declared = ResolveStrictEncoding(declaredCharset);
+        if (declared is not null && !IsLatinFamily(declaredCharset!))
+        {
+            var viaDeclared = TryDecode(bytes, declared);
+            if (viaDeclared is not null) return viaDeclared;
+        }
+
+        return TryDecode(bytes, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true))
+            ?? (declared is not null ? TryDecode(bytes, declared) : null)
+            ?? TryDecode(bytes, Windows1252);
+    }
+
+    /// <summary>
+    /// Encodings where "decoded without error" carries no signal (single-byte
+    /// maps accept every byte) or that the UTF-8 step already covers. For
+    /// these, strict UTF-8 goes first; for everything else the sender's label
+    /// is the best evidence we have.
+    /// </summary>
+    private static bool IsLatinFamily(string charset) => charset.Trim().ToLowerInvariant() is
+        "utf-8" or "utf8" or "us-ascii" or "ascii" or
+        "iso-8859-1" or "iso8859-1" or "latin1" or "l1" or "cp819" or
+        "windows-1252" or "cp1252" or "x-cp1252";
+
+    /// <summary>
+    /// Resolve a MIME charset name to a strict (throw-on-invalid-byte)
+    /// encoding, or null when the name is missing/unknown — unknown labels
+    /// fall back to the UTF-8→1252 ladder rather than failing extraction.
+    /// </summary>
+    private static Encoding? ResolveStrictEncoding(string? charset)
+    {
+        if (string.IsNullOrWhiteSpace(charset)) return null;
+        try
+        {
+            // CodePagesEncodingProvider is registered in the static ctor, so
+            // legacy names (shift_jis, gb2312, koi8-r, iso-2022-jp, …) resolve.
+            return Encoding.GetEncoding(charset.Trim(),
+                EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -335,12 +401,12 @@ public sealed class AttachmentTextExtractor(
     /// the summary / location / description / dates / participant names instead
     /// of protocol scaffolding.
     /// </summary>
-    private static ExtractionResult ExtractCalendar(byte[] bytes)
+    private static ExtractionResult ExtractCalendar(byte[] bytes, string? declaredCharset)
     {
         // Same decode ladder as ExtractText — .ics is UTF-8 by spec but legacy
-        // exporters (Outlook .vcs) still emit Windows-1252.
-        string? decoded = TryDecode(bytes, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
-        decoded ??= TryDecode(bytes, Windows1252);
+        // exporters (Outlook .vcs) still emit Windows-1252 or a declared
+        // regional codepage.
+        string? decoded = DecodeTextBytes(bytes, declaredCharset);
         if (decoded is null) return new ExtractionResult(null, StatusFailed);
 
         var sb = new StringBuilder(Math.Min(bytes.Length, 8_192));
@@ -388,10 +454,9 @@ public sealed class AttachmentTextExtractor(
     /// rest. FN is the display name; N is the structured fallback when FN is
     /// absent. ORG/N/ADR are ';'-delimited structured values, joined readably.
     /// </summary>
-    private static ExtractionResult ExtractVCard(byte[] bytes)
+    private static ExtractionResult ExtractVCard(byte[] bytes, string? declaredCharset)
     {
-        string? decoded = TryDecode(bytes, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true));
-        decoded ??= TryDecode(bytes, Windows1252);
+        string? decoded = DecodeTextBytes(bytes, declaredCharset);
         if (decoded is null) return new ExtractionResult(null, StatusFailed);
 
         var sb = new StringBuilder(Math.Min(bytes.Length, 4_096));
