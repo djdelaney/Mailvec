@@ -52,9 +52,13 @@ enum WireDecoder {
         if fraction.count >= 3 {
             normalisedFraction = String(fraction.prefix(3))
         } else {
-            normalisedFraction = fraction + String(repeating: "0", count: 3 - fraction.count)
+            normalisedFraction = String(fraction) + String(repeating: "0", count: 3 - fraction.count)
         }
-        return s[..<fracStart] + normalisedFraction + s[fracEnd...]
+        // Explicit String() around each Substring: mixed Substring/String `+`
+        // chains resolve differently across Swift compiler versions — this
+        // exact line compiled on one Xcode and failed CI on the next runner
+        // image ("cannot convert String.SubSequence to String").
+        return String(s[..<fracStart]) + normalisedFraction + String(s[fracEnd...])
     }
 }
 
