@@ -94,9 +94,24 @@ public sealed class MessageRepository(ConnectionFactory connections)
                 )
                 ON CONFLICT(message_id) DO UPDATE SET
                     thread_id        = excluded.thread_id,
-                    maildir_path     = excluded.maildir_path,
-                    maildir_filename = excluded.maildir_filename,
-                    folder           = excluded.folder,
+                    -- Folder attribution is FIRST-SEEN-WINS, not last-writer.
+                    -- A message can live in several folders at once (Gmail's
+                    -- All Mail + labels, self-CC INBOX + Sent); taking
+                    -- excluded here made the attributed folder whichever copy
+                    -- the scan happened to parse last — arbitrary, and it
+                    -- flapped between scans. Keep the stored (folder, path,
+                    -- filename) triple as a unit while the row is live; when
+                    -- the stored copy's file vanishes, the scanner's rename-
+                    -- repair pass (which detects the stale path at the end of
+                    -- the same scan) repoints all three to a surviving copy.
+                    -- The one exception is resurrection: deleted_at below is
+                    -- reset to NULL, and a soft-deleted row's stored path is
+                    -- exactly the file that disappeared — its sync_state rows
+                    -- are long gone, so no repair pass would ever fix it.
+                    -- Take the new copy's location in that case.
+                    maildir_path     = CASE WHEN messages.deleted_at IS NULL THEN messages.maildir_path     ELSE excluded.maildir_path     END,
+                    maildir_filename = CASE WHEN messages.deleted_at IS NULL THEN messages.maildir_filename ELSE excluded.maildir_filename END,
+                    folder           = CASE WHEN messages.deleted_at IS NULL THEN messages.folder           ELSE excluded.folder           END,
                     subject          = excluded.subject,
                     from_address     = excluded.from_address,
                     from_name        = excluded.from_name,
@@ -450,31 +465,66 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// One row per non-empty folder, sorted by name. Soft-deleted messages are
     /// excluded from the count. Useful for the `list_folders` MCP tool so
     /// Claude knows what folders exist before filtering by one.
+    ///
+    /// Counts come from folder membership (sync_state, v8) so a message living
+    /// in several folders (Gmail All Mail + labels) counts in each — matching
+    /// what a folder-filtered search would return. A message counts once per
+    /// folder even when a folder holds two copies of it. Falls back to the
+    /// legacy attributed-folder grouping while sync_state.folder is still
+    /// unpopulated (the window between the v8 migration and the scanner's
+    /// next full scan).
     /// </summary>
     public IReadOnlyList<FolderStats> FolderStats()
     {
         using var conn = connections.Open();
+
+        bool hasMembership;
+        using (var probe = conn.CreateCommand())
+        {
+            probe.CommandText = "SELECT EXISTS(SELECT 1 FROM sync_state WHERE folder IS NOT NULL)";
+            hasMembership = Convert.ToInt64(probe.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 1;
+        }
+
         using var cmd = conn.CreateCommand();
         // oldest/latest via ORDER BY datetime() LIMIT 1 rather than MIN/MAX on
         // the raw string: date_sent mixes UTC 'Z' and '+HH:mm' offsets, so a
         // lexical MIN/MAX can pick the wrong extreme. The subquery returns the
         // original offset-bearing string so the caller still parses a correct
         // DateTimeOffset.
-        cmd.CommandText = """
-            SELECT
-                m.folder,
-                COUNT(*) AS msg_count,
-                (SELECT o.date_sent FROM messages o
-                   WHERE o.folder = m.folder AND o.deleted_at IS NULL AND o.date_sent IS NOT NULL
-                   ORDER BY datetime(o.date_sent) ASC LIMIT 1) AS oldest_date,
-                (SELECT n.date_sent FROM messages n
-                   WHERE n.folder = m.folder AND n.deleted_at IS NULL AND n.date_sent IS NOT NULL
-                   ORDER BY datetime(n.date_sent) DESC LIMIT 1) AS latest_date
-            FROM messages m
-            WHERE m.deleted_at IS NULL
-            GROUP BY m.folder
-            ORDER BY m.folder;
-            """;
+        cmd.CommandText = hasMembership
+            ? """
+              SELECT
+                  ss.folder,
+                  COUNT(DISTINCT ss.message_id) AS msg_count,
+                  (SELECT o.date_sent FROM messages o
+                     JOIN sync_state so ON so.message_id = o.message_id AND so.folder = ss.folder
+                     WHERE o.deleted_at IS NULL AND o.date_sent IS NOT NULL
+                     ORDER BY datetime(o.date_sent) ASC LIMIT 1) AS oldest_date,
+                  (SELECT n.date_sent FROM messages n
+                     JOIN sync_state sn ON sn.message_id = n.message_id AND sn.folder = ss.folder
+                     WHERE n.deleted_at IS NULL AND n.date_sent IS NOT NULL
+                     ORDER BY datetime(n.date_sent) DESC LIMIT 1) AS latest_date
+              FROM sync_state ss
+              JOIN messages m ON m.message_id = ss.message_id AND m.deleted_at IS NULL
+              WHERE ss.folder IS NOT NULL
+              GROUP BY ss.folder
+              ORDER BY ss.folder;
+              """
+            : """
+              SELECT
+                  m.folder,
+                  COUNT(*) AS msg_count,
+                  (SELECT o.date_sent FROM messages o
+                     WHERE o.folder = m.folder AND o.deleted_at IS NULL AND o.date_sent IS NOT NULL
+                     ORDER BY datetime(o.date_sent) ASC LIMIT 1) AS oldest_date,
+                  (SELECT n.date_sent FROM messages n
+                     WHERE n.folder = m.folder AND n.deleted_at IS NULL AND n.date_sent IS NOT NULL
+                     ORDER BY datetime(n.date_sent) DESC LIMIT 1) AS latest_date
+              FROM messages m
+              WHERE m.deleted_at IS NULL
+              GROUP BY m.folder
+              ORDER BY m.folder;
+              """;
 
         var results = new List<FolderStats>();
         using var reader = cmd.ExecuteReader();

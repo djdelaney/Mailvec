@@ -2,7 +2,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Mailvec.Core.Data;
 
-public sealed record SyncStateEntry(string MaildirFullPath, string? MessageId, DateTimeOffset LastSeenAt, string? ContentHash);
+public sealed record SyncStateEntry(string MaildirFullPath, string? MessageId, DateTimeOffset LastSeenAt, string? ContentHash, string? Folder = null);
 
 public sealed class SyncStateRepository(ConnectionFactory connections)
 {
@@ -22,7 +22,7 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            SELECT maildir_full_path, message_id, last_seen_at, content_hash
+            SELECT maildir_full_path, message_id, last_seen_at, content_hash, folder
             FROM sync_state
             WHERE maildir_full_path = $path
             """;
@@ -34,25 +34,32 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
             MaildirFullPath: reader.GetString(0),
             MessageId: reader.IsDBNull(1) ? null : reader.GetString(1),
             LastSeenAt: DateTimeOffset.Parse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture),
-            ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3));
+            ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3),
+            Folder: reader.IsDBNull(4) ? null : reader.GetString(4));
     }
 
-    public void Upsert(SqliteConnection conn, SqliteTransaction tx, string maildirFullPath, string? messageId, DateTimeOffset lastSeenAt, string? contentHash = null)
+    // `folder` has no default on purpose: sync_state doubles as the
+    // folder-membership table for search (SearchFilterSql's EXISTS probe and
+    // FolderStats both read it), so every writer must supply the copy's folder
+    // or membership silently drifts NULL and folder filters stop matching.
+    public void Upsert(SqliteConnection conn, SqliteTransaction tx, string maildirFullPath, string? messageId, DateTimeOffset lastSeenAt, string? contentHash, string? folder)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO sync_state (maildir_full_path, message_id, last_seen_at, content_hash)
-            VALUES ($path, $mid, $seen, $hash)
+            INSERT INTO sync_state (maildir_full_path, message_id, last_seen_at, content_hash, folder)
+            VALUES ($path, $mid, $seen, $hash, $folder)
             ON CONFLICT(maildir_full_path) DO UPDATE SET
                 message_id   = excluded.message_id,
                 last_seen_at = excluded.last_seen_at,
-                content_hash = excluded.content_hash;
+                content_hash = excluded.content_hash,
+                folder       = excluded.folder;
             """;
         cmd.Parameters.AddWithValue("$path", maildirFullPath);
         cmd.Parameters.AddWithValue("$mid", (object?)messageId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$seen", lastSeenAt.ToString("O"));
         cmd.Parameters.AddWithValue("$hash", (object?)contentHash ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$folder", (object?)folder ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 
@@ -61,7 +68,7 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT maildir_full_path, message_id, last_seen_at, content_hash
+            SELECT maildir_full_path, message_id, last_seen_at, content_hash, folder
             FROM sync_state
             WHERE last_seen_at < $cutoff
             """;
@@ -75,7 +82,8 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
                 MaildirFullPath: reader.GetString(0),
                 MessageId: reader.IsDBNull(1) ? null : reader.GetString(1),
                 LastSeenAt: DateTimeOffset.Parse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture),
-                ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3)));
+                ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3),
+                Folder: reader.IsDBNull(4) ? null : reader.GetString(4)));
         }
         return list;
     }
