@@ -22,8 +22,11 @@ public sealed class ConnectionFactory
             DefaultTimeout = 30,
         }.ToString();
 
-        _vecExtensionPath = ResolveVecExtension(options.Value.SqliteVecExtensionPath);
+        _configuredVecPath = options.Value.SqliteVecExtensionPath;
+        _vecExtensionPath = ResolveVecExtension(_configuredVecPath);
     }
+
+    private readonly string _configuredVecPath;
 
     public SqliteConnection Open()
     {
@@ -34,6 +37,20 @@ public sealed class ConnectionFactory
         {
             conn.EnableExtensions(true);
             conn.LoadExtension(_vecExtensionPath);
+        }
+        else if (!string.IsNullOrWhiteSpace(_configuredVecPath))
+        {
+            // A path was configured but nothing resolved. Proceeding used to
+            // "work" until the first vec0-touching statement — which is the
+            // very next thing on a fresh DB (001_initial.sql declares a vec0
+            // virtual table) — and every CLI command except doctor then died
+            // with a raw `SQLite Error 1: 'no such module: vec0'` stack trace
+            // naming neither the missing file nor the fix.
+            conn.Dispose();
+            throw new InvalidOperationException(
+                $"sqlite-vec extension not found (Archive:SqliteVecExtensionPath = '{_configuredVecPath}', " +
+                "no candidate resolved against the binary or repo directories). " +
+                "Run ops/fetch-sqlite-vec.sh from the repo root, then retry.");
         }
 
         using (var cmd = conn.CreateCommand())

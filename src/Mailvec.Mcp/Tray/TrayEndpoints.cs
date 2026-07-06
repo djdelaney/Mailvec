@@ -148,9 +148,12 @@ public static class TrayEndpoints
         {
             await Task.Yield();
             var msg = messages.GetById(body.MessageId);
-            if (msg is null)
+            // Reject soft-deleted like /tray/email above — a stale search-row
+            // click otherwise reached the Maildir read and surfaced a raw
+            // FileNotFound path instead of a clean "deleted".
+            if (msg is null || msg.DeletedAt is not null)
             {
-                return Results.NotFound(new { error = $"message {body.MessageId} not found" });
+                return Results.NotFound(new { error = $"message {body.MessageId} not found (or deleted)" });
             }
             try
             {

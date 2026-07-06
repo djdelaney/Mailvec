@@ -77,7 +77,16 @@ static async Task RunHttp(string[] args)
         .WithToolsFromAssembly();
 
     var mcpOpts = builder.Configuration.GetSection(McpOptions.SectionName).Get<McpOptions>() ?? new McpOptions();
-    builder.WebHost.ConfigureKestrel(k => k.Listen(System.Net.IPAddress.Parse(mcpOpts.BindAddress), mcpOpts.Port));
+    // TryParse + a named error: Mcp:BindAddress takes an IP literal, and the
+    // natural-looking value "localhost" used to crash with a bare
+    // FormatException pointing nowhere near the config knob.
+    if (!System.Net.IPAddress.TryParse(mcpOpts.BindAddress, out var bindAddress))
+    {
+        throw new InvalidOperationException(
+            $"Mcp:BindAddress '{mcpOpts.BindAddress}' is not an IP address literal. " +
+            "Use 127.0.0.1 (not \"localhost\") or another interface IP.");
+    }
+    builder.WebHost.ConfigureKestrel(k => k.Listen(bindAddress, mcpOpts.Port));
 
     var app = builder.Build();
     WarnIfInstallerNeverRan(app.Services);
