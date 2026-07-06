@@ -13,6 +13,10 @@ struct DashboardView: View {
             // with no marker read as live. This strip is the marker.
             if model.isDisconnected && model.health != nil {
                 DisconnectedBanner()
+            } else if let mismatch = model.versionMismatch {
+                // Tray/server version skew — the wire contract fails silently
+                // (renamed fields decode null), so say it out loud instead.
+                VersionMismatchBanner(tray: mismatch.tray, server: mismatch.server)
             }
             DashboardSearchField(placeholder:
                 "Search \(model.health?.embedded ?? 0) indexed emails…")
@@ -642,6 +646,24 @@ private struct DisconnectedBanner: View {
             return "Server unreachable — showing data from \(relative(at)). Try `ops/redeploy.sh mcp`."
         }
         return "Server unreachable — showing stale data. Try `ops/redeploy.sh mcp`."
+    }
+}
+
+/// Amber strip shown when the tray and server report different versions —
+/// typically `ops/redeploy.sh` ran but `ops/install-tray.sh` didn't.
+private struct VersionMismatchBanner: View {
+    let tray: String
+    let server: String
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+            Text("Tray v\(tray), server v\(server) — update the tray: `ops/install-tray.sh`.")
+                .font(.system(size: 11, weight: .semibold))
+            Spacer()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 7)
+        .foregroundStyle(.white)
+        .background(Brand.statusWarn)
     }
 }
 

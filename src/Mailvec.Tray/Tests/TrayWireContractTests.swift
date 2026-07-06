@@ -46,13 +46,15 @@ final class TrayWireContractTests: XCTestCase {
             "recentEvents": [
                 { "time": "2026-05-14T19:03:42.909+00:00", "kind": "indexed", "text": "Test — alice@example.com", "agent": "indexer", "live": false, "severity": "ok" }
             ],
-            "sparkline": [0, 1, 5, 2, 0]
+            "sparkline": [0, 1, 5, 2, 0],
+            "serverVersion": "0.1.27"
         }
         """.data(using: .utf8)!
 
         let status = try decoder.decode(TrayHealth.self, from: json)
 
         XCTAssertEqual(status.severity, .ok)
+        XCTAssertEqual(status.serverVersion, "0.1.27")
         XCTAssertEqual(status.messages, 12345)
         XCTAssertEqual(status.embedded, 12000)
         XCTAssertEqual(status.chunks, 78901)
@@ -107,6 +109,9 @@ final class TrayWireContractTests: XCTestCase {
         XCTAssertNil(status.lastIndexedAt)
         XCTAssertNil(status.progress)
         XCTAssertTrue(status.services.isEmpty)
+        // Pre-handshake server: serverVersion absent entirely → nil, not a
+        // decode failure (skew tolerance in the older-server direction).
+        XCTAssertNil(status.serverVersion)
         XCTAssertTrue(status.recentEvents.isEmpty)
     }
 

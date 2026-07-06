@@ -116,7 +116,11 @@ public sealed class TrayStatusService(
             Ocr: ocr,
             Progress: progress,
             RecentEvents: recentEvents,
-            Sparkline: sparkline);
+            Sparkline: sparkline,
+            // Core's own assembly version, not GetEntryAssembly(): every
+            // Mailvec assembly is stamped from the one Directory.Build.props
+            // <Version>, and Core's is deterministic under test hosts too.
+            ServerVersion: typeof(TrayStatusService).Assembly.GetName().Version?.ToString(3));
     }
 
     /// <summary>

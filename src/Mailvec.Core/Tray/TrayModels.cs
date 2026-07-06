@@ -25,7 +25,17 @@ public sealed record TrayStatus(
     TrayOcrStatus Ocr,
     TrayEmbedProgress? Progress,
     IReadOnlyList<TrayTimelineEvent> RecentEvents,
-    IReadOnlyList<int> Sparkline);  // 30 buckets of embeddings/min, oldest first
+    IReadOnlyList<int> Sparkline,   // 30 buckets of embeddings/min, oldest first
+    // The version handshake: the tray compares this against its own
+    // CFBundleShortVersionString and shows a "rebuild the tray" banner on
+    // mismatch. The wire contract's documented failure mode is SILENT (a
+    // renamed field decodes as null on the Swift side with no error), so the
+    // handshake is what turns skew into something the user can see. All
+    // artifacts share one version (Directory.Build.props / project.yml, kept
+    // in lockstep by ops/build-mcpb.sh --bump), so equal-version means
+    // matched contract. Trailing + defaulted so tests constructing TrayStatus
+    // positionally keep compiling; null never happens in production.
+    string? ServerVersion = null);
 
 public sealed record TrayServiceStatus(
     string Id,                 // "mbsync" | "indexer" | "embedder" | "mcp"

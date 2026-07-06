@@ -41,6 +41,19 @@ final class TrayModel: ObservableObject {
     /// by SearchView. Distinct from `lastError`: the dashboard's poll errors
     /// and a search failure must not clobber each other's surfaces.
     @Published var searchError: String?
+
+    /// Version handshake against /tray/status's serverVersion. Non-nil when
+    /// both versions are known and differ — the wire contract's failure mode
+    /// is silent (renamed fields decode as null), so skew must be surfaced
+    /// rather than discovered field-by-field. Every artifact shares one
+    /// version, so "equal" is the only in-contract state.
+    var versionMismatch: (tray: String, server: String)? {
+        guard let server = health?.serverVersion,
+              let tray = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+              tray != server
+        else { return nil }
+        return (tray, server)
+    }
     @Published var searchQuery: String = ""
     @Published var searchHits: [SearchHit] = []
     /// True while a `/tray/search` request is in flight. Drives the spinner

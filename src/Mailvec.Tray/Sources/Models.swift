@@ -27,6 +27,10 @@ struct TrayHealth: Codable, Equatable {
     var progress: EmbedProgress?
     var recentEvents: [TimelineEvent]
     var sparkline: [Int]
+    // Version handshake: compared against CFBundleShortVersionString to
+    // surface tray/server skew (whose wire failure mode is otherwise silent
+    // null-decoding). Optional for pre-handshake servers.
+    var serverVersion: String?
 
     var embedCoverage: Double {
         guard embedTotal > 0 else { return 1.0 }
