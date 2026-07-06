@@ -57,7 +57,23 @@ public sealed class SchemaMigrator(
         using var conn = connections.Open();
         var current = ReadSchemaVersion(conn);
 
-        if (current >= LatestSchemaVersion)
+        if (current > LatestSchemaVersion)
+        {
+            // Downgrade guard. An older binary running against a newer DB is
+            // not "already up to date" — it silently lacks whatever invariant
+            // the newer schema exists to enforce (e.g. a pre-v7 binary never
+            // bumps embed_epoch, quietly reintroducing the mid-embed re-queue
+            // clobber that column prevents). Refusing loudly beats corrupting
+            // quietly: the fix is redeploying current binaries
+            // (ops/redeploy.sh) or restoring a matching DB snapshot.
+            throw new InvalidOperationException(
+                $"Database schema is v{current} but this binary only knows v{LatestSchemaVersion} — " +
+                "it is older than the database and may silently violate newer data invariants. " +
+                "Update the binaries (ops/redeploy.sh, or rebuild the MCPB bundle) or restore a " +
+                "database snapshot that matches this binary (ops/import-db.sh).");
+        }
+
+        if (current == LatestSchemaVersion)
         {
             logger.LogDebug("Schema already at version {Version}", current);
             return;
