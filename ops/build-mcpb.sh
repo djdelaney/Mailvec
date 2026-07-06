@@ -43,12 +43,13 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Patch-bump manifest.json in place AND the matching <Version> in
-# Mailvec.Mcp.csproj so the assembly version that surfaces in MCP
-# initialize.serverInfo stays aligned with the bundle the user installed.
-# Regex-targeted at the version fields only so we don't reformat the rest of
-# the files (json.dump would lose key ordering / trailing newlines, and an
-# XML serializer would reflow whitespace).
+# Patch-bump THE Mailvec version in all three places that carry it:
+# manifest.json, the repo-wide <Version> in Directory.Build.props (stamps every
+# .NET binary, surfaces in MCP initialize.serverInfo), and the tray's
+# MARKETING_VERSION in project.yml (so "what version are you running?" has one
+# answer across the whole system). Regex-targeted at the version fields only so
+# we don't reformat the rest of the files (json.dump would lose key ordering /
+# trailing newlines, and an XML serializer would reflow whitespace).
 if [[ $BUMP -eq 1 ]]; then
     python3 - <<'PY'
 import pathlib, re, sys
@@ -65,19 +66,42 @@ new = f"{major}.{minor}.{patch + 1}"
 manifest.write_text(text[:m.start(2)] + new + text[m.end(4):])
 print(f"→ Bumped manifest.json: {old} → {new}")
 
-csproj = pathlib.Path("src/Mailvec.Mcp/Mailvec.Mcp.csproj")
-ctext = csproj.read_text()
-cm = re.search(r"(<Version>)(\d+\.\d+\.\d+)(</Version>)", ctext)
-if not cm:
-    print("ERROR: could not find <Version> in Mailvec.Mcp.csproj", file=sys.stderr)
+props = pathlib.Path("Directory.Build.props")
+ptext = props.read_text()
+pm = re.search(r"(<Version>)(\d+\.\d+\.\d+)(</Version>)", ptext)
+if not pm:
+    print("ERROR: could not find <Version> in Directory.Build.props", file=sys.stderr)
     sys.exit(1)
-csproj.write_text(ctext[:cm.start(2)] + new + ctext[cm.end(2):])
-print(f"→ Bumped Mailvec.Mcp.csproj <Version>: {cm.group(2)} → {new}")
+props.write_text(ptext[:pm.start(2)] + new + ptext[pm.end(2):])
+print(f"→ Bumped Directory.Build.props <Version>: {pm.group(2)} → {new}")
+
+tray = pathlib.Path("src/Mailvec.Tray/project.yml")
+ttext = tray.read_text()
+tm = re.search(r'(MARKETING_VERSION:\s*")(\d+\.\d+\.\d+)(")', ttext)
+if not tm:
+    print("ERROR: could not find MARKETING_VERSION in src/Mailvec.Tray/project.yml", file=sys.stderr)
+    sys.exit(1)
+tray.write_text(ttext[:tm.start(2)] + new + ttext[tm.end(2):])
+print(f"→ Bumped project.yml MARKETING_VERSION: {tm.group(2)} → {new}")
+print(f"→ After committing, tag the release: git tag v{new}")
 PY
 fi
 
-# Read version from manifest so the artifact filename matches.
-VERSION="$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')"
+# Read version from manifest so the artifact filename matches, and verify the
+# three version carriers are in lockstep — a drifted version means an
+# installed bundle whose serverInfo (or tray About) lies about what it is.
+VERSION="$(python3 - <<'PY'
+import json, pathlib, re, sys
+manifest = json.load(open("manifest.json"))["version"]
+props = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", pathlib.Path("Directory.Build.props").read_text()).group(1)
+tray = re.search(r'MARKETING_VERSION:\s*"(\d+\.\d+\.\d+)"', pathlib.Path("src/Mailvec.Tray/project.yml").read_text()).group(1)
+if not (manifest == props == tray):
+    print(f"ERROR: version drift — manifest.json={manifest} Directory.Build.props={props} project.yml={tray}. "
+          "Re-align them (ops/build-mcpb.sh --bump keeps them in lockstep).", file=sys.stderr)
+    sys.exit(1)
+print(manifest)
+PY
+)"
 RID="osx-arm64"   # Apple Silicon only — Intel is unsupported (see README Requirements)
 
 if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then

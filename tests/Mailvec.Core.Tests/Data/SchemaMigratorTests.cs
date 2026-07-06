@@ -35,6 +35,28 @@ public class SchemaMigratorTests
     }
 
     [Fact]
+    public void Older_binary_refuses_a_newer_database()
+    {
+        // Downgrade guard: a binary whose LatestSchemaVersion is behind the
+        // DB's stamped version must refuse to run, not proceed silently — it
+        // lacks whatever invariant the newer schema enforces (the concrete
+        // horror story: a pre-v7 binary never bumps embed_epoch).
+        using var db = new TempDatabase(); // fresh DB at LatestSchemaVersion
+        using (var conn = db.Connections.Open())
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE metadata SET value = $v WHERE key = 'schema_version'";
+            cmd.Parameters.AddWithValue("$v", (SchemaMigrator.LatestSchemaVersion + 1).ToString());
+            cmd.ExecuteNonQuery();
+        }
+
+        var migrator = new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance);
+        var ex = Should.Throw<InvalidOperationException>(() => migrator.EnsureUpToDate());
+        ex.Message.ShouldContain("older than the database");
+        ex.Message.ShouldContain("redeploy");
+    }
+
+    [Fact]
     public void ExecuteScript_skips_re_apply_when_guard_version_is_already_met()
     {
         // The concurrent-starter loser: the DB is already migrated, so a guarded

@@ -1,16 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <PropertyGroup>
-    <!--
-      Version surfaced to MCP clients via initialize.serverInfo.version (read in
-      Program.cs from Assembly.GetEntryAssembly().GetName().Version). Keep in
-      sync with manifest.json's "version" field; ops/build-mcpb.sh "bump"
-      updates both atomically. Bumps are part of the API-stability story:
-      Phase 5 expects multiple non-Claude clients to depend on the tool surface,
-      so version drift between manifest and binary would make triage painful.
-    -->
-    <Version>0.1.27</Version>
-  </PropertyGroup>
+  <!--
+    The version surfaced via initialize.serverInfo.version comes from the
+    repo-wide <Version> in Directory.Build.props (one version for all four
+    binaries + manifest.json + the tray). ops/build-mcpb.sh "bump" updates
+    all of them atomically — don't add a per-project override here.
+  -->
 
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" />

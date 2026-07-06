@@ -41,6 +41,10 @@ internal static class StatusCommand
         var schemaModel = metadata.Get("embedding_model") ?? "(not set)";
         var schemaDim = metadata.Get("embedding_dimensions") ?? "(not set)";
 
+        // The unified Mailvec version (Directory.Build.props stamps every
+        // binary) + schema version: the two numbers support triage needs first.
+        var version = typeof(StatusCommand).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+        @out.WriteLine($"Mailvec:     v{version} (schema v{metadata.Get("schema_version") ?? "?"})");
         @out.WriteLine($"Database:    {Mailvec.Core.PathExpansion.Expand(archive.DatabasePath)}");
         @out.WriteLine($"Maildir:     {Mailvec.Core.PathExpansion.Expand(ingest.MaildirRoot)}");
         @out.WriteLine();

@@ -15,10 +15,13 @@
 ops/build-mcpb.sh --bump
 ```
 
-This patch-bumps `manifest.json`, rebuilds, and `open`s the new `.mcpb` (which Claude Desktop intercepts as an install prompt). Then in Settings → Extensions toggle Mailvec off and confirm the install, quit + relaunch.
+This patch-bumps **the** Mailvec version — `manifest.json`, the repo-wide `<Version>` in `Directory.Build.props` (stamps all four .NET binaries), and the tray's `MARKETING_VERSION` in `project.yml`, atomically — rebuilds, and `open`s the new `.mcpb` (which Claude Desktop intercepts as an install prompt). Then in Settings → Extensions toggle Mailvec off and confirm the install, quit + relaunch.
 
 - Toggling off (vs uninstalling) preserves user_config values across upgrades.
 - Without a version bump, Claude Desktop silently ignores the re-install — plain `build-mcpb.sh` is fine for "rebuild and inspect locally" but `--bump` is what you need to actually swap the running binary.
+- The non-bump build verifies the three version carriers are in lockstep and fails on drift, so a hand-edited version can't ship half-applied.
+- **Tag after bumping**: commit the bump, then `git tag v<version> && git push --tags` (if there's a remote). The tag is the known-good rollback point — `ops/redeploy.sh` overwrites binaries in place, so the tag is the only durable record of what a user's install corresponds to.
+- After bumping, `ops/redeploy.sh` + `ops/install-tray.sh` bring the launchd services and tray to the same version as the bundle — `mailvec status` prints the running version for triage.
 
 ## Manifest authoring
 
