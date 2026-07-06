@@ -1,5 +1,8 @@
 using System.ComponentModel;
+using Mailvec.Core;
 using Mailvec.Core.Data;
+using Mailvec.Core.Options;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 
 namespace Mailvec.Mcp.Tools;
@@ -10,7 +13,7 @@ namespace Mailvec.Mcp.Tools;
 /// filter — without this, Claude has to guess names like "INBOX" or "Archive".
 /// </summary>
 [McpServerToolType]
-public sealed class ListFoldersTool(MessageRepository messages, ToolCallLogger callLog)
+public sealed class ListFoldersTool(MessageRepository messages, IOptions<ArchiveOptions> archiveOptions, ToolCallLogger callLog)
 {
     private const string ToolName = "list_folders";
 
@@ -23,7 +26,13 @@ public sealed class ListFoldersTool(MessageRepository messages, ToolCallLogger c
     {
         var startTs = callLog.LogCall(ToolName, new { });
         var stats = messages.FolderStats();
-        var response = new ListFoldersResponse(stats.Count, stats);
+        // An empty folder list is an empty archive — same "why" hint as
+        // search_emails so the client LLM can explain instead of guessing.
+        var setupHint = stats.Count > 0 ? null : SetupHints.EmptyArchiveHint(
+            totalMessages: 0,
+            SharedConfig.SharedConfigFileExists(),
+            PathExpansion.Expand(archiveOptions.Value.DatabasePath));
+        var response = new ListFoldersResponse(stats.Count, stats, setupHint);
         callLog.LogResult(ToolName, new { count = response.Count }, startTs);
         return response;
     }
@@ -31,4 +40,6 @@ public sealed class ListFoldersTool(MessageRepository messages, ToolCallLogger c
 
 public sealed record ListFoldersResponse(
     int Count,
-    IReadOnlyList<Mailvec.Core.Models.FolderStats> Folders);
+    IReadOnlyList<Mailvec.Core.Models.FolderStats> Folders,
+    // Additive: populated only when there are no folders at all. See SetupHints.
+    string? SetupHint = null);

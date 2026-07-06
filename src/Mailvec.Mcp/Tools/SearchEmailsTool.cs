@@ -24,11 +24,13 @@ public sealed class SearchEmailsTool(
     IOptions<McpOptions> mcpOptions,
     IOptions<FastmailOptions> fastmailOptions,
     IOptions<OllamaOptions> ollamaOptions,
+    IOptions<ArchiveOptions> archiveOptions,
     ToolCallLogger callLog)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
     private readonly OllamaOptions _ollama = ollamaOptions.Value;
+    private readonly ArchiveOptions _archive = archiveOptions.Value;
     private const string ToolName = "search_emails";
 
     [McpServerTool(Name = "search_emails")]
@@ -96,13 +98,20 @@ public sealed class SearchEmailsTool(
         var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact);
         var archiveStats = messages.GetArchiveStats();
         var appliedFilters = AppliedFilters.From(filters);
+        // Non-null only when the archive has zero messages: tells the client
+        // LLM WHY it's empty (installer never ran vs indexer hasn't caught up)
+        // instead of letting "0 results" read as "your mail contains nothing".
+        var setupHint = SetupHints.EmptyArchiveHint(
+            archiveStats.TotalMessages,
+            Mailvec.Core.Options.SharedConfig.SharedConfigFileExists(),
+            Mailvec.Core.PathExpansion.Expand(_archive.DatabasePath));
 
         // Query-less path: just list filter-matching messages by date.
         if (string.IsNullOrWhiteSpace(query))
         {
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
             var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
-            var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters);
+            var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters, setupHint);
             callLog.LogResult(ToolName, BuildResultSummary(browseResp), startTs);
             return browseResp;
         }
@@ -137,7 +146,7 @@ public sealed class SearchEmailsTool(
                 $"(`ollama pull {_ollama.EmbeddingModel}`); `mailvec doctor` gives a precise diagnosis.");
         }
 
-        var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters);
+        var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters, setupHint);
         callLog.LogResult(ToolName, BuildResultSummary(response), startTs);
         return response;
     }
@@ -198,7 +207,11 @@ public sealed record SearchEmailsResponse(
     int Count,
     IReadOnlyList<EmailHit> Results,
     Mailvec.Core.Models.ArchiveStats ArchiveStats,
-    AppliedFilters AppliedFilters);
+    AppliedFilters AppliedFilters,
+    // Additive (nullable, omitted-when-null for older clients' purposes is
+    // fine — it serializes as null): populated only when the archive has zero
+    // messages, explaining why and what to do. See SetupHints.
+    string? SetupHint = null);
 
 /// <summary>
 /// Echo of the filters the server actually applied for this call. Surfaced on

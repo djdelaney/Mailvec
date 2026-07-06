@@ -44,6 +44,9 @@ internal static class Helpers
     public static IOptions<OllamaOptions> Ollama(OllamaOptions? opts = null) =>
         Options.Create(opts ?? new OllamaOptions());
 
+    public static IOptions<ArchiveOptions> Archive(ArchiveOptions? opts = null) =>
+        Options.Create(opts ?? new ArchiveOptions());
+
     public static ToolCallLogger NoopLogger() =>
         new(NullLogger<ToolCallLogger>.Instance, Mcp());
 

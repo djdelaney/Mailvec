@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Mailvec.Mcp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Mailvec.Core\Mailvec.Core.csproj" />
     <!-- PDF page rasterisation (PDFium + SkiaSharp, native) lives in Mailvec.Pdf
          so the native dep doesn't leak into Core/Indexer/Cli. -->

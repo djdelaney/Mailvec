@@ -6,16 +6,21 @@ namespace Mailvec.Mcp.Tests.Tools;
 public class ListFoldersToolTests
 {
     private static ListFoldersTool Build(TempDatabase db) =>
-        new(new MessageRepository(db.Connections), Helpers.NoopLogger());
+        new(new MessageRepository(db.Connections), Helpers.Archive(), Helpers.NoopLogger());
 
     [Fact]
-    public void Empty_archive_returns_zero_folders()
+    public void Empty_archive_returns_zero_folders_with_setup_hint()
     {
         using var db = new TempDatabase();
         var resp = Build(db).ListFolders();
 
         resp.Count.ShouldBe(0);
         resp.Folders.ShouldBeEmpty();
+        // The hint tells the client LLM WHY it's empty — which variant depends
+        // on whether this machine has a shared config file, so just assert
+        // presence here; SetupHintsTests pins the exact wording per branch.
+        resp.SetupHint.ShouldNotBeNull();
+        resp.SetupHint!.ShouldContain("empty");
     }
 
     [Fact]
