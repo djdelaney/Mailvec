@@ -12,7 +12,11 @@
 
   <ItemGroup>
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="appsettings.Local.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('appsettings.Local.json')" />
+    <!-- CopyToPublishDirectory=Never: this is the developer's gitignored local
+         override; `dotnet publish` (install.sh/redeploy.sh) must not bake it
+         into the deployed CLI, where a leftover experiment key (e.g. an
+         Ollama:EmbeddingModel override) would silently apply in "prod". -->
+    <Content Include="appsettings.Local.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" Condition="Exists('appsettings.Local.json')" />
   </ItemGroup>
 
   <ItemGroup>
