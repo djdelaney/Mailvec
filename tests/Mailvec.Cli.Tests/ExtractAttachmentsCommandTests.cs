@@ -411,6 +411,58 @@ public class ExtractAttachmentsCommandTests : IDisposable
         reader.GetString(1).ShouldContain("Guests");      // sheet name
     }
 
+    [Fact]
+    public void Reextract_text_recovers_mojibake_via_declared_charset()
+    {
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+
+        // A Shift-JIS text attachment whose row was stamped 'done' with
+        // mojibake by the old UTF-8→Windows-1252 ladder. --reextract-text is
+        // the backfill: re-runs the extractor, which now honors the declared
+        // charset.
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        var sjis = System.Text.Encoding.GetEncoding("shift_jis").GetBytes("請求書を添付します Invoice attached");
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "sjis.eml");
+        var msg = new MimeMessage { Subject = "txt" };
+        msg.From.Add(new MailboxAddress("", "a@x"));
+        msg.To.Add(new MailboxAddress("", "b@x"));
+        msg.Headers.Add("Message-ID", "<sjis@x>");
+        var memo = new MimePart("text", "plain")
+        {
+            Content = new MimeContent(new MemoryStream(sjis)),
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "memo.txt" },
+            ContentTransferEncoding = ContentEncoding.Base64,
+        };
+        memo.ContentType.Charset = "shift_jis";
+        msg.Body = new Multipart("mixed") { new TextPart("plain") { Text = "See attached." }, memo };
+        using (var fs = File.Create(emlPath)) msg.WriteTo(fs);
+
+        var messages = sp.GetRequiredService<MessageRepository>();
+        var parsed = new ParsedMessage(
+            MessageId: "sjis@x", ThreadId: "sjis@x", Subject: "txt",
+            FromAddress: "a@x", FromName: null, ToAddresses: [], CcAddresses: [],
+            DateSent: DateTimeOffset.UtcNow, BodyText: "See attached.", BodyHtml: null,
+            RawHeaders: "Message-ID: <sjis@x>\r\n", SizeBytes: 200, ContentHash: "h",
+            Attachments: [new ParsedAttachment(0, "memo.txt", "text/plain", sjis.LongLength,
+                ExtractedText: "ﾀｸﾋﾟ mojibake residue", ExtractionStatus: "done")]);
+        messages.Upsert(parsed, "INBOX", "INBOX/cur", "sjis.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: "text", writer, err);
+
+        exit.ShouldBe(0);
+
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT extraction_status, COALESCE(extracted_text,'') FROM attachments WHERE message_id=(SELECT id FROM messages WHERE message_id='sjis@x')";
+        using var reader = cmd.ExecuteReader();
+        reader.Read().ShouldBeTrue();
+        reader.GetString(0).ShouldBe("done");
+        reader.GetString(1).ShouldContain("請求書を添付します");   // real text, not mojibake
+        reader.GetString(1).ShouldNotContain("mojibake residue");
+    }
+
     private static byte[] BuildXlsx(string sheetName, params string[] cellTexts)
     {
         using var ms = new MemoryStream();
