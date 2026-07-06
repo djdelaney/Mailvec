@@ -79,7 +79,7 @@ if [[ ! -f "$CFG" ]]; then
 fi
 MAILDIR="${MAILVEC_MAILDIR:-}"
 if [[ -z "$MAILDIR" && -f "$CFG" ]]; then
-  MAILDIR="$(sed -n 's/.*"MaildirRoot"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CFG" | head -1)"
+  MAILDIR="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("Ingest",{}).get("MaildirRoot",""))' "$CFG" 2>/dev/null || true)"
 fi
 MAILDIR="${MAILDIR:-$HOME/Mail}"
 MAILDIR="${MAILDIR/#\~/$HOME}"   # expand a leading ~
