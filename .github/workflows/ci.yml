@@ -1,0 +1,106 @@
+# CI for Mailvec. Two independent jobs:
+#
+#   dotnet — fetch vec0.dylib, build all projects (TreatWarningsAsErrors is on,
+#            so a warning fails here), run the full xUnit suite. No Ollama is
+#            required: every test that touches the embedding/vision clients
+#            uses stub HTTP handlers, and ProgramHttpTests deliberately points
+#            Ollama:BaseUrl at a dead port to cover the unreachable path
+#            deterministically. The suite DOES exercise real native deps
+#            (sqlite-vec, PDFium/SkiaSharp page rendering), which is why this
+#            must run on a macOS arm64 runner (macos-latest is Apple Silicon;
+#            Mailvec dropped Intel support and fetch-sqlite-vec.sh refuses
+#            x86_64).
+#
+#   tray   — XcodeGen + xcodebuild test. This runs the Swift wire-contract
+#            tests, which are the only automated guard on the tray/server
+#            JSON contract: a field renamed on one side otherwise decodes as
+#            silent nil at runtime. Ad-hoc code signing (no cert in the CI
+#            keychain; the identity override mirrors ops/build-tray.sh's
+#            fallback).
+#
+# The version-lockstep check mirrors the guard in ops/build-mcpb.sh so drift
+# between Directory.Build.props / manifest.json / project.yml fails a PR, not
+# the next release build.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: Build + .NET tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Verify version lockstep (props / manifest / tray)
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, sys
+          manifest = json.load(open("manifest.json"))["version"]
+          props = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", pathlib.Path("Directory.Build.props").read_text()).group(1)
+          tray = re.search(r'MARKETING_VERSION:\s*"(\d+\.\d+\.\d+)"', pathlib.Path("src/Mailvec.Tray/project.yml").read_text()).group(1)
+          if not (manifest == props == tray):
+              print(f"Version drift: manifest.json={manifest} Directory.Build.props={props} project.yml={tray}. "
+                    "Use ops/build-mcpb.sh --bump to keep them in lockstep.", file=sys.stderr)
+              sys.exit(1)
+          print(f"Version lockstep OK: {manifest}")
+          PY
+
+      - name: Fetch sqlite-vec extension
+        run: ./ops/fetch-sqlite-vec.sh
+
+      - name: Build
+        run: dotnet build --configuration Release
+
+      - name: Test
+        run: dotnet test --configuration Release --no-build --logger "console;verbosity=normal"
+
+  tray:
+    name: Tray build + wire-contract tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: src/Mailvec.Tray
+        run: xcodegen generate
+
+      - name: Run Swift tests
+        working-directory: src/Mailvec.Tray
+        # Ad-hoc signing: the runner keychain has no Developer ID, and the
+        # unit tests don't need one — same fallback ops/build-tray.sh uses.
+        # Raw xcodebuild output on purpose: piping through a prettifier makes
+        # the pipeline's exit code the prettifier's, silently masking test
+        # failures unless pipefail is set everywhere.
+        run: |
+          xcodebuild test \
+            -project Mailvec.Tray.xcodeproj \
+            -scheme Mailvec.Tray \
+            -destination "platform=macOS" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=-
