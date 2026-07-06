@@ -68,6 +68,18 @@ osascript -e 'tell application "Mailvec.Tray" to quit' >/dev/null 2>&1 || true
 sleep 1
 
 echo "==> Installing to $APP_DST"
+# Pre-flight the copy target: a standard (non-admin) macOS account can't
+# write /Applications, and the bare `rm: Permission denied` mid-script gave
+# no hint what to do. /Applications is required (not user-relocatable) —
+# SMAppService launch-at-login registration keys off the canonical path.
+if [[ ! -w "$(dirname "$APP_DST")" ]]; then
+    echo "install-tray.sh: cannot write to $(dirname "$APP_DST") — this account lacks admin rights." >&2
+    echo "  Fix: have an administrator run once:" >&2
+    echo "    sudo cp -R '$APP_SRC' '$APP_DST' && sudo xattr -dr com.apple.quarantine '$APP_DST'" >&2
+    echo "  (Subsequent updates need the same; the tray must live in /Applications" >&2
+    echo "   for launch-at-login registration to work.)" >&2
+    exit 1
+fi
 rm -rf "$APP_DST"
 cp -R "$APP_SRC" "$APP_DST"
 # Strip macOS quarantine xattr so Gatekeeper doesn't first-launch-prompt.
