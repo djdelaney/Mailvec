@@ -129,6 +129,14 @@ public sealed class MessageIngestService(
         {
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
+                // Idempotent no-op once running. Covers the fresh-install
+                // ordering where the services start before mbsync's first
+                // sync creates the Maildir root: Start() at startup logged
+                // "watcher disabled" and previously that was permanent —
+                // indexing then relied solely on this timer until a process
+                // restart. Retrying here brings event-driven scans online
+                // within one timer tick of the root appearing.
+                watcher.Start();
                 requests.TryWrite(0);
             }
         }

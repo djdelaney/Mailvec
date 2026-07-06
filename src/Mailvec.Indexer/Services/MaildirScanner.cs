@@ -140,6 +140,24 @@ public sealed class MaildirScanner(
         }
 
         var stale = syncState.StaleEntries(olderThan: scanStart);
+
+        if (seen == 0 && stale.Count > 0)
+        {
+            // The walk found ZERO files while sync_state still tracks some.
+            // That's far more likely a vanished Maildir (network mount racing
+            // up, MaildirRoot re-pointed, mbsync mid-re-init) than a genuine
+            // "the user deleted every message" — and reconciling would
+            // soft-delete the ENTIRE archive in one scan, at the cost of a
+            // full re-parse + attachment re-extraction to recover. Skip
+            // reconciliation; a genuinely emptied mailbox reconciles on the
+            // first scan that sees at least one file.
+            logger.LogWarning(
+                "MaildirScanner: saw 0 files under {Root} but sync_state tracks {Tracked} — " +
+                "skipping deletion reconciliation (empty/vanished Maildir root?). " +
+                "If the mailbox was genuinely emptied, reconciliation resumes when any file appears.",
+                _maildirRoot, stale.Count);
+            return new ScanResult(0, upserted, failed, 0);
+        }
         // A message-id with a fresh sync_state row (this scan's pass) was just
         // re-seen at a new path — treat it as a rename, not a deletion.
         var freshMessageIds = syncState.FreshMessageIds(since: scanStart);
@@ -323,7 +341,7 @@ public sealed class MaildirScanner(
     /// indexing, and under launchd KeepAlive a throw here at startup becomes
     /// a permanent crash-restart loop.
     /// </summary>
-    private static IEnumerable<string> EnumerateMaildirFolders(string root, Action<string, Exception> onEnumerationError)
+    private IEnumerable<string> EnumerateMaildirFolders(string root, Action<string, Exception> onEnumerationError)
     {
         var stack = new Stack<string>();
         stack.Push(root);
@@ -353,7 +371,25 @@ public sealed class MaildirScanner(
             {
                 var leaf = Path.GetFileName(sub);
                 // Skip the maildir-internal subdirs themselves so they aren't reported as folders.
-                if (leaf is "new" or "cur" or "tmp") continue;
+                if (leaf is "new" or "cur" or "tmp")
+                {
+                    // ...but an IMAP folder LITERALLY named "tmp"/"new"/"cur"
+                    // is indistinguishable from the internals by name alone.
+                    // If the skipped dir itself has cur/new children, it's a
+                    // real Maildir folder whose mail will silently never be
+                    // indexed — say so instead of staying quiet. (Renaming
+                    // the folder server-side is the fix; supporting those
+                    // names would need depth-aware skipping and a watcher
+                    // change — see MaildirWatcher's tmp filter.)
+                    if (Directory.Exists(Path.Combine(sub, "cur")) || Directory.Exists(Path.Combine(sub, "new")))
+                    {
+                        logger.LogWarning(
+                            "MaildirScanner: {Path} looks like a real mail folder but is named '{Leaf}' " +
+                            "(a Maildir-internal name) — its messages will NOT be indexed. Rename the IMAP folder to fix.",
+                            sub, leaf);
+                    }
+                    continue;
+                }
                 stack.Push(sub);
             }
         }

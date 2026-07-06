@@ -261,6 +261,10 @@ public class MaildirScannerTests : IDisposable
     [Fact]
     public void Resurrected_message_takes_the_new_copys_folder()
     {
+        // The keeper exists so the deletion scan still sees >0 files — a scan
+        // that sees zero files skips reconciliation entirely (the empty-root
+        // guard), which would keep lazarus alive and never soft-delete it.
+        WriteEml("INBOX", "cur", "keeper.host:2,S", "stays alive", "keeper@x");
         var path = WriteEml("INBOX", "cur", "z.host:2,S", "back from the dead", "lazarus@x");
         _scanner.ScanAll();
         File.Delete(path);
@@ -278,6 +282,35 @@ public class MaildirScannerTests : IDisposable
         msg.DeletedAt.ShouldBeNull();
         msg.Folder.ShouldBe("Restored");
         msg.MaildirFilename.ShouldBe("z2.host:2,S");
+    }
+
+    [Fact]
+    public void Empty_maildir_root_does_not_mass_soft_delete_the_archive()
+    {
+        WriteEml("INBOX", "cur", "a.host:2,S", "message one", "one@x");
+        WriteEml("INBOX", "cur", "b.host:2,S", "message two", "two@x");
+        _scanner.ScanAll();
+        _messages.CountAll().ShouldBe(2);
+
+        // The root suddenly presents as empty — a network mount racing up,
+        // a re-pointed MaildirRoot, or mbsync mid-re-init. Pre-guard, every
+        // sync_state row went stale and the WHOLE archive was soft-deleted
+        // in one scan (and purge-deleted in that window would have made it
+        // permanent).
+        Directory.Delete(Path.Combine(_root, "INBOX"), recursive: true);
+
+        var result = _scanner.ScanAll();
+
+        result.SoftDeleted.ShouldBe(0);
+        _messages.CountAll().ShouldBe(2);   // still live
+
+        // Once ANY file is visible again, reconciliation resumes — a
+        // genuinely emptied mailbox isn't shielded forever.
+        WriteEml("INBOX", "cur", "a.host:2,S", "message one", "one@x");
+        var healed = _scanner.ScanAll();
+        healed.SoftDeleted.ShouldBe(1);     // two@x really is gone
+        _messages.GetByMessageId("one@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+        _messages.GetByMessageId("two@x").ShouldNotBeNull().DeletedAt.ShouldNotBeNull();
     }
 
     [Fact]

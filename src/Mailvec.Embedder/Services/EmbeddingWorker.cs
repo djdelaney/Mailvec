@@ -85,7 +85,21 @@ public sealed class EmbeddingWorker(
             }
             catch (Exception ex)
             {
-                RecordBatchFailure(ex);
+                try
+                {
+                    RecordBatchFailure(ex);
+                }
+                catch (Exception recordEx)
+                {
+                    // The failure heartbeat itself writes to SQLite. If THAT
+                    // write throws too (disk full, lock held past the command
+                    // timeout), letting it escape stops the host — and launchd
+                    // KeepAlive restarts the embedder straight into the same
+                    // condition, a crash loop replacing the calm poll-retry
+                    // this catch exists to provide. The heartbeat is telemetry;
+                    // losing one beat is fine.
+                    logger.LogWarning(recordEx, "Also failed to record the batch-failure heartbeat; continuing.");
+                }
                 logger.LogError(ex, "Embedding batch failed ({Consecutive} consecutive); will retry after poll interval", _consecutiveBatchFailures);
                 await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
             }
