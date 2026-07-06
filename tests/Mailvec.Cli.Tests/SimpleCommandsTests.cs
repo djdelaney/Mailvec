@@ -76,7 +76,11 @@ public class SimpleCommandsTests
 
         var output = writer.ToString();
         output.ShouldContain("Schema/config mismatch");
-        output.ShouldContain("reindex");
+        // switch-model is the only sanctioned migration; `reindex --all`
+        // (the old advice here) destroys every vector without fixing the
+        // metadata mismatch.
+        output.ShouldContain("switch-model");
+        output.ShouldNotContain("reindex");
     }
 
     // ---------------- RebuildFtsCommand ----------------

@@ -24,6 +24,7 @@ public class SearchEmailsToolTests
             keyword, vector, hybrid, messages,
             Helpers.Mcp(mcpOpts),
             Helpers.Fastmail(fastmailOpts),
+            Helpers.Ollama(),
             Helpers.NoopLogger());
     }
 

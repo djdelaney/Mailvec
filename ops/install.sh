@@ -158,6 +158,12 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exit 1
 fi
 
+if [[ "$(uname -m)" != "arm64" ]]; then
+    echo "install.sh: Apple Silicon required — Intel Macs are not supported." >&2
+    echo "(macOS is dropping Intel support in its next release; Mailvec targets arm64 only.)" >&2
+    exit 1
+fi
+
 DOTNET_BIN="$(command -v dotnet || true)"
 if [[ -z "$DOTNET_BIN" ]]; then
     echo "install.sh: dotnet not on PATH. Install .NET 10 SDK first." >&2
@@ -232,7 +238,8 @@ case "$OLLAMA_HOST" in
     *)                          OLLAMA_IS_LOCAL=0 ;;
 esac
 
-if ! curl -fsS --max-time 2 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
+OLLAMA_TAGS_JSON="$(curl -fsS --max-time 2 "$OLLAMA_URL/api/tags" 2>/dev/null || true)"
+if [[ -z "$OLLAMA_TAGS_JSON" ]]; then
     echo "warning: Ollama not reachable at $OLLAMA_URL (start it later; embedder will retry)."
     if [[ "$OLLAMA_IS_LOCAL" == 1 ]]; then
         echo "         Install the cask if you haven't: brew install --cask ollama-app && open -a Ollama"
@@ -240,6 +247,27 @@ if ! curl -fsS --max-time 2 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
         echo "         This is a remote server ($OLLAMA_HOST). Confirm it's running and"
         echo "         that it listens on all interfaces (OLLAMA_HOST=0.0.0.0 on that host),"
         echo "         and that no firewall blocks its port. The embedder will keep retrying."
+    fi
+else
+    # Ollama answered — verify the embedding model is actually pulled.
+    # Skipping `ollama pull` is the easiest Quickstart step to miss, and
+    # without this check the symptom is a permanently degraded /health whose
+    # "unreachable"-flavoured hints point at the wrong fix.
+    EMBED_MODEL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Ollama"]["EmbeddingModel"])' \
+        "$REPO_ROOT/src/Mailvec.Embedder/appsettings.json" 2>/dev/null || echo "mxbai-embed-large")"
+    if ! printf '%s' "$OLLAMA_TAGS_JSON" | python3 -c '
+import json, sys
+want = sys.argv[1].lower()
+models = [(m.get("name") or "").lower() for m in json.load(sys.stdin).get("models", [])]
+sys.exit(0 if any(n == want or n.startswith(want + ":") for n in models) else 1)
+' "$EMBED_MODEL" 2>/dev/null; then
+        echo "warning: embedding model '$EMBED_MODEL' is not pulled on $OLLAMA_URL —"
+        echo "         embedding and semantic search won't work until it is."
+        if [[ "$OLLAMA_IS_LOCAL" == 1 ]]; then
+            echo "         Run: ollama pull $EMBED_MODEL"
+        else
+            echo "         Run \`ollama pull $EMBED_MODEL\` on the remote host ($OLLAMA_HOST)."
+        fi
     fi
 fi
 

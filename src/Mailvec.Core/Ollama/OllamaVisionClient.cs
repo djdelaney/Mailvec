@@ -119,31 +119,8 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
         return sb.ToString().TrimEnd('\n');
     }
 
-    public async Task<bool> IsModelAvailableAsync(CancellationToken ct = default)
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            using var response = await http.GetAsync("/api/tags", cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return false;
-
-            var tags = await response.Content.ReadFromJsonAsync<TagsResponse>(cts.Token).ConfigureAwait(false);
-            if (tags?.Models is null) return false;
-
-            // Ollama lists models as "name:tag" (e.g. "qwen2.5vl:7b"). Match the
-            // configured name exactly, or treat a tagless config as ":latest",
-            // or any tag of the same base name.
-            var want = _opts.VisionModel;
-            return tags.Models.Any(m => m.Name is { } n &&
-                (string.Equals(n, want, StringComparison.OrdinalIgnoreCase)
-                 || string.Equals(n, want + ":latest", StringComparison.OrdinalIgnoreCase)
-                 || n.StartsWith(want + ":", StringComparison.OrdinalIgnoreCase)));
-        }
-        catch (HttpRequestException) { return false; }
-        catch (System.Text.Json.JsonException) { return false; }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
-    }
+    public async Task<bool> IsModelAvailableAsync(CancellationToken ct = default) =>
+        await OllamaModelProbe.IsModelAvailableAsync(http, _opts.VisionModel, ct).ConfigureAwait(false) == true;
 
     private sealed class GenerateRequest
     {
@@ -171,15 +148,5 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
     private sealed class GenerateResponse
     {
         [JsonPropertyName("response")] public string? Response { get; init; }
-    }
-
-    private sealed class TagsResponse
-    {
-        [JsonPropertyName("models")] public TagModel[]? Models { get; init; }
-    }
-
-    private sealed class TagModel
-    {
-        [JsonPropertyName("name")] public string? Name { get; init; }
     }
 }

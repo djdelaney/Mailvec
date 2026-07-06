@@ -275,6 +275,41 @@ public class OllamaClientTests
         calls.ShouldBeGreaterThan(3);   // at least: initial + several truncation halvings
     }
 
+    // ---------- IsModelAvailableAsync (tri-state /api/tags probe) ----------
+
+    private static HttpResponseMessage Tags(params string[] names) => new(HttpStatusCode.OK)
+    {
+        Content = JsonContent.Create(new { models = names.Select(n => new { name = n }).ToArray() }),
+    };
+
+    [Fact]
+    public async Task Model_probe_true_when_listed_exactly_or_by_tag()
+    {
+        // Config default is "mxbai-embed-large"; Ollama lists it as ":latest".
+        (await ClientWith(_ => Tags("mxbai-embed-large:latest")).IsModelAvailableAsync()).ShouldBe(true);
+        (await ClientWith(_ => Tags("mxbai-embed-large")).IsModelAvailableAsync()).ShouldBe(true);
+        (await ClientWith(_ => Tags("MXBAI-Embed-Large:latest")).IsModelAvailableAsync()).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Model_probe_false_when_server_answers_but_model_absent()
+    {
+        // false ≠ null: the server IS up, the model was never pulled. Doctor
+        // and the tray key "run `ollama pull …`" advice off this exact value.
+        (await ClientWith(_ => Tags("qwen2.5vl:7b")).IsModelAvailableAsync()).ShouldBe(false);
+        (await ClientWith(_ => Tags()).IsModelAvailableAsync()).ShouldBe(false);
+        // Base-name prefixing must not false-positive on a different model
+        // that merely starts with the same string.
+        (await ClientWith(_ => Tags("mxbai-embed-large-v2:latest")).IsModelAvailableAsync()).ShouldBe(false);
+    }
+
+    [Fact]
+    public async Task Model_probe_null_when_server_unreachable()
+    {
+        var client = ClientWith(_ => throw new HttpRequestException("connection refused"));
+        (await client.IsModelAvailableAsync()).ShouldBeNull();
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>

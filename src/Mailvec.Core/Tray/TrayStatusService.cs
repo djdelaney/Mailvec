@@ -66,7 +66,15 @@ public sealed class TrayStatusService(
             Ok: healthReport.Ollama.Reachable,
             Detail: healthReport.Ollama.Reachable
                 ? healthReport.Ollama.ConfiguredModel
-                : "unreachable",
+                // "unreachable" was previously the blanket not-ready text, which
+                // sent users restarting a healthy Ollama when the real problem
+                // was a never-pulled model. Mirror HealthService's tri-state.
+                : healthReport.Ollama.EmbeddingModelAvailable switch
+                {
+                    false => $"model not pulled — run `ollama pull {healthReport.Ollama.ConfiguredModel}`",
+                    true => $"{healthReport.Ollama.ConfiguredModel} can't load — check Ollama build/memory",
+                    null => "unreachable",
+                },
             Severity: healthReport.Ollama.Reachable ? "ok" : "error");
 
         var ocr = new TrayOcrStatus(

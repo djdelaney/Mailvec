@@ -23,10 +23,12 @@ public sealed class SearchEmailsTool(
     MessageRepository messages,
     IOptions<McpOptions> mcpOptions,
     IOptions<FastmailOptions> fastmailOptions,
+    IOptions<OllamaOptions> ollamaOptions,
     ToolCallLogger callLog)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
+    private readonly OllamaOptions _ollama = ollamaOptions.Value;
     private const string ToolName = "search_emails";
 
     [McpServerTool(Name = "search_emails")]
@@ -107,15 +109,33 @@ public sealed class SearchEmailsTool(
 
         var resolvedMode = NormaliseMode(mode);
 
-        IReadOnlyList<EmailHit> hits = resolvedMode switch
+        IReadOnlyList<EmailHit> hits;
+        try
         {
-            "keyword" => keyword.Search(query, resolvedLimit, filters).Select(EmailHit.FromKeyword).Select(WithWebmailUrl).ToList(),
-            "semantic" => (await vector.SearchAsync(query, resolvedLimit, k: Math.Max(100, resolvedLimit * 5), filters, ct).ConfigureAwait(false))
-                .Select(EmailHit.FromVector).Select(WithWebmailUrl).ToList(),
-            "hybrid" => (await hybrid.SearchAsync(query, resolvedLimit, filters: filters, ct: ct).ConfigureAwait(false))
-                .Select(EmailHit.FromHybrid).Select(WithWebmailUrl).ToList(),
-            _ => throw new McpException($"Unknown mode '{mode}'. Use 'keyword', 'semantic', or 'hybrid'."),
-        };
+            hits = resolvedMode switch
+            {
+                "keyword" => keyword.Search(query, resolvedLimit, filters).Select(EmailHit.FromKeyword).Select(WithWebmailUrl).ToList(),
+                "semantic" => (await vector.SearchAsync(query, resolvedLimit, k: Math.Max(100, resolvedLimit * 5), filters, ct).ConfigureAwait(false))
+                    .Select(EmailHit.FromVector).Select(WithWebmailUrl).ToList(),
+                "hybrid" => (await hybrid.SearchAsync(query, resolvedLimit, filters: filters, ct: ct).ConfigureAwait(false))
+                    .Select(EmailHit.FromHybrid).Select(WithWebmailUrl).ToList(),
+                _ => throw new McpException($"Unknown mode '{mode}'. Use 'keyword', 'semantic', or 'hybrid'."),
+            };
+        }
+        catch (HttpRequestException ex)
+        {
+            // The MCP SDK collapses any non-McpException into a bare
+            // "An error occurred." — invisible to the client LLM. The only
+            // HTTP dependency in the search path is the query-embedding call,
+            // so translate it into something the client can act on (this is
+            // the single most common broken state on a fresh install: Ollama
+            // not running, or the embedding model never pulled).
+            throw new McpException(
+                $"Semantic ranking is unavailable — the embedding call to Ollama at {_ollama.BaseUrl} failed ({ex.Message}). " +
+                $"Keyword search still works: retry this query with mode=keyword. " +
+                $"To restore semantic/hybrid search, make sure Ollama is running and the embedding model is pulled " +
+                $"(`ollama pull {_ollama.EmbeddingModel}`); `mailvec doctor` gives a precise diagnosis.");
+        }
 
         var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters);
         callLog.LogResult(ToolName, BuildResultSummary(response), startTs);

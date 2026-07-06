@@ -16,12 +16,17 @@ public class DoctorHealthChecksTests
     // ---------- Embedding model ----------
 
     [Fact]
-    public void Model_mismatch_fails_and_points_at_reindex()
+    public void Model_mismatch_fails_and_points_at_switch_model()
     {
+        // `switch-model` is the only sanctioned migration (rebuilds the vec0
+        // table + metadata in one transaction). `reindex --all` — the advice
+        // this message used to give — clears every vector WITHOUT updating
+        // metadata, so the embedder still refuses to start afterwards.
         var checks = Run(Report(embeddings: Emb(schemaModel: "nomic-embed-text", schemaDim: 768, mismatch: true)));
         var c = Find(checks, "Embedding model");
         c.Status.ShouldBe("fail");
-        c.Detail.ShouldContain("reindex");
+        c.Detail.ShouldContain("switch-model");
+        c.Detail.ShouldNotContain("reindex");
     }
 
     [Fact]
@@ -130,6 +135,28 @@ public class DoctorHealthChecksTests
         c.Detail.ShouldContain("unreachable");
     }
 
+    [Fact]
+    public void Ollama_up_but_model_not_pulled_points_at_ollama_pull()
+    {
+        // The single most common fresh-install failure: Ollama runs fine but
+        // `ollama pull` was never run. "Unreachable — restart Ollama" advice
+        // here sends the user chasing a healthy server.
+        var c = Find(Run(Report(ollama: Oll(reachable: false, modelAvailable: false))), "Ollama");
+        c.Status.ShouldBe("warn");
+        c.Detail.ShouldContain("not pulled");
+        c.Detail.ShouldContain("ollama pull mxbai-embed-large");
+        c.Detail.ShouldNotContain("unreachable at");
+    }
+
+    [Fact]
+    public void Ollama_up_with_model_pulled_but_embed_failing_points_at_broken_build()
+    {
+        var c = Find(Run(Report(ollama: Oll(reachable: false, modelAvailable: true))), "Ollama");
+        c.Status.ShouldBe("warn");
+        c.Detail.ShouldContain("can't load");
+        c.Detail.ShouldNotContain("unreachable at");
+    }
+
     // ---------- builders ----------
 
     private static IReadOnlyList<DoctorCommand.DoctorCheck> Run(HealthReport report, bool skipNet = false)
@@ -166,6 +193,6 @@ public class DoctorHealthChecksTests
         long chunks = 200)
         => new(schemaModel, schemaDim, "mxbai-embed-large", 1024, mismatch, embedded, coveragePct, chunks);
 
-    private static OllamaHealth Oll(bool reachable = true)
-        => new("http://localhost:11434", reachable, "mxbai-embed-large");
+    private static OllamaHealth Oll(bool reachable = true, bool? modelAvailable = null)
+        => new("http://localhost:11434", reachable, "mxbai-embed-large", modelAvailable);
 }

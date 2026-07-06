@@ -41,6 +41,9 @@ internal static class Helpers
     public static IOptions<FastmailOptions> Fastmail(FastmailOptions? opts = null) =>
         Options.Create(opts ?? new FastmailOptions());
 
+    public static IOptions<OllamaOptions> Ollama(OllamaOptions? opts = null) =>
+        Options.Create(opts ?? new OllamaOptions());
+
     public static ToolCallLogger NoopLogger() =>
         new(NullLogger<ToolCallLogger>.Instance, Mcp());
 

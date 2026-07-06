@@ -54,6 +54,12 @@ echo "===================================================================="
 echo "Mailvec full install"
 echo "===================================================================="
 
+if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
+    echo "install-all.sh: Apple Silicon Mac required — Intel Macs are not supported." >&2
+    echo "(macOS is dropping Intel support in its next release; Mailvec targets arm64 only.)" >&2
+    exit 1
+fi
+
 # 1. sqlite-vec dylib
 if [[ $SKIP_FETCH -eq 0 ]]; then
     if [[ -f "$REPO_ROOT/runtimes/osx-arm64/native/vec0.dylib" ]]; then

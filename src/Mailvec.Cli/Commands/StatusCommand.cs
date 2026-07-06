@@ -57,7 +57,7 @@ internal static class StatusCommand
         @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={ollama.EmbeddingModel} ({ollama.EmbeddingDimensions}d)");
         if (schemaModel != "(not set)" && schemaModel != ollama.EmbeddingModel)
         {
-            @out.WriteLine("⚠  Schema/config mismatch — the embedder will refuse to start. Run `mailvec reindex --all` to switch models.");
+            @out.WriteLine("⚠  Schema/config mismatch — the embedder will refuse to start. Run `mailvec switch-model` to migrate the DB to the configured model.");
         }
         return 0;
     }

@@ -46,6 +46,12 @@ public sealed class MaildirScanner(
         var upserted = 0;
         var failed = 0;
         var unrefreshed = 0;
+        // Directories we couldn't enumerate (permissions, I/O). Any skipped
+        // directory means the files inside it never got their sync_state
+        // refreshed this scan, so — like `unrefreshed` — it must veto the
+        // deletion-reconciliation pass or every message in that directory
+        // would be soft-deleted as "stale".
+        var enumerationFailures = 0;
 
         // One connection + a rolling transaction for the whole file walk.
         // The previous design opened a fresh connection for every Get/Upsert
@@ -59,7 +65,11 @@ public sealed class MaildirScanner(
 
         try
         {
-            foreach (var folderDir in EnumerateMaildirFolders(_maildirRoot))
+            foreach (var folderDir in EnumerateMaildirFolders(_maildirRoot, onEnumerationError: (dir, ex) =>
+            {
+                logger.LogWarning(ex, "Cannot enumerate {Path}; skipping this directory.", dir);
+                enumerationFailures++;
+            }))
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -69,7 +79,22 @@ public sealed class MaildirScanner(
                     var sub = Path.Combine(folderDir, subdir);
                     if (!Directory.Exists(sub)) continue;
 
-                    foreach (var file in Directory.EnumerateFiles(sub))
+                    // Eager GetFiles (not the lazy Enumerate) so a permission
+                    // error surfaces here, where it can be scoped to this one
+                    // directory instead of aborting the whole scan mid-walk.
+                    string[] files;
+                    try
+                    {
+                        files = Directory.GetFiles(sub);
+                    }
+                    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+                    {
+                        logger.LogWarning(ex, "Cannot enumerate {Path}; skipping this directory.", sub);
+                        enumerationFailures++;
+                        continue;
+                    }
+
+                    foreach (var file in files)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         seen++;
@@ -98,18 +123,19 @@ public sealed class MaildirScanner(
             throw;
         }
 
-        if (unrefreshed > 0)
+        if (unrefreshed > 0 || enumerationFailures > 0)
         {
-            // At least one live file's sync_state row could not be refreshed,
-            // so the deletion-reconciliation pass would see it as stale and
-            // soft-delete a message whose file is alive on disk. Skip
-            // reconciliation entirely this scan — genuinely deleted files are
-            // simply caught one scan later.
+            // At least one live file's sync_state row could not be refreshed
+            // (its ingest + refresh both failed, or its whole directory
+            // couldn't be enumerated), so the deletion-reconciliation pass
+            // would see it as stale and soft-delete a message whose file is
+            // alive on disk. Skip reconciliation entirely this scan —
+            // genuinely deleted files are simply caught one scan later.
             logger.LogWarning(
-                "MaildirScanner: {Count} file(s) failed ingest AND their sync_state refresh failed; " +
+                "MaildirScanner: {Unrefreshed} file(s) failed ingest+refresh and {EnumFailures} director(ies) could not be enumerated; " +
                 "skipping deletion reconciliation this scan to avoid soft-deleting live messages. " +
                 "seen={Seen} upserted={Upserted} parseFailed={Failed}",
-                unrefreshed, seen, upserted, failed);
+                unrefreshed, enumerationFailures, seen, upserted, failed);
             return new ScanResult(seen, upserted, failed, 0);
         }
 
@@ -289,9 +315,15 @@ public sealed class MaildirScanner(
     /// <summary>
     /// A Maildir folder is any directory that itself contains the canonical
     /// new/ and cur/ subdirectories. Walks recursively so nested folders
-    /// (e.g. Archive.2024) are picked up.
+    /// (e.g. Archive.2024) are picked up. A directory that can't be listed
+    /// (permissions, I/O — think a TCC-protected or cloud-placeholder dir
+    /// someone dropped under the Maildir root) is reported via
+    /// <paramref name="onEnumerationError"/> and skipped rather than aborting
+    /// the walk: one bad directory must not stop the whole archive from
+    /// indexing, and under launchd KeepAlive a throw here at startup becomes
+    /// a permanent crash-restart loop.
     /// </summary>
-    private static IEnumerable<string> EnumerateMaildirFolders(string root)
+    private static IEnumerable<string> EnumerateMaildirFolders(string root, Action<string, Exception> onEnumerationError)
     {
         var stack = new Stack<string>();
         stack.Push(root);
@@ -304,7 +336,20 @@ public sealed class MaildirScanner(
                 yield return dir;
             }
 
-            foreach (var sub in Directory.EnumerateDirectories(dir))
+            // Eager GetDirectories: a yield-iterator can't catch around a
+            // lazy enumerator's MoveNext without losing the rest of the walk.
+            string[] subs;
+            try
+            {
+                subs = Directory.GetDirectories(dir);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                onEnumerationError(dir, ex);
+                continue;
+            }
+
+            foreach (var sub in subs)
             {
                 var leaf = Path.GetFileName(sub);
                 // Skip the maildir-internal subdirs themselves so they aren't reported as folders.

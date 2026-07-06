@@ -61,6 +61,15 @@ public sealed class HealthService(
             ? null
             : await visionProbe.ConfigureAwait(false);
 
+        // A failed embed ping has two very different causes with opposite
+        // remediation: the server is down (restart Ollama), or the server is
+        // fine and the embedding model was never pulled (`ollama pull ...`).
+        // One cheap /api/tags follow-up disambiguates; doctor and the tray
+        // key their hints off this. A successful ping implies the model works.
+        bool? embeddingModelAvailable = ollamaReachable
+            ? true
+            : await ollama.IsModelAvailableAsync(ct).ConfigureAwait(false);
+
         var counts = messages?.OcrCounts(embOpts.ImageOcrMinBytes)
             ?? new OcrStageCounts(0, 0, 0, 0);
         // A disabled sub-pass won't drain its backlog, so don't count it as
@@ -115,7 +124,8 @@ public sealed class HealthService(
             Ollama: new OllamaHealth(
                 BaseUrl: ollamaOpts.Value.BaseUrl,
                 Reachable: ollamaReachable,
-                ConfiguredModel: configModel),
+                ConfiguredModel: configModel,
+                EmbeddingModelAvailable: embeddingModelAvailable),
             Embedder: embedder,
             Ocr: ocr);
     }
@@ -268,7 +278,15 @@ public sealed record EmbeddingHealth(
     double CoveragePct,
     long ChunkCount);
 
+/// <summary>
+/// <c>Reachable</c> means "ready to embed" (the ping is a real /api/embed
+/// probe, not a liveness GET). When it's false, <c>EmbeddingModelAvailable</c>
+/// says why: false = server answered /api/tags but the configured model isn't
+/// pulled; true = model is pulled but can't produce an embedding (bad Ollama
+/// build, OOM); null = the server itself was unreachable.
+/// </summary>
 public sealed record OllamaHealth(
     string BaseUrl,
     bool Reachable,
-    string ConfiguredModel);
+    string ConfiguredModel,
+    bool? EmbeddingModelAvailable = null);

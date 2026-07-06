@@ -62,6 +62,16 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
     }
 
     /// <summary>
+    /// Tri-state /api/tags probe for the configured embedding model. Weaker
+    /// than <see cref="PingAsync"/> (a listed model can still fail to load),
+    /// but it's what distinguishes "server down" (null) from "server up, model
+    /// not pulled" (false) when the ping fails — the two states need opposite
+    /// remediation, and conflating them sends users restarting a healthy Ollama.
+    /// </summary>
+    public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) =>
+        OllamaModelProbe.IsModelAvailableAsync(http, _opts.EmbeddingModel, ct);
+
+    /// <summary>
     /// Returns one float[] per input string, in the same order. May silently
     /// truncate inputs that exceed the model's context length — log warnings
     /// surface this. Throws on any non-recoverable Ollama error.
