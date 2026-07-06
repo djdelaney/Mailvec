@@ -62,7 +62,10 @@ public class AttachmentOcrServiceTests : IDisposable
     // by the SQL candidate query (the default gate is 50KB).
     private static EmbedderOptions ImageGate => new() { ImageOcrMinBytes = 1 };
 
-    private long StageNoTextPdf(string id, byte[] pdfBytes)
+    // partIndex normally 0 (the .eml written here has one attachment part);
+    // pass a higher value to fabricate a stale DB row whose part doesn't
+    // exist on disk — the Maildir read then throws ArgumentOutOfRange.
+    private long StageNoTextPdf(string id, byte[] pdfBytes, int partIndex = 0)
     {
         var b64 = Convert.ToBase64String(pdfBytes);
         var eml =
@@ -78,7 +81,7 @@ public class AttachmentOcrServiceTests : IDisposable
             MessageId: id, ThreadId: id, Subject: "s", FromAddress: "a@x", FromName: null,
             ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
             BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 100, ContentHash: $"h-{id}",
-            Attachments: [new ParsedAttachment(0, "scan.pdf", "application/pdf", pdfBytes.LongLength,
+            Attachments: [new ParsedAttachment(partIndex, "scan.pdf", "application/pdf", pdfBytes.LongLength,
                 ExtractedText: null, ExtractionStatus: AttachmentTextExtractor.StatusNoText)]);
         return _messages.Upsert(parsed, "INBOX", "INBOX/cur", id + ".eml", DateTimeOffset.UtcNow);
     }
@@ -298,6 +301,27 @@ public class AttachmentOcrServiceTests : IDisposable
         }
         // And the poison doc is retired so it stops costing a timeout per cycle.
         StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
+    public async Task Unreadable_candidate_is_retired_and_does_not_block_the_batch()
+    {
+        // A DB row whose part_index doesn't exist in the .eml (stale row after
+        // a post-ingest rewrite) throws from the Maildir read. Before the
+        // tiered catch, that exception escaped ProcessBatchAsync entirely —
+        // aborting BOTH OCR passes for the cycle — and the id-ordered
+        // candidate query re-selected the same row first every cycle: a
+        // permanent, silent stall of the whole OCR queue.
+        long poison = StageNoTextPdf("stale-part@x", MinimalPdf(1), partIndex: 7);
+        long healthy = StageNoTextPdf("fine@x", MinimalPdf(1));
+        var svc = Build(new FakeVision(true, _ => "GOOD TEXT"));
+
+        var done = await svc.ProcessBatchAsync(10, default);
+
+        done.ShouldBe(1);
+        StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusFailed); // retired immediately, not retried
+        StatusOf(healthy).ShouldBe(AttachmentTextExtractor.StatusOcr);   // the queue behind it still drains
+        TextOf(healthy).ShouldBe("GOOD TEXT");
     }
 
     [Fact]
