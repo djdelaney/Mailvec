@@ -42,9 +42,13 @@ HEALTH_TIMEOUT=15
 
 usage() {
     cat <<EOF
-Usage: $0 [--uninstall]
+Usage: $0 [--uninstall] [--defaults]
 
   (no args)    install or reinstall the four Mailvec launchd agents
+  --defaults   answer every prompt with its default (on a reinstall the
+               defaults are your existing configured values, so this is
+               also the unattended-upgrade mode). Implied when stdin is
+               not a terminal.
   --uninstall  bootout the agents and remove the plists; preserves the
                published binaries, the database, and the log directory
 EOF
@@ -62,6 +66,15 @@ expand_tilde() {
 prompt_with_default() {
     # prompt_with_default <prompt> <default> <var-name>
     local message="$1" default="$2" var="$3" reply
+    # --defaults, or stdin isn't a terminal (CI, `curl | bash`, automation):
+    # take the default instead of prompting. Previously `read` hit EOF under
+    # `set -e` and the ERR trap printed only "failed at line NN" — a dead end
+    # with no hint that the script wanted a terminal.
+    if [[ "${NONINTERACTIVE:-0}" -eq 1 || ! -t 0 ]]; then
+        echo "$message [$default]  (using default)"
+        printf -v "$var" '%s' "$default"
+        return 0
+    fi
     read -r -p "$message [$default]: " reply
     reply="${reply:-$default}"
     printf -v "$var" '%s' "$reply"
@@ -140,15 +153,19 @@ uninstall() {
     echo "  the SQLite database (location depends on your config)"
 }
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    usage
-    exit 0
-fi
-
-if [[ "${1:-}" == "--uninstall" ]]; then
-    uninstall
-    exit 0
-fi
+NONINTERACTIVE=0
+for arg in "$@"; do
+    case "$arg" in
+        --help|-h) usage; exit 0 ;;
+        --uninstall) uninstall; exit 0 ;;
+        --defaults) NONINTERACTIVE=1 ;;
+        *)
+            echo "install.sh: unknown argument '$arg'" >&2
+            usage
+            exit 2
+            ;;
+    esac
+done
 
 # ---------------------------------------------------------------------------
 # 1. Preflight

@@ -28,6 +28,9 @@
 #   ops/install-all.sh             # full bootstrap, prompts for paths in install.sh
 #   ops/install-all.sh --no-tray   # skip the SwiftUI tray (.NET services only)
 #   ops/install-all.sh --no-fetch  # skip vec0.dylib fetch (already present)
+#   ops/install-all.sh --defaults  # answer install.sh's prompts with defaults
+#                                    (unattended reinstall/upgrade; also implied
+#                                    when stdin isn't a terminal)
 set -euo pipefail
 
 trap 'echo "install-all.sh: failed at line $LINENO" >&2' ERR
@@ -35,12 +38,14 @@ trap 'echo "install-all.sh: failed at line $LINENO" >&2' ERR
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKIP_FETCH=0
 SKIP_TRAY=0
+INSTALL_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --no-fetch) SKIP_FETCH=1 ;;
         --no-tray)  SKIP_TRAY=1 ;;
+        --defaults) INSTALL_ARGS+=("--defaults") ;;
         -h|--help)
-            sed -n '2,28p' "$0"
+            sed -n '2,31p' "$0"
             exit 0
             ;;
         *)
@@ -76,7 +81,7 @@ echo
 # 2. .NET services + CLI shim. install.sh prompts for site-specific paths
 # (Maildir, DB, Ollama URL, mbsyncrc, optional Fastmail account id).
 echo "==> [2/3] Installing .NET services + CLI shim"
-"$REPO_ROOT/ops/install.sh"
+"$REPO_ROOT/ops/install.sh" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
 echo
 
 # 3. SwiftUI tray app. Skip on machines without Xcode or where the user
