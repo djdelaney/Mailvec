@@ -237,5 +237,6 @@ public class VectorSearchServiceTests
         }
 
         public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
+        public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 }

@@ -77,7 +77,7 @@ struct EmbeddingTab: View {
                     }
                 }
             } header: { Text("Provider") } footer: {
-                RowHint(text: "Embedding model + chunk size are pinned in appsettings.json. Changing either invalidates the existing vector index — run `ops/redeploy.sh embedder` after editing and then `mailvec reindex --all`. Scanned-PDF OCR uses the vision model; pull it with `ollama pull \(prefs.system.visionModel)`.")
+                RowHint(text: "Embedding model + chunk size are pinned in appsettings.json. Changing the model requires `mailvec switch-model` (then `ops/redeploy.sh embedder`); changing chunk size requires `mailvec reindex --all`. Scanned-PDF OCR uses the vision model; pull it with `ollama pull \(prefs.system.visionModel)`.")
             }
 
             Section {

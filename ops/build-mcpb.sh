@@ -78,7 +78,12 @@ fi
 
 # Read version from manifest so the artifact filename matches.
 VERSION="$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')"
-RID="osx-arm64"
+RID="osx-arm64"   # Apple Silicon only — Intel is unsupported (see README Requirements)
+
+if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
+    echo "ERROR: build-mcpb.sh must run on an Apple Silicon Mac — Intel is not supported." >&2
+    exit 1
+fi
 STAGING="$(mktemp -d -t mailvec-mcpb.XXXXXX)"
 DIST="$REPO_ROOT/dist"
 OUTPUT="$DIST/mailvec-${VERSION}.mcpb"

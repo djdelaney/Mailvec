@@ -38,7 +38,19 @@ public sealed class MessageIngestService(
         migrator.EnsureUpToDate();
 
         logger.LogInformation("Initial Maildir scan starting");
-        scanner.ScanAll(stoppingToken);
+        try
+        {
+            scanner.ScanAll(stoppingToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Same guard RunScansAsync gives every later scan. Without it a
+            // deterministic failure here (DB locked, disk error) stops the
+            // host, and launchd KeepAlive restarts it straight into the same
+            // failure — a crash loop that never indexes anything. Logging and
+            // carrying on lets the watcher + periodic timer retry instead.
+            logger.LogError(ex, "Initial scan failed; will retry on the next watcher pulse or timer tick.");
+        }
 
         watcher.Start();
 

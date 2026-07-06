@@ -11,7 +11,10 @@ VERSION="${SQLITE_VEC_VERSION:-0.1.9}"
 
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)  ASSET="sqlite-vec-${VERSION}-loadable-macos-aarch64.tar.gz" ; DEST_DIR="runtimes/osx-arm64/native" ;;
-    Darwin-x86_64) ASSET="sqlite-vec-${VERSION}-loadable-macos-x86_64.tar.gz"  ; DEST_DIR="runtimes/osx-x64/native"   ;;
+    Darwin-x86_64)
+        echo "fetch-sqlite-vec.sh: Intel Macs are not supported — Mailvec requires Apple Silicon." >&2
+        echo "(macOS is dropping Intel support in its next release; Mailvec targets arm64 only.)" >&2
+        exit 1 ;;
     *) echo "Unsupported platform: $(uname -s)-$(uname -m)" >&2 ; exit 1 ;;
 esac
 

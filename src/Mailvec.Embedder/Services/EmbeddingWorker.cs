@@ -486,7 +486,7 @@ public sealed class EmbeddingWorker(
             throw new InvalidOperationException(
                 $"Embedding model mismatch. Database was built with {existingModel} ({existingDim} dims); " +
                 $"config requests {configuredModel} ({configuredDim} dims). " +
-                $"Run `mailvec reindex --all` to rebuild vectors with the new model.");
+                $"Run `mailvec switch-model` to migrate the DB to the new model (reindex alone won't update the stamped metadata).");
         }
     }
 }

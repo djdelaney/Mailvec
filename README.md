@@ -44,7 +44,7 @@ mbsync ──► ~/Mail/<account>/  (Maildir)
 
 ## Quickstart
 
-Requires macOS 14+, the .NET 10 SDK, and a few brews. Embeddings are local-only via Ollama. Building the menu-bar tray additionally needs a full **Xcode** (not just the Command Line Tools) for `xcodebuild` — if you don't have it, run `./ops/install-all.sh --no-tray` for the headless pipeline (it skips the tray with a clear message rather than failing).
+Requires macOS 14+ on **Apple Silicon** (Intel Macs are not supported — macOS is dropping Intel in its next release, and the install scripts refuse to run on x86_64), the .NET 10 SDK, and a few brews. Embeddings are local-only via Ollama. Building the menu-bar tray additionally needs a full **Xcode** (not just the Command Line Tools) for `xcodebuild` — if you don't have it, run `./ops/install-all.sh --no-tray` for the headless pipeline (it skips the tray with a clear message rather than failing).
 
 ```sh
 # 1. Prereqs
@@ -77,11 +77,11 @@ mbsync -aV                                       # first sync — may take hours
 Then connect Claude Desktop:
 
 ```sh
-./ops/build-mcpb.sh                              # writes dist/mailvec-<version>.mcpb (Apple Silicon only — see note)
+./ops/build-mcpb.sh                              # writes dist/mailvec-<version>.mcpb
 open dist/mailvec-*.mcpb                         # one-click install into Claude Desktop
 ```
 
-> The MCPB bundle is built self-contained for **Apple Silicon** (`RID="osx-arm64"` in `ops/build-mcpb.sh`). On an Intel Mac, edit that line to `osx-x64` before building — an arm64 bundle won't run there, and nothing else will tell you why.
+> The MCPB bundle is built self-contained for **Apple Silicon** (`RID="osx-arm64"` in `ops/build-mcpb.sh`). Intel Macs are not supported — the script refuses to run on x86_64.
 
 ### What to expect on first run
 

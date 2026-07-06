@@ -193,6 +193,74 @@ public class MaildirScannerTests : IDisposable
         EmbeddedAt(msg.Id).ShouldNotBeNull();
     }
 
+    [Fact]
+    public void Unreadable_folder_is_skipped_and_deletion_reconciliation_deferred()
+    {
+        // chmod can't block root (some CI containers), and unix modes don't
+        // exist on Windows — in both cases the scenario is untestable.
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess) return;
+
+        WriteEml("INBOX", "cur", "ok.host:2,S", "readable message", "ok@x");
+        WriteEml("Blocked", "cur", "b.host:2,S", "behind a locked door", "blocked@x");
+        _scanner.ScanAll();
+        _messages.CountAll().ShouldBe(2);
+
+        var blockedDir = Path.Combine(_root, "Blocked");
+        var original = File.GetUnixFileMode(blockedDir);
+        File.SetUnixFileMode(blockedDir, UnixFileMode.None);
+        try
+        {
+            // One unreadable directory must not abort the walk (pre-fix this
+            // threw UnauthorizedAccessException out of ScanAll, which under
+            // launchd KeepAlive is a startup crash loop)...
+            var result = Should.NotThrow(() => _scanner.ScanAll());
+
+            // ...and the message whose file is alive-but-unlistable must not
+            // be soft-deleted: reconciliation is skipped for this scan.
+            result.SoftDeleted.ShouldBe(0);
+            _messages.GetByMessageId("blocked@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+            // The readable folder was still scanned.
+            result.Seen.ShouldBe(1);
+        }
+        finally
+        {
+            File.SetUnixFileMode(blockedDir, original);
+        }
+
+        // Readable again: a normal scan sees both files and deletes nothing.
+        var healed = _scanner.ScanAll();
+        healed.Seen.ShouldBe(2);
+        healed.SoftDeleted.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Unreadable_cur_subdir_is_skipped_and_deletion_reconciliation_deferred()
+    {
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess) return;
+
+        WriteEml("INBOX", "cur", "ok.host:2,S", "readable message", "ok@x");
+        WriteEml("Locked", "cur", "l.host:2,S", "cur is locked", "locked@x");
+        _scanner.ScanAll();
+
+        // The folder dir stays listable, only its cur/ is not — exercises the
+        // per-subdir GetFiles guard rather than the walker's GetDirectories one.
+        var lockedCur = Path.Combine(_root, "Locked", "cur");
+        var original = File.GetUnixFileMode(lockedCur);
+        File.SetUnixFileMode(lockedCur, UnixFileMode.None);
+        try
+        {
+            var result = Should.NotThrow(() => _scanner.ScanAll());
+
+            result.SoftDeleted.ShouldBe(0);
+            _messages.GetByMessageId("locked@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+            result.Seen.ShouldBe(1);
+        }
+        finally
+        {
+            File.SetUnixFileMode(lockedCur, original);
+        }
+    }
+
     private string? EmbeddedAt(long messageId)
     {
         using var conn = _connections.Open();

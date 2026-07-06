@@ -24,4 +24,14 @@ public interface IEmbeddingClient
     /// short internal timeout; returns false on any error.
     /// </summary>
     Task<bool> PingAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Diagnostic follow-up for a failed <see cref="PingAsync"/>: is the
+    /// configured embedding model installed on the provider? Tri-state —
+    /// true/false when the provider answered (model present/absent), null
+    /// when the provider itself was unreachable. Health/doctor use this to
+    /// tell "server down" apart from "server up but model not pulled", which
+    /// need opposite remediation. Bounded by a short internal timeout.
+    /// </summary>
+    Task<bool?> IsModelAvailableAsync(CancellationToken ct = default);
 }

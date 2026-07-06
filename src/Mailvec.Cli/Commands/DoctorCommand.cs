@@ -335,7 +335,7 @@ internal static class DoctorCommand
         if (report.Embeddings.ModelMismatch)
         {
             checks.Add(DoctorCheck.Fail("Embedding model",
-                $"schema={report.Embeddings.SchemaModel} ({report.Embeddings.SchemaDimensions}d) vs config={report.Embeddings.ConfigModel} ({report.Embeddings.ConfigDimensions}d). The embedder will refuse to start. Run `mailvec reindex --all` to switch models.",
+                $"schema={report.Embeddings.SchemaModel} ({report.Embeddings.SchemaDimensions}d) vs config={report.Embeddings.ConfigModel} ({report.Embeddings.ConfigDimensions}d). The embedder will refuse to start. Run `mailvec switch-model` to migrate the DB to the configured model (rebuilds the vector table and re-queues every message).",
                 "pipeline"));
         }
         else if (report.Embeddings.SchemaModel is null)
@@ -397,6 +397,31 @@ internal static class DoctorCommand
         else if (report.Ollama.Reachable)
         {
             checks.Add(DoctorCheck.Ok("Ollama", $"reachable at {report.Ollama.BaseUrl} (configured model: {report.Ollama.ConfiguredModel})", "pipeline"));
+        }
+        else if (report.Ollama.EmbeddingModelAvailable == false)
+        {
+            // The server answered /api/tags — it's up. The embed ping failed
+            // because the configured model was never pulled. "Restart Ollama"
+            // advice here would send the user chasing a healthy server.
+            var hint = IsLocalOllama(report.Ollama.BaseUrl)
+                ? $"Run `ollama pull {report.Ollama.ConfiguredModel}`."
+                : $"Run `ollama pull {report.Ollama.ConfiguredModel}` on the remote Ollama host.";
+            checks.Add(DoctorCheck.Warn("Ollama",
+                $"reachable at {report.Ollama.BaseUrl}, but the embedding model {report.Ollama.ConfiguredModel} is not pulled. " +
+                $"Embedder is stuck and semantic / hybrid search is degraded; keyword search still works. {hint}",
+                "pipeline"));
+        }
+        else if (report.Ollama.EmbeddingModelAvailable == true)
+        {
+            // Server up, model listed as pulled, yet the embed probe failed —
+            // the model can't actually load. The known cause is the incomplete
+            // Homebrew *formula* build (no llama-server, GGML models never
+            // load); GPU/memory pressure is the other candidate.
+            checks.Add(DoctorCheck.Warn("Ollama",
+                $"reachable at {report.Ollama.BaseUrl} and {report.Ollama.ConfiguredModel} is pulled, but the embed probe failed — " +
+                "the model can't load. If Ollama came from the Homebrew formula, switch to the cask (`brew install --cask ollama-app`) — " +
+                "see the README's Ollama note; otherwise check the host's free memory and the Ollama server log.",
+                "pipeline"));
         }
         else
         {

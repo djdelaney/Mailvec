@@ -16,7 +16,7 @@ ops/build-mcpb.sh         # produces dist/mailvec-<version>.mcpb
 open dist/mailvec-*.mcpb  # hands it to Claude Desktop
 ```
 
-> **Apple Silicon only as shipped**: the bundle is a self-contained `osx-arm64` build (`RID=` in `ops/build-mcpb.sh`). On an Intel Mac, change that to `osx-x64` before building — an arm64 bundle installs fine but its binary won't start, and the only symptom is a missing connector.
+> **Apple Silicon only**: the bundle is a self-contained `osx-arm64` build (`RID=` in `ops/build-mcpb.sh`). Intel Macs are not supported anywhere in Mailvec — the install scripts refuse to run on x86_64. (An arm64 bundle installs fine on an Intel Mac but its binary won't start, and the only symptom is a missing connector.)
 
 `ops/install.sh` writes `~/Library/Application Support/Mailvec/appsettings.Local.json` with your DB path, Maildir root, Ollama endpoint, and Fastmail account id. The bundled MCP reads from the same file, so the only setting in Claude Desktop's install dialog is the **Log tool calls** debug toggle — everything else flows from the shared config and reinstalling the bundle never asks you to re-enter your account id.
 
