@@ -173,6 +173,44 @@ public class VectorSearchServiceTests
     }
 
     [Fact]
+    public void Escalates_k_when_soft_deleted_messages_crowd_the_nearest_neighbours()
+    {
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var now = DateTimeOffset.UtcNow;
+
+        // 60 soft-deleted messages own the nearest chunks; 3 live targets sit
+        // far down the ranking. Nothing purges soft-deletes automatically
+        // (purge-deleted is a manual CLI command), so this is the steady state
+        // of a delete-heavy corpus. The old unfiltered path did a single-shot
+        // KNN: the deleted_at IS NULL predicate dropped every neighbour and
+        // returned 0 hits even though live matches existed.
+        var deletedIds = new List<long>();
+        for (var i = 0; i < 60; i++)
+        {
+            long id = messages.Upsert(M($"dead{i}@x", "noise", "noise"), "INBOX", "INBOX/cur", $"d{i}", now);
+            chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "noise", 1)], [OneHot(1024, hotIndex: i)], now);
+            deletedIds.Add(id);
+        }
+        messages.MarkDeleted(deletedIds, now);
+        for (var i = 0; i < 3; i++)
+        {
+            long id = messages.Upsert(M($"live{i}@x", "target", "target"), "INBOX", "INBOX/cur", $"l{i}", now);
+            chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "target", 1)], [OneHot(1024, hotIndex: 500 + i)], now);
+        }
+
+        var query = OneHot(1024, hotIndex: 0);   // nearest neighbours are all soft-deleted
+
+        // No explicit filters — this exercises the formerly short-circuited path.
+        var hits = search.SearchByVector(query, limit: 3, k: 5);
+
+        hits.Count.ShouldBe(3);
+        hits.ShouldAllBe(h => h.MessageIdHeader.StartsWith("live"));
+    }
+
+    [Fact]
     public void Returns_best_chunk_per_message_when_a_message_has_multiple()
     {
         using var db = new TempDatabase();

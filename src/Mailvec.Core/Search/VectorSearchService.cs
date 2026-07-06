@@ -89,15 +89,21 @@ public sealed class VectorSearchService(ConnectionFactory connections, IEmbeddin
 
         using var conn = connections.Open();
 
-        if (filters.IsEmpty)
-            return ExecuteKnn(conn, queryVector, limit, k, filters);
-
-        // Filtered: escalate k until we have `limit` post-filter hits or we've
-        // fetched every available neighbour. Bounding by the chunk count (not a
-        // "result count stopped growing" heuristic) is what makes this correct —
-        // in-filter matches can sit arbitrarily far down the distance ranking, so
-        // we must keep widening until either limit is met or there's nothing left
-        // to widen into. KnnEscalationCap backstops a pathologically large table.
+        // Escalate k until we have `limit` post-filter hits or we've fetched
+        // every available neighbour — for ALL queries, not just explicitly
+        // filtered ones. Even an "unfiltered" KNN is post-filtered twice: the
+        // deleted_at IS NULL predicate (nothing purges soft-deletes
+        // automatically, so a delete-heavy corpus starved results here — the
+        // old IsEmpty short-circuit returned fewer than `limit` while live
+        // matches sat past k), and the one-row-per-message window (k raw
+        // neighbours collapse to fewer messages when a message has several
+        // matching chunks). When the first round already yields `limit` hits
+        // — the overwhelmingly common case — this costs exactly one KNN,
+        // identical to the old short-circuit. Bounding by the chunk count
+        // (not a "result count stopped growing" heuristic) is what makes the
+        // loop correct — qualifying matches can sit arbitrarily far down the
+        // distance ranking, so we must keep widening until either limit is
+        // met or there's nothing left to widen into.
         var maxK = Math.Min(Vec0MaxK, CountChunks(conn));
         if (maxK == 0) return [];
         var curK = Math.Min(Math.Max(k, limit), maxK);
