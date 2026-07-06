@@ -100,6 +100,41 @@ public class MessageIngestServiceTests : IDisposable
         await service.StopAsync(default);
     }
 
+    [Fact]
+    public async Task Recovers_when_the_maildir_root_appears_after_startup()
+    {
+        // Fresh-install ordering: services installed before mbsync's first
+        // sync ever created the Maildir root. The watcher logs "disabled" at
+        // startup; pre-fix that was permanent (no retry until process
+        // restart). With the timer-tick retry, indexing comes online once
+        // the root appears.
+        var missingRoot = Path.Combine(Path.GetDirectoryName(_root)!, "NotYetCreated");
+        var service = BuildService(rootOverride: missingRoot, scanIntervalSeconds: 1);
+        await service.StartAsync(default);
+
+        // Root (and mail) appear after the service is already running.
+        var dir = Path.Combine(missingRoot, "INBOX", "cur");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "late.host:2,S"), """
+            Message-ID: <late@x>
+            Date: Mon, 13 Jan 2025 10:15:00 -0500
+            From: alice@example.com
+            To: bob@example.com
+            Subject: Test
+            MIME-Version: 1.0
+            Content-Type: text/plain; charset=utf-8
+
+            arrived after startup
+
+            """);
+
+        (await WaitForAsync(() => _messages.CountAll() == 1, TimeSpan.FromSeconds(15)))
+            .ShouldBeTrue("indexer never picked up mail from a root created after startup");
+        _messages.GetByMessageId("late@x").ShouldNotBeNull();
+
+        await service.StopAsync(default);
+    }
+
     private async Task<bool> WaitForAsync(Func<bool> condition, TimeSpan timeout, Action? retouch = null)
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
@@ -131,12 +166,12 @@ public class MessageIngestServiceTests : IDisposable
             """);
     }
 
-    private MessageIngestService BuildService(int debounceMs = 200)
+    private MessageIngestService BuildService(int debounceMs = 200, string? rootOverride = null, int scanIntervalSeconds = 9999)
     {
-        var ingestOpts = Options.Create(new IngestOptions { MaildirRoot = _root });
+        var ingestOpts = Options.Create(new IngestOptions { MaildirRoot = rootOverride ?? _root });
         var indexerOpts = Options.Create(new IndexerOptions
         {
-            ScanIntervalSeconds = 9999,        // disable timer-triggered rescans during the test
+            ScanIntervalSeconds = scanIntervalSeconds,   // 9999 = timer effectively disabled
             DebounceMilliseconds = debounceMs,
         });
         var chunks = new ChunkRepository(_connections);
