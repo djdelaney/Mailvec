@@ -117,7 +117,10 @@ struct MailvecTrayApp: App {
             .environment(\.colorScheme, .light)
             .onAppear { TrayLog.info("popover opened") }
         } label: {
-            MenuBarIcon(severity: model.health?.severity ?? .ok)
+            // effectiveSeverity, not `health?.severity ?? .ok`: a dead server
+            // must show the error badge (stale green is a lie), and the first
+            // poll shows the syncing pulse instead of a false all-clear.
+            MenuBarIcon(severity: model.effectiveSeverity)
         }
         .menuBarExtraStyle(.window)
 
