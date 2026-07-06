@@ -194,6 +194,93 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    public void Duplicate_copies_across_folders_are_searchable_under_each_folder()
+    {
+        // Gmail-shaped corpus: the same Message-ID lives in All Mail AND a
+        // label folder. One messages row (never one per copy), but folder
+        // filtering and list_folders must see every membership.
+        WriteEml("INBOX",   "cur", "d1.host:2,S", "quarterly report attached", "dup@x");
+        WriteEml("AllMail", "cur", "d2.host:2,S", "quarterly report attached", "dup@x");
+
+        _scanner.ScanAll();
+        _messages.CountAll().ShouldBe(1);
+
+        var keyword = new Mailvec.Core.Search.KeywordSearchService(_connections);
+        keyword.Search("quarterly", 10, new Mailvec.Core.Search.SearchFilters(Folder: "INBOX")).Count.ShouldBe(1);
+        keyword.Search("quarterly", 10, new Mailvec.Core.Search.SearchFilters(Folder: "AllMail")).Count.ShouldBe(1);
+        keyword.Search("quarterly", 10, new Mailvec.Core.Search.SearchFilters(Folder: "Elsewhere")).Count.ShouldBe(0);
+
+        var stats = _messages.FolderStats();
+        stats.Single(s => s.Folder == "INBOX").MessageCount.ShouldBe(1);
+        stats.Single(s => s.Folder == "AllMail").MessageCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Folder_attribution_is_stable_when_the_other_copy_is_rewritten()
+    {
+        WriteEml("INBOX",   "cur", "s1.host:2,S", "same body", "sticky@x");
+        WriteEml("AllMail", "cur", "s2.host:2,S", "same body", "sticky@x");
+        _scanner.ScanAll();
+
+        var winner = _messages.GetByMessageId("sticky@x").ShouldNotBeNull().Folder;
+        var loserFolder = winner == "INBOX" ? "AllMail" : "INBOX";
+        var loserFile = winner == "INBOX" ? "s2.host:2,S" : "s1.host:2,S";
+
+        // Rewrite the non-attributed copy: mtime bumps → full reparse →
+        // upsert conflict. Under the old last-writer-wins clause this flipped
+        // the attributed folder to whichever copy was parsed most recently.
+        File.Delete(Path.Combine(_root, loserFolder, "cur", loserFile));
+        WriteEml(loserFolder, "cur", loserFile, "same body", "sticky@x");
+        _scanner.ScanAll();
+
+        _messages.GetByMessageId("sticky@x").ShouldNotBeNull().Folder.ShouldBe(winner);
+    }
+
+    [Fact]
+    public void Deleting_the_attributed_copy_repoints_to_the_surviving_copy()
+    {
+        WriteEml("INBOX",   "cur", "r1.host:2,S", "same body", "repoint@x");
+        WriteEml("AllMail", "cur", "r2.host:2,S", "same body", "repoint@x");
+        _scanner.ScanAll();
+
+        var msg = _messages.GetByMessageId("repoint@x").ShouldNotBeNull();
+        var survivor = msg.Folder == "INBOX" ? "AllMail" : "INBOX";
+        File.Delete(Path.Combine(_root, msg.Folder, "cur", msg.MaildirFilename));
+
+        var second = _scanner.ScanAll();
+
+        // Not a deletion: the message lives on via the other copy, and the
+        // rename-repair pass (now load-bearing, since the upsert no longer
+        // rewrites the location triple) repoints attribution to it.
+        second.SoftDeleted.ShouldBe(0);
+        var after = _messages.GetByMessageId("repoint@x").ShouldNotBeNull();
+        after.DeletedAt.ShouldBeNull();
+        after.Folder.ShouldBe(survivor);
+    }
+
+    [Fact]
+    public void Resurrected_message_takes_the_new_copys_folder()
+    {
+        var path = WriteEml("INBOX", "cur", "z.host:2,S", "back from the dead", "lazarus@x");
+        _scanner.ScanAll();
+        File.Delete(path);
+        _scanner.ScanAll();
+        _messages.GetByMessageId("lazarus@x").ShouldNotBeNull().DeletedAt.ShouldNotBeNull();
+
+        // Same Message-ID reappears in a different folder (restored from
+        // Trash, re-delivered). The stored INBOX path is dead and its
+        // sync_state row is gone, so no repair pass will ever fix it — the
+        // conflict clause must take the new copy's location on resurrection.
+        WriteEml("Restored", "cur", "z2.host:2,S", "back from the dead", "lazarus@x");
+        _scanner.ScanAll();
+
+        var msg = _messages.GetByMessageId("lazarus@x").ShouldNotBeNull();
+        msg.DeletedAt.ShouldBeNull();
+        msg.Folder.ShouldBe("Restored");
+        msg.MaildirFilename.ShouldBe("z2.host:2,S");
+    }
+
+    [Fact]
     public void Unreadable_folder_is_skipped_and_deletion_reconciliation_deferred()
     {
         // chmod can't block root (some CI containers), and unix modes don't

@@ -385,6 +385,8 @@ public class SchemaMigratorTests
             TableHasColumn(connections, "messages", "attachment_text").ShouldBeTrue();
             TableHasColumn(connections, "chunks", "source").ShouldBeTrue();
             TableHasColumn(connections, "chunks", "attachment_id").ShouldBeTrue();
+            TableHasColumn(connections, "messages", "embed_epoch").ShouldBeTrue();     // v7
+            TableHasColumn(connections, "sync_state", "folder").ShouldBeTrue();        // v8
 
             // The pre-existing row survives and is still searchable via FTS,
             // i.e. the rebuild repopulated the index from messages.
@@ -491,6 +493,16 @@ public class SchemaMigratorTests
                 UNIQUE(message_id, chunk_index)
             )
             """,
+            // sync_state has been part of the schema since v1 (reconciliation
+            // predates every migration); 008 ALTERs it, so the seed needs it.
+            """
+            CREATE TABLE sync_state (
+                maildir_full_path TEXT PRIMARY KEY,
+                message_id        TEXT,
+                last_seen_at      TEXT NOT NULL,
+                content_hash      TEXT
+            )
+            """,
             "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
             "INSERT INTO metadata(key, value) VALUES ('schema_version', '1')",
         };
@@ -580,6 +592,15 @@ public class SchemaMigratorTests
                 chunk_text   TEXT NOT NULL,
                 token_count  INTEGER,
                 UNIQUE(message_id, chunk_index)
+            )
+            """,
+            // sync_state has been part of the schema since v1; 008 ALTERs it.
+            """
+            CREATE TABLE sync_state (
+                maildir_full_path TEXT PRIMARY KEY,
+                message_id        TEXT,
+                last_seen_at      TEXT NOT NULL,
+                content_hash      TEXT
             )
             """,
             "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",

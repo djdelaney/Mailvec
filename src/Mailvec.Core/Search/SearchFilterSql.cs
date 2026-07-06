@@ -18,7 +18,20 @@ internal static class SearchFilterSql
     {
         if (!string.IsNullOrEmpty(filters.Folder))
         {
-            sql.Append("\n  AND m.folder = $folder");
+            // A message matches a folder if ANY of its live copies is in it,
+            // not just the attributed primary (messages.folder). sync_state is
+            // the membership source: one row per live file, folder written by
+            // the scanner (v8). The `m.folder = $folder` half keeps single-copy
+            // semantics identical, covers rows written by pre-v8 binaries
+            // whose sync_state.folder is still NULL (self-heals on the next
+            // scan), and lets tests that seed messages without sync_state keep
+            // working. Probe is index-only via idx_sync_state_message_folder.
+            sql.Append("""
+
+                  AND (m.folder = $folder OR EXISTS (
+                        SELECT 1 FROM sync_state ss
+                        WHERE ss.message_id = m.message_id AND ss.folder = $folder))
+                """);
             cmd.Parameters.AddWithValue("$folder", filters.Folder);
         }
         if (filters.DateFrom is { } from)

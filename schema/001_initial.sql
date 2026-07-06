@@ -153,13 +153,25 @@ CREATE VIRTUAL TABLE chunk_embeddings USING vec0(
     embedding  FLOAT[1024]
 );
 
--- Tracks Maildir state for reconciliation between scans.
+-- Tracks Maildir state for reconciliation between scans — and doubles as the
+-- folder-membership table for search. One message can live in several folders
+-- at once (Gmail's All Mail + every label, self-CC'd INBOX + Sent), but
+-- messages keys on message_id UNIQUE, so messages.folder holds only the
+-- attributed primary copy; folder filters and list_folders counts consult
+-- these rows so a message is findable under every folder it actually lives
+-- in. The scanner writes `folder` on every upsert; NULL only on rows written
+-- by pre-v8 binaries (self-heals on the next full scan).
 CREATE TABLE sync_state (
     maildir_full_path TEXT PRIMARY KEY,
     message_id        TEXT,
     last_seen_at      TEXT NOT NULL,
-    content_hash      TEXT
+    content_hash      TEXT,
+    folder            TEXT
 );
+
+-- Serves both the folder-membership EXISTS probe in SearchFilterSql and the
+-- scanner's rename-repair lookup (FreshPathForMessageId).
+CREATE INDEX idx_sync_state_message_folder ON sync_state(message_id, folder);
 
 -- Schema + embedding-model metadata. Seeded by the migration runner; the
 -- embedding values are substituted from config at fresh-DB creation (see
@@ -171,6 +183,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '7'),
+    ('schema_version',       '8'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');

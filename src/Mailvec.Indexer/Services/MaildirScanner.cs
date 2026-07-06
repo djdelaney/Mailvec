@@ -250,7 +250,7 @@ public sealed class MaildirScanner(
             if (prior is { MessageId: not null, ContentHash: not null }
                 && File.GetLastWriteTimeUtc(filePath) <= prior.LastSeenAt.UtcDateTime)
             {
-                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash);
+                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash, folderName);
                 ctx.NoteWrite();
                 return IngestOutcome.Ok;
             }
@@ -277,7 +277,7 @@ public sealed class MaildirScanner(
                     "Content changed for message_id={MessageId} (id={Id}); cleared embeddings.",
                     parsed.MessageId, outcome.Id);
             }
-            syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash);
+            syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash, folderName);
             ctx.NoteWrite();
             return IngestOutcome.Ok;
         }
@@ -297,7 +297,7 @@ public sealed class MaildirScanner(
             // failure on a changed file silently mask the change forever.
             try
             {
-                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, contentHash: null);
+                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, contentHash: null, folderName);
                 ctx.NoteWrite();
             }
             catch (Exception refreshEx)

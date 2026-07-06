@@ -35,7 +35,10 @@ public sealed class SchemaMigrator(
     // v7 adds messages.embed_epoch, the monotonic re-queue counter that lets
     // the embedder's guarded chunk write detect re-queues that don't change
     // content_hash (attachment re-extraction, OCR write-back, backfills).
-    public const int LatestSchemaVersion = 7;
+    // v8 adds sync_state.folder (+ index): folder membership for search, so a
+    // message living in several folders (Gmail All Mail + labels) is findable
+    // under each. No backfill — the scanner populates it on its next full scan.
+    public const int LatestSchemaVersion = 8;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying
