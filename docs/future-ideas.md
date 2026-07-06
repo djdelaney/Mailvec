@@ -20,6 +20,44 @@ A middle ground between local-only and public — laptop on the same Tailscale t
 
 Implied by any cloud-access path. Out of scope for this single-user system.
 
+## Packaged distribution (installer + notarized artifacts)
+
+Today the **only** way to get any part of Mailvec is to build from source: clone
+the repo, install the prereqs via Homebrew (including the .NET 10 SDK, and full
+Xcode + xcodegen if you want the tray), then `ops/install-all.sh`. That's fine
+for the author and for contributors; it's a real adoption wall for anyone else.
+A distribution story would have three artifacts, all buildable from the
+existing scripts:
+
+1. **Notarized tray `.app`.** `ops/build-tray.sh` already signs with a
+   Developer ID certificate when one is in the keychain — but without
+   notarization, a downloaded `.app` is killed by Gatekeeper on another
+   machine (`install-tray.sh`'s quarantine-strip only covers local builds).
+   The missing lane is `xcrun notarytool submit` (App Store Connect API key)
+   + `xcrun stapler staple`, after which a zipped `.app` can be attached to a
+   GitHub Release. This removes the Xcode + xcodegen prerequisite for tray
+   users entirely.
+2. **Services + CLI.** The four .NET binaries are already `dotnet publish`-ed
+   by `ops/install.sh`; a release artifact would be that published output
+   (self-contained, like the MCPB, to drop the .NET SDK prerequisite) plus
+   the installer running against it instead of the working tree. Signing +
+   notarization applies here too — launchd runs local unsigned binaries fine,
+   but downloaded ones carry quarantine. A Homebrew tap/cask is the
+   alternative packaging, with its own update story.
+3. **Prebuilt `.mcpb` per release.** `ops/build-mcpb.sh` output attached to
+   the GitHub Release — it's already self-contained; it just isn't published
+   anywhere. (It's the read-side only: without the installed services there
+   is nothing to search — the `setupHint` guard covers that failure mode.)
+
+CI can build all three on a `v*` tag now that unified versioning + tagging
+exist. What stays user-owned regardless of packaging: mbsync config, the IMAP
+app-password in the Keychain, and Ollama model pulls — the installer
+prompts/checks for these but deliberately doesn't own them.
+
+Deferred until there are actual second users to distribute to; sequenced so
+the tray notarization lane (the biggest UX win per unit of work) can ship
+first on its own.
+
 ## Still open (small)
 
 Carried forward from the original design doc — none are committed work, all gated on a problem actually being observed:
