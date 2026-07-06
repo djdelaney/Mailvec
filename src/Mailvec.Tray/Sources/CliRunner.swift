@@ -28,7 +28,18 @@ enum CliRunner {
     /// explicit `activate` brings Terminal forward; tested with Terminal
     /// already running, not running, and with multiple windows open.
     static func runInTerminal(_ args: [String]) {
-        let cmd = ([resolvedBinary()] + args)
+        guard let binary = installedBinary() else {
+            // Spawning the bare name "mailvec" here used to open a Terminal
+            // window showing only `zsh: command not found: mailvec` — a dead
+            // end behind eight tray buttons. Explain instead.
+            showAlert(
+                title: "mailvec CLI not found",
+                text: "Looked in ~/.local/bin and /usr/local/bin. "
+                    + "Run ops/install.sh (first install) or ops/redeploy.sh cli from the Mailvec repo to install it. "
+                    + "If you keep the CLI somewhere custom, symlink it to /usr/local/bin/mailvec.")
+            return
+        }
+        let cmd = ([binary] + args)
             // Escape backslashes before double-quotes so a literal backslash in an
             // arg survives shell double-quoting instead of consuming the next char.
             .map { "\"\($0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\"" }
@@ -43,18 +54,40 @@ enum CliRunner {
         NSAppleScript(source: script)?.executeAndReturnError(&err)
         if let err {
             TrayLog.warn("CLI Terminal spawn failed", "\(err)")
+            // Surface the failure — previously log-only, so a user who denied
+            // the Automation prompt once had every CLI button silently do
+            // nothing forever. -1743 = errAEEventNotPermitted.
+            let code = (err[NSAppleScript.errorNumber] as? Int) ?? 0
+            if code == -1743 {
+                showAlert(
+                    title: "Automation permission needed",
+                    text: "macOS blocked Mailvec from opening Terminal. "
+                        + "Allow it under System Settings → Privacy & Security → Automation → Mailvec.Tray → Terminal, then try again.")
+            } else {
+                showAlert(
+                    title: "Couldn't open Terminal",
+                    text: (err[NSAppleScript.errorMessage] as? String) ?? "AppleScript error \(code).")
+            }
         }
     }
 
-    /// Returns the absolute path to the `mailvec` shim if installed, or the
-    /// bare string "mailvec" as a last-resort fallback.
-    static func resolvedBinary() -> String {
+    /// Absolute path to the `mailvec` shim, or nil when it isn't installed
+    /// in either location ops/install.sh (or a user symlink) would put it.
+    static func installedBinary() -> String? {
         let candidates = [
             ("~/.local/bin/mailvec" as NSString).expandingTildeInPath,
             "/usr/local/bin/mailvec",
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-            ?? "mailvec"
+    }
+
+    private static func showAlert(title: String, text: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     private static func asAppleScriptString(_ s: String) -> String {

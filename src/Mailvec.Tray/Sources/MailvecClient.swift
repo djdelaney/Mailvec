@@ -9,7 +9,18 @@ import Foundation
 actor MailvecClient {
     static let shared = MailvecClient()
 
-    private let base = URL(string: "http://127.0.0.1:3333")!
+    // The server port is user-configurable (Mcp:Port in appsettings.json),
+    // but this URL used to be hardcoded — a user who moved the port (3333
+    // collision) got a tray that spun forever with no tray-side knob. Read
+    // an override from UserDefaults; set it with
+    //   defaults write com.mailvec.tray mailvec.serverPort -int <port>
+    // then relaunch the tray. Host stays loopback on purpose: 127.0.0.1 is
+    // the server's trust boundary.
+    private let base: URL = {
+        let stored = UserDefaults.standard.integer(forKey: "mailvec.serverPort")
+        let port = (1...65535).contains(stored) ? stored : 3333
+        return URL(string: "http://127.0.0.1:\(port)")!
+    }()
     private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         // /tray/status pings Ollama (up to 2s) and shells out to launchctl

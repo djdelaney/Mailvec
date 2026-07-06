@@ -88,7 +88,7 @@ struct SearchAndMCPTab: View {
                     }
                 }
             } header: { Text("MCP server") } footer: {
-                RowHint(text: "Transport, bind address, and port are managed by the launchd agent com.mailvec.mcp. To change them, edit src/Mailvec.Mcp/appsettings.json and run ops/redeploy.sh mcp. Default 127.0.0.1:3333 is the trust boundary.")
+                RowHint(text: "Transport, bind address, and port are managed by the launchd agent com.mailvec.mcp. To change them, edit src/Mailvec.Mcp/appsettings.json and run ops/redeploy.sh mcp — then point this tray at the new port with `defaults write com.mailvec.tray mailvec.serverPort -int <port>` and relaunch it. Default 127.0.0.1:3333 is the trust boundary.")
             }
 
             Section {
