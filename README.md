@@ -49,10 +49,10 @@ Requires macOS 14+ on **Apple Silicon** (Intel Macs are not supported — macOS 
 ```sh
 # 1. Prereqs
 brew install --cask dotnet-sdk   # the .NET 10 SDK (the cask; see the dotnet note below)
-brew install isync xcodegen
+brew install isync xcodegen jq   # jq is only used by the validation snippets below
 brew install --cask ollama-app   # the cask, NOT `brew install ollama` — see note below
 open -a Ollama                   # launch once; enable "Open at Login" to survive reboot
-ollama pull mxbai-embed-large
+ollama pull mxbai-embed-large    # needs Ollama ≥ 0.21.2 (the cask auto-updates; see ops/UPGRADING.md)
 ollama pull qwen2.5vl:7b         # vision model for OCR'ing scanned PDFs (~6 GB; Embedder:OcrEnabled, on by default)
 
 # 2. Configure mbsync — full walkthrough in docs/imap-setup.md; the short version:

@@ -17,4 +17,14 @@ PUBLISH_DIR="$HOME/.local/share/mailvec/mcp"
 
 cd "$REPO_ROOT"
 dotnet publish src/Mailvec.Mcp/Mailvec.Mcp.csproj -c Release -o "$PUBLISH_DIR"
+
+# Stable-signature the publish output. Without this, every republish carries
+# a fresh ad-hoc CDHash and Claude Desktop re-fires the TCC permission
+# dialogs (TCC anchors grants to the code signature) — the exact problem
+# ops/sign-publish.sh exists to solve, and every other publish path already
+# goes through it.
+# shellcheck source=sign-publish.sh
+source "$REPO_ROOT/ops/sign-publish.sh"
+mailvec_sign_publish "$PUBLISH_DIR" "Mailvec.Mcp" "com.mailvec.mcp"
+
 echo "Published to $PUBLISH_DIR"
