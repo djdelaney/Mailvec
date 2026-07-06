@@ -8,6 +8,12 @@ struct DashboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             HeaderBand()
+            // Mid-session server death: refresh() keeps the last good health
+            // so the dashboard doesn't blank on a blip, but stale numbers
+            // with no marker read as live. This strip is the marker.
+            if model.isDisconnected && model.health != nil {
+                DisconnectedBanner()
+            }
             DashboardSearchField(placeholder:
                 "Search \(model.health?.embedded ?? 0) indexed emails…")
                 .padding(.horizontal, 12)
@@ -49,6 +55,16 @@ private struct HeaderBand: View {
             : Image(systemName: "tray.full.fill")
     }
 
+    /// The pill must reflect connectivity, not just the last decoded health:
+    /// `severity: h?.severity ?? .ok` rendered "All clear" both on first
+    /// launch before any poll succeeded AND over a frozen dashboard after the
+    /// server died mid-session.
+    private var pillState: StatusPill.PillState {
+        if model.isDisconnected { return .unreachable }
+        if let h = model.health { return .severity(h.severity) }
+        return .connecting
+    }
+
     var body: some View {
         let h = model.health
         // No decorative watermark behind this band — its faint strokes sat
@@ -63,7 +79,7 @@ private struct HeaderBand: View {
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.5))
                 Spacer()
-                StatusPill(severity: h?.severity ?? .ok)
+                StatusPill(state: pillState)
             }
             HStack(spacing: 14) {
                 CoverageRing(
@@ -605,6 +621,30 @@ private func fmtBytes(_ b: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: b, countStyle: .file)
 }
 
+/// Red strip shown between the header and the (stale) dashboard body once
+/// the poller has missed enough consecutive polls to call the server gone.
+private struct DisconnectedBanner: View {
+    @EnvironmentObject var model: TrayModel
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.horizontal.circle.fill")
+            Text(message)
+                .font(.system(size: 11, weight: .semibold))
+            Spacer()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 7)
+        .foregroundStyle(.white)
+        .background(Brand.statusError)
+    }
+    private var message: String {
+        // relative() already renders "… ago" via RelativeDateTimeFormatter.
+        if let at = model.lastSuccessAt {
+            return "Server unreachable — showing data from \(relative(at)). Try `ops/redeploy.sh mcp`."
+        }
+        return "Server unreachable — showing stale data. Try `ops/redeploy.sh mcp`."
+    }
+}
+
 private struct LoadingRow: View {
     @EnvironmentObject var model: TrayModel
     var body: some View {
@@ -617,6 +657,17 @@ private struct LoadingRow: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
                     .textSelection(.enabled)
+                // First-launch UX: a raw URLError gives no clue what to do.
+                // If we've never reached the server, the likeliest cause is
+                // that the services aren't installed (tray installed first)
+                // or aren't running — say so.
+                Text("Mailvec's background services may not be installed or running. "
+                    + "Run ops/install.sh from the Mailvec repo (first install) "
+                    + "or ops/redeploy.sh mcp (restart the server).")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
             }
         }
         .padding(40)

@@ -59,11 +59,12 @@ struct SearchView: View {
                     EmptyState()
                 } else if model.searchHits.isEmpty {
                     // No hits yet: either the first search for this query is
-                    // still running (spinner) or it genuinely returned nothing
-                    // (message). Either way, beats a blank pane. A refine over
-                    // existing results keeps showing ResultsList while the
-                    // field/header spinners signal the in-flight request.
-                    SearchStatusState(searching: model.isSearching)
+                    // still running (spinner), it failed (error — a down
+                    // server must NOT render as "No matches"), or it genuinely
+                    // returned nothing (message). A refine over existing
+                    // results keeps showing ResultsList while the field/header
+                    // spinners signal the in-flight request.
+                    SearchStatusState(searching: model.isSearching, error: model.searchError)
                 } else {
                     ResultsList()
                 }
@@ -240,11 +241,14 @@ private struct FilterChipContent: View {
 // MARK: Searching / no-results state
 
 /// Shown when the query is non-empty but there are no hits to render — a
-/// spinner while the first search runs, or a "no matches" message once it
-/// completes empty. Prevents the blank pane that made a running search look
-/// like an ignored keystroke.
+/// spinner while the first search runs, a search-failed message when the
+/// request errored (previously that fell through to "No matches", which is
+/// actively wrong when the server is down), or a "no matches" message once
+/// it completes empty. Prevents the blank pane that made a running search
+/// look like an ignored keystroke.
 private struct SearchStatusState: View {
     let searching: Bool
+    var error: String? = nil
     var body: some View {
         VStack(spacing: 10) {
             Spacer()
@@ -253,6 +257,18 @@ private struct SearchStatusState: View {
                 Text("Searching…")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+            } else if let error {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Brand.statusError)
+                Text("Search failed")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+                    .textSelection(.enabled)
             } else {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 22))

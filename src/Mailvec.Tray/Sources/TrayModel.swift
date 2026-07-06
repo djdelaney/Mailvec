@@ -13,6 +13,34 @@ final class TrayModel: ObservableObject {
 
     @Published var health: TrayHealth?
     @Published var lastError: String?
+
+    /// Consecutive /tray/status poll failures. `refresh()` deliberately keeps
+    /// the last good `health` on error (so a blip doesn't blank the dashboard),
+    /// which used to mean a dead server left frozen counts under a green
+    /// "All clear" pill indefinitely — this counter is what lets the UI tell
+    /// "stale but momentary" from "the server is gone".
+    @Published private(set) var consecutivePollFailures = 0
+    /// Wall-clock of the last successful status poll — the "showing data
+    /// from Xs ago" timestamp on the disconnected banner.
+    @Published private(set) var lastSuccessAt: Date?
+    /// Two missed polls (~10s at the 5s cadence) before declaring the server
+    /// unreachable: one miss can be a restart (ops/redeploy.sh bounces the
+    /// MCP); two in a row is a real outage worth alarming on.
+    private let disconnectedAfterFailures = 2
+    var isDisconnected: Bool { consecutivePollFailures >= disconnectedAfterFailures }
+
+    /// Severity for the menu-bar icon: server state when we can see it,
+    /// error when we've lost the server (stale data must not render a green
+    /// icon), syncing-pulse while the first poll is still connecting.
+    var effectiveSeverity: TrayHealth.Severity {
+        if isDisconnected { return .error }
+        return health?.severity ?? .syncing
+    }
+
+    /// Error from the most recent (non-superseded) search request, rendered
+    /// by SearchView. Distinct from `lastError`: the dashboard's poll errors
+    /// and a search failure must not clobber each other's surfaces.
+    @Published var searchError: String?
     @Published var searchQuery: String = ""
     @Published var searchHits: [SearchHit] = []
     /// True while a `/tray/search` request is in flight. Drives the spinner
@@ -137,8 +165,11 @@ final class TrayModel: ObservableObject {
             detectAndNotifyTransitions(from: before, to: next)
             health = next
             lastError = nil
+            consecutivePollFailures = 0
+            lastSuccessAt = Date()
         } catch {
             lastError = error.localizedDescription
+            consecutivePollFailures += 1
         }
     }
 
@@ -222,6 +253,7 @@ final class TrayModel: ObservableObject {
             searchHits = []
             searchSelection = nil
             expandedHit = nil
+            searchError = nil
             return
         }
         // Flip the spinner on at the keystroke, not when the debounced request
@@ -273,6 +305,7 @@ final class TrayModel: ObservableObject {
                 searchHits = []
                 searchSelection = nil
                 expandedHit = nil
+                searchError = nil
             }
             return
         }
@@ -295,6 +328,7 @@ final class TrayModel: ObservableObject {
             // A newer search started while this one was awaiting (or cancelled
             // it) — drop its results rather than clobbering the fresher query's.
             guard gen == searchGeneration else { return }
+            searchError = nil
             searchHits = hits
             // Don't auto-expand the first hit — the user explicitly picks
             // a row to preview. If the previously-selected id is still in
@@ -315,7 +349,14 @@ final class TrayModel: ObservableObject {
             // Superseded / cancelled request — stay silent so a newer search's
             // spinner and results aren't disturbed by this one's cancellation.
             guard gen == searchGeneration else { return }
-            lastError = error.localizedDescription
+            // Clear the stale hits: leaving the previous query's results under
+            // a failed search read as "the new search found these", and with
+            // the hits pane occupied the failure had no surface at all — a
+            // down server showed "No matches", which is actively wrong.
+            searchError = error.localizedDescription
+            searchHits = []
+            searchSelection = nil
+            expandedHit = nil
         }
     }
 
