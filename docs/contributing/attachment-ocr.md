@@ -129,7 +129,10 @@ set it to `-1` (pin-forever).
 3. ✅ `MaildirAttachmentReader` (decode-only Maildir bytes); `AttachmentExtractor` delegates to it.
 4. ✅ Embedder OCR pass (`AttachmentOcrService`): render → OCR → write `status='ocr'` →
    re-queue parent. Default-on, graceful skip when the model isn't pulled, poison-PDF→`failed`,
-   transient→retry. **Multi-page included here** (was listed under step 5). After this, OCR'd
+   transient→retry. Maildir read failures are tiered the same way: missing `.eml` → skip (an
+   indexer rescan reconciles), transient IO → retry next cycle, corrupt `.eml` / stale
+   `part_index` → `failed` (deterministic — before the tiering, one such row aborted both OCR
+   passes every cycle and stalled the queue). **Multi-page included here** (was listed under step 5). After this, OCR'd
    scans are *semantic*-searchable via the re-embed.
 5. ✅ Keyword/FTS: `SaveOcrText` rebuilds `messages.attachment_text` (the FTS trigger then syncs
    `messages_fts`), so OCR'd text is keyword-searchable too; `get_email` `IndexedForSearch` now

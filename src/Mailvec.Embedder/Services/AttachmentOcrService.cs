@@ -147,6 +147,32 @@ public sealed class AttachmentOcrService(
                     c.AttachmentId, c.MessageId);
                 continue;
             }
+            catch (IOException ex)
+            {
+                // Possibly transient (permissions blip, volume hiccup). Skip
+                // this candidate and retry next cycle; the rest of the batch
+                // still runs, so a persistent case costs one read per cycle
+                // without blocking the queue.
+                logger.LogWarning(ex,
+                    "OCR skip: could not read Maildir file for attachment {AttachmentId}; will retry next cycle.",
+                    c.AttachmentId);
+                continue;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Deterministic for this file+part: a corrupt .eml (MimeKit
+                // FormatException) or a stale part_index (ArgumentOutOfRange)
+                // fails identically on every read. Before this catch existed,
+                // the exception aborted BOTH OCR passes for the cycle, and the
+                // id-ordered candidate query re-selected the same poison row
+                // first every cycle — stalling the whole queue indefinitely.
+                // Mark failed to retire it.
+                logger.LogWarning(ex,
+                    "OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
+                    c.AttachmentId, c.MessageId);
+                messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                continue;
+            }
 
             int pages;
             try
@@ -257,6 +283,25 @@ public sealed class AttachmentOcrService(
                 logger.LogInformation(
                     "Image OCR skip: Maildir file missing for attachment {AttachmentId} (message {MessageId}).",
                     c.AttachmentId, c.MessageId);
+                continue;
+            }
+            catch (IOException ex)
+            {
+                // Same tiering as ProcessBatchAsync: possibly transient → skip
+                // and retry next cycle without blocking the rest of the batch.
+                logger.LogWarning(ex,
+                    "Image OCR skip: could not read Maildir file for attachment {AttachmentId}; will retry next cycle.",
+                    c.AttachmentId);
+                continue;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Deterministic read/parse failure (corrupt .eml, stale
+                // part_index) — retire it; see ProcessBatchAsync.
+                logger.LogWarning(ex,
+                    "Image OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
+                    c.AttachmentId, c.MessageId);
+                messages.MarkAttachmentOcrFailed(c.AttachmentId);
                 continue;
             }
 
