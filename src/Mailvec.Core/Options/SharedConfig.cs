@@ -32,6 +32,16 @@ public static class SharedConfig
     public const string SharedConfigPath = "~/Library/Application Support/Mailvec/appsettings.Local.json";
 
     /// <summary>
+    /// Whether the shared config file has been written (i.e. ops/install.sh
+    /// has run on this machine). Its absence is the tell that distinguishes
+    /// "MCPB bundle installed on a machine that never ran the installer" —
+    /// where the default DB path resolves to a freshly-created empty database
+    /// and every search silently returns nothing — from an ordinary empty
+    /// archive whose indexer just hasn't caught up yet.
+    /// </summary>
+    public static bool SharedConfigFileExists() => File.Exists(PathExpansion.Expand(SharedConfigPath));
+
+    /// <summary>
     /// Adds the shared file to the configuration builder at a precedence
     /// step between the binary-local appsettings and environment variables.
     /// Final order: appsettings.json defaults → shared file → env vars

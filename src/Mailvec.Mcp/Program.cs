@@ -57,6 +57,7 @@ static async Task RunStdio(string[] args)
         .WithToolsFromAssembly();
 
     var host = builder.Build();
+    WarnIfInstallerNeverRan(host.Services);
     host.Services.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
     await host.RunAsync().ConfigureAwait(false);
 }
@@ -79,6 +80,7 @@ static async Task RunHttp(string[] args)
     builder.WebHost.ConfigureKestrel(k => k.Listen(System.Net.IPAddress.Parse(mcpOpts.BindAddress), mcpOpts.Port));
 
     var app = builder.Build();
+    WarnIfInstallerNeverRan(app.Services);
     app.Services.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
 
     // DNS-rebinding / same-origin guard. Runs before every route (MCP, /health,
@@ -110,6 +112,29 @@ static async Task RunHttp(string[] args)
     app.MapTrayEndpoints();
     app.MapMcp();
     await app.RunAsync().ConfigureAwait(false);
+}
+
+// The MCPB bundle looks standalone but isn't: on a machine that never ran
+// ops/install.sh there is no shared config, the default Archive:DatabasePath
+// resolves to a path with nothing at it, and EnsureUpToDate (next line at both
+// call sites) creates a fresh EMPTY database there — every search then returns
+// zero results with no error anywhere. Deliberately a warning, not a refusal:
+// in stdio mode a startup failure just means "the connector never appears"
+// with the only clue buried in Claude Desktop's log — strictly worse. The
+// per-call SetupHints on search_emails/list_folders are what make the state
+// visible to the client LLM; this log line is for the human reading logs.
+static void WarnIfInstallerNeverRan(IServiceProvider sp)
+{
+    var archive = sp.GetRequiredService<IOptions<ArchiveOptions>>().Value;
+    var dbPath = Mailvec.Core.PathExpansion.Expand(archive.DatabasePath);
+    if (!File.Exists(dbPath) && !SharedConfig.SharedConfigFileExists())
+    {
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Mcp.Startup").LogWarning(
+            "No database at {DbPath} and no shared config at {ConfigPath} — ops/install.sh has likely " +
+            "never run on this machine. A fresh empty database will be created and every search will " +
+            "return zero results until the installer runs and the indexer populates the archive.",
+            dbPath, Mailvec.Core.PathExpansion.Expand(SharedConfig.SharedConfigPath));
+    }
 }
 
 static void AddMailvecServices(IServiceCollection services, IConfiguration config)

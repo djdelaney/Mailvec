@@ -25,6 +25,7 @@ public class SearchEmailsToolTests
             Helpers.Mcp(mcpOpts),
             Helpers.Fastmail(fastmailOpts),
             Helpers.Ollama(),
+            Helpers.Archive(),
             Helpers.NoopLogger());
     }
 
