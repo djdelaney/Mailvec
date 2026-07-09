@@ -2,7 +2,7 @@
 
 User-facing docs ("how Claude reads the file", inline content blocks, attachment content indexing) live in [`docs/attachments.md`](../attachments.md). This page is the implementation gotcha collection — read it before editing the MCP `view_attachment` tool, `AttachmentExtractor`, or related code.
 
-**Sibling tools.** All three attachment tools decode bytes out of the Maildir *in memory* and write nothing to disk. `view_attachment` inlines an image (`ImageContentBlock`) or a small text file (`TextContentBlock`), and returns a summary for anything else; `get_attachment_text` is a pure DB read of `extracted_text`; `get_attachment_page_image` renders a PDF page to JPEG via `PdfRenderer`/PDFium (see the native-dep note in `ops/UPGRADING.md` and the renderer's sizing/JPEG rationale in `PdfRenderer.cs`). The shared decode path is `AttachmentExtractor.ExtractInMemory`.
+**Sibling tools.** None of the three attachment tools writes to disk. The two viewer tools decode bytes out of the Maildir *in memory*: `view_attachment` inlines an image (`ImageContentBlock`) or a small text file (`TextContentBlock`), and returns a summary for anything else; `get_attachment_page_image` renders a PDF page to JPEG via `PdfRenderer`/PDFium (see the native-dep note in `ops/UPGRADING.md` and the renderer's sizing/JPEG rationale in `PdfRenderer.cs`). `get_attachment_text` never touches the Maildir at all — it's a pure DB read of `extracted_text`. The shared decode path for the two viewers is `AttachmentExtractor.ExtractInMemory`.
 
 ## Why binary types return a summary, not bytes
 

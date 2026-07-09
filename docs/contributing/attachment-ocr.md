@@ -54,7 +54,9 @@ pass re-OCRs it.
 - **New status value `ocr`** on `AttachmentTextExtractor` (`StatusOcr = "ocr"`),
   distinct from `done` (native) — gives provenance ("text via OCR", surfaced in
   `get_email`) and lets us re-run OCR later with a better model by selecting
-  `status='ocr'`. Two spots filter on `'done'` and must become `IN ('done','ocr')`:
+  `status='ocr'`. Two spots filter on `'done'` and must become `IN ('done','ocr')`
+  *(as shipped, only the second needed a change — see step 5 below;
+  `BuildAttachmentText` keys off non-empty `extracted_text`, not status)*:
   1. `MessageRepository.BuildAttachmentText` (the FTS `attachment_text` column —
      required for **keyword** search to see OCR text).
   2. `GetEmailTool` `AttachmentInfo.IndexedForSearch` (cosmetic flag).
