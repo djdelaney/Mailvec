@@ -65,16 +65,7 @@ public sealed class GetEmailTool(
         if (msg.DeletedAt is not null)
             throw new McpException($"Message {msg.Id} is soft-deleted (gone from disk).");
 
-        var attachments = msg.Attachments
-            .Select(a => new AttachmentInfo(
-                a.PartIndex,
-                a.FileName,
-                a.ContentType,
-                a.SizeBytes,
-                a.ExtractionStatus,
-                IndexedForSearch: a.ExtractionStatus is "done" or "ocr",
-                ExtractedTextChars: string.IsNullOrEmpty(a.ExtractedText) ? null : a.ExtractedText.Length))
-            .ToList();
+        var attachments = msg.Attachments.Select(AttachmentInfo.From).ToList();
 
         var webmailUrl = WebmailLinkBuilder.Build(msg.MessageId, _fastmail);
         var response = new GetEmailResponse(
@@ -143,4 +134,15 @@ public sealed record AttachmentInfo(
     bool IndexedForSearch,
     // Total length of the extracted text (null when there is none). Lets Claude
     // plan get_attachment_text paging (maxChars/offset) before the first call.
-    int? ExtractedTextChars = null);
+    int? ExtractedTextChars = null)
+{
+    /// <summary>Shared mapping so get_email and get_thread advertise the identical shape.</summary>
+    public static AttachmentInfo From(Mailvec.Core.Models.Attachment a) => new(
+        a.PartIndex,
+        a.FileName,
+        a.ContentType,
+        a.SizeBytes,
+        a.ExtractionStatus,
+        IndexedForSearch: a.ExtractionStatus is "done" or "ocr",
+        ExtractedTextChars: string.IsNullOrEmpty(a.ExtractedText) ? null : a.ExtractedText.Length);
+}

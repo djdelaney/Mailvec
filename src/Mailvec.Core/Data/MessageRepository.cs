@@ -456,8 +456,20 @@ public sealed class MessageRepository(ConnectionFactory connections)
         }
 
         var results = new List<Message>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) results.Add(Map(reader));
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read()) results.Add(Map(reader));
+        }
+
+        // Hydrate attachment rows so the thread view can list each message's
+        // attachments (get_thread) without a follow-up get_email per message.
+        // Only attachment-carrying messages pay the extra query, and threads
+        // are small, so this stays cheap.
+        for (var i = 0; i < results.Count; i++)
+        {
+            if (results[i].HasAttachments)
+                results[i] = results[i] with { Attachments = GetAttachmentsForMessage(conn, results[i].Id) };
+        }
         return results;
     }
 

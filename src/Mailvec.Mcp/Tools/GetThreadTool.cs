@@ -29,6 +29,9 @@ public sealed class GetThreadTool(
         "Pass either `id` or `messageId` for any message that's part of the thread; the tool will resolve the thread via thread_id. " +
         "Default returns subject/from/date/snippet for each message — set includeBodies=true to include full body text " +
         "(token-heavy on long threads, so prefer the default and follow up with get_email on specific messages). " +
+        "Each entry also lists its attachments (same shape as get_email: partIndex, fileName, extraction status, " +
+        "extractedTextChars), so 'which message has the invoice?' needs no per-message get_email — go straight to " +
+        "get_attachment_text / view_attachment / get_attachment_page_image with that entry's id and partIndex. " +
         "Each entry includes `webmailUrl` (the raw deep-link to that specific message) and `webmailLink` (a ready-made, " +
         "correctly-escaped Markdown link), both populated only when the user has configured their webmail account id. " +
         "When you cite or quote a specific message from the thread, render its `webmailLink` **verbatim** so the user can " +
@@ -70,6 +73,7 @@ public sealed class GetThreadTool(
                 DateSent: m.DateSent,
                 Snippet: BuildSnippet(m.BodyText),
                 BodyText: includeBodies ? (m.BodyText ?? string.Empty) : null,
+                Attachments: m.Attachments.Select(AttachmentInfo.From).ToList(),
                 WebmailUrl: webmailUrl,
                 WebmailLink: WebmailLinkBuilder.MarkdownLink(webmailUrl, m.Subject));
         }).ToList();
@@ -112,5 +116,9 @@ public sealed record ThreadEntry(
     DateTimeOffset? DateSent,
     string Snippet,
     string? BodyText,
+    // Same shape get_email advertises, so Claude can jump from a thread entry
+    // straight to get_attachment_text / view_attachment without a get_email
+    // round trip per message. Empty for attachment-less messages.
+    IReadOnlyList<AttachmentInfo> Attachments,
     string? WebmailUrl,
     string? WebmailLink);

@@ -57,6 +57,34 @@ public class GetThreadToolTests
     }
 
     [Fact]
+    public void Entries_list_attachments_with_get_email_shape()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var t = "thread-att";
+        var d1 = new DateTimeOffset(2024, 6, 1, 10, 0, 0, TimeSpan.Zero);
+        var d2 = new DateTimeOffset(2024, 6, 1, 11, 0, 0, TimeSpan.Zero);
+
+        repo.Upsert(Helpers.Sample("plain@x", threadId: t, dateSent: d1), "INBOX", "INBOX/cur", "p", DateTimeOffset.UtcNow);
+        repo.Upsert(Helpers.Sample("invoice@x", threadId: t, dateSent: d2, attachments: [
+            new Mailvec.Core.Parsing.ParsedAttachment(0, "invoice.pdf", "application/pdf", 1234L,
+                ExtractedText: "Total due: $42", ExtractionStatus: "done"),
+        ]), "INBOX", "INBOX/cur", "i", DateTimeOffset.UtcNow);
+
+        var resp = Build(db).GetThread(messageId: "plain@x");
+
+        resp.Messages.Count.ShouldBe(2);
+        resp.Messages[0].Attachments.ShouldBeEmpty();
+
+        var att = resp.Messages[1].Attachments.ShouldHaveSingleItem();
+        att.PartIndex.ShouldBe(0);
+        att.FileName.ShouldBe("invoice.pdf");
+        att.ExtractionStatus.ShouldBe("done");
+        att.IndexedForSearch.ShouldBeTrue();
+        att.ExtractedTextChars.ShouldBe("Total due: $42".Length);
+    }
+
+    [Fact]
     public void Bodies_are_omitted_by_default_but_snippets_present()
     {
         using var db = new TempDatabase();
