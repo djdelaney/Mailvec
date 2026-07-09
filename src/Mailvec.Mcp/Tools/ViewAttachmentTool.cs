@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using System.Runtime.Versioning;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Pdf;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -12,6 +14,14 @@ namespace Mailvec.Mcp.Tools;
 /// are written to disk. Image attachments come back as an ImageContentBlock
 /// (visible to Claude vision) and small text-ish files as a decoded text block,
 /// so "describe this photo" / "what's in this CSV" work in one round trip.
+///
+/// Images are only passed through verbatim when they're a format Claude vision
+/// accepts natively (JPEG/PNG/GIF/WebP) and small; everything else (TIFF scans,
+/// oversized photos) is normalised through <see cref="ImageRenderer"/> — the
+/// same white-flatten / ≤1536px / JPEG-q85 path the OCR pass uses — because a
+/// raw 15 MB photo base64s to ~20 MB (clients reject it, and vision downsamples
+/// to ~1568px anyway) and a TIFF/SVG/HEIC ImageContentBlock is rejected as an
+/// unsupported image format. Undecodable formats fall back to a summary.
 ///
 /// Binary types we can't render inline (PDF, DOCX, zip, …) return only a summary
 /// pointing at the right tool: get_attachment_text for extracted document text,
@@ -31,13 +41,32 @@ public sealed class ViewAttachmentTool(
 {
     private const string ToolName = "view_attachment";
 
+    // Formats Claude vision accepts natively; anything else must be transcoded
+    // to JPEG before inlining or the client rejects the image block.
+    private static readonly HashSet<string> ClaudeNativeImageTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/jpeg", "image/png", "image/gif", "image/webp",
+    };
+
+    // Pass an image through untouched only below this size; larger ones are
+    // re-encoded (≤1536px long edge, JPEG q85 — a few hundred KB) so the base64
+    // payload can't blow past client message limits. Vision downsamples to
+    // ~1568px regardless, so nothing useful is lost. Not configurable: this is
+    // about protocol/client ceilings, not user preference.
+    private const int ImagePassThroughMaxBytes = 1024 * 1024;
+
     [McpServerTool(Name = "view_attachment")]
+    [SupportedOSPlatform("macos")]
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
     [Description(
         "Show a single email attachment's content inline (nothing is written to disk). " +
         "Identify the email with either `id` (the internal SQLite id) OR `messageId` (the RFC Message-ID). " +
         "Identify the attachment with `partIndex` from the get_email response (0-based, in MIME order). " +
-        "Image attachments are returned as an MCP ImageContentBlock (visible to Claude vision); small text-ish " +
-        "files (text/*, application/json, etc., under ~256 KB) have their decoded UTF-8 text included as a text block. " +
+        "Image attachments are returned as an MCP ImageContentBlock (visible to Claude vision); large or " +
+        "non-JPEG/PNG/GIF/WebP images are automatically downscaled/re-encoded to a JPEG that clients accept. " +
+        "Small text-ish files (text/*, application/json, etc., under ~256 KB) have their decoded UTF-8 text " +
+        "included as a text block. " +
         "For other binary types (PDF, DOCX, zip, …) the response is a short summary — use get_attachment_text to read " +
         "a document's extracted text, or get_attachment_page_image to view a PDF page as an image.")]
     public CallToolResult ViewAttachment(
@@ -82,9 +111,34 @@ public sealed class ViewAttachmentTool(
         }
 
         var isImage = IsImageContentType(att.ContentType);
+
+        // Resolve what actually gets inlined for an image: verbatim bytes for
+        // small native-format images, a normalised JPEG otherwise, nothing when
+        // the bytes can't be decoded (HEIC, SVG, corrupt).
+        byte[]? imageBytes = null;
+        string? imageMime = null;
+        bool imageTranscoded = false;
+        if (isImage)
+        {
+            if (ClaudeNativeImageTypes.Contains(att.ContentType) && att.Bytes.Length <= ImagePassThroughMaxBytes)
+            {
+                imageBytes = att.Bytes;
+                imageMime = att.ContentType;
+            }
+            else if (ImageRenderer.TryNormalize(att.Bytes) is { } normalized)
+            {
+                imageBytes = normalized.Jpeg;
+                imageMime = "image/jpeg";
+                imageTranscoded = true;
+            }
+        }
+
         var content = new List<ContentBlock>
         {
-            new TextContentBlock { Text = BuildSummary(att, imageInlined: isImage, textInlined: att.InlineText is not null) },
+            new TextContentBlock
+            {
+                Text = BuildSummary(att, isImage, imageInlined: imageBytes is not null, imageTranscoded, textInlined: att.InlineText is not null),
+            },
         };
 
         // Inline the decoded text for small text-ish files so Claude can read
@@ -98,15 +152,15 @@ public sealed class ViewAttachmentTool(
         // This is the only binary path reliable across all current Claude clients
         // — non-image binary goes through a bridge that rejects everything as an
         // unsupported image, which is why other types get only the summary above.
-        if (isImage)
+        if (imageBytes is not null)
         {
             // The SDK's Data setter takes the UTF-8 bytes of the base64 string,
             // not the raw bytes (counterintuitive, but per the SDK doc).
-            var base64Utf8 = System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(att.Bytes));
+            var base64Utf8 = System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(imageBytes));
             content.Add(new ImageContentBlock
             {
                 Data = base64Utf8,
-                MimeType = att.ContentType,
+                MimeType = imageMime!, // always set alongside imageBytes above
             });
         }
 
@@ -115,18 +169,29 @@ public sealed class ViewAttachmentTool(
             fileName = att.FileName,
             contentType = att.ContentType,
             sizeBytes = att.SizeBytes,
-            imageInlined = isImage,
+            imageInlined = imageBytes is not null,
+            imageTranscoded,
+            imageBytes = imageBytes?.Length,
             inlineChars = att.InlineText?.Length,
         }, startTs);
 
         return new CallToolResult { Content = content };
     }
 
-    private static string BuildSummary(InlineAttachment att, bool imageInlined, bool textInlined)
+    [SupportedOSPlatform("macos")]
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    private static string BuildSummary(InlineAttachment att, bool isImage, bool imageInlined, bool imageTranscoded, bool textInlined)
     {
         var header = $"'{att.FileName}' ({att.ContentType}, {FormatSize(att.SizeBytes)})";
         if (imageInlined)
-            return $"{header} — shown inline below.";
+            return imageTranscoded
+                ? $"{header} — shown inline below, re-encoded as JPEG (long edge capped at {PdfRenderer.MaxEdgePx}px) for client compatibility and size."
+                : $"{header} — shown inline below.";
+        if (isImage)
+            return
+                $"{header}. This image format can't be decoded for inline display (e.g. HEIC or SVG). " +
+                "The user can save the file via the tray's Save button or `mailvec extract-attachments` and open it themselves.";
         if (textInlined)
             return $"{header} — decoded text included below.";
         return

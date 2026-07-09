@@ -27,7 +27,8 @@ public sealed class GetEmailTool(
     [Description(
         "Fetch a single email's full body and headers by id. " +
         "Pass either `id` (the internal SQLite id from a search_emails result) OR `messageId` (the RFC Message-ID). " +
-        "Returns subject, from, to, cc, date, folder, body text, and per-attachment metadata (filename, content type, size). " +
+        "Returns subject, from, to, cc, date, folder, body text, and per-attachment metadata (filename, content type, " +
+        "size, extraction status, and extractedTextChars — the total extracted-text length, for planning get_attachment_text paging). " +
         "To read an attachment's contents, use get_attachment_text (extracted text), view_attachment " +
         "(inline image or small text file), or get_attachment_page_image (render a PDF page) with the partIndex returned here. " +
         "Set includeHtml=true to also return the raw HTML body when present. " +
@@ -71,7 +72,8 @@ public sealed class GetEmailTool(
                 a.ContentType,
                 a.SizeBytes,
                 a.ExtractionStatus,
-                IndexedForSearch: a.ExtractionStatus is "done" or "ocr"))
+                IndexedForSearch: a.ExtractionStatus is "done" or "ocr",
+                ExtractedTextChars: string.IsNullOrEmpty(a.ExtractedText) ? null : a.ExtractedText.Length))
             .ToList();
 
         var webmailUrl = WebmailLinkBuilder.Build(msg.MessageId, _fastmail);
@@ -138,4 +140,7 @@ public sealed record AttachmentInfo(
     // True iff the attachment's text was extracted (natively or via OCR) and
     // embedded — i.e., search_emails can match this email by its content.
     // Convenience flag for Claude; equivalent to ExtractionStatus in ('done','ocr').
-    bool IndexedForSearch);
+    bool IndexedForSearch,
+    // Total length of the extracted text (null when there is none). Lets Claude
+    // plan get_attachment_text paging (maxChars/offset) before the first call.
+    int? ExtractedTextChars = null);

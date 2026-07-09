@@ -14,7 +14,7 @@ All three take the email (`id` or `messageId`) plus `partIndex` from the `get_em
 
 `view_attachment` decodes a single attachment **in memory** and returns its content inline — nothing is written to disk:
 
-- **Image attachments** come back as an `ImageContentBlock` so Claude vision can describe / OCR them in one round trip.
+- **Image attachments** come back as an `ImageContentBlock` so Claude vision can describe / OCR them in one round trip. Images pass through verbatim only when they're a format Claude vision accepts natively (JPEG/PNG/GIF/WebP) **and** under 1 MB; anything else (TIFF/BMP scans, oversized photos) is normalised through the same `ImageRenderer` path the OCR pass uses — white-flattened, long edge capped at 1536px, re-encoded JPEG q85 — because a raw 15 MB photo base64s past client message limits and a TIFF/SVG image block is rejected as an unsupported format. Formats that can't be decoded at all (HEIC, SVG) fall back to a summary.
 - **Small text-ish files** (`text/*`, `application/json`, `application/xml`, etc., under `Mcp:AttachmentInlineTextMaxBytes` — default 256 KB) have their decoded UTF-8 text included as a text block.
 - **Any other binary type** (PDF, DOCX, zip, …) returns just a short summary pointing at the right tool: `get_attachment_text` for the document's extracted text, or `get_attachment_page_image` to view a PDF page.
 
@@ -25,6 +25,8 @@ It deliberately does **not** ship arbitrary binary back through MCP — Claude.a
 ## `get_attachment_text` — the document's text
 
 `get_attachment_text` returns the text Mailvec already extracted from the attachment at ingest time (PDF via PdfPig, DOCX via OpenXml), straight from the database — **no filesystem touched**. Because it returns a plain text block, it renders on every client and works identically over a remote (HTTP/OAuth) connection, where a returned filesystem path would be meaningless. This is the path for "summarise this contract" / "what's the total on this invoice". When extraction couldn't produce text (scanned/image-only PDF, encrypted, oversize, unsupported), it says so and points you at `get_attachment_page_image`.
+
+Long documents are **windowed**: at most `maxChars` characters (default 50,000, capped at 200,000) starting at `offset` come back per call, and a truncated response states the total length and the next offset — extraction can store up to 2,000,000 chars per document, far past what one tool result should carry. `get_email`'s per-attachment `extractedTextChars` gives the total up front so a client can plan the paging.
 
 ## `get_attachment_page_image` — a rendered page
 

@@ -182,4 +182,105 @@ public class GetAttachmentTextToolTests
         msg.ShouldContain("no extraction record");
         msg.ShouldContain("view_attachment");
     }
+
+    // --- maxChars / offset windowing ---
+
+    private static string HundredChars() =>
+        string.Concat(Enumerable.Range(0, 10).Select(i => $"chunk-{i:D2}: ")); // 10 × "chunk-NN: " = 100 chars
+
+    [Fact]
+    public void MaxChars_truncates_and_header_gives_total_and_next_offset()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var text = HundredChars();
+        long id = Seed(repo, "win@x", text, "done");
+
+        var result = Build(db).GetAttachmentText(partIndex: 0, id: id, maxChars: 40);
+
+        result.Content.Count.ShouldBe(2);
+        var header = result.Content[0].ShouldBeOfType<TextContentBlock>().Text;
+        header.ShouldContain("chars 0–40 of 100");
+        header.ShouldContain("offset=40");
+        result.Content[1].ShouldBeOfType<TextContentBlock>().Text.ShouldBe(text[..40]);
+    }
+
+    [Fact]
+    public void Offset_pages_through_and_final_chunk_is_labelled()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var text = HundredChars();
+        long id = Seed(repo, "page@x", text, "done");
+
+        var middle = Build(db).GetAttachmentText(partIndex: 0, id: id, maxChars: 40, offset: 40);
+        middle.Content[0].ShouldBeOfType<TextContentBlock>().Text.ShouldContain("chars 40–80 of 100");
+        middle.Content[1].ShouldBeOfType<TextContentBlock>().Text.ShouldBe(text[40..80]);
+
+        var last = Build(db).GetAttachmentText(partIndex: 0, id: id, maxChars: 40, offset: 80);
+        var lastHeader = last.Content[0].ShouldBeOfType<TextContentBlock>().Text;
+        lastHeader.ShouldContain("chars 80–100 of 100");
+        lastHeader.ShouldContain("final chunk");
+        last.Content[1].ShouldBeOfType<TextContentBlock>().Text.ShouldBe(text[80..]);
+    }
+
+    [Fact]
+    public void Offset_past_end_reports_total_length()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Seed(repo, "past@x", HundredChars(), "done");
+
+        var result = Build(db).GetAttachmentText(partIndex: 0, id: id, offset: 500);
+
+        result.Content.Count.ShouldBe(1);
+        var msg = result.Content[0].ShouldBeOfType<TextContentBlock>().Text;
+        msg.ShouldContain("past the end");
+        msg.ShouldContain("100");
+    }
+
+    [Fact]
+    public void Full_text_under_default_cap_is_returned_without_paging_chatter()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Seed(repo, "small@x", "short doc", "done");
+
+        var result = Build(db).GetAttachmentText(partIndex: 0, id: id);
+
+        var header = result.Content[0].ShouldBeOfType<TextContentBlock>().Text;
+        header.ShouldNotContain("offset=");
+        header.ShouldNotContain("chunk");
+        result.Content[1].ShouldBeOfType<TextContentBlock>().Text.ShouldBe("short doc");
+    }
+
+    [Fact]
+    public void Window_never_splits_a_surrogate_pair()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var text = "ab💡cd"; // 💡 is a surrogate pair at UTF-16 indexes 2–3
+        long id = Seed(repo, "emoji@x", text, "done");
+
+        // maxChars=3 would cut between the high and low surrogate; the window
+        // must shrink to 2 so the slice stays valid UTF-16.
+        var result = Build(db).GetAttachmentText(partIndex: 0, id: id, maxChars: 3);
+        var slice = result.Content[1].ShouldBeOfType<TextContentBlock>().Text;
+        slice.ShouldBe("ab");
+
+        // Paging from inside the pair snaps back to include the whole pair.
+        var next = Build(db).GetAttachmentText(partIndex: 0, id: id, maxChars: 10, offset: 3);
+        next.Content[1].ShouldBeOfType<TextContentBlock>().Text.ShouldBe("💡cd");
+    }
+
+    [Fact]
+    public void Invalid_offset_and_maxChars_are_rejected()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Seed(repo, "bad@x", "text", "done");
+
+        Should.Throw<McpException>(() => Build(db).GetAttachmentText(partIndex: 0, id: id, offset: -1));
+        Should.Throw<McpException>(() => Build(db).GetAttachmentText(partIndex: 0, id: id, maxChars: 0));
+    }
 }
