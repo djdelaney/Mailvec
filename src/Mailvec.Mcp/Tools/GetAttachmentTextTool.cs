@@ -32,6 +32,13 @@ public sealed class GetAttachmentTextTool(
 {
     private const string ToolName = "get_attachment_text";
 
+    // A single extracted document can be up to 2,000,000 chars (the extraction
+    // output cap) — far past any client's context budget in one tool result.
+    // Default to a window that comfortably covers typical documents; callers
+    // page through bigger ones with `offset`.
+    internal const int DefaultMaxChars = 50_000;
+    internal const int MaxMaxChars = 200_000;
+
     [McpServerTool(Name = "get_attachment_text")]
     [Description(
         "Return the extracted plain text of a single attachment (PDF, DOCX, etc.) that Mailvec indexed at ingest time. " +
@@ -39,6 +46,9 @@ public sealed class GetAttachmentTextTool(
         "attachment with `partIndex` from the get_email response (0-based, in MIME order). " +
         "Prefer this over view_attachment when you just need to READ or summarise a document's contents — it returns the " +
         "text directly with no filesystem dependency, so it works the same locally and over a remote connection. " +
+        "Long documents are windowed: at most `maxChars` characters (default 50,000) starting at `offset` are returned, " +
+        "with the total length and the next offset stated when truncated — page with `offset` until you have what you need " +
+        "(get_email's per-attachment `extractedTextChars` tells you the total up front). " +
         "Text extraction loses layout, so tables and multi-column content may be flattened; if the attachment is a " +
         "scanned / image-only PDF (no embedded text), encrypted, too large, or an unsupported type, this tool says so " +
         "and suggests the fallback: get_attachment_page_image for PDF pages, view_attachment for images and small text files.")]
@@ -48,14 +58,24 @@ public sealed class GetAttachmentTextTool(
         [Description("Internal SQLite id of the email, as returned in search_emails / get_email results. Mutually exclusive with messageId.")]
         long? id = null,
         [Description("RFC Message-ID header (without angle brackets). Mutually exclusive with id.")]
-        string? messageId = null)
+        string? messageId = null,
+        [Description("Maximum characters to return in this call. Default 50,000; capped at 200,000.")]
+        int? maxChars = null,
+        [Description("0-based character offset to start from, for paging through a long document. Default 0.")]
+        int offset = 0)
     {
-        var startTs = callLog.LogCall(ToolName, new { id, messageId, partIndex });
+        var startTs = callLog.LogCall(ToolName, new { id, messageId, partIndex, maxChars, offset });
 
         if (id is null && string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Provide either id or messageId.");
         if (id is not null && !string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Pass id OR messageId, not both.");
+        if (offset < 0)
+            throw new McpException("offset must be 0 or greater.");
+        if (maxChars is < 1)
+            throw new McpException("maxChars must be 1 or greater.");
+
+        var window = Math.Min(maxChars ?? DefaultMaxChars, MaxMaxChars);
 
         var msg = id is not null ? messages.GetById(id.Value) : messages.GetByMessageId(messageId!);
         if (msg is null)
@@ -84,13 +104,29 @@ public sealed class GetAttachmentTextTool(
         if (attachment.ExtractionStatus is AttachmentTextExtractor.StatusDone or AttachmentTextExtractor.StatusOcr
             && !string.IsNullOrEmpty(attachment.ExtractedText))
         {
+            var text = attachment.ExtractedText;
             var how = attachment.ExtractionStatus == AttachmentTextExtractor.StatusOcr ? "OCR text" : "Extracted text";
-            content.Add(new TextContentBlock
+
+            if (offset >= text.Length)
             {
-                Text = $"{how} from {name} (partIndex {partIndex}, {attachment.ExtractedText.Length:N0} chars):",
-            });
-            content.Add(new TextContentBlock { Text = attachment.ExtractedText });
-            callLog.LogResult(ToolName, new { id = msg.Id, partIndex, status = attachment.ExtractionStatus, chars = attachment.ExtractedText.Length }, startTs);
+                content.Add(new TextContentBlock
+                {
+                    Text = $"offset {offset:N0} is past the end of {name} — its extracted text is {text.Length:N0} chars total.",
+                });
+                callLog.LogResult(ToolName, new { id = msg.Id, partIndex, status = attachment.ExtractionStatus, chars = 0, offset }, startTs);
+                return new CallToolResult { Content = content };
+            }
+
+            var (start, slice) = SliceWindow(text, offset, window);
+            var end = start + slice.Length;
+            var header = end < text.Length || start > 0
+                ? $"{how} from {name} (partIndex {partIndex}): chars {start:N0}–{end:N0} of {text.Length:N0}" +
+                  (end < text.Length ? $". Call again with offset={end} for the next chunk:" : " (final chunk):")
+                : $"{how} from {name} (partIndex {partIndex}, {text.Length:N0} chars):";
+
+            content.Add(new TextContentBlock { Text = header });
+            content.Add(new TextContentBlock { Text = slice });
+            callLog.LogResult(ToolName, new { id = msg.Id, partIndex, status = attachment.ExtractionStatus, chars = slice.Length, offset = start, total = text.Length }, startTs);
         }
         else
         {
@@ -99,6 +135,27 @@ public sealed class GetAttachmentTextTool(
         }
 
         return new CallToolResult { Content = content };
+    }
+
+    /// <summary>
+    /// Slice [offset, offset+window) out of <paramref name="text"/>, nudging
+    /// both ends off the middle of a surrogate pair so the window is always
+    /// valid UTF-16 (a split pair would serialize as U+FFFD).
+    /// </summary>
+    private static (int Start, string Slice) SliceWindow(string text, int offset, int window)
+    {
+        var start = offset;
+        if (start > 0 && char.IsLowSurrogate(text[start]))
+            start--;
+        var end = Math.Min(start + window, text.Length);
+        if (end < text.Length && char.IsHighSurrogate(text[end - 1]))
+        {
+            // Shrink to exclude the split pair — unless that would empty the
+            // window, in which case grow to include it (its low half is at
+            // `end`, so end+1 is in range).
+            end = end - start > 1 ? end - 1 : end + 1;
+        }
+        return (start, text[start..end]);
     }
 
     private static string UnavailableMessage(string name, string? status) => status switch
