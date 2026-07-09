@@ -28,8 +28,10 @@ stable `attachments.extraction_status` enum:
 ## Formats we extract (indexer)
 
 Everything here is **pure-managed — no native deps, no shell-out, no OCR** in the
-indexer path. (The one native dep in the wider system, PDFium via `Mailvec.Pdf`,
-is used only for OCR rasterisation in the embedder/MCP, never the indexer.)
+indexer path. (The only native dep besides `sqlite-vec` — PDFium/SkiaSharp via
+`Mailvec.Pdf` — is referenced only by the embedder, for OCR rasterisation, and the
+MCP server, for `get_attachment_page_image` rendering and `view_attachment` image
+normalisation; never the indexer.)
 
 | Format | Library | What we pull |
 |--------|---------|--------------|

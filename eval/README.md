@@ -171,7 +171,7 @@ Notes:
 | Where | How |
 | --- | --- |
 | `mailvec search` | Add `-i` / `--with-id` — every result gets an extra `id: <Message-ID>` line. |
-| The MCP tool-call log | With `Mcp:LogToolCalls=true` set on the server, every `mcp-result` line includes the message ids Claude saw. Tail `~/Library/Logs/Mailvec/mailvec-mcp-*.log`. |
+| The MCP tool-call log | With `Mcp:LogToolCalls=true` set on the server, each `mcp-result` line summarizes the **top 5** hits — but with their SQLite **row ids** and subjects/senders, *not* Message-IDs. Good for locating a message, but translate before pinning (e.g. via the direct DB query below, or `mailvec get <rowid>`). Tail `~/Library/Logs/Mailvec/mailvec-mcp-*.log`. |
 | Inside `eval-add` | The interactive candidate list shows each id even when you don't end up picking it. |
 | Direct DB query | `sqlite3 ~/Library/Application\ Support/Mailvec/archive.sqlite "SELECT message_id, subject FROM messages WHERE subject LIKE '%foo%';"` for header-field grepping. |
 
@@ -294,7 +294,7 @@ the row id here.
 | --- | --- | --- |
 | `version` | yes | Currently `1`; schema version, bumped on breaking change. |
 | `queries[].id` | yes | Stable handle, must be unique. The bootstrapper auto-generates `q001`, `q002`, … but any string works. |
-| `queries[].query` | yes | The natural-language query. Same string is fed to BM25, vector, and hybrid. |
+| `queries[].query` | yes, unless `filters` is set | The natural-language query. Same string is fed to BM25, vector, and hybrid. May be null/empty **if at least one filter is present** — that exercises the query-less browse path instead of ranked search. |
 | `queries[].relevant` | yes | List of expected-relevant Message-IDs. Each entry is **either** a bare string (binary, grade=1) **or** an object `{messageId, grade}` (graded relevance, grade ≥ 1). Mixing both forms in one query is fine. |
 | `queries[].filters` | no | Optional. Mirrors `Mailvec.Core.Search.SearchFilters` 1:1 — labeled queries exercise the same WHERE clause path as production. See below. |
 | `queries[].notes` | no | Free-text. Ignored by the eval; useful for future-you. |
