@@ -1,0 +1,48 @@
+# mbsync config for the Docker compose stack (the container counterpart of
+# ops/mbsyncrc.example). Copy to ./mbsyncrc next to compose.yml and fill in
+# the placeholders; compose mounts it read-only at /root/.mbsyncrc in the
+# mbsync service.
+#
+# The app-specific password is NOT in this file: it lives in
+# ./secrets/fastmail_password (a compose file-secret, mounted at
+# /run/secrets/fastmail_password). Create one at
+# https://app.fastmail.com/settings/security/devicekeys
+
+IMAPAccount fastmail
+Host          imap.fastmail.com
+Port          993
+User          you@fastmail.com
+PassCmd       "cat /run/secrets/fastmail_password"
+TLSType       IMAPS
+TLSVersions   +1.2 +1.3
+AuthMechs     LOGIN
+
+IMAPStore fastmail-remote
+Account fastmail
+
+MaildirStore fastmail-local
+Subfolders Verbatim
+# /mail is the shared maildir bind mount; the account-named subdirectory
+# matches Ingest__MaildirRoot=/mail/Fastmail set in compose.yml.
+Path       /mail/Fastmail/
+Inbox      /mail/Fastmail/INBOX
+
+Channel fastmail
+Far     :fastmail-remote:
+Near    :fastmail-local:
+# Which IMAP folders to mirror. Fastmail "labels" are exposed as IMAP folders,
+# so this is the knob for filtering them. Examples:
+#   Patterns *                    sync everything (default)
+#   Patterns INBOX                inbox only — archived/labelled mail won't sync
+#   Patterns INBOX INBOX/*        inbox plus its sub-folders
+#   Patterns * !Archive !Trash    everything except the named folders
+Patterns *
+Create  Near
+SyncState *
+# Read-only sync: changes in Fastmail flow down, never up.
+Sync    Pull
+Expunge Near
+# Example Cap each folder to the 6000 newest messages. mbsync has no date-range
+# filter; this is the closest knob and works well if you don't want to
+# pull years of archive on first sync. Remove the line to sync everything.
+#MaxMessages 6000
