@@ -125,6 +125,36 @@ public class AttachmentExtractorTests : IDisposable
     }
 
     [Fact]
+    public void ExtractInMemory_returns_bytes_and_metadata_without_touching_disk()
+    {
+        var ext = BuildExtractor();
+        var msg = StageEml("110.imapfetch:2,S", PdfMessage, messageId: 110);
+
+        var att = ext.ExtractInMemory(msg, partIndex: 0);
+
+        att.FileName.ShouldBe("quote.pdf");
+        att.ContentType.ShouldBe("application/pdf");
+        att.SizeBytes.ShouldBe(att.Bytes.LongLength);
+        att.InlineText.ShouldBeNull(); // PDF is not text-ish
+        System.Text.Encoding.ASCII.GetString(att.Bytes, 0, 5).ShouldBe("%PDF-");
+        // The point of the in-memory path: nothing is persisted to the download dir.
+        Directory.GetFiles(_downloadDir).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void ExtractInMemory_decodes_inline_text_for_text_attachments()
+    {
+        var ext = BuildExtractor();
+        var msg = StageEml("111.imapfetch:2,S", CsvMessage, messageId: 111);
+
+        var att = ext.ExtractInMemory(msg, partIndex: 0);
+
+        att.ContentType.ShouldBe("text/csv");
+        att.InlineText.ShouldNotBeNull().ShouldContain("region,units");
+        Directory.GetFiles(_downloadDir).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void Re_extract_reuses_existing_file_when_size_matches()
     {
         var ext = BuildExtractor();
