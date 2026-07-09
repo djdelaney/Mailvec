@@ -6,8 +6,8 @@ goal is that when someone later asks "why isn't this PDF/image/spreadsheet
 searchable?", the answer (and whether it's intentional) is written down.
 
 For the vision-model OCR design specifically, see
-[`attachment-ocr.md`](attachment-ocr.md). For `get_attachment` (serving raw
-bytes) see [`attachments.md`](attachments.md).
+[`attachment-ocr.md`](attachment-ocr.md). For `view_attachment` (showing
+attachment content inline) see [`attachments.md`](attachments.md).
 
 ## The pipeline in one picture
 

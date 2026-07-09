@@ -145,7 +145,7 @@ public class GetAttachmentTextToolTests
     }
 
     [Fact]
-    public void No_text_status_explains_scanned_pdf_and_points_at_get_attachment()
+    public void No_text_status_explains_scanned_pdf_and_points_at_page_image()
     {
         using var db = new TempDatabase();
         var repo = new MessageRepository(db.Connections);
@@ -156,7 +156,7 @@ public class GetAttachmentTextToolTests
         result.Content.Count.ShouldBe(1);
         var msg = result.Content[0].ShouldBeOfType<TextContentBlock>().Text;
         msg.ShouldContain("scan.pdf");
-        msg.ShouldContain("get_attachment");
+        msg.ShouldContain("get_attachment_page_image");
         msg.ShouldContain("scanned");
     }
 
@@ -179,6 +179,7 @@ public class GetAttachmentTextToolTests
         long id = Seed(repo, "legacy@x", text: null, status: null);
 
         var msg = Build(db).GetAttachmentText(partIndex: 0, id: id).Content[0].ShouldBeOfType<TextContentBlock>().Text;
-        msg.ShouldContain("get_attachment");
+        msg.ShouldContain("no extraction record");
+        msg.ShouldContain("view_attachment");
     }
 }

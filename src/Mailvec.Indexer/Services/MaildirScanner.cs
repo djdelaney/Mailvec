@@ -186,7 +186,7 @@ public sealed class MaildirScanner(
         // duplicate copies — the message stays live via another path. But the
         // messages row may still point at the path that just vanished: the
         // surviving copy rides the mtime fast-path and never re-upserts, so
-        // the dangling path would persist forever (get_attachment fails, the
+        // the dangling path would persist forever (view_attachment fails, the
         // OCR pass re-selects and skips those attachments every cycle).
         // Repoint the row at a live fresh path for the same Message-ID.
         var repaired = 0;

@@ -122,7 +122,7 @@ public sealed class GetAttachmentPageImageTool(
             },
             new ImageContentBlock
             {
-                // Same encoding quirk as get_attachment: the SDK's Data setter
+                // Same encoding quirk as view_attachment: the SDK's Data setter
                 // takes the UTF-8 bytes of the base64 string, not the raw bytes.
                 Data = Encoding.UTF8.GetBytes(Convert.ToBase64String(jpeg)),
                 MimeType = "image/jpeg",

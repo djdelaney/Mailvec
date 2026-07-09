@@ -98,7 +98,7 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
    - *If that fails Claude's OAuth:* deploy a Worker with `workers-oauth-provider` that
      proxies to the tunnel origin.
 7. **(Recommended) Reduce the cloud tool surface** — disable high-exposure tools
-   (esp. `get_attachment`) on the portal, or filter them in the Worker proxy.
+   (esp. `view_attachment`) on the portal, or filter them in the Worker proxy.
 8. **Register the connector on claude.ai (web)** with a **distinct name: "Mailvec (Cloud)"**
    and the `https://<sub>.<domain>/mcp` URL. Complete the OAuth flow once.
 9. **Verify on iOS** — the connector syncs down; confirm tools load and a search works.
@@ -131,7 +131,7 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
   to be account-synced rather than per-device, use the **per-conversation** toggle on
   Desktop as the deterministic fallback.
 
-- **Exposure of `get_attachment`.** It reads raw Maildir bytes off disk. Once the endpoint
+- **Exposure of `view_attachment`.** It reads raw Maildir bytes off disk. Once the endpoint
   is internet-reachable (even gated), that's the highest-risk tool — drop it from the cloud
   connector's surface.
 
@@ -155,5 +155,5 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
    (DCR/CIMD + S256)? If not → Worker fallback.
 2. Is the connector enable/disable toggle **per-device** on Desktop, or account-synced?
    Determines whether step 10 is permanent or per-conversation.
-3. Does per-tool disable on the portal cover `get_attachment`, or is the Worker filter
+3. Does per-tool disable on the portal cover `view_attachment`, or is the Worker filter
    needed to trim the cloud surface?

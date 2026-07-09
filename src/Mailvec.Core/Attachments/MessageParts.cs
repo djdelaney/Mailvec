@@ -8,7 +8,7 @@ namespace Mailvec.Core.Attachments;
 /// write side (<see cref="Parsing.MessageParser"/>, which assigns part_index at
 /// index time) and the read side (<see cref="MaildirAttachmentReader"/>, which
 /// resolves part_index back to bytes) MUST enumerate through here, or the two
-/// drift and get_attachment / OCR read the wrong bytes.
+/// drift and view_attachment / OCR read the wrong bytes.
 ///
 /// The set is: every <c>Content-Disposition: attachment</c> part (MimeKit's
 /// <see cref="MimeMessage.Attachments"/>, in document order) FIRST, then every

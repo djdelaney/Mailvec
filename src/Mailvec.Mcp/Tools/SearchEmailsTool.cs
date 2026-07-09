@@ -48,8 +48,9 @@ public sealed class SearchEmailsTool(
         "doubt for casual 'recently'-style asks, a 12-month lower bound is a safe default. " +
         "Each result carries the internal id, RFC message_id, folder, sender, date, snippet, and (for ranked queries) score breakdown. " +
         "When a match was driven by content inside a PDF/DOCX/text attachment rather than the email body, the result includes " +
-        "`matchedAttachment` with the attachment's partIndex and filename — use those with `get_attachment` to retrieve the " +
-        "document. Use a result's id or messageId with get_email/get_thread for follow-up. " +
+        "`matchedAttachment` with the attachment's partIndex and filename — use those with `get_attachment_text` to read the " +
+        "document (or `get_attachment_page_image` for a PDF page, `view_attachment` for an image). " +
+        "Use a result's id or messageId with get_email/get_thread for follow-up. " +
         "Each result also includes `webmailUrl` (the raw deep-link) and `webmailLink` (a ready-made, correctly-escaped " +
         "Markdown link), both populated when the user has configured their webmail account id. " +
         "When you cite or quote a specific result to the user, render its `webmailLink` **verbatim** so they can one-click " +
@@ -262,7 +263,7 @@ public sealed record EmailHit(
     // Surfaced when the top-ranked chunk for this message came from an
     // attachment rather than the body — answers Claude's "why did this email
     // match my query?" without a follow-up call. Pair (PartIndex, FileName)
-    // is also exactly what `get_attachment` needs to fetch the source.
+    // is also exactly what the attachment tools need to fetch the source.
     MatchedAttachment? MatchedAttachment = null,
     // Decorated post-construction by SearchEmailsTool.WithWebmailUrl when
     // Fastmail:AccountId is configured. The factory methods below leave them null.
@@ -341,6 +342,7 @@ public sealed record EmailHit(
 /// <summary>
 /// Tells the caller a search hit matched via an email attachment, not the
 /// body. <see cref="PartIndex"/> + parent message id are the inputs to
-/// <c>get_attachment</c>, so Claude can fetch the document directly.
+/// <c>get_attachment_text</c> / <c>view_attachment</c>, so Claude can fetch
+/// the document directly.
 /// </summary>
 public sealed record MatchedAttachment(int PartIndex, string? FileName);

@@ -96,7 +96,7 @@ struct SearchAndMCPTab: View {
                     PathField(path: prefs.system.attachmentDownloadDir)
                 }
             } header: { Text("Attachments") } footer: {
-                RowHint(text: "Where get_attachment extracts files. Configured via Mcp:AttachmentDownloadDir in appsettings.json.")
+                RowHint(text: "Where the Save button and mailvec extract-attachments write files. Configured via Mcp:AttachmentDownloadDir in appsettings.json.")
             }
         }
     }
