@@ -144,7 +144,7 @@ public class GetAttachmentToolTests : IDisposable
     }
 
     [Fact]
-    public void Happy_path_returns_summary_text_block_and_writes_file()
+    public void Non_inlineable_attachment_returns_summary_and_writes_nothing_to_disk()
     {
         using var db = new TempDatabase();
         var repo = new MessageRepository(db.Connections);
@@ -155,24 +155,13 @@ public class GetAttachmentToolTests : IDisposable
         result.Content.ShouldNotBeEmpty();
         var summary = result.Content[0].ShouldBeOfType<TextContentBlock>();
         summary.Text.ShouldContain("quote.pdf");
-        summary.Text.ShouldContain(_downloadDir);
+        // A PDF can't be shown inline, so the summary points at the reader tools.
+        summary.Text.ShouldContain("get_attachment_text");
+        // No image/text blocks for a PDF — just the summary.
+        result.Content.OfType<ImageContentBlock>().ShouldBeEmpty();
 
-        Directory.GetFiles(_downloadDir).Length.ShouldBe(1);
-    }
-
-    [Fact]
-    public void Reusing_an_existing_extraction_uses_already_saved_phrasing()
-    {
-        using var db = new TempDatabase();
-        var repo = new MessageRepository(db.Connections);
-        long id = StagePdfMessage(repo);
-
-        var tool = Build(db);
-        tool.GetAttachment(partIndex: 0, id: id);
-        var second = tool.GetAttachment(partIndex: 0, id: id);
-
-        var summary = second.Content[0].ShouldBeOfType<TextContentBlock>();
-        summary.Text.ShouldContain("Already saved");
+        // The point of the in-memory rework: no mail content is persisted to disk.
+        Directory.GetFiles(_downloadDir).ShouldBeEmpty();
     }
 
     [Fact]
@@ -228,6 +217,7 @@ public class GetAttachmentToolTests : IDisposable
         result.Content.Count.ShouldBeGreaterThanOrEqualTo(2);
         var inline = result.Content[1].ShouldBeOfType<TextContentBlock>();
         inline.Text.ShouldContain("col_a,col_b");
+        Directory.GetFiles(_downloadDir).ShouldBeEmpty();
     }
 
     // 1x1 transparent PNG (smallest valid PNG); base64 is round-trippable.
@@ -270,5 +260,6 @@ public class GetAttachmentToolTests : IDisposable
         var image = result.Content.OfType<ImageContentBlock>().ShouldHaveSingleItem();
         image.MimeType.ShouldBe("image/png");
         image.Data.Length.ShouldBeGreaterThan(0);
+        Directory.GetFiles(_downloadDir).ShouldBeEmpty();
     }
 }
