@@ -46,6 +46,46 @@ internal static class SearchFilterSql
             sql.Append("\n  AND m.date_sent IS NOT NULL AND datetime(m.date_sent) <= datetime($date_to)");
             cmd.Parameters.AddWithValue("$date_to", to.ToString("O"));
         }
+        if (filters.HasAttachments is { } hasAttachments)
+        {
+            // messages.has_attachments is denormalized at upsert time from the
+            // parsed part list (disposition=attachment + inline images), so
+            // this stays index-friendly with no join.
+            sql.Append("\n  AND m.has_attachments = $has_attachments");
+            cmd.Parameters.AddWithValue("$has_attachments", hasAttachments ? 1 : 0);
+        }
+        if (!string.IsNullOrWhiteSpace(filters.AttachmentType))
+        {
+            var token = filters.AttachmentType.Trim().TrimStart('.').ToLowerInvariant();
+            if (token == "image")
+            {
+                sql.Append("""
+
+                      AND EXISTS (
+                            SELECT 1 FROM attachments att
+                            WHERE att.message_id = m.id AND att.content_type LIKE 'image/%')
+                    """);
+            }
+            else
+            {
+                // Match by filename suffix OR by the extension's known MIME:
+                // senders mislabel constantly (PDFs as application/octet-stream)
+                // and name files freely, so either signal alone under-matches.
+                var match = new StringBuilder("LOWER(att.filename) LIKE $att_ext ESCAPE '\\'");
+                cmd.Parameters.AddWithValue("$att_ext", "%." + EscapeLike(token));
+                if (Attachments.AttachmentExtractor.MimeForExtension("." + token) is { } mime)
+                {
+                    match.Append(" OR LOWER(att.content_type) = $att_mime");
+                    cmd.Parameters.AddWithValue("$att_mime", mime);
+                }
+                sql.Append($"""
+
+                      AND EXISTS (
+                            SELECT 1 FROM attachments att
+                            WHERE att.message_id = m.id AND ({match}))
+                    """);
+            }
+        }
         // FromExact takes precedence over FromContains — exact match is strictly
         // narrower, and Claude can hit either depending on what it knows about
         // the sender. Don't AND both clauses; that's confusing semantics.

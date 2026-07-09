@@ -17,16 +17,32 @@ namespace Mailvec.Core.Search;
 /// unique enough for an "exact" filter to mean anything useful). Set this for
 /// "all email from invoice@anthropic.com" lookups.
 /// </param>
+/// <param name="HasAttachments">
+/// True restricts to messages carrying at least one attachment (the
+/// denormalized messages.has_attachments flag, which includes inline images);
+/// false restricts to messages without. Null (default) doesn't filter.
+/// </param>
+/// <param name="AttachmentType">
+/// Restrict to messages with at least one attachment of this type. Either the
+/// literal token "image" (any image/* content type) or a filename extension
+/// like "pdf" / "docx" / "csv" (leading dot optional) — matched against the
+/// attachment filename suffix OR its known MIME, because senders mislabel
+/// constantly (a PDF as application/octet-stream) and name files freely.
+/// Implies messages with attachments, independent of <see cref="HasAttachments"/>.
+/// </param>
 public sealed record SearchFilters(
     string? Folder = null,
     DateTimeOffset? DateFrom = null,
     DateTimeOffset? DateTo = null,
     string? FromContains = null,
-    string? FromExact = null)
+    string? FromExact = null,
+    bool? HasAttachments = null,
+    string? AttachmentType = null)
 {
     public static readonly SearchFilters None = new();
 
     public bool IsEmpty =>
         Folder is null && DateFrom is null && DateTo is null
-        && string.IsNullOrEmpty(FromContains) && string.IsNullOrEmpty(FromExact);
+        && string.IsNullOrEmpty(FromContains) && string.IsNullOrEmpty(FromExact)
+        && HasAttachments is null && string.IsNullOrEmpty(AttachmentType);
 }

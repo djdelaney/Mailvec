@@ -217,7 +217,15 @@ public sealed class AttachmentExtractor(
         return fromExt ?? declared;
     }
 
-    private static string? MimeFromExtension(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
+    private static string? MimeFromExtension(string fileName) =>
+        MimeForExtension(Path.GetExtension(fileName).ToLowerInvariant());
+
+    /// <summary>
+    /// Known MIME for a lowercase filename extension including the leading dot
+    /// ('.pdf'), or null. Also consumed by SearchFilterSql's attachmentType
+    /// filter so "pdf" matches correctly-typed attachments with odd filenames.
+    /// </summary>
+    internal static string? MimeForExtension(string ext) => ext switch
     {
         ".pdf" => "application/pdf",
         ".png" => "image/png",
