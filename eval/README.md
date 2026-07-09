@@ -197,7 +197,10 @@ echo '{ "Mcp": { "LogToolCalls": true } }' > src/Mailvec.Mcp/appsettings.Local.j
 # Restart the MCP server (redeploy it) to pick up the change.
 
 # Use Claude as you normally would for a few days. Each search_emails call
-# lands in ~/Library/Logs/Mailvec/mailvec-mcp-*.log as a structured line.
+# lands as a structured line in ~/Library/Logs/Mailvec/mailvec-mcp-*.log
+# (the launchd HTTP server, used by Claude Code) or
+# ~/Library/Logs/Claude/mcp-server-mailvec.log (the stdio MCPB bundle, which
+# never writes the rolling file). eval-import scans both.
 
 # Then:
 mailvec eval-import
@@ -295,7 +298,8 @@ the row id here.
 | `version` | yes | Currently `1`; schema version, bumped on breaking change. |
 | `queries[].id` | yes | Stable handle, must be unique. The bootstrapper auto-generates `q001`, `q002`, … but any string works. |
 | `queries[].query` | yes, unless `filters` is set | The natural-language query. Same string is fed to BM25, vector, and hybrid. May be null/empty **if at least one filter is present** — that exercises the query-less browse path instead of ranked search. |
-| `queries[].relevant` | yes | List of expected-relevant Message-IDs. Each entry is **either** a bare string (binary, grade=1) **or** an object `{messageId, grade}` (graded relevance, grade ≥ 1). Mixing both forms in one query is fine. |
+| `queries[].relevant` | yes | List of expected-relevant Message-IDs. Each entry is **either** a bare string (binary, grade=1) **or** an object `{messageId, grade}` (graded relevance, grade ≥ 1). Mixing both forms in one query is fine. Must be **empty** when `expectEmpty` is true. |
+| `queries[].expectEmpty` | no | Marks a **negative query**: the system should return nothing (e.g. a query about something that never happened). Scored as **specificity** instead of NDCG/MRR/Recall — see Metrics. Loading fails if a query sets both `expectEmpty` and a non-empty `relevant`. |
 | `queries[].filters` | no | Optional. Mirrors `Mailvec.Core.Search.SearchFilters` 1:1 — labeled queries exercise the same WHERE clause path as production. See below. |
 | `queries[].notes` | no | Free-text. Ignored by the eval; useful for future-you. |
 
@@ -337,6 +341,11 @@ All three are reported; the suggested headline is **NDCG@10**.
 
 Per-query values are averaged with equal weight to produce the aggregate.
 
+Negative (`expectEmpty`) queries are scored separately as **specificity** —
+`1.0` when the query returned nothing, scaling linearly to `0.0` as the result
+count approaches top-k. They're excluded from the NDCG/MRR/Recall aggregates
+and reported in their own block (want `1.000`).
+
 ## Tuning workflow
 
 1. **Establish a baseline.** With your current build, `mailvec eval --json baselines/<date>.json`. Commit the baseline next to the change you're about to make so you can roll back easily (the report doesn't contain Message-IDs, only ids and metric values, so it is *not* sensitive). Latency (mean / p50 / p95 per mode) is recorded automatically — no flag needed.
@@ -360,8 +369,9 @@ mailvec eval --baseline baselines/pre-import.json --timing --json baselines/post
 
 The Δp95 column for `semantic` and `hybrid` is the one to watch — if it grows
 super-linearly with corpus size, the vec0 leg is the bottleneck and the next
-move is either bumping `HybridSearchService`'s candidate-inflation factor or
-moving to a partitioned vec0 index. Latency is recorded in the JSON report
+move is either tuning `VectorSearchService.SearchByVector`'s k-escalation
+(or `HybridSearchService`'s `candidatesPerLeg`) or moving to a partitioned
+vec0 index. Latency is recorded in the JSON report
 regardless of whether `--timing` was passed, so old baselines stay
 diff-comparable as long as they were captured with a build that has timing
 support.

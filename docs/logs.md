@@ -27,4 +27,4 @@ That's the file to tail when triaging a Claude Desktop / extension-install issue
 
 ## mbsync
 
-mbsync (the only non-.NET service) writes to small launchd-captured files in `~/Library/Logs/Mailvec/mailvec-mbsync.{out,err}.log`. These don't rotate — mbsync emits at most a few lines per 5-minute sync, so size isn't a concern.
+mbsync (the only non-.NET service) writes to small launchd-captured files in `~/Library/Logs/Mailvec/mailvec-mbsync.{out,err}.log`. These don't rotate — mbsync emits at most a few lines per 10-minute sync (`StartInterval` 600 in the plist), so size isn't a concern.

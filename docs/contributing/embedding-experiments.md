@@ -103,8 +103,9 @@ can't be attributed.
   ranks the relevant chunks below that horizon, a filtered query returns
   nothing relevant and scores NDCG 0.0 even though the document was "only"
   moderately demoted. If every query in the eval set carries a date filter
-  (they currently all do), aggregate deltas overstate quality differences
-  between models. Consider adding unfiltered twins of a few queries.
+  (all 43 scored queries did at the time of the 2026-06 experiment; unfiltered
+  twins have since been added), aggregate deltas overstate quality differences
+  between models.
 
 - **Latency**: qwen3-embedding:4b is a 4B model — both ingest throughput and
   per-query embed latency drop. Always pass `--timing` so the eval JSON
@@ -148,7 +149,7 @@ Reports: `baselines/2026-06-10-mxbai.json`, `baselines/2026-06-11-qwen06b.json`.
    and the new vectors physically scattered; the vec0 KNN full scan ran at
    random-I/O speed, identically slow on repeat runs (so not a cache
    effect). `VACUUM INTO` fixed it: 18.8s → 2.7s per semantic CLI search,
-   on par with the live DB. → Now step 4 in the runbook and in
+   on par with the live DB. → Now the first caveat above and step 4 of
    `switch-model`'s printed next-steps.
 2. **Missing query-side instruction prefix buried relevant documents.**
    qwen3-embedding is trained for asymmetric retrieval; embedding the bare

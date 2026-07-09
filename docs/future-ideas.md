@@ -12,9 +12,11 @@ The Anthropic / Google / OpenAI cloud clients (Claude.ai web app, Gemini in the 
 
 Deferred because the value of "Claude.ai / ChatGPT / Gemini in the browser searching my email" is real but lower than the operational cost of running OAuth + a public tunnel for a single-user system. The Phase 5 local-agent path (Gemini CLI, Codex CLI, ChatGPT desktop) covers most of the same use cases without the auth surface or external tunnel dependency.
 
+*Update: the Claude-iOS slice of this is no longer deferred — a concrete design exists in [remote-access-cloudflare.md](remote-access-cloudflare.md) (Cloudflare Tunnel + Access), and the Docker deployment already ships a `cloudflared` sidecar (`compose.yml`, `tunnel` profile) with go-live tracked in [deploy-docker.md](deploy-docker.md). The cross-vendor (ChatGPT/Gemini browser) part remains deferred.*
+
 ## Tailnet-only access from another personal machine
 
-A middle ground between local-only and public — laptop on the same Tailscale tailnet hitting the Mac mini's MCP server. Tailscale ACLs gate at the network layer, so no OAuth is needed; the change is one config knob (`Mcp:BindAddress` from `127.0.0.1` to the tailnet IP) plus a launchd plist re-render. Cheap when wanted; not built today.
+A middle ground between local-only and public — laptop on the same Tailscale tailnet hitting the Mac mini's MCP server. Tailscale ACLs gate at the network layer, so no OAuth is needed; the change is two config knobs (`Mcp:BindAddress` from `127.0.0.1` to the tailnet IP, **and** the tailnet IP/hostname added to `Mcp:AllowedHosts` — HostGuard 403s any Host header that isn't loopback or allowlisted) plus a launchd plist re-render. Cheap when wanted; not built today.
 
 ## Multi-user / federated identity
 
