@@ -59,11 +59,20 @@ internal static class SearchFilterSql
             var token = filters.AttachmentType.Trim().TrimStart('.').ToLowerInvariant();
             if (token == "image")
             {
+                // MIME prefix OR common image extensions — same mislabel
+                // tolerance the extension tokens get (a photo attached as
+                // application/octet-stream named IMG_0001.jpg must match).
                 sql.Append("""
 
                       AND EXISTS (
                             SELECT 1 FROM attachments att
-                            WHERE att.message_id = m.id AND att.content_type LIKE 'image/%')
+                            WHERE att.message_id = m.id AND (
+                                  att.content_type LIKE 'image/%'
+                                  OR LOWER(att.filename) LIKE '%.png'  OR LOWER(att.filename) LIKE '%.jpg'
+                                  OR LOWER(att.filename) LIKE '%.jpeg' OR LOWER(att.filename) LIKE '%.gif'
+                                  OR LOWER(att.filename) LIKE '%.webp' OR LOWER(att.filename) LIKE '%.heic'
+                                  OR LOWER(att.filename) LIKE '%.tif'  OR LOWER(att.filename) LIKE '%.tiff'
+                                  OR LOWER(att.filename) LIKE '%.bmp'  OR LOWER(att.filename) LIKE '%.svg'))
                     """);
             }
             else

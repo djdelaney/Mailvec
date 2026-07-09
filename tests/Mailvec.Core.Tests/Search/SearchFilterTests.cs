@@ -298,6 +298,25 @@ public class SearchFilterTests
     }
 
     [Fact]
+    public void Keyword_attachment_type_image_matches_mislabeled_image_by_extension()
+    {
+        // A photo attached as application/octet-stream named IMG_0001.jpg must
+        // match the 'image' token, same mislabel tolerance as extension tokens.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("mislabeled@x", attachments: [new ParsedAttachment(0, "IMG_0001.JPG", "application/octet-stream", 10L)]),
+            "INBOX", "INBOX/cur", "m", now);
+        repo.Upsert(M("doc@x", attachments: [new ParsedAttachment(0, "doc.bin", "application/octet-stream", 10L)]),
+            "INBOX", "INBOX/cur", "d", now);
+
+        var hits = search.Search("ramen", filters: new SearchFilters(AttachmentType: "image"));
+        hits.Single().MessageIdHeader.ShouldBe("mislabeled@x");
+    }
+
+    [Fact]
     public void Vector_filter_by_attachment_type_matches_keyword_semantics()
     {
         // Both legs must filter identically or hybrid RRF fuses skewed lists.
