@@ -24,10 +24,11 @@ namespace Mailvec.Core.Search;
 /// </param>
 /// <param name="AttachmentType">
 /// Restrict to messages with at least one attachment of this type. Either the
-/// literal token "image" (any image/* content type) or a filename extension
-/// like "pdf" / "docx" / "csv" (leading dot optional) — matched against the
-/// attachment filename suffix OR its known MIME, because senders mislabel
-/// constantly (a PDF as application/octet-stream) and name files freely.
+/// literal token "image" (any image/* content type OR a common image filename
+/// extension) or a filename extension like "pdf" / "docx" / "csv" (leading dot
+/// optional) — matched against the attachment filename suffix OR its known
+/// MIME, because senders mislabel constantly (a PDF as
+/// application/octet-stream) and name files freely.
 /// Implies messages with attachments, independent of <see cref="HasAttachments"/>.
 /// </param>
 public sealed record SearchFilters(

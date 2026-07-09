@@ -98,9 +98,11 @@ public sealed class SearchEmailsTool(
         [Description("true = only messages with at least one attachment (including inline images); false = only messages without. " +
                      "Combine with omitted `query` to browse 'recent mail with attachments from X'.")]
         bool? hasAttachments = null,
-        [Description("Only messages with at least one attachment of this type: the token 'image' (any image/*), or a filename " +
+        [Description("Only messages with at least one attachment of this type: the token 'image' (any image format), or a filename " +
                      "extension like 'pdf', 'docx', 'xlsx', 'csv' (leading dot optional). Matches the attachment's filename " +
-                     "suffix or its known MIME type, so mislabeled attachments still match. Implies hasAttachments=true.")]
+                     "suffix or its known MIME type, so mislabeled attachments still match. Must be an extension or 'image' — " +
+                     "category words like 'spreadsheet' or 'document' match nothing (use 'xlsx', 'pdf', etc.). " +
+                     "Implies hasAttachments=true.")]
         string? attachmentType = null,
         CancellationToken ct = default)
     {
