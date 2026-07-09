@@ -1,0 +1,65 @@
+# Actions housekeeping. CI uploads no artifacts and this repo publishes no
+# container images (the Docker deployment builds images from source on the
+# deployment host — see docs/deploy-docker.md), so the only things that
+# accumulate on GitHub are workflow-run history (logs) and Actions caches
+# (the NuGet cache gets a new entry whenever Directory.Packages.props or a
+# csproj changes; stale keys otherwise linger until GitHub's 7-day-unused
+# eviction). Keep the newest two of each, delete the rest weekly.
+#
+# Scope guard: this deletes completed workflow runs and caches only — it
+# never touches releases, tags, or git history. If a workflow ever starts
+# uploading artifacts, prefer `retention-days` on the upload step over
+# extending this job.
+
+name: Cleanup
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: cleanup
+
+jobs:
+  prune:
+    name: Prune old runs + caches (keep newest 2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      KEEP: 2
+    steps:
+      - name: Prune workflow runs
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/workflows" --jq '.workflows[].id' |
+          while read -r wf; do
+            # Runs come back newest-first; status=completed skips anything
+            # in flight (including this run).
+            gh api --paginate "repos/$REPO/actions/workflows/$wf/runs?status=completed&per_page=100" \
+              --jq '.workflow_runs[].id' |
+            tail -n +$((KEEP + 1)) |
+            while read -r run; do
+              echo "Deleting run $run (workflow $wf)"
+              gh api -X DELETE "repos/$REPO/actions/runs/$run"
+            done
+          done
+
+      - name: Prune caches
+        run: |
+          set -euo pipefail
+          # Sort by last access so the cache CI is actively restoring is
+          # always among the survivors.
+          gh cache list --repo "$REPO" --limit 100 \
+            --sort last_accessed_at --order desc \
+            --json id --jq '.[].id' |
+          tail -n +$((KEEP + 1)) |
+          while read -r id; do
+            echo "Deleting cache $id"
+            gh cache delete "$id" --repo "$REPO"
+          done
