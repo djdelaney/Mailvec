@@ -88,7 +88,7 @@ public sealed class AttachmentTextExtractor(
         // attachments that lie about Content-Length.
         if (declaredSize is { } sz && sz > _maxBytes)
         {
-            logger.LogDebug("Skipping oversized attachment {Name}: {Size}b > {Max}b", fileName, sz, _maxBytes);
+            logger.LogDebug("Skipping oversized {Ext} attachment: {Size}b > {Max}b", FileKind(fileName), sz, _maxBytes);
             return new ExtractionResult(null, StatusOversize);
         }
 
@@ -99,7 +99,9 @@ public sealed class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to decode MIME entity for {Name}", fileName);
+            // Expected-ish (malformed transfer-encoding); the exception message can
+            // echo raw content bytes, so log only its type, not the full exception.
+            logger.LogWarning("Failed to decode {Ext} attachment: {Error}", FileKind(fileName), ex.GetType().Name);
             return new ExtractionResult(null, StatusFailed);
         }
 
@@ -123,6 +125,19 @@ public sealed class AttachmentTextExtractor(
             AttachmentFormat.Text => ExtractText(bytes, declaredCharset),
             _ => new ExtractionResult(null, StatusUnsupported),
         };
+    }
+
+    /// <summary>
+    /// A non-identifying descriptor for extraction-failure logs. Attachment
+    /// filenames are PII (e.g. "2024_Tax_Return_JaneDoe.pdf", "Divorce.docx")
+    /// and these logs fire unconditionally at Warning into the indexer's rolling
+    /// file, so we log only the extension — enough to tell which format is
+    /// failing without naming anyone's documents.
+    /// </summary>
+    private static string FileKind(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName);
+        return string.IsNullOrEmpty(ext) ? "(no extension)" : ext.ToLowerInvariant();
     }
 
     private ExtractionResult ExtractPdf(byte[] bytes, string? fileName)
@@ -167,15 +182,18 @@ public sealed class AttachmentTextExtractor(
         {
             // Expected for non-conforming PDFs (mostly older corporate/legal
             // mailers and scanner output). One-liner — full stack trace is
-            // noise since we already know the cause class. The attachment
-            // gets stamped 'failed' and the embedder won't retry.
-            logger.LogWarning("PDF text extraction failed for {Name}: {Message}", fileName, ex.Message);
+            // noise since we already know the cause class. Log the exception
+            // type, not ex.Message: PdfPig's message can quote offending bytes
+            // from the document. The attachment gets stamped 'failed' and the
+            // embedder won't retry.
+            logger.LogWarning("PDF text extraction failed for {Ext} attachment: {Error}", FileKind(fileName), ex.GetType().Name);
             return new ExtractionResult(null, StatusFailed);
         }
         catch (Exception ex)
         {
-            // Unexpected — keep the full stack so we can dig in.
-            logger.LogWarning(ex, "PDF text extraction failed for {Name}", fileName);
+            // Unexpected — keep the full stack so we can dig in, but not the
+            // filename (PII); the extension is enough to correlate.
+            logger.LogWarning(ex, "PDF text extraction failed unexpectedly for {Ext} attachment", FileKind(fileName));
             return new ExtractionResult(null, StatusFailed);
         }
     }
@@ -211,7 +229,7 @@ public sealed class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "DOCX text extraction failed for {Name}", fileName);
+            logger.LogWarning(ex, "DOCX text extraction failed for {Ext} attachment", FileKind(fileName));
             return new ExtractionResult(null, StatusFailed);
         }
     }
@@ -265,7 +283,7 @@ public sealed class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "XLSX text extraction failed for {Name}", fileName);
+            logger.LogWarning(ex, "XLSX text extraction failed for {Ext} attachment", FileKind(fileName));
             return new ExtractionResult(null, StatusFailed);
         }
     }
@@ -311,7 +329,7 @@ public sealed class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "PPTX text extraction failed for {Name}", fileName);
+            logger.LogWarning(ex, "PPTX text extraction failed for {Ext} attachment", FileKind(fileName));
             return new ExtractionResult(null, StatusFailed);
         }
     }
