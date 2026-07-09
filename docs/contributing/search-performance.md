@@ -63,7 +63,7 @@ This is about **latency**, not retrieval **quality**. For quality regressions
 ## How to re-measure
 
 Hit the live endpoint directly to bypass the SwiftUI / debounce layer (server must
-be running on `127.0.0.1:3333`). `time_total` is the server-side wall clock.
+be running on `127.0.0.1:3333`). curl's `time_total` is the client-observed end-to-end time (connect + request + transfer); over loopback that's effectively the server's wall clock.
 
 ```sh
 URL=http://127.0.0.1:3333

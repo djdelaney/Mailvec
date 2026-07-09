@@ -72,7 +72,7 @@ mbsync -aV                                       # first sync — may take hours
 
 > **Install Ollama via the cask (`ollama-app`), not the `ollama` formula.** The Homebrew *formula* bottle has shipped incomplete builds that bundle only the MLX runner and no `llama-server`, so GGML models like `mxbai-embed-large` fail to load (`llama-server binary not found`) — Ollama answers HTTP but every `/api/embed` hangs. The cask is Ollama's own complete prebuilt app, auto-updates, keeps the `ollama` CLI on your PATH, and is what the tray's "Start Ollama" button launches. If you previously installed the formula: `brew services stop ollama && brew uninstall ollama`, then install the cask.
 
-`install-all.sh` orchestrates three scripts and prompts for site-specific values (Maildir root, DB path, Ollama URL, optional Fastmail account id). Use `--no-tray` to skip the SwiftUI build.
+`install-all.sh` orchestrates three scripts and prompts for site-specific values (Maildir root, DB path, Ollama URL, mbsync config path, optional Fastmail account id). Use `--no-tray` to skip the SwiftUI build.
 
 Then connect Claude Desktop:
 
@@ -113,7 +113,7 @@ ops/export-db.sh --to you@newmac      # ...and scp it over
 ops/import-db.sh /path/snapshot.sqlite  # on the destination, AFTER install-all.sh + mbsync there
 ```
 
-Both scripts pause the writers, checkpoint the WAL, and restart the services when done; their header comments document the ordering requirements (on the destination: install first, sync mail first, then import). The Maildir itself is not backed up by these — mbsync can always re-pull it from the server.
+Both scripts pause the writers and restart the services when done — export checkpoints the WAL before copying, import removes stale `-wal`/`-shm` sidecars before moving the snapshot into place; their header comments document the ordering requirements (on the destination: install first, sync mail first, then import). The Maildir itself is not backed up by these — mbsync can always re-pull it from the server.
 
 ## Uninstall
 

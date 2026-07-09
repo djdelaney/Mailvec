@@ -11,13 +11,16 @@
 #   server/runtimes/osx-arm64/native/vec0.dylib         (sqlite-vec extension)
 #   server/appsettings.json + everything else from publish output
 #
-# The bundle extracts to ~/Library/Application Support/Claude/extensions/<name>/
-# at install time, which avoids the ~/Documents TCC restriction we hit before.
+# The bundle extracts to ~/Library/Application Support/Claude/Claude Extensions/<id>/
+# (older Claude Desktop builds: Connectors/) at install time, which avoids the
+# ~/Documents TCC restriction we hit before.
 #
 # Usage:
 #   ops/fetch-sqlite-vec.sh        # one-time, ensures the dylib is present
 #   ops/build-mcpb.sh              # produces dist/mailvec-<version>.mcpb
-#   ops/build-mcpb.sh --bump       # patch-bump manifest.json, build, open the result
+#   ops/build-mcpb.sh --bump       # patch-bump manifest.json + Directory.Build.props
+#                                    <Version> + project.yml MARKETING_VERSION,
+#                                    build, open the result
 #                                    (Claude Desktop ignores re-installs of the same
 #                                     version, so a bump is needed for any rebuild
 #                                     you want to install)

@@ -13,7 +13,7 @@
 #      printf '%s' '<fastmail app password>' > secrets/fastmail_password
 #   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot
 #      (or set MAILVEC_REQUIRE_SEEDED_DB=0 in .env for a from-scratch build).
-#   5. docker compose up -d
+#   5. docker compose up -d --build
 #
 # ./data and ./mail must live on host-local disk: SQLite WAL needs real POSIX
 # file locking, so never place them on an NFS/SMB mount. The maildir is

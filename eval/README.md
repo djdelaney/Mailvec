@@ -103,8 +103,10 @@ mailvec eval-add "Q1 invoice" \
 After the candidate list prints, you'll see:
 
 ```
-Enter ranks of relevant results (e.g., '1 3 5'). Use 'N=G' for graded relevance.
-Empty line to abort.
+Enter the rank numbers (the 1., 2., … on the left) of the relevant results,
+separated by spaces. Example: 1 3 5 marks results 1, 3, and 5 as relevant.
+For graded relevance use N=G (e.g. 2=3 marks rank 2 with grade 3).
+Empty line to abort. (The Message-IDs of your picks are what gets saved.)
 >
 ```
 

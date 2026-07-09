@@ -26,7 +26,7 @@ open dist/mailvec-*.mcpb  # hands it to Claude Desktop
 ops/build-mcpb.sh --bump   # patch-bumps manifest.json, Directory.Build.props <Version>, and the tray's MARKETING_VERSION; builds, opens
 ```
 
-In Claude Desktop: Settings → Extensions → Mailvec → toggle off, accept the install prompt, quit and relaunch. Claude Desktop ignores re-installs of the same version, so the bump is what makes the new binary actually take effect. User config lives in the shared `appsettings.Local.json`, not in Claude Desktop's per-extension storage, so the upgrade carries forward whether you toggle off or uninstall.
+In Claude Desktop: Settings → Extensions → Mailvec → toggle off, accept the install prompt, quit and relaunch. Claude Desktop ignores re-installs of the same version, so the bump is what makes the new binary actually take effect. User config lives in the shared `appsettings.Local.json`, not in Claude Desktop's per-extension storage, so those settings carry forward either way — but the one dialog setting (the **Log tool calls** toggle) lives in Claude Desktop's per-extension storage: it survives a toggle-off upgrade and is cleared by a full uninstall, which is why toggle-off is the recommended path.
 
 ## Logs
 
