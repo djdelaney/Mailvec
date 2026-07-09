@@ -144,5 +144,7 @@ public sealed record AttachmentInfo(
         a.SizeBytes,
         a.ExtractionStatus,
         IndexedForSearch: a.ExtractionStatus is "done" or "ocr",
-        ExtractedTextChars: string.IsNullOrEmpty(a.ExtractedText) ? null : a.ExtractedText.Length);
+        // Full loads (get_email) carry the text; the thread summary loader
+        // carries only the projected length. Either way clients get the total.
+        ExtractedTextChars: string.IsNullOrEmpty(a.ExtractedText) ? a.ExtractedTextChars : a.ExtractedText.Length);
 }

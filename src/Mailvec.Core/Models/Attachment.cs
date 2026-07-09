@@ -18,4 +18,9 @@ public sealed record Attachment(
     long Id = 0,
     string? ExtractedText = null,
     string? ExtractionStatus = null,
-    DateTimeOffset? ExtractedAt = null);
+    DateTimeOffset? ExtractedAt = null,
+    // Length of extracted_text without loading the text itself — populated by
+    // the summary loader (thread view) via SQL LENGTH(). Null when there is no
+    // text. When ExtractedText IS loaded, prefer its .Length; SQL LENGTH()
+    // counts code points vs UTF-16 units, close enough for paging estimates.
+    int? ExtractedTextChars = null);
