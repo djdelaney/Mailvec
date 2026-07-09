@@ -27,10 +27,7 @@ internal static class EvalAddCandidates
             }
             case EvalMode.Semantic:
             {
-                // Mirror HybridSearchService's k-inflation when filters are present:
-                // vec0 KNN runs before the filter join, so a small k + restrictive
-                // filter can return an empty post-filter set.
-                var k = (filters is null || filters.IsEmpty) ? Math.Max(100, topK * 5) : Math.Max(500, topK * 50);
+                var k = Math.Max(100, topK * 5);
                 var hits = await sp.GetRequiredService<VectorSearchService>().SearchAsync(query, topK, k: k, filters, ct);
                 return hits.Select(h => new EvalAddCandidate(h.MessageIdHeader, h.Subject, h.FromName ?? h.FromAddress, h.DateSent, h.Folder, Truncate(h.ChunkText, 240))).ToList();
             }
