@@ -129,6 +129,23 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 if [[ -f "$DB" ]]; then
   echo "==> Backing up existing archive -> $DB.bak.$STAMP"
   mv "$DB" "$DB.bak.$STAMP"
+  # Each .bak is a full-PII copy; tighten perms (mv preserves the original's,
+  # typically 0644) and prune so they don't pile up unbounded.
+  chmod 600 "$DB.bak.$STAMP" 2>/dev/null || true
+  KEEP=3
+  shopt -s nullglob
+  BAKS=("$DB".bak.*)   # array glob: safe with spaces in the path; timestamp names sort chronologically
+  shopt -u nullglob
+  if (( ${#BAKS[@]} > KEEP )); then
+    PRUNE=$(( ${#BAKS[@]} - KEEP ))
+    i=0
+    for old in "${BAKS[@]}"; do
+      (( i < PRUNE )) || break
+      echo "  pruning old backup $(basename "$old")"
+      rm -f "$old"
+      i=$(( i + 1 ))
+    done
+  fi
 fi
 echo "==> Removing stale WAL/SHM sidecars"
 rm -f "$DB-wal" "$DB-shm"
@@ -136,6 +153,10 @@ rm -f "$DB-wal" "$DB-shm"
 echo "==> Installing snapshot"
 mkdir -p "$DB_DIR"
 cp "$SNAP" "$DB"
+# Restrict the freshly-copied archive to the owner (cp inherits the umask). The
+# service self-heals this on next open too, but do it here so the full-PII file
+# is never briefly world-readable between import and first service start.
+chmod 600 "$DB" 2>/dev/null || true
 
 # Rebuild the denormalized messages.attachment_text (the 6th messages_fts column)
 # from the persisted attachments rows, which still carry OCR-recovered text. This

@@ -19,11 +19,10 @@ namespace Mailvec.Mcp.Tools;
 /// can't read (no embedded text). One page per call keeps the vision-token
 /// cost bounded: read the text first to find the page, then render that page.
 ///
-/// Reuses <see cref="AttachmentExtractor"/> to pull the PDF bytes out of the
-/// Maildir (so the file also lands in the download dir, same as
-/// get_attachment), then rasterises via <see cref="PdfRenderer"/> (PDFium).
-/// Platform-annotated because PDFium is native — the server only runs on
-/// macOS / Linux / Windows.
+/// Pulls the PDF bytes out of the Maildir in memory (<see cref="AttachmentExtractor.ExtractInMemory"/>
+/// — nothing is written to disk), then rasterises via <see cref="PdfRenderer"/>
+/// (PDFium). Platform-annotated because PDFium is native — the server only runs
+/// on macOS / Linux / Windows.
 /// </summary>
 [McpServerToolType]
 public sealed class GetAttachmentPageImageTool(
@@ -74,10 +73,10 @@ public sealed class GetAttachmentPageImageTool(
         if (!msg.HasAttachments)
             throw new McpException($"Message {msg.Id} has no attachments.");
 
-        ExtractResult result;
+        InlineAttachment att;
         try
         {
-            result = extractor.Extract(msg, partIndex);
+            att = extractor.ExtractInMemory(msg, partIndex);
         }
         catch (ArgumentOutOfRangeException ex)
         {
@@ -88,28 +87,19 @@ public sealed class GetAttachmentPageImageTool(
             throw new McpException(ex.Message);
         }
 
-        if (!IsPdf(result.ContentType, result.FileName))
+        if (!IsPdf(att.ContentType, att.FileName))
             throw new McpException(
-                $"partIndex {partIndex} ('{result.FileName}', {result.ContentType}) is not a PDF. " +
-                "This tool only renders PDFs — use get_attachment_text for a document's text or get_attachment for the raw file.");
+                $"partIndex {partIndex} ('{att.FileName}', {att.ContentType}) is not a PDF. " +
+                "This tool only renders PDFs — use get_attachment_text for a document's text.");
 
-        byte[] pdf;
-        try
-        {
-            pdf = File.ReadAllBytes(result.FilePath);
-        }
-        catch (IOException ex)
-        {
-            throw new McpException($"Could not read the extracted PDF '{result.FileName}': {ex.Message}");
-        }
-
+        byte[] pdf = att.Bytes;
         int pageCount;
         byte[] jpeg;
         try
         {
             pageCount = PdfRenderer.PageCount(pdf);
             if (page > pageCount)
-                throw new McpException($"'{result.FileName}' has {pageCount} page(s); page {page} is out of range.");
+                throw new McpException($"'{att.FileName}' has {pageCount} page(s); page {page} is out of range.");
             jpeg = PdfRenderer.RenderPageJpeg(pdf, page - 1);
         }
         catch (McpException)
@@ -120,15 +110,15 @@ public sealed class GetAttachmentPageImageTool(
         {
             // PDFium throws on encrypted or corrupt PDFs.
             throw new McpException(
-                $"Could not render '{result.FileName}' page {page}: {ex.Message}. " +
-                "The PDF may be encrypted or corrupt; try get_attachment_text or get_attachment.");
+                $"Could not render '{att.FileName}' page {page}: {ex.Message}. " +
+                "The PDF may be encrypted or corrupt; try get_attachment_text for any embedded text.");
         }
 
         var content = new List<ContentBlock>
         {
             new TextContentBlock
             {
-                Text = $"Rendered page {page} of {pageCount} from {result.FileName} as a JPEG image.",
+                Text = $"Rendered page {page} of {pageCount} from {att.FileName} as a JPEG image.",
             },
             new ImageContentBlock
             {

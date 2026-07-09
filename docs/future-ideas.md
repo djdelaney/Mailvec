@@ -58,10 +58,47 @@ Deferred until there are actual second users to distribute to; sequenced so
 the tray notarization lane (the biggest UX win per unit of work) can ship
 first on its own.
 
+## Internationalization (CJK search + localized reply trimming)
+
+Parked until there's a real user with substantial non-English mail. Two
+separate problems, one trigger:
+
+1. **CJK is dead in the keyword leg.** `messages_fts` uses `porter unicode61`,
+   which segments on whitespace/punctuation — Chinese/Japanese text indexes as
+   one giant token, so BM25 matches nothing inside it and hybrid quietly
+   degrades to vector-only (losing exact-match strength: names, order numbers,
+   domains). The standard fix is FTS5's built-in **trigram** tokenizer (works
+   for any language, no segmenter), but it changes BM25 behavior for English
+   too — shifting ranking on *every* keyword query. That makes it a design
+   session, not a patch: full `rebuild-fts`, complete eval re-baseline, and
+   possibly a dual-index design (porter for Latin, trigram shadow index) to
+   avoid regressing the tuned English experience. Measurement gap: the eval
+   query set is English — scoring a CJK improvement needs CJK mail and CJK
+   labeled queries first.
+2. **ReplyTrimmer only speaks English** ("On … wrote:",
+   "-----Original Message-----"). Localized markers ("Am … schrieb:",
+   "Le … a écrit :", 差出人:) sail past it, so non-English reply threads
+   re-embed the full quoted history in every message — inflating the vector
+   space and BM25 term counts with exactly the duplication the trimmer exists
+   to prevent. Mechanically easy (Gmail/Outlook localizations are well
+   documented; add patterns + per-language fixtures) and the cheap first move
+   when the trigger arrives; still needs re-processing affected messages and
+   a re-baseline.
+
 ## Still open (small)
 
 Carried forward from the original design doc — none are committed work, all gated on a problem actually being observed:
 
+- **`datetime(date_sent)` expression index.** `date_sent` stores mixed-offset
+  ISO strings, so every date-ordered query (query-less browse, `FolderStats`'s
+  per-folder oldest/latest, date-range filters) wraps the column in
+  `datetime()` for correct ordering — which makes `idx_messages_date_sent`
+  unusable and full-scans instead. Fix is a v9 migration adding
+  `CREATE INDEX … ON messages(datetime(date_sent))` (or a normalized-UTC sort
+  column). Parked because at ~80k messages the scan is tens of ms: benchmark
+  against a live-DB copy (`ops/export-db.sh`, then time browse/`list_folders`
+  with and without the index) before shipping a migration. Un-park when that
+  latency is user-visible or a corpus hits 200k+.
 - **Thread reconstruction.** Today's `In-Reply-To` / `References` heuristic is acceptable; revisit if mismatches with Fastmail's JMAP threading become a usability issue.
 - **JMAP-specific metadata.** IMAP flags are available via mbsync, but JMAP-only fields (masked email, server-side labels) would require a separate JMAP path. Not currently planned.
 - **WAL checkpointing strategy.** No periodic auto-checkpoint configured beyond SQLite's default (every 1000 frames). For one-off cleanup after a bulk embed, `mailvec checkpoint` runs `PRAGMA wal_checkpoint(TRUNCATE)`. Worth measuring `-wal` file growth on a long-running install before deciding whether automatic periodic checkpoints are needed.

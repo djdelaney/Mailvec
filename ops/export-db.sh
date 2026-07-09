@@ -103,6 +103,10 @@ echo "==> Copying snapshot"
 echo "  from: $DB"
 echo "  to:   $OUT"
 cp "$DB" "$OUT"
+# The snapshot is a complete, unencrypted copy of all mail PII. Restrict it to
+# the owner before it sits around in $HOME or gets transferred (plain cp inherits
+# the umask, typically 0644 = world-readable).
+chmod 600 "$OUT"
 
 echo "==> Validating snapshot"
 # Plain SELECT on messages doesn't touch the vec0 virtual table, so it works
@@ -121,12 +125,22 @@ SNAP_BYTES="$(stat -f%z "$OUT" 2>/dev/null || echo '?')"
 echo "  size=${SNAP_BYTES} bytes"
 
 if [[ -n "$TO" ]]; then
+  # scp does not preserve the local 0600 (no -p), so the remote copy lands at the
+  # destination umask. A world-readable, world-writable /tmp is the worst place
+  # for a full-PII archive to come to rest — warn loudly.
+  case "$TO" in
+    *:/tmp/*|*:/tmp|*:/var/tmp/*|*:/var/tmp)
+      echo "  WARN: '$TO' targets a world-readable temp dir. The snapshot is an" >&2
+      echo "        unencrypted copy of all your mail — prefer a path under the" >&2
+      echo "        remote home dir and 'chmod 600' it there after import." >&2
+      ;;
+  esac
   echo "==> Transferring to $TO"
   scp "$OUT" "$TO"
 fi
 
 echo
-echo "Snapshot ready: $OUT"
+echo "Snapshot ready: $OUT (mode 0600 — unencrypted full-mail copy; delete it once imported)"
 echo "Next, on the destination machine:"
 echo "  ops/import-db.sh <snapshot.sqlite>"
 echo "  (then: mailvec status && mailvec doctor)"
