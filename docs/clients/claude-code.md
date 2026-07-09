@@ -49,8 +49,8 @@ The launchd plist sets `MAILVEC_LAUNCHD=1` to suppress Serilog's Console sink in
 ## Known quirks
 
 - **HTTP transport requires a session.** Streamable HTTP clients must `initialize` first, capture the `Mcp-Session-Id` response header, send `notifications/initialized`, and include the session header on every subsequent call. Claude Code handles this automatically, but if you ever `curl` the endpoint directly, calls without the session header silently 404.
-- **No auth, 127.0.0.1 only.** Anything running as your user on the same machine can call any tool. That's the threat model — see [`docs/security.md`](../security.md) (and [`docs/future-ideas.md`](../future-ideas.md) for the cloud-access framing).
+- **No auth, 127.0.0.1 only.** Anything running on the same machine — under any local account — can call any tool. That's the threat model — see [`docs/security.md`](../security.md) (and [`docs/future-ideas.md`](../future-ideas.md) for the cloud-access framing).
 
 ## Verifying
 
-Run `claude mcp list` in a shell (or `/mcp` inside a Claude Code session): `mailvec` should be listed as connected, with the version string from `manifest.json` / `Mailvec.Mcp.csproj <Version>`. Asking the agent something archive-specific should trigger a `search_emails` call.
+Run `claude mcp list` in a shell (or `/mcp` inside a Claude Code session): `mailvec` should be listed as connected, with the version string from `manifest.json` / the repo-wide `<Version>` in `Directory.Build.props`. Asking the agent something archive-specific should trigger a `search_emails` call.

@@ -87,22 +87,42 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
 1. **Leave the desktop alone.** Local MCPB + `127.0.0.1:3333` stay as configured. They
    are device-local and never appear on iOS.
 2. **Install + auth `cloudflared`** on the Mac (`cloudflared tunnel login`).
-3. **Create a named tunnel** and an **ingress rule that routes ONLY the MCP path** of
-   `mailvec.<domain>` → `http://127.0.0.1:3333`. Everything else → `http_status:404`.
-   Do **not** expose `/health` or `/tray/*`.
-4. **Run the tunnel as a service** (launchd / `cloudflared service install`).
-5. **Configure an IdP** in Zero Trust (one-time PIN email is simplest for a single user).
-6. **Stand up the auth front (★):**
+3. **Create a named tunnel** with ingress rules that **404 the unauthenticated surfaces
+   before the catch-all**. MCP is mounted at the root `/` (there is no dedicated "MCP
+   path" to allow-list), so the shape is deny-then-forward:
+
+   ```yaml
+   ingress:
+     - hostname: mailvec.<domain>
+       path: ^/health$
+       service: http_status:404
+     - hostname: mailvec.<domain>
+       path: ^/tray/.*
+       service: http_status:404
+     - hostname: mailvec.<domain>
+       service: http://127.0.0.1:3333
+     - service: http_status:404
+   ```
+
+4. **Add `mailvec.<domain>` to `Mcp:AllowedHosts`** in the shared config
+   (`~/Library/Application Support/Mailvec/appsettings.Local.json`) and restart the MCP
+   service. cloudflared forwards the original public `Host` header, and
+   [`HostGuard`](../src/Mailvec.Mcp/HostGuard.cs) returns 403 for any hostname that isn't
+   loopback or allowlisted — without this step **every request through the tunnel fails**.
+   See [security.md](security.md#host--origin-validation-dns-rebinding-guard).
+5. **Run the tunnel as a service** (launchd / `cloudflared service install`).
+6. **Configure an IdP** in Zero Trust (one-time PIN email is simplest for a single user).
+7. **Stand up the auth front (★):**
    - *Try first:* MCP Server Portal — add the tunneled server, attach an Access policy
      restricting to your identity, connect clients to `https://<sub>.<domain>/mcp`.
    - *If that fails Claude's OAuth:* deploy a Worker with `workers-oauth-provider` that
      proxies to the tunnel origin.
-7. **(Recommended) Reduce the cloud tool surface** — disable high-exposure tools
+8. **(Recommended) Reduce the cloud tool surface** — disable high-exposure tools
    (esp. `view_attachment`) on the portal, or filter them in the Worker proxy.
-8. **Register the connector on claude.ai (web)** with a **distinct name: "Mailvec (Cloud)"**
+9. **Register the connector on claude.ai (web)** with a **distinct name: "Mailvec (Cloud)"**
    and the `https://<sub>.<domain>/mcp` URL. Complete the OAuth flow once.
-9. **Verify on iOS** — the connector syncs down; confirm tools load and a search works.
-10. **Disable "Mailvec (Cloud)" on Desktop** so the desktop keeps using the fast local
+10. **Verify on iOS** — the connector syncs down; confirm tools load and a search works.
+11. **Disable "Mailvec (Cloud)" on Desktop** so the desktop keeps using the fast local
     path (see gotcha on duplicates).
 
 ---
@@ -136,8 +156,9 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
   connector's surface.
 
 - **Keep `/health` and `/tray/*` private.** The security model leans on "bind to
-  `127.0.0.1`"; those endpoints are unauthenticated. The tunnel ingress must route the MCP
-  path *only*.
+  `127.0.0.1`"; those endpoints are unauthenticated. The tunnel ingress must 404 them
+  *before* the catch-all rule that forwards to `127.0.0.1:3333` (step 3) — MCP lives at
+  `/`, so there is no narrower path to allow-list instead.
 
 - **`serverInfo.name = "mailvec"` is shared** between local and cloud. Fine for the
   connector list (display name is separate), but it's an identical protocol identity — keep
@@ -145,7 +166,7 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
 
 - **Latency is not the deciding factor.** Cloudflare overhead is ~30–70 ms on top of mobile
   RTT, and `search_emails` is Ollama-bound anyway. Fine for iOS. (Don't route desktop
-  traffic through it, though — that's the whole point of step 10.)
+  traffic through it, though — that's the whole point of step 11.)
 
 ---
 
