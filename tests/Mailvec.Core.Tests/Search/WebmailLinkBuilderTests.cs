@@ -75,4 +75,57 @@ public class WebmailLinkBuilderTests
             new FastmailOptions { AccountId = "u1", WebUrl = null! });
         url.ShouldStartWith("https://app.fastmail.com/mail/search:msgid:");
     }
+
+    [Fact]
+    public void MarkdownLink_returns_null_when_url_is_null()
+    {
+        WebmailLinkBuilder.MarkdownLink(null, "Anything").ShouldBeNull();
+    }
+
+    [Fact]
+    public void MarkdownLink_wraps_a_plain_subject()
+    {
+        WebmailLinkBuilder.MarkdownLink("https://mail/x", "Q3 numbers")
+            .ShouldBe("[Q3 numbers](https://mail/x)");
+    }
+
+    [Fact]
+    public void MarkdownLink_falls_back_when_subject_is_missing()
+    {
+        WebmailLinkBuilder.MarkdownLink("https://mail/x", null)
+            .ShouldBe("[(no subject)](https://mail/x)");
+        WebmailLinkBuilder.MarkdownLink("https://mail/x", "   ")
+            .ShouldBe("[(no subject)](https://mail/x)");
+    }
+
+    [Fact]
+    public void MarkdownLink_escapes_a_subject_that_tries_to_spoof_the_target()
+    {
+        // A crafted subject that, unescaped, would render as a link to evil.com
+        // with benign-looking text. Escaping the brackets keeps the whole subject
+        // inside the link text so the real target survives.
+        var link = WebmailLinkBuilder.MarkdownLink("https://mail/real", "Invoice](https://evil.com) [x");
+
+        link.ShouldBe("[Invoice\\](https://evil.com) \\[x](https://mail/real)");
+        // The real destination is the only (...) target the renderer will bind.
+        link.ShouldEndWith("](https://mail/real)");
+        // The evil closing-bracket is escaped (\]), so the renderer keeps it as
+        // literal link text instead of ending the span and binding evil.com.
+        link!.ShouldContain("\\](https://evil.com)");
+    }
+
+    [Fact]
+    public void MarkdownLink_escapes_backslashes_before_brackets()
+    {
+        // A trailing backslash must not escape our closing ']' — escape '\' first.
+        WebmailLinkBuilder.MarkdownLink("https://mail/x", "weird\\")
+            .ShouldBe("[weird\\\\](https://mail/x)");
+    }
+
+    [Fact]
+    public void MarkdownLink_collapses_newlines_in_the_subject()
+    {
+        WebmailLinkBuilder.MarkdownLink("https://mail/x", "line one\r\nline two")
+            .ShouldBe("[line one  line two](https://mail/x)");
+    }
 }

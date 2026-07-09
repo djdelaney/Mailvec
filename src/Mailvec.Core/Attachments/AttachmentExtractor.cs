@@ -7,18 +7,24 @@ using MimeKit;
 namespace Mailvec.Core.Attachments;
 
 /// <summary>
-/// Extracts an attachment from its Maildir source file and writes the bytes
-/// to a user-visible download directory (~/Downloads/mailvec/ by default),
-/// returning the absolute path. Mailvec doesn't try to ship binary content
-/// to Claude over MCP — Claude.ai's bridge mishandles non-image
-/// EmbeddedResource blocks and rejects them as "unsupported image format".
-/// Instead, we put the file on disk where downstream tools (Claude Code's
-/// built-in Read, the @modelcontextprotocol/server-filesystem MCP, etc.)
-/// can pick it up.
+/// Decodes an attachment from its Maildir source file. Two entry points:
 ///
-/// This is the only place outside the indexer that reads from the Maildir,
-/// so it owns the small architectural break of "MCP must know MaildirRoot".
-/// See CLAUDE.md (Attachment-extraction gotchas) for the rationale.
+/// <list type="bullet">
+/// <item><see cref="ExtractInMemory"/> returns the decoded bytes + metadata and
+/// touches no disk — the path the read-only MCP tools use to inline an image /
+/// small text file or rasterise a PDF page. Nothing is persisted.</item>
+/// <item><see cref="Extract"/> additionally writes the bytes to a user-visible
+/// download directory (~/Downloads/mailvec/ by default) and returns the path.
+/// Reserved for the explicit, user-initiated download paths — the tray's Save
+/// button (<c>/tray/attachment</c>) and <c>mailvec extract-attachments</c> — not
+/// the automatic agent read path, so ordinary searches never litter mail content
+/// on disk.</item>
+/// </list>
+///
+/// This is (with <see cref="MaildirAttachmentReader"/>) the only place outside
+/// the indexer that reads from the Maildir, so it owns the small architectural
+/// break of "MCP must know MaildirRoot". See CLAUDE.md (Attachment-extraction
+/// gotchas) for the rationale.
 /// </summary>
 public sealed class AttachmentExtractor(
     IOptions<IngestOptions> ingestOptions,
@@ -52,7 +58,15 @@ public sealed class AttachmentExtractor(
     /// <see cref="ArgumentOutOfRangeException"/> when the requested part
     /// doesn't exist on the message.
     /// </summary>
-    public ExtractResult Extract(Message message, int partIndex)
+    /// <summary>
+    /// Decode the attachment at <paramref name="partIndex"/> entirely in memory —
+    /// no bytes are written to disk. Returns the resolved filename / content type /
+    /// size, the decoded bytes, and (for small text-ish files) the decoded UTF-8
+    /// text. Throws <see cref="FileNotFoundException"/> when the Maildir source is
+    /// missing and <see cref="ArgumentOutOfRangeException"/> when the part doesn't
+    /// exist — same as <see cref="Extract"/>.
+    /// </summary>
+    public InlineAttachment ExtractInMemory(Message message, int partIndex)
     {
         ArgumentNullException.ThrowIfNull(message);
 
@@ -60,15 +74,27 @@ public sealed class AttachmentExtractor(
         var entity = data.Entity;
         var safeName = ResolveSafeFileName(entity, partIndex);
         var contentType = ResolveContentType(entity, safeName);
+        var inlineText = TryDecodeInlineText(data.Bytes, contentType);
+
+        return new InlineAttachment(
+            FileName: safeName,
+            ContentType: contentType,
+            SizeBytes: data.Bytes.LongLength,
+            Bytes: data.Bytes,
+            InlineText: inlineText);
+    }
+
+    public ExtractResult Extract(Message message, int partIndex)
+    {
+        var att = ExtractInMemory(message, partIndex);
 
         // Prefix with message id + part index — guarantees no collisions across
         // emails that happened to attach files with the same name, and keeps
         // the originating email greppable from the saved filename.
-        var outputName = $"{message.Id}-{partIndex}-{safeName}";
+        var outputName = $"{message.Id}-{partIndex}-{att.FileName}";
         var targetPath = ResolveSafeOutputPath(_downloadDir, outputName);
 
-        var bytes = data.Bytes;
-        bool wasReused = TryReuseExisting(targetPath, bytes.LongLength);
+        bool wasReused = TryReuseExisting(targetPath, att.SizeBytes);
         if (!wasReused)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
@@ -77,7 +103,7 @@ public sealed class AttachmentExtractor(
             var tempPath = targetPath + ".part";
             try
             {
-                File.WriteAllBytes(tempPath, bytes);
+                File.WriteAllBytes(tempPath, att.Bytes);
                 File.Move(tempPath, targetPath, overwrite: true);
             }
             catch
@@ -88,15 +114,13 @@ public sealed class AttachmentExtractor(
             }
         }
 
-        var inlineText = TryDecodeInlineText(bytes, contentType);
-
         return new ExtractResult(
             FilePath: targetPath,
-            FileName: safeName,
-            ContentType: contentType,
-            SizeBytes: bytes.LongLength,
+            FileName: att.FileName,
+            ContentType: att.ContentType,
+            SizeBytes: att.SizeBytes,
             WasReused: wasReused,
-            InlineText: inlineText);
+            InlineText: att.InlineText);
     }
 
     /// <summary>
@@ -269,4 +293,12 @@ public sealed record ExtractResult(
     string ContentType,
     long SizeBytes,
     bool WasReused,
+    string? InlineText);
+
+/// <summary>An attachment decoded in memory: metadata + bytes, nothing on disk.</summary>
+public sealed record InlineAttachment(
+    string FileName,
+    string ContentType,
+    long SizeBytes,
+    byte[] Bytes,
     string? InlineText);

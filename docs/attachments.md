@@ -4,35 +4,27 @@ There are three tools, for three jobs:
 
 | Tool | Returns | Best for |
 | --- | --- | --- |
-| `get_attachment` | the **file on disk** (+ inline image/small-text) | getting the actual file; images |
+| `get_attachment` | an **image** or **small text file** inline (else a summary) | viewing a photo/image; a quick CSV/JSON/text |
 | `get_attachment_text` | the **extracted text** (PDF/DOCX) inline | "what does this document say" — works over a remote connection, no filesystem |
 | `get_attachment_page_image` | a **rendered page** as an inline JPEG | layout that text loses (tables, forms, signatures) or scanned/image-only PDFs |
 
 All three take the email (`id` or `messageId`) plus `partIndex` from the `get_email` response.
 
-## `get_attachment` — the file
+## `get_attachment` — inline image / text
 
-`get_attachment` extracts a single email attachment to `~/Downloads/mailvec/` (configurable via `Mcp:AttachmentDownloadDir`) and returns the absolute path. It deliberately does **not** try to ship the bytes back through MCP — Claude.ai's MCP bridge currently mishandles non-image binary blobs and rejects them as "unsupported image format". Putting the file on disk delegates the "interpret bytes by file type" job to whichever tool is best at it.
+`get_attachment` decodes a single attachment **in memory** and returns its content inline — nothing is written to disk:
 
-## How Claude actually reads the file
+- **Image attachments** come back as an `ImageContentBlock` so Claude vision can describe / OCR them in one round trip.
+- **Small text-ish files** (`text/*`, `application/json`, `application/xml`, etc., under `Mcp:AttachmentInlineTextMaxBytes` — default 256 KB) have their decoded UTF-8 text included as a text block.
+- **Any other binary type** (PDF, DOCX, zip, …) returns just a short summary pointing at the right tool: `get_attachment_text` for the document's extracted text, or `get_attachment_page_image` to view a PDF page.
 
-Depends on the client:
+It deliberately does **not** ship arbitrary binary back through MCP — Claude.ai's bridge maps every non-image blob to an image block and rejects it as "unsupported image format" (which is why only `image/*` is inlined). It also no longer persists the file to `~/Downloads/mailvec/`: writing mail content to disk on every read was a needless privacy footprint (see the pre-go-live data-leak review) and is meaningless in a containerised deployment, where that path isn't the user's Downloads folder.
 
-- **Claude Code** — the built-in `Read` tool can open the saved path directly and handles PDFs, text, images, etc. natively. Nothing extra to install.
-- **Claude.ai web / Claude Desktop** — Claude can't read arbitrary local paths. To make `get_attachment` useful end-to-end, **install a filesystem MCP server** alongside Mailvec. The official one is [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem). Point it at `~/Downloads/mailvec/`, then Claude can call its `read_text_file` / `read_media_file` tools on the path Mailvec just returned. Without a filesystem MCP, `get_attachment` still works — Claude just tells you "I saved it to /Users/.../Downloads/mailvec/foo.pdf" and you open it yourself in Finder.
-
-## Inline content blocks
-
-For convenience, two cases are also inlined as native MCP content blocks regardless of client:
-
-- **Image attachments** are inlined as `ImageContentBlock` so Claude vision can describe / OCR them in one round trip.
-- **Small text-ish files** (`text/*`, `application/json`, `application/xml`, etc., under `Mcp:AttachmentInlineTextMaxBytes` — default 256 KB) have their decoded UTF-8 text included as an additional text block.
-
-The file is also always saved to disk in those cases, so a downstream tool can still pick it up.
+**Need the actual file on disk?** Use the tray's Save button (which calls `/tray/attachment`) or `mailvec extract-attachments` — the explicit, user-initiated download paths. `Mcp:AttachmentDownloadDir` (default `~/Downloads/mailvec/`) configures where those write.
 
 ## `get_attachment_text` — the document's text
 
-`get_attachment_text` returns the text Mailvec already extracted from the attachment at ingest time (PDF via PdfPig, DOCX via OpenXml), straight from the database — **no filesystem touched**. Because it returns a plain text block, it renders on every client and works identically over a remote (HTTP/OAuth) connection, where a returned filesystem path would be meaningless. This is the path for "summarise this contract" / "what's the total on this invoice". When extraction couldn't produce text (scanned/image-only PDF, encrypted, oversize, unsupported), it says so and points you at `get_attachment` or `get_attachment_page_image`.
+`get_attachment_text` returns the text Mailvec already extracted from the attachment at ingest time (PDF via PdfPig, DOCX via OpenXml), straight from the database — **no filesystem touched**. Because it returns a plain text block, it renders on every client and works identically over a remote (HTTP/OAuth) connection, where a returned filesystem path would be meaningless. This is the path for "summarise this contract" / "what's the total on this invoice". When extraction couldn't produce text (scanned/image-only PDF, encrypted, oversize, unsupported), it says so and points you at `get_attachment_page_image`.
 
 ## `get_attachment_page_image` — a rendered page
 

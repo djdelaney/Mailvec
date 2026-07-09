@@ -53,6 +53,28 @@ public class GetEmailToolTests
     }
 
     [Fact]
+    public void WebmailLink_escapes_a_spoofing_subject_and_is_null_without_account_id()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = repo.Upsert(
+            Helpers.Sample("spoof@x", subject: "Invoice](https://evil.com) [x"),
+            "INBOX", "INBOX/cur", "s", DateTimeOffset.UtcNow);
+
+        // No account id configured → no link is offered at all.
+        Build(db).GetEmail(id: id).WebmailLink.ShouldBeNull();
+
+        // With an account id, the subject is server-escaped so it can't spoof the
+        // link target — the tool must never hand the model a raw [subject](url).
+        var withAcct = Build(db, new FastmailOptions { AccountId = "u12345678" });
+        var link = withAcct.GetEmail(id: id).WebmailLink;
+        link.ShouldNotBeNull();
+        link.ShouldContain("\\](https://evil.com)");
+        link.ShouldContain("/mail/search:msgid:");
+        link.ShouldEndWith("?u=u12345678)");
+    }
+
+    [Fact]
     public void Throws_when_message_is_soft_deleted()
     {
         using var db = new TempDatabase();

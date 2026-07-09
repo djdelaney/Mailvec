@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Mailvec.Core.Options;
 
@@ -7,12 +8,24 @@ namespace Mailvec.Core.Data;
 public sealed class ConnectionFactory
 {
     private readonly string _connectionString;
+    private readonly string _dbPath;
     private readonly string? _vecExtensionPath;
+    private readonly ILogger<ConnectionFactory>? _logger;
+    private bool _permsHardened;
 
-    public ConnectionFactory(IOptions<ArchiveOptions> options)
+    public ConnectionFactory(IOptions<ArchiveOptions> options, ILogger<ConnectionFactory>? logger = null)
     {
+        _logger = logger;
         var dbPath = PathExpansion.Expand(options.Value.DatabasePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _dbPath = dbPath;
+        var dbDir = Path.GetDirectoryName(dbPath)!;
+        Directory.CreateDirectory(dbDir);
+        // The archive holds full mail bodies, subjects, addresses and attachment
+        // text — the single richest PII object in the system. Lock its directory
+        // to owner-only (0700) so its confidentiality doesn't rely on $HOME being
+        // 0700 (true on macOS, NOT guaranteed on Linux, and irrelevant for a
+        // container bind-mount whose perms come from the host).
+        HardenPath(dbDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, "archive directory");
 
         _connectionString = new SqliteConnectionStringBuilder
         {
@@ -73,7 +86,50 @@ public sealed class ConnectionFactory
             _ = cmd.ExecuteScalar();
         }
 
+        // The file exists now (ReadWriteCreate) and the WAL pragma has created the
+        // -wal/-shm sidecars, so this is the first safe point to restrict all three
+        // to 0600. Done once (idempotent, cheap); self-heals a DB created before
+        // this landed. SetUnixFileMode on the main file doesn't cover the sidecars,
+        // so we chmod each explicitly.
+        HardenPermissions();
+
         return conn;
+    }
+
+    private void HardenPermissions()
+    {
+        if (_permsHardened) return;
+        const UnixFileMode ownerReadWrite = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        HardenPath(_dbPath, ownerReadWrite, "archive DB");
+        HardenPath(_dbPath + "-wal", ownerReadWrite, "archive WAL");
+        HardenPath(_dbPath + "-shm", ownerReadWrite, "archive SHM");
+        _permsHardened = true;
+    }
+
+    /// <summary>
+    /// Best-effort restriction of a file/dir to the given owner-only mode. A no-op
+    /// on Windows (SetUnixFileMode throws PlatformNotSupportedException there) and
+    /// on a missing path. A chmod failure never propagates — some container bind
+    /// mounts and network filesystems don't honor POSIX modes; hardening the DB
+    /// must not be able to crash the connection-open path. We warn once so a silent
+    /// non-restriction on Linux/Docker is at least visible in the logs.
+    /// </summary>
+    private void HardenPath(string path, UnixFileMode mode, string label)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        if (!File.Exists(path) && !Directory.Exists(path)) return;
+        try
+        {
+            File.SetUnixFileMode(path, mode);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            _logger?.LogWarning(ex,
+                "Could not restrict permissions on the {Label} at {Path}; it may be readable by " +
+                "other local accounts. Expected on filesystems without POSIX modes (some container " +
+                "bind mounts / network volumes) — set the mount's ownership/mode at the host instead.",
+                label, path);
+        }
     }
 
     /// <summary>

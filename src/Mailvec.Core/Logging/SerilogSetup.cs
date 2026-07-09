@@ -1,8 +1,10 @@
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Events;
+using Serilog.Sinks.File;
 
 namespace Mailvec.Core.Logging;
 
@@ -54,6 +56,11 @@ public static class SerilogSetup
         {
             var logDir = ResolveLogDir();
             Directory.CreateDirectory(logDir);
+            // Logs carry Maildir paths, attachment extensions, and — when
+            // Mcp:LogToolCalls is on — search query text, so keep them off-limits
+            // to other local accounts: 0700 on the dir, 0600 on each file (the
+            // hook fires for every rolled file, not just the first).
+            TrySetOwnerOnly(logDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             config = config.WriteTo.File(
                 path: Path.Combine(logDir, $"mailvec-{serviceName}-.log"),
                 rollingInterval: RollingInterval.Day,
@@ -61,6 +68,7 @@ public static class SerilogSetup
                 rollOnFileSizeLimit: true,
                 retainedFileCountLimit: 14,
                 shared: false,
+                hooks: new OwnerOnlyFileHook(),
                 outputTemplate:
                     "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}");
         }
@@ -95,5 +103,38 @@ public static class SerilogSetup
         if (!string.IsNullOrWhiteSpace(fromEnv)) return PathExpansion.Expand(fromEnv);
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return Path.Combine(home, "Library", "Logs", "Mailvec");
+    }
+
+    /// <summary>
+    /// Best-effort owner-only chmod. No-op on Windows (SetUnixFileMode throws
+    /// there) and swallows failures on filesystems without POSIX modes (some
+    /// container bind mounts / network volumes). Silent because this runs during
+    /// logger construction — there is no logger to report to yet.
+    /// </summary>
+    private static void TrySetOwnerOnly(string path, UnixFileMode mode)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try
+        {
+            File.SetUnixFileMode(path, mode);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            // Intentionally swallowed — the 0700 dir is the primary control.
+        }
+    }
+
+    /// <summary>
+    /// Restricts each rolling log file to owner-only (0600) as it is opened, so
+    /// the Maildir paths / attachment extensions / (opt-in) query text they carry
+    /// aren't world-readable. Fires for every rolled file, not just the first.
+    /// </summary>
+    private sealed class OwnerOnlyFileHook : FileLifecycleHooks
+    {
+        public override Stream OnFileOpened(string path, Stream underlyingStream, Encoding encoding)
+        {
+            TrySetOwnerOnly(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            return base.OnFileOpened(path, underlyingStream, encoding);
+        }
     }
 }
