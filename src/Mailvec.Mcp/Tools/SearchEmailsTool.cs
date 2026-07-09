@@ -49,9 +49,10 @@ public sealed class SearchEmailsTool(
         "10-year archive, an unbounded query skews toward old mail and dilutes recent context. When in " +
         "doubt for casual 'recently'-style asks, a 12-month lower bound is a safe default. " +
         "Each result carries the internal id, RFC message_id, folder, sender, date, snippet, and (for ranked queries) score breakdown. " +
-        "When a match was driven by content inside a PDF/DOCX/text attachment rather than the email body, the result includes " +
-        "`matchedAttachment` with the attachment's partIndex and filename — use those with `get_attachment_text` to read the " +
-        "document (or `get_attachment_page_image` for a PDF page, `view_attachment` for an image). " +
+        "When a match was driven by content inside a PDF/DOCX/text attachment rather than the email body, the result MAY include " +
+        "`matchedAttachment` with the attachment's partIndex and filename (semantic matches report it; keyword-only matches " +
+        "can't attribute a specific attachment, so its absence doesn't mean the body matched) — use those with " +
+        "`get_attachment_text` to read the document (or `get_attachment_page_image` for a PDF page, `view_attachment` for an image). " +
         "Use a result's id or messageId with get_email/get_thread for follow-up. " +
         "Each result also includes `webmailUrl` (the raw deep-link) and `webmailLink` (a ready-made, correctly-escaped " +
         "Markdown link), both populated when the user has configured their webmail account id. " +

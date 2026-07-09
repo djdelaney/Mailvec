@@ -39,7 +39,7 @@
   "tools": [
     { "name": "search_emails",  "description": "Search the archive by keyword, semantic similarity, or hybrid RRF fusion. Supports folder, date, sender, and attachment filters (hasAttachments, attachmentType e.g. 'pdf'/'image')." },
     { "name": "get_email",      "description": "Fetch a single message by its message_id header or internal id. Returns body text and per-attachment metadata." },
-    { "name": "get_thread",     "description": "Fetch all messages in a thread given any message in the thread." },
+    { "name": "get_thread",     "description": "Fetch all messages in a thread given any message in the thread. Each entry lists its attachments (partIndex, filename, extraction status) so attachment tools can be called directly." },
     { "name": "list_folders",   "description": "List Maildir folders with message counts." },
     { "name": "view_attachment", "description": "Show an email attachment inline, in memory — nothing is written to disk. Images come back as an image block (Claude vision; large or non-JPEG/PNG/GIF/WebP images are automatically downscaled/re-encoded to JPEG); small text-ish files as decoded UTF-8 text. Other binary types (PDF, DOCX, zip) return a summary pointing at get_attachment_text / get_attachment_page_image." },
     { "name": "get_attachment_text", "description": "Return the plain text Mailvec already extracted from an attachment (PDF, DOCX, etc.), straight from the database — no filesystem needed, so it works over a remote connection. Long documents are paged via maxChars/offset (default 50,000 chars per call). Use this to read or summarise a document's contents; falls back to a clear message for scanned/encrypted/unsupported attachments." },
