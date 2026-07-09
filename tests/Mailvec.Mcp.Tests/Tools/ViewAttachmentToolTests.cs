@@ -365,6 +365,24 @@ public class ViewAttachmentToolTests : IDisposable
         summary.ShouldContain("logo.svg");
     }
 
+    [Fact]
+    public void Inline_text_over_display_window_is_truncated_with_paging_pointer()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        // Under the 256 KB decode cap but over the 50k-char display window.
+        var csv = System.Text.Encoding.UTF8.GetBytes("col\n" + new string('x', 80_000));
+        StageImageMessage(repo, "bigcsv.eml", "bigcsv@example.com", "big.csv", "text/csv", csv);
+
+        var result = Build(db).ViewAttachment(partIndex: 0, id: 1);
+
+        var summary = result.Content[0].ShouldBeOfType<TextContentBlock>().Text;
+        summary.ShouldContain("50,000");
+        summary.ShouldContain("get_attachment_text");
+        var inline = result.Content[1].ShouldBeOfType<TextContentBlock>().Text;
+        inline.Length.ShouldBe(GetAttachmentTextTool.DefaultMaxChars);
+    }
+
     private static byte[] MinimalBmp2X2()
     {
         // 14-byte file header + 40-byte BITMAPINFOHEADER + 2 rows of (2 px * 3 B + 2 B pad).

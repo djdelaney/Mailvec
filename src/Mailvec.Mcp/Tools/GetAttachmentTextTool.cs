@@ -140,9 +140,10 @@ public sealed class GetAttachmentTextTool(
     /// <summary>
     /// Slice [offset, offset+window) out of <paramref name="text"/>, nudging
     /// both ends off the middle of a surrogate pair so the window is always
-    /// valid UTF-16 (a split pair would serialize as U+FFFD).
+    /// valid UTF-16 (a split pair would serialize as U+FFFD). Internal so
+    /// view_attachment's inline-text truncation shares the same slicer.
     /// </summary>
-    private static (int Start, string Slice) SliceWindow(string text, int offset, int window)
+    internal static (int Start, string Slice) SliceWindow(string text, int offset, int window)
     {
         var start = offset;
         if (start > 0 && char.IsLowSurrogate(text[start]))
