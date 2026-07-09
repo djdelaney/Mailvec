@@ -66,7 +66,7 @@ public sealed class ViewAttachmentTool(
         "Image attachments are returned as an MCP ImageContentBlock (visible to Claude vision); large or " +
         "non-JPEG/PNG/GIF/WebP images are automatically downscaled/re-encoded to a JPEG that clients accept. " +
         "Small text-ish files (text/*, application/json, etc., under ~256 KB) have their decoded UTF-8 text " +
-        "included as a text block. " +
+        "included as a text block (display capped at 50,000 chars — page longer files via get_attachment_text). " +
         "For other binary types (PDF, DOCX, zip, …) the response is a short summary — use get_attachment_text to read " +
         "a document's extracted text, or get_attachment_page_image to view a PDF page as an image.")]
     public CallToolResult ViewAttachment(
@@ -133,19 +133,34 @@ public sealed class ViewAttachmentTool(
             }
         }
 
+        // Cap the *displayed* inline text at the same window get_attachment_text
+        // uses — the 256 KB decode cap is ~5× that in chars, and one tool result
+        // shouldn't carry more than a page of paged reads would. The full text
+        // stays reachable via get_attachment_text maxChars/offset (plain-text
+        // attachments are extracted at index time).
+        var inlineText = att.InlineText;
+        var inlineTotalChars = inlineText?.Length ?? 0;
+        var inlineTruncated = false;
+        if (inlineText is not null && inlineText.Length > GetAttachmentTextTool.DefaultMaxChars)
+        {
+            (_, inlineText) = GetAttachmentTextTool.SliceWindow(inlineText, 0, GetAttachmentTextTool.DefaultMaxChars);
+            inlineTruncated = true;
+        }
+
         var content = new List<ContentBlock>
         {
             new TextContentBlock
             {
-                Text = BuildSummary(att, isImage, imageInlined: imageBytes is not null, imageTranscoded, textInlined: att.InlineText is not null),
+                Text = BuildSummary(att, isImage, imageInlined: imageBytes is not null, imageTranscoded,
+                    textInlined: inlineText is not null, inlineTruncated, inlineTotalChars),
             },
         };
 
         // Inline the decoded text for small text-ish files so Claude can read
         // CSV / JSON / logs in one round trip.
-        if (att.InlineText is not null)
+        if (inlineText is not null)
         {
-            content.Add(new TextContentBlock { Text = att.InlineText });
+            content.Add(new TextContentBlock { Text = inlineText });
         }
 
         // Inline images as ImageContentBlock so Claude vision works immediately.
@@ -172,7 +187,8 @@ public sealed class ViewAttachmentTool(
             imageInlined = imageBytes is not null,
             imageTranscoded,
             imageBytes = imageBytes?.Length,
-            inlineChars = att.InlineText?.Length,
+            inlineChars = inlineText?.Length,
+            inlineTruncated,
         }, startTs);
 
         return new CallToolResult { Content = content };
@@ -181,7 +197,7 @@ public sealed class ViewAttachmentTool(
     [SupportedOSPlatform("macos")]
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("windows")]
-    private static string BuildSummary(InlineAttachment att, bool isImage, bool imageInlined, bool imageTranscoded, bool textInlined)
+    private static string BuildSummary(InlineAttachment att, bool isImage, bool imageInlined, bool imageTranscoded, bool textInlined, bool inlineTruncated, int inlineTotalChars)
     {
         var header = $"'{att.FileName}' ({att.ContentType}, {FormatSize(att.SizeBytes)})";
         if (imageInlined)
@@ -193,7 +209,10 @@ public sealed class ViewAttachmentTool(
                 $"{header}. This image format can't be decoded for inline display (e.g. HEIC or SVG). " +
                 "The user can save the file via the tray's Save button or `mailvec extract-attachments` and open it themselves.";
         if (textInlined)
-            return $"{header} — decoded text included below.";
+            return inlineTruncated
+                ? $"{header} — first {GetAttachmentTextTool.DefaultMaxChars:N0} of {inlineTotalChars:N0} decoded chars included below; " +
+                  "use get_attachment_text with maxChars/offset to page through the full text."
+                : $"{header} — decoded text included below.";
         return
             $"{header}. This type can't be shown inline. " +
             "For a PDF, call get_attachment_page_image to view a page as an image; " +
