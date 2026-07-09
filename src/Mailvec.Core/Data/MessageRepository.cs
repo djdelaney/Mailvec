@@ -343,6 +343,42 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return list;
     }
 
+    /// <summary>
+    /// Like <see cref="GetAttachmentsForMessage"/> but projects LENGTH(extracted_text)
+    /// instead of loading the text blob — the thread view only needs the length
+    /// (for get_attachment_text paging hints), and full texts can be 2M chars each.
+    /// </summary>
+    private IReadOnlyList<Attachment> GetAttachmentSummariesForMessage(SqliteConnection conn, long messageId)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, part_index, filename, content_type, size_bytes,
+                   LENGTH(extracted_text), extracted_at, extraction_status
+            FROM attachments
+            WHERE message_id = $mid
+            ORDER BY part_index;
+            """;
+        cmd.Parameters.AddWithValue("$mid", messageId);
+
+        var list = new List<Attachment>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var chars = reader.IsDBNull(5) ? 0 : reader.GetInt32(5);
+            list.Add(new Attachment(
+                PartIndex: reader.GetInt32(1),
+                FileName: reader.IsDBNull(2) ? null : reader.GetString(2),
+                ContentType: reader.IsDBNull(3) ? null : reader.GetString(3),
+                SizeBytes: reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                Id: reader.GetInt64(0),
+                ExtractedText: null,
+                ExtractedAt: reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), System.Globalization.CultureInfo.InvariantCulture),
+                ExtractionStatus: reader.IsDBNull(7) ? null : reader.GetString(7),
+                ExtractedTextChars: chars > 0 ? chars : null));
+        }
+        return list;
+    }
+
     public Message? GetById(long id)
     {
         using var conn = connections.Open();
@@ -463,12 +499,12 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
         // Hydrate attachment rows so the thread view can list each message's
         // attachments (get_thread) without a follow-up get_email per message.
-        // Only attachment-carrying messages pay the extra query, and threads
-        // are small, so this stays cheap.
+        // Only attachment-carrying messages pay the extra query, threads are
+        // small, and the summary loader skips the extracted-text blobs.
         for (var i = 0; i < results.Count; i++)
         {
             if (results[i].HasAttachments)
-                results[i] = results[i] with { Attachments = GetAttachmentsForMessage(conn, results[i].Id) };
+                results[i] = results[i] with { Attachments = GetAttachmentSummariesForMessage(conn, results[i].Id) };
         }
         return results;
     }
