@@ -37,7 +37,7 @@
     "runtimes": {}
   },
   "tools": [
-    { "name": "search_emails",  "description": "Search the archive by keyword, semantic similarity, or hybrid RRF fusion. Supports folder, date, and sender filters." },
+    { "name": "search_emails",  "description": "Search the archive by keyword, semantic similarity, or hybrid RRF fusion. Supports folder, date, sender, and attachment filters (hasAttachments, attachmentType e.g. 'pdf'/'image')." },
     { "name": "get_email",      "description": "Fetch a single message by its message_id header or internal id. Returns body text and per-attachment metadata." },
     { "name": "get_thread",     "description": "Fetch all messages in a thread given any message in the thread." },
     { "name": "list_folders",   "description": "List Maildir folders with message counts." },

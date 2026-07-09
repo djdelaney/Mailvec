@@ -39,6 +39,8 @@ public sealed class SearchEmailsTool(
         "If `query` is provided, runs hybrid (keyword + semantic) ranked search by default. " +
         "If `query` is omitted, returns the most recent messages matching the filters, sorted by date descending — " +
         "use this for 'show me my recent INBOX mail' or 'find all email from invoice@anthropic.com' style requests. " +
+        "For attachment-seeking asks ('what PDFs did I get last month', 'that email with the spreadsheet from Dan'), " +
+        "set `attachmentType` (e.g. 'pdf', 'image') or `hasAttachments=true` — with or without a query. " +
         "The archive may span 10+ years and hundreds of thousands of messages; every response includes " +
         "`archiveStats` (totalMessages, oldestDate, latestDate) so you can gauge actual scope, and " +
         "`appliedFilters` echoing the filters you used. " +
@@ -92,12 +94,19 @@ public sealed class SearchEmailsTool(
         string? fromContains = null,
         [Description("Case-insensitive exact match on from_address (the email address only, not the display name). Use for 'all email from <addr>' lookups.")]
         string? fromExact = null,
+        [Description("true = only messages with at least one attachment (including inline images); false = only messages without. " +
+                     "Combine with omitted `query` to browse 'recent mail with attachments from X'.")]
+        bool? hasAttachments = null,
+        [Description("Only messages with at least one attachment of this type: the token 'image' (any image/*), or a filename " +
+                     "extension like 'pdf', 'docx', 'xlsx', 'csv' (leading dot optional). Matches the attachment's filename " +
+                     "suffix or its known MIME type, so mislabeled attachments still match. Implies hasAttachments=true.")]
+        string? attachmentType = null,
         CancellationToken ct = default)
     {
-        var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact });
+        var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType });
 
         var resolvedLimit = ClampLimit(limit);
-        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact);
+        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType);
         var archiveStats = messages.GetArchiveStats();
         var appliedFilters = AppliedFilters.From(filters);
         // Non-null only when the archive has zero messages: tells the client
@@ -186,14 +195,16 @@ public sealed class SearchEmailsTool(
     private static string NormaliseMode(string mode) =>
         mode?.Trim().ToLowerInvariant() ?? "hybrid";
 
-    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains, string? fromExact)
+    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains, string? fromExact, bool? hasAttachments, string? attachmentType)
     {
         return new SearchFilters(
             Folder: string.IsNullOrWhiteSpace(folder) ? null : folder.Trim(),
             DateFrom: ParseDate(dateFrom, nameof(dateFrom), isUpperBound: false),
             DateTo: ParseDate(dateTo, nameof(dateTo), isUpperBound: true),
             FromContains: string.IsNullOrWhiteSpace(fromContains) ? null : fromContains.Trim(),
-            FromExact: string.IsNullOrWhiteSpace(fromExact) ? null : fromExact.Trim());
+            FromExact: string.IsNullOrWhiteSpace(fromExact) ? null : fromExact.Trim(),
+            HasAttachments: hasAttachments,
+            AttachmentType: string.IsNullOrWhiteSpace(attachmentType) ? null : attachmentType.Trim());
     }
 
     // Delegates to the shared Core parser so the "date-only dateTo means end
@@ -231,14 +242,18 @@ public sealed record AppliedFilters(
     string? DateFrom,
     string? DateTo,
     string? FromContains,
-    string? FromExact)
+    string? FromExact,
+    bool? HasAttachments = null,
+    string? AttachmentType = null)
 {
     public static AppliedFilters From(Mailvec.Core.Search.SearchFilters f) => new(
         Folder: f.Folder,
         DateFrom: f.DateFrom?.ToString("O"),
         DateTo: f.DateTo?.ToString("O"),
         FromContains: f.FromContains,
-        FromExact: f.FromExact);
+        FromExact: f.FromExact,
+        HasAttachments: f.HasAttachments,
+        AttachmentType: f.AttachmentType);
 }
 
 /// <summary>

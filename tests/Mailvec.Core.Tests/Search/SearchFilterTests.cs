@@ -21,7 +21,8 @@ public class SearchFilterTests
         string body = "ramen body text",
         string? from = "alice@example.com",
         string? fromName = null,
-        DateTimeOffset? dateSent = null) => new(
+        DateTimeOffset? dateSent = null,
+        IReadOnlyList<ParsedAttachment>? attachments = null) => new(
         MessageId: id,
         ThreadId: id,
         Subject: subject,
@@ -35,7 +36,7 @@ public class SearchFilterTests
         RawHeaders: $"Message-ID: <{id}>\r\n",
         SizeBytes: 100,
         ContentHash: $"hash-{id}",
-        Attachments: []);
+        Attachments: attachments ?? []);
 
     private static float[] OneHot(int hotIndex, int dim = 1024)
     {
@@ -220,6 +221,121 @@ public class SearchFilterTests
             FromExact: "alice@x"));
 
         hits.Single().MessageIdHeader.ShouldBe("hit@x");
+    }
+
+    // ---------- Attachment filter tests ----------
+
+    [Fact]
+    public void Keyword_filter_by_has_attachments_true_and_false()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("att@x", attachments: [new ParsedAttachment(0, "doc.pdf", "application/pdf", 10L)]),
+            "INBOX", "INBOX/cur", "a", now);
+        repo.Upsert(M("plain@x"), "INBOX", "INBOX/cur", "p", now);
+
+        search.Search("ramen", filters: new SearchFilters(HasAttachments: true))
+            .Single().MessageIdHeader.ShouldBe("att@x");
+        search.Search("ramen", filters: new SearchFilters(HasAttachments: false))
+            .Single().MessageIdHeader.ShouldBe("plain@x");
+    }
+
+    [Fact]
+    public void Keyword_attachment_type_matches_mislabeled_mime_by_filename_extension()
+    {
+        // Senders mislabel constantly: a PDF attached as application/octet-stream
+        // must still match attachmentType 'pdf' via its filename.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("mislabeled@x", attachments: [new ParsedAttachment(0, "Invoice.PDF", "application/octet-stream", 10L)]),
+            "INBOX", "INBOX/cur", "m", now);
+        repo.Upsert(M("other@x", attachments: [new ParsedAttachment(0, "notes.docx", "application/octet-stream", 10L)]),
+            "INBOX", "INBOX/cur", "o", now);
+
+        var hits = search.Search("ramen", filters: new SearchFilters(AttachmentType: "pdf"));
+        hits.Single().MessageIdHeader.ShouldBe("mislabeled@x");
+    }
+
+    [Fact]
+    public void Keyword_attachment_type_matches_odd_filename_by_known_mime()
+    {
+        // The flip side: a correctly-typed PDF whose filename has no extension
+        // must still match via the extension's known MIME.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("mimed@x", attachments: [new ParsedAttachment(0, "statement", "application/pdf", 10L)]),
+            "INBOX", "INBOX/cur", "m", now);
+        repo.Upsert(M("plain@x"), "INBOX", "INBOX/cur", "p", now);
+
+        var hits = search.Search("ramen", filters: new SearchFilters(AttachmentType: ".pdf"));
+        hits.Single().MessageIdHeader.ShouldBe("mimed@x");
+    }
+
+    [Fact]
+    public void Keyword_attachment_type_image_matches_any_image_content_type()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var search = new KeywordSearchService(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("photo@x", attachments: [new ParsedAttachment(0, "IMG_0001.heic", "image/heic", 10L)]),
+            "INBOX", "INBOX/cur", "i", now);
+        repo.Upsert(M("doc@x", attachments: [new ParsedAttachment(0, "doc.pdf", "application/pdf", 10L)]),
+            "INBOX", "INBOX/cur", "d", now);
+
+        var hits = search.Search("ramen", filters: new SearchFilters(AttachmentType: "image"));
+        hits.Single().MessageIdHeader.ShouldBe("photo@x");
+    }
+
+    [Fact]
+    public void Vector_filter_by_attachment_type_matches_keyword_semantics()
+    {
+        // Both legs must filter identically or hybrid RRF fuses skewed lists.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var now = DateTimeOffset.UtcNow;
+
+        long pdf = messages.Upsert(M("pdf@x", attachments: [new ParsedAttachment(0, "doc.pdf", "application/pdf", 10L)]),
+            "INBOX", "INBOX/cur", "p", now);
+        long none = messages.Upsert(M("none@x"), "INBOX", "INBOX/cur", "n", now);
+        chunks.ReplaceChunksForMessage(pdf,  [new TextChunk(0, "x", 1)], [OneHot(0)], now);
+        chunks.ReplaceChunksForMessage(none, [new TextChunk(0, "x", 1)], [OneHot(0)], now);
+
+        var hits = search.SearchByVector(OneHot(0), limit: 10, k: 100,
+            filters: new SearchFilters(AttachmentType: "pdf"));
+
+        hits.Single().MessageIdHeader.ShouldBe("pdf@x");
+    }
+
+    [Fact]
+    public void Browse_filter_by_has_attachments_and_type()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(M("pdf@x", attachments: [new ParsedAttachment(0, "doc.pdf", "application/pdf", 10L)]),
+            "INBOX", "INBOX/cur", "1", now);
+        repo.Upsert(M("img@x", attachments: [new ParsedAttachment(0, "pic.png", "image/png", 10L)]),
+            "INBOX", "INBOX/cur", "2", now);
+        repo.Upsert(M("plain@x"), "INBOX", "INBOX/cur", "3", now);
+
+        repo.BrowseByFilters(new SearchFilters(HasAttachments: true), 10)
+            .Select(m => m.MessageId).ShouldBe(new[] { "pdf@x", "img@x" }, ignoreOrder: true);
+        repo.BrowseByFilters(new SearchFilters(AttachmentType: "pdf"), 10)
+            .Single().MessageId.ShouldBe("pdf@x");
     }
 
     // ---------- Vector filter tests ----------

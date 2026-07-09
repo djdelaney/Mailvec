@@ -258,6 +258,19 @@ public class SearchEmailsToolTests
         applied.FromContains.ShouldBe("vendor");
         applied.DateTo.ShouldBeNull();
         applied.FromExact.ShouldBeNull();
+        applied.HasAttachments.ShouldBeNull();
+        applied.AttachmentType.ShouldBeNull();
+    }
+
+    [Fact]
+    public void AppliedFilters_From_echoes_attachment_filters()
+    {
+        var applied = AppliedFilters.From(new SearchFilters(
+            HasAttachments: true,
+            AttachmentType: "pdf"));
+
+        applied.HasAttachments.ShouldBe(true);
+        applied.AttachmentType.ShouldBe("pdf");
     }
 
     // ---------- EmailHit factories ----------
