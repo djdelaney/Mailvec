@@ -28,7 +28,7 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     # THE Mailvec version — kept in lockstep with Directory.Build.props and
     # manifest.json by `ops/build-mcpb.sh --bump`; don't edit by hand.
-    MARKETING_VERSION: "0.1.28"
+    MARKETING_VERSION: "0.1.29"
     CURRENT_PROJECT_VERSION: "1"
     PRODUCT_BUNDLE_IDENTIFIER: com.mailvec.tray
     ENABLE_HARDENED_RUNTIME: YES
