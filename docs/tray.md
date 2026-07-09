@@ -4,7 +4,7 @@ Optional. A SwiftUI menu-bar app at [`src/Mailvec.Tray/`](../src/Mailvec.Tray/) 
 
 ```sh
 brew install xcodegen           # required (XcodeGen generates the .xcodeproj from project.yml)
-./ops/install-tray.sh           # builds + signs ad-hoc + installs to /Applications + launches
+./ops/install-tray.sh           # builds + signs (Developer ID if present, ad-hoc fallback) + installs to /Applications + launches
 ```
 
 ## What it gives you
@@ -15,6 +15,6 @@ brew install xcodegen           # required (XcodeGen generates the .xcodeproj fr
 
 ## Build chain
 
-[`project.yml`](../src/Mailvec.Tray/project.yml) (XcodeGen spec — checked in) → `.xcodeproj` (regenerated each build, gitignored) → `xcodebuild archive` with ad-hoc signing → `build/Mailvec.Tray.app`. The ad-hoc signature matters — macOS rejects `UNUserNotificationCenter.requestAuthorization` for fully-unsigned bundles, so notifications need at least `codesign -s -`. No Apple Developer Program account required.
+[`project.yml`](../src/Mailvec.Tray/project.yml) (XcodeGen spec — checked in) → `.xcodeproj` (regenerated each build, gitignored) → `xcodebuild archive` → `build/Mailvec.Tray.app`. The build signs with a Developer ID Application certificate when one is in the keychain, falling back to ad-hoc otherwise (see [contributing/tray.md](contributing/tray.md)). At minimum the ad-hoc signature matters — macOS rejects `UNUserNotificationCenter.requestAuthorization` for fully-unsigned bundles, so notifications need at least `codesign -s -`. No Apple Developer Program account required.
 
 The CLI buttons spawn `~/.local/bin/mailvec` (installed by `ops/install.sh` — a small shim that execs `dotnet ~/.local/share/mailvec/cli/Mailvec.Cli.dll`). After CLI source changes, re-run `ops/redeploy.sh cli` to refresh.

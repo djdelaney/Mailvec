@@ -19,13 +19,13 @@ Keep them **small** (a page or two) — they're committed to the repo.
   (`AttachmentTextExtractor` → `done`), the inverse of the scan — so the two
   fixtures bracket both regimes. Checked in.
 
-- **`scanned-sample.pdf`** — *(provide this)* a real **scanned / image-only**
-  PDF: a page that is a raster image with **no embedded text layer**. This is the
-  marquee case for `get_attachment_page_image` — the one `get_attachment_text`
-  can't read. A redacted receipt, statement, or letter is ideal. Drop it here
-  with exactly this name and the skipped test activates automatically.
+- **`scanned-sample.pdf`** — a real **scanned / image-only** PDF: a page that
+  is a raster image with **no embedded text layer**. This is the marquee case
+  for `get_attachment_page_image` — the one `get_attachment_text` can't read.
+  Checked in. (The test guards on the file's existence, so a replacement just
+  needs to keep exactly this name.)
 
-  A good scanned fixture: one or two pages, has visible dark content (so the
-  not-blank assertion is meaningful), and genuinely lacks a text layer (so
-  `AttachmentTextExtractor` returns `no_text`). Avoid anything sensitive — these
-  are public in the repo.
+  If you ever replace it, a good scanned fixture: one or two pages, has visible
+  dark content (so the not-blank assertion is meaningful), and genuinely lacks
+  a text layer (so `AttachmentTextExtractor` returns `no_text`). Avoid anything
+  sensitive — these are public in the repo.

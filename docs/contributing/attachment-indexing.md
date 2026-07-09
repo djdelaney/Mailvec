@@ -37,8 +37,8 @@ normalisation; never the indexer.)
 |--------|---------|--------------|
 | PDF | PdfPig (Apache 2.0) | text in content-stream order; scanned/image-only PDFs come back `no_text` and are handed to the embedder's OCR pass |
 | DOCX / XLSX / PPTX | DocumentFormat.OpenXml (MIT) | DOCX paragraphs; XLSX sheet names + shared-string table; PPTX slide text runs |
-| iCalendar (.ics) | hand-rolled | unfolded SUMMARY / LOCATION / DTSTART / ORGANIZER / ATTENDEE, machine noise dropped |
-| vCard (.vcf) | hand-rolled | unfolded name / org / title / email / phone / address / note; QP-decoded; PHOTO blob dropped |
+| iCalendar (.ics) | hand-rolled | unfolded SUMMARY / DESCRIPTION / COMMENT / LOCATION / DTSTART / ORGANIZER / ATTENDEE, machine noise dropped |
+| vCard (.vcf) | hand-rolled | unfolded name / nickname / org / title / email / phone / address / URL / note; QP-decoded; PHOTO blob dropped |
 | plain text | — | declared MIME charset first (strict), then UTF-8, then Windows-1252 |
 
 **Charset ladder** (`AttachmentTextExtractor.DecodeTextBytes`, shared by the

@@ -37,7 +37,7 @@ Wires the archive up to Claude. **Exit criterion met.**
 - `Mailvec.Mcp` runs in two transports sharing the same Core wiring:
   - **HTTP** (default) on `127.0.0.1:3333` for Claude Code and the smoke tests.
   - **stdio** (`--stdio` flag) for Claude Desktop, packaged as an `.mcpb` bundle (see [docs/clients/claude-desktop.md](docs/clients/claude-desktop.md)).
-- Tools: `search_emails` (keyword / semantic / hybrid with folder/date/sender filters), `get_email`, `get_thread`, `list_folders`, `get_attachment`. The original 6-tool design merged to 4 search/fetch tools — `recent_emails` is `search_emails` with `query` omitted, and `find_by_sender` is `search_emails` with `fromExact` — plus `get_attachment` added later for attachment delivery (see [docs/attachments.md](docs/attachments.md)).
+- Tools: `search_emails` (keyword / semantic / hybrid with folder/date/sender filters), `get_email`, `get_thread`, `list_folders`, `get_attachment` *(later renamed `view_attachment` — the name [docs/attachments.md](docs/attachments.md) documents it under)*. The original 6-tool design merged to 4 search/fetch tools — `recent_emails` is `search_emails` with `query` omitted, and `find_by_sender` is `search_emails` with `fromExact` — plus `get_attachment` added later for attachment delivery.
 - Hybrid search reused from Phase 2.
 - Attachment **filename** indexing: filenames are stored in the `attachments` table and surfaced through FTS5 (so a query like `"mortgage statement"` matches an email whose only mention is in `mortgage_statement_2024.pdf`). Per-attachment metadata (filename, content type, size, partIndex) is returned by `get_email`. Attachment **content** indexing landed in Phase 4.5 below.
 
