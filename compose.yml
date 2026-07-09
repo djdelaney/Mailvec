@@ -1,0 +1,115 @@
+# Mailvec homelab stack — the full mail pipeline in one compose project,
+# with Ollama external (a GPU VM reachable over the LAN) and the MCP server
+# exposed through a Cloudflare tunnel.
+#
+#   fastmail ◄─IMAP── mbsync ──► ./mail ──► indexer ─┐
+#                                                     ▼
+#   cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder ──► ${OLLAMA_BASE_URL}
+#
+# Setup on the Docker host:
+#   1. cp .env.example .env                          # Ollama URL, tunnel token
+#   2. cp ops/mbsyncrc.container.example mbsyncrc    # fill in User / Patterns
+#   3. mkdir -p secrets
+#      printf '%s' '<fastmail app password>' > secrets/fastmail_password
+#   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot
+#      (or set MAILVEC_REQUIRE_SEEDED_DB=0 in .env for a from-scratch build).
+#   5. docker compose up -d
+#
+# ./data and ./mail must live on host-local disk: SQLite WAL needs real POSIX
+# file locking, so never place them on an NFS/SMB mount. The maildir is
+# mounted read-only into every service except mbsync (the pipeline is
+# pull-only end to end).
+#
+# Operator commands: docker compose exec mcp mailvec status|doctor|eval ...
+
+name: mailvec
+
+x-mailvec: &mailvec-common
+  build: .
+  restart: unless-stopped
+  environment: &mailvec-env
+    Ingest__MaildirRoot: /mail/Fastmail
+    Ollama__BaseUrl: ${OLLAMA_BASE_URL:-http://localhost:11434}
+    # Refuse to start against a missing/empty archive (the expected state for
+    # a snapshot-seeded deployment — see the entrypoint guard in Dockerfile).
+    MAILVEC_REQUIRE_SEEDED_DB: ${MAILVEC_REQUIRE_SEEDED_DB:-1}
+
+services:
+  mcp:
+    <<: *mailvec-common
+    environment:
+      <<: *mailvec-env
+      Fastmail__AccountId: ${FASTMAIL_ACCOUNT_ID:-}
+      # The DNS-rebinding HostGuard (src/Mailvec.Mcp/HostGuard.cs) 403s any
+      # request whose Host header isn't loopback or allowlisted. Requests
+      # arriving through cloudflared carry the public tunnel hostname, so it
+      # must be allowed; "mcp" covers direct in-network access from other
+      # containers. Empty entries are filtered by the guard, so an unset
+      # MCP_PUBLIC_HOSTNAME is harmless.
+      Mcp__AllowedHosts__0: ${MCP_PUBLIC_HOSTNAME:-}
+      Mcp__AllowedHosts__1: mcp
+      Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
+    volumes:
+      - ./data:/data
+      - ./mail:/mail:ro
+    healthcheck:
+      # /health returns 503 when degraded, which includes "Ollama unreachable"
+      # — so an Ollama VM outage shows here as an unhealthy mcp container even
+      # though keyword search still works. Informative, not fatal: nothing
+      # restarts or gates on it.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # LAN access (pre-tunnel testing, or kept afterwards for on-network
+    # clients): uncomment to publish the port on the VM, and set
+    # MCP_LAN_HOSTNAME in .env to the address clients will use — HostGuard
+    # 403s it otherwise.
+    # ports:
+    #   - "3333:3333"
+
+  indexer:
+    <<: *mailvec-common
+    command: ["dotnet", "/app/indexer/Mailvec.Indexer.dll"]
+    volumes:
+      - ./data:/data
+      - ./mail:/mail:ro
+
+  embedder:
+    <<: *mailvec-common
+    command: ["dotnet", "/app/embedder/Mailvec.Embedder.dll"]
+    volumes:
+      - ./data:/data
+      - ./mail:/mail:ro    # OCR pass reads .eml bytes out of the maildir
+
+  mbsync:
+    build:
+      context: .
+      target: mbsync
+    restart: unless-stopped
+    environment:
+      MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-600}
+    volumes:
+      - ./mail:/mail
+      - ./mbsyncrc:/root/.mbsyncrc:ro
+    secrets:
+      - fastmail_password
+
+  cloudflared:
+    # Behind a profile so the pipeline runs (and is LAN-testable) before the
+    # tunnel exists: plain `docker compose up -d` skips this service; add it
+    # at go-live with `docker compose --profile tunnel up -d` once
+    # TUNNEL_TOKEN and MCP_PUBLIC_HOSTNAME are set in .env.
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - mcp
+
+secrets:
+  fastmail_password:
+    file: ./secrets/fastmail_password

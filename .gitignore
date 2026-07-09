@@ -63,15 +63,20 @@ appsettings.Local.json
 *.sqlite-wal
 *.sqlite-shm
 /Mail/
-runtimes/osx-arm64/native/*.dylib
-runtimes/osx-arm64/native/VERSION
-runtimes/osx-x64/native/*.dylib
-runtimes/osx-x64/native/VERSION
+# sqlite-vec natives fetched by ops/fetch-sqlite-vec.sh (any RID)
+runtimes/*/native/
 /dist/
 # Tray app build artifacts (ops/build-tray.sh output).
 /build/
 *.mcpb
 .DS_Store
+
+# Docker compose deployment-local state (bind mounts, config, secrets —
+# these live on the Docker host next to compose.yml, never in git)
+/data/
+/mail/
+/secrets/
+/mbsyncrc
 
 # Claude Code local state
 .claude/worktrees/

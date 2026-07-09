@@ -25,30 +25,14 @@
     <MailvecRepoRoot>$(MSBuildThisFileDirectory)</MailvecRepoRoot>
   </PropertyGroup>
 
-  <!-- Copy sqlite-vec native binaries into every project's output directory so
-       `./runtimes/<rid>/native/vec0.dylib` resolves at runtime. The Exists
-       guard prevents a build break when ops/fetch-sqlite-vec.sh hasn't run. -->
-  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-arm64/native/vec0.dylib') ">
-    <None Include="$(MailvecRepoRoot)runtimes/osx-arm64/native/vec0.dylib"
-          Link="runtimes/osx-arm64/native/vec0.dylib"
-          CopyToOutputDirectory="PreserveNewest"
-          Visible="false" />
-  </ItemGroup>
-  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-arm64/native/VERSION') ">
-    <None Include="$(MailvecRepoRoot)runtimes/osx-arm64/native/VERSION"
-          Link="runtimes/osx-arm64/native/VERSION"
-          CopyToOutputDirectory="PreserveNewest"
-          Visible="false" />
-  </ItemGroup>
-  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-x64/native/vec0.dylib') ">
-    <None Include="$(MailvecRepoRoot)runtimes/osx-x64/native/vec0.dylib"
-          Link="runtimes/osx-x64/native/vec0.dylib"
-          CopyToOutputDirectory="PreserveNewest"
-          Visible="false" />
-  </ItemGroup>
-  <ItemGroup Condition=" Exists('$(MailvecRepoRoot)runtimes/osx-x64/native/VERSION') ">
-    <None Include="$(MailvecRepoRoot)runtimes/osx-x64/native/VERSION"
-          Link="runtimes/osx-x64/native/VERSION"
+  <!-- Copy sqlite-vec native binaries (vec0.dylib / vec0.so, plus the VERSION
+       sidecar) for every RID fetched by ops/fetch-sqlite-vec.sh into each
+       project's output directory so a configured
+       `./runtimes/<rid>/native/vec0.<ext>` resolves at runtime. The glob
+       matches nothing, and breaks nothing, when the fetch script hasn't run. -->
+  <ItemGroup>
+    <None Include="$(MailvecRepoRoot)runtimes/**"
+          Link="runtimes/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
   </ItemGroup>

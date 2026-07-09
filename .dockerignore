@@ -1,0 +1,19 @@
+# Keep the build context to sources + ops scripts. Notably excluded:
+# - runtimes/: host-fetched macOS dylibs; the Dockerfile fetches the Linux
+#   .so for the image platform itself, and the Directory.Build.props glob
+#   would otherwise copy stale mac binaries into the Linux publish.
+# - src/Mailvec.Tray/: macOS SwiftUI app, not part of the container.
+.git
+.dockerignore
+Dockerfile
+build/
+coverage/
+dist/
+runtimes/
+src/Mailvec.Tray/
+**/bin/
+**/obj/
+**/appsettings.Local.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
