@@ -8,13 +8,13 @@ using ModelContextProtocol.Protocol;
 
 namespace Mailvec.Mcp.Tests.Tools;
 
-public class GetAttachmentToolTests : IDisposable
+public class ViewAttachmentToolTests : IDisposable
 {
     private readonly string _tempRoot;
     private readonly string _maildirRoot;
     private readonly string _downloadDir;
 
-    public GetAttachmentToolTests()
+    public ViewAttachmentToolTests()
     {
         _tempRoot = Path.Combine(Path.GetTempPath(), "mailvec-mcp-attach-tests-" + Guid.NewGuid().ToString("N"));
         _maildirRoot = Path.Combine(_tempRoot, "Mail");
@@ -29,7 +29,7 @@ public class GetAttachmentToolTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private GetAttachmentTool Build(TempDatabase db)
+    private ViewAttachmentTool Build(TempDatabase db)
     {
         var ingest = Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = _maildirRoot });
         var mcp = Microsoft.Extensions.Options.Options.Create(new McpOptions
@@ -37,7 +37,7 @@ public class GetAttachmentToolTests : IDisposable
             AttachmentDownloadDir = _downloadDir,
         });
         var extractor = new AttachmentExtractor(ingest, mcp);
-        return new GetAttachmentTool(new MessageRepository(db.Connections), extractor, Helpers.NoopLogger());
+        return new ViewAttachmentTool(new MessageRepository(db.Connections), extractor, Helpers.NoopLogger());
     }
 
     private const string PdfMessage = """
@@ -76,14 +76,14 @@ public class GetAttachmentToolTests : IDisposable
     public void Throws_when_neither_id_nor_messageId_provided()
     {
         using var db = new TempDatabase();
-        Should.Throw<McpException>(() => Build(db).GetAttachment(partIndex: 0));
+        Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0));
     }
 
     [Fact]
     public void Throws_when_both_id_and_messageId_provided()
     {
         using var db = new TempDatabase();
-        var ex = Should.Throw<McpException>(() => Build(db).GetAttachment(partIndex: 0, id: 1, messageId: "x@y"));
+        var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: 1, messageId: "x@y"));
         ex.Message.ShouldContain("OR");
     }
 
@@ -91,7 +91,7 @@ public class GetAttachmentToolTests : IDisposable
     public void Throws_when_message_does_not_exist()
     {
         using var db = new TempDatabase();
-        Should.Throw<McpException>(() => Build(db).GetAttachment(partIndex: 0, id: 999));
+        Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: 999));
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class GetAttachmentToolTests : IDisposable
         long id = StagePdfMessage(repo);
         repo.MarkDeleted([id], DateTimeOffset.UtcNow);
 
-        var ex = Should.Throw<McpException>(() => Build(db).GetAttachment(partIndex: 0, id: id));
+        var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: id));
         ex.Message.ShouldContain("soft-deleted");
     }
 
@@ -113,7 +113,7 @@ public class GetAttachmentToolTests : IDisposable
         var repo = new MessageRepository(db.Connections);
         long id = repo.Upsert(Helpers.Sample("a@x"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
 
-        var ex = Should.Throw<McpException>(() => Build(db).GetAttachment(partIndex: 0, id: id));
+        var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: id));
         ex.Message.ShouldContain("no attachments");
     }
 
@@ -125,7 +125,7 @@ public class GetAttachmentToolTests : IDisposable
         long id = StagePdfMessage(repo);
 
         // PDF message has exactly one attachment (partIndex 0); 5 is out of range.
-        var ex = Should.Throw<McpException>(() => Build(db).GetAttachment(partIndex: 5, id: id));
+        var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 5, id: id));
         ex.Message.ShouldContain("out of range");
     }
 
@@ -139,7 +139,7 @@ public class GetAttachmentToolTests : IDisposable
             Helpers.Sample("ghost@x", attachments: [new ParsedAttachment(0, "foo.pdf", "application/pdf", 100L)]),
             "INBOX", "INBOX/cur", "ghost.eml", DateTimeOffset.UtcNow);
 
-        var ex = Should.Throw<McpException>(() => Build(db).GetAttachment(partIndex: 0, id: id));
+        var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: id));
         ex.Message.ShouldContain("not found");
     }
 
@@ -150,7 +150,7 @@ public class GetAttachmentToolTests : IDisposable
         var repo = new MessageRepository(db.Connections);
         long id = StagePdfMessage(repo);
 
-        var result = Build(db).GetAttachment(partIndex: 0, id: id);
+        var result = Build(db).ViewAttachment(partIndex: 0, id: id);
 
         result.Content.ShouldNotBeEmpty();
         var summary = result.Content[0].ShouldBeOfType<TextContentBlock>();
@@ -171,7 +171,7 @@ public class GetAttachmentToolTests : IDisposable
         var repo = new MessageRepository(db.Connections);
         StagePdfMessage(repo);
 
-        var result = Build(db).GetAttachment(partIndex: 0, messageId: "attach-001@example.com");
+        var result = Build(db).ViewAttachment(partIndex: 0, messageId: "attach-001@example.com");
 
         result.Content.ShouldNotBeEmpty();
         result.Content[0].ShouldBeOfType<TextContentBlock>().Text.ShouldContain("quote.pdf");
@@ -211,7 +211,7 @@ public class GetAttachmentToolTests : IDisposable
             Helpers.Sample("csv-001@example.com", attachments: [new ParsedAttachment(0, "data.csv", "text/csv", 30L)]),
             "INBOX", "INBOX/cur", "2.eml", DateTimeOffset.UtcNow);
 
-        var result = Build(db).GetAttachment(partIndex: 0, id: 1);
+        var result = Build(db).ViewAttachment(partIndex: 0, id: 1);
 
         // Summary + decoded UTF-8 contents = 2 blocks.
         result.Content.Count.ShouldBeGreaterThanOrEqualTo(2);
@@ -253,7 +253,7 @@ public class GetAttachmentToolTests : IDisposable
             Helpers.Sample("png-001@example.com", attachments: [new ParsedAttachment(0, "pixel.png", "image/png", 70L)]),
             "INBOX", "INBOX/cur", "3.eml", DateTimeOffset.UtcNow);
 
-        var result = Build(db).GetAttachment(partIndex: 0, id: 1);
+        var result = Build(db).ViewAttachment(partIndex: 0, id: 1);
 
         // Summary + ImageContentBlock = 2+ blocks.
         result.Content.Count.ShouldBeGreaterThanOrEqualTo(2);

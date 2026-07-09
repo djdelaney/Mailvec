@@ -24,23 +24,23 @@ namespace Mailvec.Mcp.Tools;
 /// `mailvec extract-attachments` remain the explicit save-to-disk paths.
 /// </summary>
 [McpServerToolType]
-public sealed class GetAttachmentTool(
+public sealed class ViewAttachmentTool(
     MessageRepository messages,
     AttachmentExtractor extractor,
     ToolCallLogger callLog)
 {
-    private const string ToolName = "get_attachment";
+    private const string ToolName = "view_attachment";
 
-    [McpServerTool(Name = "get_attachment")]
+    [McpServerTool(Name = "view_attachment")]
     [Description(
-        "Return a single email attachment's content inline (nothing is written to disk). " +
+        "Show a single email attachment's content inline (nothing is written to disk). " +
         "Identify the email with either `id` (the internal SQLite id) OR `messageId` (the RFC Message-ID). " +
         "Identify the attachment with `partIndex` from the get_email response (0-based, in MIME order). " +
         "Image attachments are returned as an MCP ImageContentBlock (visible to Claude vision); small text-ish " +
         "files (text/*, application/json, etc., under ~256 KB) have their decoded UTF-8 text included as a text block. " +
         "For other binary types (PDF, DOCX, zip, …) the response is a short summary — use get_attachment_text to read " +
         "a document's extracted text, or get_attachment_page_image to view a PDF page as an image.")]
-    public CallToolResult GetAttachment(
+    public CallToolResult ViewAttachment(
         [Description("0-based index from the Attachments list returned by get_email.")]
         int partIndex,
         [Description("Internal SQLite id of the email, as returned in search_emails / get_email results. Mutually exclusive with messageId.")]

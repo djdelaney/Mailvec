@@ -28,8 +28,8 @@ public sealed class GetEmailTool(
         "Fetch a single email's full body and headers by id. " +
         "Pass either `id` (the internal SQLite id from a search_emails result) OR `messageId` (the RFC Message-ID). " +
         "Returns subject, from, to, cc, date, folder, body text, and per-attachment metadata (filename, content type, size). " +
-        "To read an attachment's contents, use get_attachment_text (extracted text), get_attachment " +
-        "(save to disk), or get_attachment_page_image (render a PDF page) with the partIndex returned here. " +
+        "To read an attachment's contents, use get_attachment_text (extracted text), view_attachment " +
+        "(inline image or small text file), or get_attachment_page_image (render a PDF page) with the partIndex returned here. " +
         "Set includeHtml=true to also return the raw HTML body when present. " +
         "The response includes `webmailUrl` (the raw deep-link to this message in the user's webmail) and `webmailLink` " +
         "(a ready-made, correctly-escaped Markdown link), both populated only when the user has configured their webmail " +

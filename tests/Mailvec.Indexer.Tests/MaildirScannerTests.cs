@@ -513,7 +513,7 @@ public class MaildirScannerTests : IDisposable
         // messages row records whichever copy scanned last; if THAT copy is
         // deleted, rename-detection correctly keeps the message alive — but
         // the survivor rides the mtime fast-path and never re-upserts, so the
-        // row's maildir_path used to dangle forever (get_attachment fails,
+        // row's maildir_path used to dangle forever (view_attachment fails,
         // OCR skips its attachments every cycle).
         WriteEml("INBOX", "cur", "dup.host:2,S", "same body", "dup@x");
         WriteEml("Archive.2024", "cur", "dup.host:2,S", "same body", "dup@x");

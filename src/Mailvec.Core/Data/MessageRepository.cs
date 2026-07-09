@@ -1110,7 +1110,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// hashes, or embedding state. Used by the scanner's reconciliation when
     /// a duplicate copy the row referenced is deleted: the surviving copy
     /// rides the mtime fast-path and never re-upserts, so without this the
-    /// row's path would dangle forever — get_attachment fails and the OCR
+    /// row's path would dangle forever — view_attachment fails and the OCR
     /// pass skips the message's attachments on every cycle.
     /// </summary>
     public void UpdateMaildirLocation(long id, string folder, string maildirRelativePath, string maildirFilename)

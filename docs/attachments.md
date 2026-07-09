@@ -4,15 +4,15 @@ There are three tools, for three jobs:
 
 | Tool | Returns | Best for |
 | --- | --- | --- |
-| `get_attachment` | an **image** or **small text file** inline (else a summary) | viewing a photo/image; a quick CSV/JSON/text |
+| `view_attachment` | an **image** or **small text file** inline (else a summary) | viewing a photo/image; a quick CSV/JSON/text |
 | `get_attachment_text` | the **extracted text** (PDF/DOCX) inline | "what does this document say" — works over a remote connection, no filesystem |
 | `get_attachment_page_image` | a **rendered page** as an inline JPEG | layout that text loses (tables, forms, signatures) or scanned/image-only PDFs |
 
 All three take the email (`id` or `messageId`) plus `partIndex` from the `get_email` response.
 
-## `get_attachment` — inline image / text
+## `view_attachment` — inline image / text
 
-`get_attachment` decodes a single attachment **in memory** and returns its content inline — nothing is written to disk:
+`view_attachment` decodes a single attachment **in memory** and returns its content inline — nothing is written to disk:
 
 - **Image attachments** come back as an `ImageContentBlock` so Claude vision can describe / OCR them in one round trip.
 - **Small text-ish files** (`text/*`, `application/json`, `application/xml`, etc., under `Mcp:AttachmentInlineTextMaxBytes` — default 256 KB) have their decoded UTF-8 text included as a text block.

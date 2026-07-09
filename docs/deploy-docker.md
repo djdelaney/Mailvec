@@ -81,7 +81,7 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   the first mbsync pull completes, the indexer's first full scan reconciles
   `sync_state`/`maildir_path` to the new Maildir layout via rename-repair
   (same Message-ID at a new path). Until that scan settles: expect
-  `get_attachment` misses, and **do not run `purge-deleted`** — messages look
+  `view_attachment` misses, and **do not run `purge-deleted`** — messages look
   transiently stale mid-reconciliation.
 - **Ranking parity gate.** After the embedder settles, run
   `docker compose exec mcp mailvec eval` against the latest baseline in

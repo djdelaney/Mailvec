@@ -11,17 +11,19 @@ namespace Mailvec.Mcp.Tools;
 /// <summary>
 /// Returns the plain text Mailvec already extracted from an attachment
 /// (PDF via PdfPig, DOCX via OpenXml) at index time, straight from
-/// <c>attachments.extracted_text</c>. Unlike <see cref="GetAttachmentTool"/>
+/// <c>attachments.extracted_text</c>. Unlike <see cref="ViewAttachmentTool"/>
 /// this touches neither the Maildir nor the download directory — it's a pure
 /// DB read returning a <see cref="TextContentBlock"/>, which is the one
 /// content type that renders reliably on every Claude client including a
 /// remote (HTTP/OAuth) connector, where filesystem paths are meaningless and
 /// non-image binary blocks don't render. This is the "what does this document
-/// say" path; use <c>get_attachment</c> when the user needs the actual file.
+/// say" path; <c>view_attachment</c> shows images and small text files inline,
+/// and <c>get_attachment_page_image</c> renders PDF pages.
 ///
 /// When extraction didn't produce text (scanned/image-only PDF, encrypted,
 /// oversize, unsupported type, or a failure) we say so explicitly, keyed off
-/// the stored <c>extraction_status</c>, and point at <c>get_attachment</c>.
+/// the stored <c>extraction_status</c>, and point at whichever viewer tool
+/// can still help.
 /// </summary>
 [McpServerToolType]
 public sealed class GetAttachmentTextTool(
@@ -35,11 +37,11 @@ public sealed class GetAttachmentTextTool(
         "Return the extracted plain text of a single attachment (PDF, DOCX, etc.) that Mailvec indexed at ingest time. " +
         "Identify the email with either `id` (the internal SQLite id) OR `messageId` (the RFC Message-ID), and the " +
         "attachment with `partIndex` from the get_email response (0-based, in MIME order). " +
-        "Prefer this over get_attachment when you just need to READ or summarise a document's contents — it returns the " +
+        "Prefer this over view_attachment when you just need to READ or summarise a document's contents — it returns the " +
         "text directly with no filesystem dependency, so it works the same locally and over a remote connection. " +
         "Text extraction loses layout, so tables and multi-column content may be flattened; if the attachment is a " +
         "scanned / image-only PDF (no embedded text), encrypted, too large, or an unsupported type, this tool says so " +
-        "and you should fall back to get_attachment to fetch the file itself.")]
+        "and suggests the fallback: get_attachment_page_image for PDF pages, view_attachment for images and small text files.")]
     public CallToolResult GetAttachmentText(
         [Description("0-based index from the Attachments list returned by get_email.")]
         int partIndex,
@@ -103,22 +105,27 @@ public sealed class GetAttachmentTextTool(
     {
         AttachmentTextExtractor.StatusNoText =>
             $"No text could be extracted from '{name}' — it has no embedded text layer (e.g. a scanned or image-only PDF). " +
-            "Use get_attachment to fetch the file itself.",
+            "Use get_attachment_page_image to view its pages.",
         AttachmentTextExtractor.StatusEncrypted =>
-            $"'{name}' is encrypted, so its text could not be extracted. Use get_attachment to fetch the file.",
+            $"'{name}' is encrypted, so its text could not be extracted and its pages cannot be rendered. " +
+            "Mailvec cannot decrypt it — the user can save the file via the tray's Save button or `mailvec extract-attachments` and open it themselves.",
         AttachmentTextExtractor.StatusOversize =>
-            $"'{name}' exceeds the text-extraction size cap, so its text was not extracted. Use get_attachment to fetch the file.",
+            $"'{name}' exceeds the text-extraction size cap, so its text was not extracted. " +
+            "If it is a PDF, get_attachment_page_image can still render individual pages.",
         AttachmentTextExtractor.StatusUnsupported =>
-            $"'{name}' is a type Mailvec does not extract text from. Use get_attachment to fetch the file.",
+            $"'{name}' is a type Mailvec does not extract text from. " +
+            "If it is an image or a small text file, view_attachment can show it inline.",
         AttachmentTextExtractor.StatusFailed =>
-            $"Text extraction failed for '{name}'. Use get_attachment to fetch the file.",
+            $"Text extraction failed for '{name}'. " +
+            "Try get_attachment_page_image for a PDF, or view_attachment for an image or small text file.",
         AttachmentTextExtractor.StatusOcr =>
             $"'{name}' was OCR-processed but no text was recovered (likely a blank scan). " +
             "Use get_attachment_page_image to view the pages.",
         null =>
             $"'{name}' has no extraction record yet (it predates attachment text extraction, or the embedder hasn't " +
-            "processed it). Use get_attachment to fetch the file.",
+            "processed it). Try get_attachment_page_image for a PDF, or view_attachment for an image or small text file.",
         _ =>
-            $"No extracted text is available for '{name}' (status: {status}). Use get_attachment to fetch the file.",
+            $"No extracted text is available for '{name}' (status: {status}). " +
+            "Try get_attachment_page_image for a PDF, or view_attachment for an image or small text file.",
     };
 }

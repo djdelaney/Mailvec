@@ -26,15 +26,17 @@ public sealed class McpOptions
     public bool LogToolCalls { get; set; }
 
     /// <summary>
-    /// Where get_attachment writes extracted attachment files. The default is
-    /// inside ~/Downloads so the user can find files in Finder / their browser's
-    /// Downloads list. Avoid ~/Library/Caches (hidden from users) and
-    /// ~/Documents (TCC-blocked from Claude Desktop's spawned processes).
+    /// Where the explicit save-to-disk paths (the tray's Save button and
+    /// `mailvec extract-attachments`) write attachment files — the MCP tools
+    /// never write here. The default is inside ~/Downloads so the user can find
+    /// files in Finder / their browser's Downloads list. Avoid ~/Library/Caches
+    /// (hidden from users) and ~/Documents (TCC-blocked from Claude Desktop's
+    /// spawned processes).
     /// </summary>
     public string AttachmentDownloadDir { get; set; } = "~/Downloads/mailvec";
 
     /// <summary>
-    /// For text-ish content types under this many bytes, get_attachment also
+    /// For text-ish content types under this many bytes, view_attachment also
     /// returns the decoded UTF-8 text inline as a separate text content block.
     /// Convenience for CSV / JSON / logs so Claude can read them in one round
     /// trip without invoking a filesystem MCP. 0 disables the extra text block.
