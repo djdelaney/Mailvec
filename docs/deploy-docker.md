@@ -199,7 +199,11 @@ docker compose exec mcp mailvec doctor
 6. **Client switch-over**: Claude Code → tunnel URL (HTTP transport); Claude
    Desktop → remote connector instead of the MCPB stdio bundle. The tray app
    has no remote story yet (it polls `/tray/status`; future-ideas material).
-7. **Decommission the Mac pipeline** once parity holds: `ops/stop.sh` (keeps
-   launchd plists installed but booted out), retire the mbsync launchd job,
-   keep the Mac's DB copy as a rollback for a while.
+7. **Decommission the Mac pipeline** once parity holds — follow
+   [docs/contributing/local-dev-dataset.md](contributing/local-dev-dataset.md)
+   (rollback snapshot, then `ops/install.sh --uninstall`, mbsync included).
+   Don't use `ops/stop.sh` for this: it leaves mbsync running by default and
+   the plists re-bootstrap at the next login, so the pipeline quietly comes
+   back after a reboot. The Mac's archive then lives on as the frozen local
+   dev corpus.
 8. **Backup cron on the VM** (export-db flow) + PBS schedule.
