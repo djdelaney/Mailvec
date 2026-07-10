@@ -95,6 +95,15 @@ internal static class EvalAddFlow
 
         if (!args.Yes)
         {
+            // Same guard the pickers have. Without it, a scripted
+            // `eval-add --pin-relevant ...` under redirected stdin read null
+            // from ReadLine, printed "(not saved)", and exited 0 — a silent
+            // no-op that looked like success to the calling script.
+            if (Console.IsInputRedirected)
+            {
+                Console.Error.WriteLine("stdin is not a TTY; pass --yes to save non-interactively.");
+                return 2;
+            }
             Console.Write("Save? [y/N]: ");
             var confirm = Console.ReadLine()?.Trim().ToLowerInvariant();
             if (confirm != "y" && confirm != "yes")
