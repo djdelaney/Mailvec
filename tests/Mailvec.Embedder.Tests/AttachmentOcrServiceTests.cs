@@ -304,6 +304,73 @@ public class AttachmentOcrServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Adjacent_poison_documents_retire_via_the_health_probe_and_unblock_the_queue()
+    {
+        // Two poison docs lead the id-ordered queue and both fail every cycle,
+        // so the consecutive-failure abort fires before any document-level
+        // success can happen. Without the health probe that meant zero
+        // same-cycle evidence, zero strikes, and a permanently wedged queue —
+        // the healthy doc behind them never ran. The probe (a tiny blank
+        // image the fake distinguishes by reference) proves the model healthy,
+        // so strikes accrue and both retire after MaxVisionAttempts cycles.
+        long poisonA = StageNoTextPdf("poison-a@x", MinimalPdf(1));
+        long poisonB = StageNoTextPdf("poison-b@x", MinimalPdf(1));
+        long healthy = StageNoTextPdf("behind@x", MinimalPdf(1));
+        // Each wedged cycle makes exactly two document calls (poisonA, poisonB)
+        // before the consecutive-failure abort; the healthy doc is never
+        // reached. 5 cycles x 2 = 10 failing document calls, then the healthy
+        // doc's call succeeds. Probe calls are distinguished by reference and
+        // don't advance the counter.
+        var docCalls = 0;
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return ""; // probe: model healthy
+            return ++docCalls <= 10
+                ? throw new TaskCanceledException("this document hangs the model")
+                : "RECOVERED";
+        }));
+
+        for (int cycle = 0; cycle < 5; cycle++) // MaxVisionAttempts
+        {
+            (await svc.ProcessBatchAsync(10, default)).ShouldBe(0);
+        }
+
+        StatusOf(poisonA).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        StatusOf(poisonB).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        // With the head-of-line poisons retired, the next cycle reaches the
+        // healthy doc that was starving behind them.
+        (await svc.ProcessBatchAsync(10, default)).ShouldBe(1);
+        StatusOf(healthy).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        TextOf(healthy).ShouldBe("RECOVERED");
+    }
+
+    [Fact]
+    public async Task Multi_page_document_failing_on_a_later_page_retires_via_page_level_successes()
+    {
+        // A 3-page PDF whose last page deterministically times out. Successes
+        // used to be counted per *document*, so this doc produced zero
+        // evidence per cycle — never a strike, retried forever, burning two
+        // good page renders + vision calls every cycle. Page-level counting
+        // makes pages 1-2 the health evidence that lets page 3's failure
+        // accrue strikes until retirement.
+        long id = StageNoTextPdf("lastpage@x", MinimalPdf(3));
+        var calls = 0;
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            return ++calls % 3 == 0 ? throw new TaskCanceledException("page 3 hangs") : "PAGE";
+        }));
+
+        for (int cycle = 0; cycle < 5; cycle++) // MaxVisionAttempts
+        {
+            (await svc.ProcessBatchAsync(10, default)).ShouldBe(0);
+        }
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed); // retired, queue unblocked
+        TextOf(id).ShouldBeNull(); // partial page text was never persisted
+    }
+
+    [Fact]
     public async Task Unreadable_candidate_is_retired_and_does_not_block_the_batch()
     {
         // A DB row whose part_index doesn't exist in the .eml (stale row after
