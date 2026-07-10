@@ -86,6 +86,20 @@ public sealed class ConnectionFactory
             _ = cmd.ExecuteScalar();
         }
 
+        // Cap how large the -wal file may REMAIN after a checkpoint. SQLite's
+        // autocheckpoint reuses space inside the WAL but never shrinks the
+        // file, so one giant transaction (reindex / switch-model clearing the
+        // ~1.2 GB vector table) sets a multi-GB high-water mark that persists
+        // forever — the observed ~2 GB WAL in search-performance.md. With the
+        // limit set, the next checkpoint truncates the file back down.
+        // Result-returning pragma — same ExecuteScalar requirement as
+        // journal_mode above (ExecuteNonQuery silently no-ops it).
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA journal_size_limit = 67108864;"; // 64 MiB
+            _ = cmd.ExecuteScalar();
+        }
+
         // The file exists now (ReadWriteCreate) and the WAL pragma has created the
         // -wal/-shm sidecars, so this is the first safe point to restrict all three
         // to 0600. Done once (idempotent, cheap); self-heals a DB created before
