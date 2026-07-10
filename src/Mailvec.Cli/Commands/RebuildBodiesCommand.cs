@@ -75,10 +75,39 @@ internal static class RebuildBodiesCommand
             }
         }
 
+        // Convert and commit in batches rather than one archive-wide write
+        // transaction. The old single transaction held the write lock for the
+        // entire CPU-bound HTML re-conversion (minutes on a real corpus), so
+        // the live indexer/embedder hit their 30s busy timeout and threw
+        // SQLITE_BUSY for the whole run. Converting each batch BEFORE opening
+        // its transaction keeps every lock hold to a few hundred pure UPDATEs
+        // (milliseconds); each row is independently re-derivable, so an
+        // interrupt between batches just means a re-run finishes the rest.
+        const int BatchSize = 500;
         long updated = 0, errors = 0;
-        using (var tx = conn.BeginTransaction())
-        using (var update = conn.CreateCommand())
+        foreach (var batch in rows.Chunk(BatchSize))
         {
+            var converted = new List<(long Id, string? Text)>(batch.Length);
+            foreach (var (id, subject, html) in batch)
+            {
+                try
+                {
+                    var newText = HtmlToText.Convert(html);
+                    if (!string.IsNullOrEmpty(newText))
+                    {
+                        newText = ReplyTrimmer.Trim(newText, subject);
+                    }
+                    converted.Add((id, newText));
+                }
+                catch (Exception ex)
+                {
+                    err.WriteLine($"  id={id}: convert failed ({ex.GetType().Name}: {ex.Message})");
+                    errors++;
+                }
+            }
+
+            using var tx = conn.BeginTransaction();
+            using var update = conn.CreateCommand();
             update.Transaction = tx;
             update.CommandText = "UPDATE messages SET body_text = $body WHERE id = $id";
             var bodyParam = update.CreateParameter();
@@ -88,32 +117,16 @@ internal static class RebuildBodiesCommand
             idParam.ParameterName = "$id";
             update.Parameters.Add(idParam);
 
-            foreach (var (id, subject, html) in rows)
+            foreach (var (id, text) in converted)
             {
-                string newText;
-                try
-                {
-                    newText = HtmlToText.Convert(html);
-                    if (!string.IsNullOrEmpty(newText))
-                    {
-                        newText = ReplyTrimmer.Trim(newText, subject);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    err.WriteLine($"  id={id}: convert failed ({ex.GetType().Name}: {ex.Message})");
-                    errors++;
-                    continue;
-                }
-
-                bodyParam.Value = string.IsNullOrEmpty(newText) ? (object)DBNull.Value : newText;
+                bodyParam.Value = string.IsNullOrEmpty(text) ? (object)DBNull.Value : text;
                 idParam.Value = id;
                 update.ExecuteNonQuery();
                 updated++;
-
-                if (updated % 500 == 0) @out.WriteLine($"  ... {updated:N0}/{total:N0}");
             }
             tx.Commit();
+
+            if (updated < total) @out.WriteLine($"  ... {updated:N0}/{total:N0}");
         }
 
         @out.WriteLine($"Updated body_text on {updated:N0} messages ({errors:N0} errors).");
@@ -121,6 +134,7 @@ internal static class RebuildBodiesCommand
         if (reembed)
         {
             var chunks = sp.GetRequiredService<ChunkRepository>();
+            @out.WriteLine("Clearing embeddings (one transaction over chunks + vectors; running services may log SQLITE_BUSY retries until it commits)...");
             var cleared = chunks.ClearEmbeddings(folderFilter: null);
             @out.WriteLine($"Cleared embeddings on {cleared:N0} messages. Run the embedder to regenerate.");
         }
