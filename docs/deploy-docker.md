@@ -117,6 +117,51 @@ Note the on-host rationale still holds either way: the VM keeps the repo
 clone (compose.yml, `.env`, `mbsyncrc`, `baselines/` for the parity gate) —
 pulled images just mean the clone no longer needs to *build*.
 
+### Release tags (`v*`) — what to pin in production
+
+Two kinds of pin, with different lifetimes:
+
+- **`sha-<gitsha>`** — published on every green-main run, **pruned to the
+  newest 2** weekly by `cleanup.yml`. Fine for tracking main, but not
+  durable: a stale `sha-` pin can be garbage-collected out from under a
+  deployment. The *running* container survives (its image is local), but a
+  re-pull, host rebuild, or rollback against a pruned tag fails.
+- **`v<version>`** (and `latest`) — **never pruned**. Use `v*` for the
+  homelab's production pin and for anything you may want to roll back to.
+  A `v*` tag is the same image bytes as its underlying `sha-` — one
+  durable, human-meaningful name for the same digest (which also protects
+  that build's `sha-` tag from pruning: tags on one digest share a package
+  version).
+
+**The tag value is not free-form.** The repo-wide `<Version>` in
+`Directory.Build.props` stamps all four binaries and `serverInfo.version`,
+kept in lockstep with `manifest.json` and the tray by
+`ops/build-mcpb.sh --bump` (the only sanctioned bump path — see
+`ops/mcpb-release.md`). The `v*` tag must equal that version at the tagged
+commit, or the image's label and what its binaries report from
+`mailvec status` / the MCP handshake disagree forever.
+
+**Cutting a release** (dev machine, not the deploy host):
+
+```sh
+# 1. If the current <Version> has already been released, bump first:
+ops/build-mcpb.sh --bump      # commit the bump; must be green on main
+# 2. Tag the green bump commit with the MATCHING version and push:
+git tag -a v0.1.29 -m "…" && git push origin v0.1.29
+```
+
+The tag push publishes `ghcr.io/<owner>/mailvec:v0.1.29` +
+`…/mailvec-mbsync:v0.1.29` (plus the commit's `sha-` tag). It does **not**
+move `:latest` (green-main / manual-dispatch only) — and note the `v*`
+trigger is **not CI-gated**, unlike the green-main path, so the release
+rule is: only tag commits that already passed CI on main.
+
+**Deploying it:** pin both vars in `.env` to `:v0.1.29`, then
+`docker compose pull && docker compose up -d` (backup first — the
+SchemaMigrator-on-start rule above), and verify the loop closes:
+`docker compose exec mcp mailvec status` must print the same version as
+the image tag.
+
 ## Migrating the archive from the Mac
 
 `ops/import-db.sh` does **not** apply here — it is the macOS destination path
