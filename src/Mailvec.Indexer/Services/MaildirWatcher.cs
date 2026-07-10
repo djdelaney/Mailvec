@@ -34,6 +34,10 @@ public sealed class MaildirWatcher : IDisposable
     /// </summary>
     public ChannelReader<byte> Pulses => _pulses.Reader;
 
+    // Test seam: lets tests substitute a factory that throws, simulating
+    // Linux inotify exhaustion (IOException out of FSW creation).
+    internal Func<string, FileSystemWatcher> CreateWatcher { get; set; } = root => new FileSystemWatcher(root);
+
     public void Start()
     {
         if (_fsw is not null) return;
@@ -43,24 +47,45 @@ public sealed class MaildirWatcher : IDisposable
             return;
         }
 
-        _fsw = new FileSystemWatcher(_root)
+        FileSystemWatcher? fsw = null;
+        try
         {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName,
-            EnableRaisingEvents = true,
-        };
-        _fsw.Created  += (_, e) => OnEvent(e.FullPath);
-        _fsw.Deleted  += (_, e) => OnEvent(e.FullPath);
-        _fsw.Renamed  += (_, e) => OnEvent(e.FullPath);
-        _fsw.Changed  += (_, e) => OnEvent(e.FullPath);
-        _fsw.Error    += (_, e) =>
+            fsw = CreateWatcher(_root);
+            fsw.IncludeSubdirectories = true;
+            fsw.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName;
+            fsw.Created  += (_, e) => OnEvent(e.FullPath);
+            fsw.Deleted  += (_, e) => OnEvent(e.FullPath);
+            fsw.Renamed  += (_, e) => OnEvent(e.FullPath);
+            fsw.Changed  += (_, e) => OnEvent(e.FullPath);
+            fsw.Error    += (_, e) =>
+            {
+                // A buffer overflow means events were dropped — we don't know which
+                // files changed. Force a pulse so the scanner does a full pass
+                // instead of waiting up to a full timer interval for the next one.
+                _logger.LogWarning(e.GetException(), "FileSystemWatcher reported an error; forcing a rescan");
+                _pulses.Writer.TryWrite(0);
+            };
+            // Enable LAST, with every handler already attached, so an event
+            // landing in the setup window can't be silently dropped.
+            fsw.EnableRaisingEvents = true;
+            _fsw = fsw;
+        }
+        catch (Exception ex)
         {
-            // A buffer overflow means events were dropped — we don't know which
-            // files changed. Force a pulse so the scanner does a full pass
-            // instead of waiting up to a full timer interval for the next one.
-            _logger.LogWarning(e.GetException(), "FileSystemWatcher reported an error; forcing a rescan");
-            _pulses.Writer.TryWrite(0);
-        };
+            // Watcher creation/enable can throw — most plausibly IOException
+            // on Linux when inotify max_user_watches / max_user_instances is
+            // exhausted (IncludeSubdirectories registers a watch per Maildir
+            // directory). Both Start() call sites sit on the service's spine:
+            // an escaping throw stops the host, launchd/Docker restarts it
+            // into the same condition, and the indexer crash-loops through a
+            // full rescan each time. Log and stay watcher-less instead — the
+            // periodic timer still drives scans, and the timer-tick Start()
+            // retry brings the watcher up once the pressure clears.
+            fsw?.Dispose();
+            _logger.LogWarning(ex,
+                "MaildirWatcher failed to start; falling back to timer-driven scans and retrying on the next tick.");
+            return;
+        }
 
         _logger.LogInformation("MaildirWatcher started on {Path} (debounce {Ms}ms)", _root, _debounce.TotalMilliseconds);
     }

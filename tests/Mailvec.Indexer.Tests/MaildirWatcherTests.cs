@@ -124,6 +124,28 @@ public class MaildirWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_survives_watcher_creation_failure_and_recovers_on_retry()
+    {
+        // Linux inotify exhaustion surfaces as IOException out of FSW
+        // creation. Both Start() call sites sit on the indexer's spine — an
+        // escaping throw stops the host, and launchd/Docker restarts it into
+        // the same condition: a crash loop through a full rescan each time.
+        // Start must swallow, leave scanning to the periodic timer, and let
+        // the timer-tick retry bring the watcher up once the pressure clears.
+        using var watcher = BuildWatcher(_root, debounceMs: 100);
+        watcher.CreateWatcher = _ => throw new IOException("inotify watch limit reached");
+
+        Should.NotThrow(() => watcher.Start());
+
+        // The pressure clears; the next timer tick's Start() succeeds and
+        // event-driven pulses work.
+        watcher.CreateWatcher = root => new FileSystemWatcher(root);
+        Should.NotThrow(() => watcher.Start());
+        File.WriteAllText(Path.Combine(_root, "INBOX", "cur", "9.host:2,S"), "Subject: hi\n\nbody");
+        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5))).ShouldBeTrue();
+    }
+
+    [Fact]
     public void Dispose_closes_the_pulses_channel()
     {
         var watcher = BuildWatcher(_root, debounceMs: 50);
