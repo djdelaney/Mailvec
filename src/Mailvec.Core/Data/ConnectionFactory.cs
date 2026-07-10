@@ -13,12 +13,18 @@ public sealed class ConnectionFactory
     private readonly ILogger<ConnectionFactory>? _logger;
     private bool _permsHardened;
 
-    // Test seam: Microsoft.Data.Sqlite retries a busy statement until the
-    // command timeout, so contention tests against the production 30s would
-    // take 30s each. Init-only — production always runs the default. The
-    // connection string is built lazily (below) because init properties are
-    // assigned after the constructor runs.
+    // Test seams: contention tests against the production values would take
+    // tens of seconds each. Init-only — production always runs the defaults.
+    // BOTH matter for how long a blocked writer waits: the native
+    // busy_timeout sleeps INSIDE a single statement step, so the
+    // Microsoft.Data.Sqlite command-timeout check only runs between
+    // busy-timeout quanta — the effective wait is DefaultTimeoutSeconds
+    // rounded UP to a multiple of BusyTimeoutMilliseconds (the audit's
+    // measured ~33s against the 30s command timeout is 30s rounded up to
+    // the next 5s quantum). The connection string is built lazily (below)
+    // because init properties are assigned after the constructor runs.
     internal int DefaultTimeoutSeconds { get; init; } = 30;
+    internal int BusyTimeoutMilliseconds { get; init; } = 5000;
 
     private string ConnectionString => _connectionString ??= new SqliteConnectionStringBuilder
     {
@@ -75,9 +81,9 @@ public sealed class ConnectionFactory
 
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = """
+            cmd.CommandText = $"""
                 PRAGMA foreign_keys = ON;
-                PRAGMA busy_timeout = 5000;
+                PRAGMA busy_timeout = {BusyTimeoutMilliseconds};
                 """;
             cmd.ExecuteNonQuery();
         }
