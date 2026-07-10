@@ -304,7 +304,9 @@ internal static class EvalCommand
         }
     }
 
-    private static void PrintBaselineDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming)
+    // Internal for tests: the diff output is the signal the whole
+    // "re-baseline before ranking changes" discipline reads.
+    internal static void PrintBaselineDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming)
     {
         Console.WriteLine();
         Console.WriteLine($"Baseline ({baseline.RanAt:u}, top-{baseline.TopK}):");

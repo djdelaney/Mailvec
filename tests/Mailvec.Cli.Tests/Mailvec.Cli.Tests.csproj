@@ -20,6 +20,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Mailvec.Cli\Mailvec.Cli.csproj" />
+    <!-- For the ToolCallLogger <-> eval-import log-format contract test:
+         the producer type lives in the MCP server. -->
+    <ProjectReference Include="..\..\src\Mailvec.Mcp\Mailvec.Mcp.csproj" />
   </ItemGroup>
 
 </Project>
