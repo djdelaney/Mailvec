@@ -155,7 +155,10 @@ internal static class EvalImportCommand
     /// Dedupes by canonical args (Claude often retries with identical params)
     /// and returns the most recent <paramref name="limit"/>.
     /// </summary>
-    private static IReadOnlyList<RecentCall> LoadRecentCalls(string mailvecLogDir, string claudeLogPath, int limit)
+    // Internal for tests: this is the consumer half of the log-format
+    // contract with ToolCallLogger (the producer) — the round-trip test
+    // drives real ToolCallLogger output through these regexes.
+    internal static IReadOnlyList<RecentCall> LoadRecentCalls(string mailvecLogDir, string claudeLogPath, int limit)
     {
         var calls = new List<RecentCall>(256);
 
