@@ -26,7 +26,18 @@
 name: mailvec
 
 x-mailvec: &mailvec-common
-  build: .
+  # Two deploy modes (docs/deploy-docker.md "Prebuilt images"):
+  #   build on host (default): docker compose up -d --build   -> mailvec:local
+  #   pull from GHCR:          set MAILVEC_IMAGE in .env, then
+  #                            docker compose pull && docker compose up -d
+  # With both image: and build: present, a bare `up` BUILDS when the tag
+  # isn't already local — the pull path must run `compose pull` first. And
+  # don't run `--build` while MAILVEC_IMAGE points at the GHCR ref: that
+  # retags the remote name with a local build.
+  image: ${MAILVEC_IMAGE:-mailvec:local}
+  build:
+    context: .
+    target: runtime
   restart: unless-stopped
   environment: &mailvec-env
     Ingest__MaildirRoot: /mail/Fastmail
@@ -94,6 +105,7 @@ services:
       - ./mail:/mail:ro    # OCR pass reads .eml bytes out of the maildir
 
   mbsync:
+    image: ${MAILVEC_MBSYNC_IMAGE:-mailvec-mbsync:local}
     build:
       context: .
       target: mbsync

@@ -1,15 +1,18 @@
-# Actions housekeeping. CI uploads no artifacts and this repo publishes no
-# container images (the Docker deployment builds images from source on the
-# deployment host — see docs/deploy-docker.md), so the only things that
-# accumulate on GitHub are workflow-run history (logs) and Actions caches
-# (the NuGet cache gets a new entry whenever Directory.Packages.props or a
-# csproj changes; stale keys otherwise linger until GitHub's 7-day-unused
-# eviction). Keep the newest two of each, delete the rest weekly.
+# Actions housekeeping. Three things accumulate on GitHub: workflow-run
+# history (logs), Actions caches, and — since publish-images.yml — GHCR
+# container versions (a sha-tagged pair per green main push). Keep the
+# newest two of each, delete the rest weekly.
 #
-# Scope guard: this deletes completed workflow runs and caches only — it
-# never touches releases, tags, or git history. If a workflow ever starts
-# uploading artifacts, prefer `retention-days` on the upload step over
-# extending this job.
+# The cache prune is scoped to nuget-* keys ON PURPOSE: publish-images.yml
+# stores buildx layer caches as Actions caches too, and an unscoped
+# keep-newest-2 would thrash one set or the other every Monday. Buildx
+# entries are left to GitHub's own 7-day-unused / 10GB LRU eviction.
+#
+# Scope guard: this deletes completed workflow runs, nuget caches, and
+# sha-tagged/untagged GHCR versions only — it never touches releases, git
+# tags, v*-tagged or :latest images, or git history. If a workflow ever
+# starts uploading artifacts, prefer `retention-days` on the upload step
+# over extending this job.
 
 name: Cleanup
 
@@ -20,6 +23,7 @@ on:
 
 permissions:
   actions: write
+  packages: write
 
 concurrency:
   group: cleanup
@@ -50,16 +54,48 @@ jobs:
             done
           done
 
-      - name: Prune caches
+      - name: Prune caches (nuget-* only — buildx caches are GitHub-managed)
         run: |
           set -euo pipefail
           # Sort by last access so the cache CI is actively restoring is
-          # always among the survivors.
-          gh cache list --repo "$REPO" --limit 100 \
+          # always among the survivors. --key scopes to the NuGet caches;
+          # see the header for why buildx entries are excluded.
+          gh cache list --repo "$REPO" --limit 100 --key nuget- \
             --sort last_accessed_at --order desc \
             --json id --jq '.[].id' |
           tail -n +$((KEEP + 1)) |
           while read -r id; do
             echo "Deleting cache $id"
             gh cache delete "$id" --repo "$REPO"
+          done
+
+      - name: Prune GHCR image versions (keep newest sha builds; never v* or latest)
+        run: |
+          set -euo pipefail
+          OWNER="${REPO%%/*}"
+          for pkg in mailvec mailvec-mbsync; do
+            # 404 = package not published yet — nothing to prune.
+            if ! versions=$(gh api --paginate "/users/$OWNER/packages/container/$pkg/versions" 2>/dev/null); then
+              echo "$pkg: no package versions found (not published yet?); skipping"
+              continue
+            fi
+            # Protect any version carrying a v* or latest tag (releases and
+            # the rolling pointer); of the rest (sha-only or untagged), keep
+            # the newest $KEEP and delete the remainder. --paginate emits
+            # concatenated arrays, so merge with `jq -s add` first. If the
+            # DELETEs start returning 403, GITHUB_TOKEN can't delete this
+            # package — fall back to a classic PAT with delete:packages in a
+            # secret.
+            echo "$versions" |
+            jq -s 'add // []' |
+            jq -r --argjson keep "$KEEP" '
+              [ .[] | select(
+                  ((.metadata.container.tags // []) | any(. == "latest" or startswith("v"))) | not
+                ) ]
+              | sort_by(.created_at) | reverse | .[$keep:] | .[].id' |
+            while read -r vid; do
+              [ -z "$vid" ] && continue
+              echo "Deleting $pkg version $vid"
+              gh api -X DELETE "/users/$OWNER/packages/container/$pkg/versions/$vid"
+            done
           done
