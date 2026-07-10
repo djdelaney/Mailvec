@@ -69,6 +69,25 @@ public sealed class ConnectionFactoryTests : IDisposable
         File.GetUnixFileMode(_dbPath).ShouldBe(OwnerRw);
     }
 
+    [Fact]
+    public void Open_caps_wal_growth_with_journal_size_limit()
+    {
+        // Without a journal_size_limit, SQLite reuses space inside the WAL but
+        // never shrinks the file — one giant transaction (reindex /
+        // switch-model clearing the vector table) sets a multi-GB high-water
+        // mark that persists forever. The limit lets checkpoints truncate it.
+        using var conn = NewFactory().Open();
+
+        Scalar(conn, "PRAGMA journal_size_limit;").ShouldBe(67108864L); // 64 MiB
+    }
+
+    private static object? Scalar(SqliteConnection conn, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        return cmd.ExecuteScalar();
+    }
+
     public void Dispose()
     {
         // Nothing was created on the skipped-Windows path.
