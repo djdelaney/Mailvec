@@ -199,6 +199,22 @@ public class MaildirWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task Negative_debounce_config_is_clamped_and_pulses_still_flow()
+    {
+        // A negative DebounceMilliseconds used to make Task.Delay throw
+        // inside the unobserved debounce task, leaving _debounceTask
+        // permanently non-null: every future event saw a "running" loop and
+        // no pulse ever fired again — a silent, timer-covered death of
+        // event-driven scanning. The constructor clamps to >= 0 now.
+        using var watcher = BuildWatcher(_root, debounceMs: -250);
+        watcher.Start();
+
+        File.WriteAllText(Path.Combine(_root, "INBOX", "cur", "11.host:2,S"), "Subject: hi\n\nbody");
+
+        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5))).ShouldBeTrue();
+    }
+
+    [Fact]
     public void Dispose_closes_the_pulses_channel()
     {
         var watcher = BuildWatcher(_root, debounceMs: 50);

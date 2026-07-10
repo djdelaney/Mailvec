@@ -24,7 +24,12 @@ public sealed class MaildirWatcher : IDisposable
     public MaildirWatcher(IOptions<IngestOptions> ingest, IOptions<IndexerOptions> indexer, ILogger<MaildirWatcher> logger)
     {
         _root = PathExpansion.Expand(ingest.Value.MaildirRoot);
-        _debounce = TimeSpan.FromMilliseconds(indexer.Value.DebounceMilliseconds);
+        // Clamp like ScanIntervalSeconds gets clamped in MessageIngestService:
+        // a negative value would make Task.Delay throw inside the unobserved
+        // debounce task, leaving _debounceTask permanently non-null — every
+        // future event would see a "running" loop and no pulse would ever
+        // fire again (silent, timer-covered).
+        _debounce = TimeSpan.FromMilliseconds(Math.Max(0, indexer.Value.DebounceMilliseconds));
         _logger = logger;
     }
 
@@ -169,8 +174,20 @@ public sealed class MaildirWatcher : IDisposable
             if (DateTimeOffset.UtcNow - last >= _debounce)
             {
                 _pulses.Writer.TryWrite(0);
-                lock (_gate) { _debounceTask = null; }
-                return;
+                lock (_gate)
+                {
+                    // An event may have landed between the quiet-check above
+                    // and taking the gate here. Exiting now would strand it:
+                    // its OnEvent saw a live loop and started no new one, and
+                    // the pulse just written may be consumed by a scan that
+                    // enumerates before the new file lands — leaving the
+                    // change unscanned until the periodic timer. Keep looping
+                    // until the quiet period covers the newest event observed
+                    // under the gate.
+                    if (_lastEventAt > last) continue;
+                    _debounceTask = null;
+                    return;
+                }
             }
         }
     }
