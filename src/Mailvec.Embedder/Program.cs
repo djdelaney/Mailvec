@@ -36,14 +36,19 @@ builder.Services
     {
         var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OllamaOptions>>().Value;
         client.BaseAddress = new Uri(opts.BaseUrl);
-        // The resilience handler below owns ALL timeouts. HttpClient.Timeout
-        // wraps the entire handler chain — retries included — so a finite
-        // value here silently caps the pipeline: with the old 60s default,
-        // the widened 120s/300s resilience timeouts were dead config, cold
-        // model loads threw TaskCanceledException at 60s, and the retry
-        // attempts never ran. (PingAsync stays bounded by its own 2s linked
-        // CTS regardless.)
-        client.Timeout = Timeout.InfiniteTimeSpan;
+        // The resilience handler below owns the per-attempt/total timeouts.
+        // HttpClient.Timeout wraps the entire handler chain — retries
+        // included — so it must sit ABOVE TotalRequestTimeout or it silently
+        // caps the pipeline (the old 60s default made the widened 120s/300s
+        // resilience timeouts dead config: cold model loads threw
+        // TaskCanceledException at 60s and the retry attempts never ran).
+        // But it must not be infinite either: the resilience timeouts only
+        // cover up to response HEADERS, while PostAsJsonAsync's buffered
+        // body read happens afterwards under HttpClient.Timeout alone — an
+        // Ollama that returns 200 and then stalls mid-body would hang the
+        // worker until SIGTERM. 330s = 300s total + slack for the body read.
+        // (PingAsync stays bounded by its own 5s linked CTS regardless.)
+        client.Timeout = TimeSpan.FromSeconds(330);
     })
     .AddStandardResilienceHandler(o =>
     {
@@ -78,8 +83,8 @@ builder.Services.AddHostedService<EmbeddingWorker>();
 var host = builder.Build();
 
 // Log resolved DB path at startup so the operator can confirm which dataset
-// (prod vs test) the service is running against. Embedder doesn't read the
-// Maildir, so only the DB is relevant.
+// (prod vs test) the service is running against. (The OCR pass also reads
+// .eml bytes out of the Maildir, but the DB is what distinguishes datasets.)
 {
     var archive = host.Services.GetRequiredService<IOptions<ArchiveOptions>>().Value;
     var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Embedder");
