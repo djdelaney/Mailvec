@@ -293,9 +293,17 @@ internal static class DoctorCommand
             checks.Add(DoctorCheck.Warn("MCP /health", "skipped (--no-net)", "mcp"));
         }
 
-        // ---------------------------------------------------------------
-        // Output
-        // ---------------------------------------------------------------
+        return Emit(checks, json, Console.Out);
+    }
+
+    /// <summary>
+    /// Output + exit code — internal for tests because both halves are
+    /// consumed by machines: scripts branch on the exit code (0 = all
+    /// pass/warn, 1 = any fail) and the --json shape travels in bug
+    /// reports, so its property names are a contract.
+    /// </summary>
+    internal static int Emit(List<DoctorCheck> checks, bool json, TextWriter @out)
+    {
         if (json)
         {
             var (ok, warn, fail) = Summarize(checks);
@@ -310,7 +318,7 @@ internal static class DoctorCommand
                     detail = c.Detail,
                 }),
             };
-            Console.WriteLine(JsonSerializer.Serialize(doc, new JsonSerializerOptions
+            @out.WriteLine(JsonSerializer.Serialize(doc, new JsonSerializerOptions
             {
                 WriteIndented = true,
             }));
