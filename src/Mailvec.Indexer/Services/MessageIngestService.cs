@@ -82,7 +82,24 @@ public sealed class MessageIngestService(
 
         try
         {
-            await Task.WhenAll(pulseTask, timerTask).ConfigureAwait(false);
+            // The consumer joins via WhenAny, not WhenAll: it only exits when
+            // the channel completes (the finally below), so putting it in the
+            // WhenAll would deadlock — but leaving it entirely unobserved
+            // until shutdown means a faulted consumer produces the worst kind
+            // of failure: a process that looks alive, keeps accepting
+            // triggers into a full channel, and never scans again. Today the
+            // consumer catches everything except cancellation, so this is a
+            // backstop for future throw paths — if it ever completes while
+            // the producers are alive, it faulted; await it to rethrow and
+            // stop the host loudly (launchd/Docker restart beats a silent
+            // never-scans-again).
+            var producers = Task.WhenAll(pulseTask, timerTask);
+            var finished = await Task.WhenAny(producers, scanTask).ConfigureAwait(false);
+            if (ReferenceEquals(finished, scanTask))
+            {
+                await scanTask.ConfigureAwait(false);
+            }
+            await producers.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
