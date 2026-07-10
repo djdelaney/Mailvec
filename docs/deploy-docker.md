@@ -82,7 +82,51 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   `sync_state`/`maildir_path` to the new Maildir layout via rename-repair
   (same Message-ID at a new path). Until that scan settles: expect
   `view_attachment` misses, and **do not run `purge-deleted`** — messages look
-  transiently stale mid-reconciliation.
+  transiently stale mid-reconciliation. Step-by-step commands below.
+
+## Migrating the archive from the Mac
+
+`ops/import-db.sh` does **not** apply here — it is the macOS destination path
+(launchctl pause/resume, Application Support layout). The container
+equivalent is placing the snapshot at the compose bind mount before first
+start:
+
+```sh
+# 1. On the Mac — pauses the launchd writers, checkpoints, snapshots,
+#    validates, resumes. The snapshot is one complete file: no -wal/-shm
+#    sidecars exist for it or should ever be copied.
+ops/export-db.sh --to you@docker-vm:
+
+# 2. On the VM, from the compose directory, BEFORE the first `up`:
+mkdir -p data
+mv ~/mailvec-archive-snapshot.sqlite data/archive.sqlite
+chmod 600 data/archive.sqlite
+
+# 3. Bring the stack up. MAILVEC_REQUIRE_SEEDED_DB=1 (the default) makes the
+#    entrypoint refuse to start if the seed didn't land where expected.
+docker compose up -d --build
+
+# 4. Verify the migrated archive is what's being served:
+docker compose exec mcp mailvec status    # message/OCR counts match the Mac's
+docker compose exec mcp mailvec doctor
+```
+
+- **Model identity is the hard prerequisite.** The snapshot's
+  `metadata.embedding_model`/dimensions must match what the VM's embedder is
+  configured for, or it refuses to start. Pointing `OLLAMA_BASE_URL` at the
+  same GPU-VM Ollama that already serves the Mac satisfies this by
+  construction (models already pulled, same versions).
+- **Re-seeding later** (a fresher Mac snapshot over a container DB that has
+  already run): `docker compose down` first, then replace
+  `data/archive.sqlite` **and delete `data/archive.sqlite-wal` /
+  `-shm`** — those sidecars belong to the container's previous run, and a
+  stale WAL applied onto the new main file corrupts it. This is the same
+  footgun `ops/import-db.sh` handles on macOS; here it's manual.
+- **After parity holds**, stop the Mac pipeline (checklist item 7) — its
+  archive keeps diverging from the VM's the moment you export, so treat the
+  Mac copy as a frozen rollback, not a peer. The Mac's Claude Desktop stdio
+  MCP keeps serving the Mac's local copy until you switch clients over
+  (checklist item 6).
 - **Ranking parity gate.** After the embedder settles, run
   `docker compose exec mcp mailvec eval` against the latest baseline in
   `baselines/`. Same model + same vectors means any drift implicates the
@@ -103,9 +147,15 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   Note `/health` returns 503 when Ollama is unreachable, so an Ollama VM
   outage shows as an *unhealthy mcp container* even though keyword search
   still works — informative, nothing restarts on it.
-- **Backups move to the VM**: cron the export-db checkpoint-then-copy flow
-  inside the VM (only that export is guaranteed-consistent); Proxmox/PBS
-  snapshots are the crash-consistent outer layer. Note `ConnectionFactory`
+- **Backups move to the VM**: cron the checkpoint-then-copy *flow* — the
+  `ops/export-db.sh` script itself is macOS-only (it pauses writers via
+  launchctl). The container equivalent:
+  `docker compose stop indexer embedder && docker compose exec mcp mailvec
+  checkpoint && cp data/archive.sqlite <backup> && docker compose start
+  indexer embedder` (mcp stays up — it's read-only against the DB, and the
+  CLI rides inside its container). Only a pause-checkpoint-copy sequence is
+  guaranteed-consistent; Proxmox/PBS snapshots are the crash-consistent
+  outer layer. Note `ConnectionFactory`
   hardens the DB dir/files to owner-only (0700/0600) on open — on the VM
   that owner is the container's root, so run backup reads via
   `docker compose exec` or as root on the host.
