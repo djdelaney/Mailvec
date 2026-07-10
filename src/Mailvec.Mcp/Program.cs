@@ -54,7 +54,7 @@ static async Task RunStdio(string[] args)
     builder.Services
         .AddMcpServer(ConfigureServerInfo)
         .WithStdioServerTransport()
-        .WithToolsFromAssembly();
+        .WithTools(EnabledTools(builder.Configuration));
 
     var host = builder.Build();
     WarnIfInstallerNeverRan(host.Services);
@@ -74,7 +74,7 @@ static async Task RunHttp(string[] args)
     builder.Services
         .AddMcpServer(ConfigureServerInfo)
         .WithHttpTransport()
-        .WithToolsFromAssembly();
+        .WithTools(EnabledTools(builder.Configuration));
 
     var mcpOpts = builder.Configuration.GetSection(McpOptions.SectionName).Get<McpOptions>() ?? new McpOptions();
     // TryParse + a named error: Mcp:BindAddress takes an IP literal, and the
@@ -211,6 +211,13 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
 // tool call returns something unexpected ("did the user upgrade? am I on the
 // build that has the new field?"). Without this, the server name defaults to
 // the assembly filename, which is uninformative.
+// The tool classes to register for this deployment: the locked seven-tool
+// surface minus Mcp:DisabledTools. Reads config directly (registration runs
+// at builder time, before the options pipeline exists). Throws on unknown
+// names — see ToolSurface.Resolve.
+static IEnumerable<Type> EnabledTools(IConfiguration config) =>
+    ToolSurface.Resolve(config.GetSection($"{McpOptions.SectionName}:{nameof(McpOptions.DisabledTools)}").Get<string[]>());
+
 static void ConfigureServerInfo(ModelContextProtocol.Server.McpServerOptions opts)
 {
     var asmVersion = Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";

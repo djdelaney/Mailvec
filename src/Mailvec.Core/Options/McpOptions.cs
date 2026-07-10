@@ -15,6 +15,19 @@ public sealed class McpOptions
     /// hostname here so its requests aren't rejected. See HostGuard.
     /// </summary>
     public string[] AllowedHosts { get; set; } = [];
+
+    /// <summary>
+    /// Tool names to remove from this deployment's MCP surface — absent from
+    /// tools/list and rejected on tools/call. Names must match the locked
+    /// tool-name contract exactly; an unknown name fails startup (a typo
+    /// would otherwise silently leave the tool it meant to disable exposed).
+    /// Intended for internet-fronted deployments: docs/security.md requires
+    /// dropping view_attachment and get_attachment_page_image (native parsers
+    /// fed by mail bytes; whole raw documents) from any tunnel-exposed
+    /// surface. Empty (the default) keeps the full surface.
+    /// </summary>
+    public string[] DisabledTools { get; set; } = [];
+
     public int SearchDefaultLimit { get; set; } = 20;
     public int SearchMaxLimit { get; set; } = 100;
 
