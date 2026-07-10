@@ -84,6 +84,39 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   `view_attachment` misses, and **do not run `purge-deleted`** — messages look
   transiently stale mid-reconciliation. Step-by-step commands below.
 
+## Prebuilt images (GHCR)
+
+Two deploy modes, both first-class; the compose file is identical for both
+(`image:` + `build:` coexist, parametrized by `.env`):
+
+- **Build on host (default):** `docker compose up -d --build`, tagging
+  `mailvec:local` / `mailvec-mbsync:local`. Unchanged from day one.
+- **Pull from GHCR:** `publish-images.yml` builds both images
+  (`ghcr.io/<owner>/mailvec` at the `runtime` stage, `…/mailvec-mbsync` at
+  the `mbsync` stage) on every **green** CI run on main — publishing is
+  gated on CI success so `:latest` never advances on a red suite — plus
+  `v*` release tags. On the host: set `MAILVEC_IMAGE` +
+  `MAILVEC_MBSYNC_IMAGE` in `.env` to a **pinned** `sha-<gitsha>` or
+  `v<version>` tag, then `docker compose pull && docker compose up -d`.
+  (Compose builds when the tag isn't local, so the `pull` must come first;
+  and don't run `--build` while the vars point at GHCR refs — it retags
+  the remote name with a local build.)
+
+Switching an existing seeded deployment to pulled images is a recreate, not
+a resync: the archive and Maildir are bind mounts, so `mailvec status`
+counts stay identical, nothing re-embeds (`modelMismatch` stays false —
+same code, same model default), and mbsync resumes incrementally from its
+`.mbsyncstate`. Take a backup first anyway: **SchemaMigrator runs against
+the seeded archive on every start**, so a new image can migrate the DB in
+place — which is also why this pipeline must never be wired to
+Watchtower-style auto-updates. Update manually, backup-first, by bumping
+the pinned tag. Old sha builds are pruned weekly by `cleanup.yml`
+(keep-newest-2; `v*` and `latest` never deleted).
+
+Note the on-host rationale still holds either way: the VM keeps the repo
+clone (compose.yml, `.env`, `mbsyncrc`, `baselines/` for the parity gate) —
+pulled images just mean the clone no longer needs to *build*.
+
 ## Migrating the archive from the Mac
 
 `ops/import-db.sh` does **not** apply here — it is the macOS destination path
