@@ -66,9 +66,33 @@ public sealed class HealthService(
         // fine and the embedding model was never pulled (`ollama pull ...`).
         // One cheap /api/tags follow-up disambiguates; doctor and the tray
         // key their hints off this. A successful ping implies the model works.
-        bool? embeddingModelAvailable = ollamaReachable
-            ? true
-            : await ollama.IsModelAvailableAsync(ct).ConfigureAwait(false);
+        bool? embeddingModelAvailable;
+        if (ollamaReachable)
+        {
+            embeddingModelAvailable = true;
+        }
+        else
+        {
+            // Cap the follow-up at 2s instead of the probe's own 5s. It runs
+            // serially after the ping, so against a hang-accepting Ollama
+            // (ping eats its full 5s) the old worst case pushed /health to
+            // ~10s while the tray polls every 5s — permanently overlapping
+            // polls. 2s loses no information: every scenario where the probe
+            // answers (server down → fast failure; model missing → fast tags
+            // list; model can't load → tags is metadata, no model load) does
+            // so well inside 2s, and a server too hung to list tags reads as
+            // null ("can't tell") exactly as the full-length probe would.
+            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            probeCts.CancelAfter(TimeSpan.FromSeconds(2));
+            try
+            {
+                embeddingModelAvailable = await ollama.IsModelAvailableAsync(probeCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                embeddingModelAvailable = null; // probe deadline — same reading as a hung server
+            }
+        }
 
         var counts = messages?.OcrCounts(embOpts.ImageOcrMinBytes)
             ?? new OcrStageCounts(0, 0, 0, 0);
