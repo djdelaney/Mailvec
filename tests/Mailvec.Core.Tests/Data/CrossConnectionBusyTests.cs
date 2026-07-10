@@ -32,9 +32,16 @@ public sealed class CrossConnectionBusyTests : IDisposable
                 DatabasePath = Path.Combine(_dir, "archive.sqlite"),
             }))
         {
-            // 1s instead of the production 30s so the wait-then-throw path
-            // runs in test time; the mechanism under test is identical.
+            // Shrink BOTH timeouts, not just the command timeout: the native
+            // busy_timeout sleeps inside a single statement step, so the
+            // command-timeout check only runs between busy-timeout quanta and
+            // the effective wait rounds UP to a quantum multiple. With the
+            // production 5000ms quantum this test measured 10.1s on a slow CI
+            // runner (2 quanta) and flaked its ceiling; 250ms quanta against
+            // a 1s budget give a deterministic ~1-1.25s wait. The mechanism
+            // under test is identical at production values.
             DefaultTimeoutSeconds = 1,
+            BusyTimeoutMilliseconds = 250,
         };
         new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
     }
