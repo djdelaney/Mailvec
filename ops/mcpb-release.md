@@ -20,7 +20,7 @@ This patch-bumps **the** Mailvec version — `manifest.json`, the repo-wide `<Ve
 - Toggling off (vs uninstalling) preserves user_config values across upgrades.
 - Without a version bump, Claude Desktop silently ignores the re-install — plain `build-mcpb.sh` is fine for "rebuild and inspect locally" but `--bump` is what you need to actually swap the running binary.
 - The non-bump build verifies the three version carriers are in lockstep and fails on drift, so a hand-edited version can't ship half-applied.
-- **Tag after bumping**: commit the bump, then `git tag v<version> && git push --tags` (if there's a remote). The tag is the known-good rollback point — `ops/redeploy.sh` overwrites binaries in place, so the tag is the only durable record of what a user's install corresponds to.
+- **Tag after bumping**: commit the bump, then `git tag v<version> && git push --tags` (if there's a remote). The tag is the known-good rollback point — `ops/redeploy.sh` overwrites binaries in place, so the tag is the only durable record of what a user's install corresponds to. **The `v*` tag push also cuts durable GHCR container images** (never pruned, unlike `sha-` tags) for the Docker deployment — one release motion covers both artifacts; see "Release tags" in [docs/deploy-docker.md](../docs/deploy-docker.md). The tag must equal the bumped `<Version>` so the image label matches what `mailvec status` reports inside the container.
 - After bumping, `ops/redeploy.sh` + `ops/install-tray.sh` bring the launchd services and tray to the same version as the bundle — `mailvec status` prints the running version for triage.
 
 ## Manifest authoring
