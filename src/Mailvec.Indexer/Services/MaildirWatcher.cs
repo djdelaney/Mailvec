@@ -40,7 +40,7 @@ public sealed class MaildirWatcher : IDisposable
 
     public void Start()
     {
-        if (_fsw is not null) return;
+        lock (_gate) { if (_fsw is not null) return; }
         if (!Directory.Exists(_root))
         {
             _logger.LogWarning("MaildirWatcher: {Path} does not exist; watcher disabled.", _root);
@@ -57,18 +57,11 @@ public sealed class MaildirWatcher : IDisposable
             fsw.Deleted  += (_, e) => OnEvent(e.FullPath);
             fsw.Renamed  += (_, e) => OnEvent(e.FullPath);
             fsw.Changed  += (_, e) => OnEvent(e.FullPath);
-            fsw.Error    += (_, e) =>
-            {
-                // A buffer overflow means events were dropped — we don't know which
-                // files changed. Force a pulse so the scanner does a full pass
-                // instead of waiting up to a full timer interval for the next one.
-                _logger.LogWarning(e.GetException(), "FileSystemWatcher reported an error; forcing a rescan");
-                _pulses.Writer.TryWrite(0);
-            };
+            fsw.Error    += (sender, e) => HandleWatcherError((FileSystemWatcher)sender!, e.GetException());
             // Enable LAST, with every handler already attached, so an event
             // landing in the setup window can't be silently dropped.
             fsw.EnableRaisingEvents = true;
-            _fsw = fsw;
+            lock (_gate) { _fsw = fsw; }
         }
         catch (Exception ex)
         {
@@ -88,6 +81,37 @@ public sealed class MaildirWatcher : IDisposable
         }
 
         _logger.LogInformation("MaildirWatcher started on {Path} (debounce {Ms}ms)", _root, _debounce.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Error-event handler body (internal so tests can drive it — FSW gives
+    /// no way to raise Error externally). An errored watcher may be
+    /// permanently dead (buffer overflow recovers, but a deleted/remounted
+    /// watch root does not, often without any further events), and Start()'s
+    /// "already created" guard would then no-op on every timer tick — the
+    /// exact retry that exists to bring the watcher back. Force a full-pass
+    /// pulse for the dropped events, then retire this instance so the next
+    /// tick recreates it.
+    /// </summary>
+    internal void HandleWatcherError(FileSystemWatcher dead, Exception? cause)
+    {
+        _logger.LogWarning(cause, "FileSystemWatcher reported an error; forcing a rescan and retiring the watcher for recreation");
+        _pulses.Writer.TryWrite(0);
+
+        lock (_gate)
+        {
+            // A late error from an already-replaced instance must not tear
+            // down its replacement.
+            if (!ReferenceEquals(_fsw, dead)) return;
+            _fsw = null;
+        }
+        // Dispose off this thread: disposing an FSW from inside its own
+        // event callback can deadlock on the callback it is running.
+        _ = Task.Run(() =>
+        {
+            try { dead.Dispose(); }
+            catch { /* best effort — it is already broken */ }
+        });
     }
 
     private DateTimeOffset _lastEventAt;
