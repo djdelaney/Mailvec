@@ -7,6 +7,7 @@ using Mailvec.Core.Vision;
 using Mailvec.Pdf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SkiaSharp;
 
 namespace Mailvec.Embedder.Services;
 
@@ -41,15 +42,20 @@ public sealed class AttachmentOcrService(
     // counted failures we retire it to 'failed' and move on. Only the single
     // embedder worker touches this, sequentially, so a plain dict is safe.
     //
-    // IMPORTANT: failures only COUNT toward retirement in cycles where some
-    // other vision call succeeded (see SettleVisionFailures). The model-
-    // availability probe is a /api/tags name check, which answers 200 even
-    // when Ollama can't actually load the model (GPU OOM, dead runner) — in
-    // that wedged state every call times out, and counting those failures
-    // would permanently retire perfectly good scans, one head-of-queue
-    // document at a time, for as long as the outage lasted. A same-cycle
-    // success is the evidence that distinguishes "this document is poison"
-    // from "the model can't run at all".
+    // IMPORTANT: failures only COUNT toward retirement in cycles with
+    // evidence the model can run — a successful vision call (page-level for
+    // PDFs), or the tiny-image health probe that fires when a cycle ends
+    // with failures but zero successes (see SettleVisionFailures /
+    // ProbeVisionHealthAsync). The model-availability probe gating the batch
+    // is a /api/tags name check, which answers 200 even when Ollama can't
+    // actually load the model (GPU OOM, dead runner) — in that wedged state
+    // every call times out, and counting those failures would permanently
+    // retire perfectly good scans, one head-of-queue document at a time, for
+    // as long as the outage lasted. Same-cycle success evidence is what
+    // distinguishes "this document is poison" from "the model can't run at
+    // all" — and the health probe supplies it even when the id-ordered
+    // candidate window happens to lead with nothing but poison docs, which
+    // otherwise aborts every cycle evidence-free and wedges the queue.
     private const int MaxVisionAttempts = 5;
 
     // How many consecutive vision failures within one cycle before we stop
@@ -58,6 +64,52 @@ public sealed class AttachmentOcrService(
     private const int MaxConsecutiveCycleFailures = 2;
 
     private readonly Dictionary<long, int> _visionFailures = new();
+
+    // Tiny blank JPEG for the zero-success health probe (see
+    // ProbeVisionHealthAsync). Internal so tests can tell probe calls apart
+    // from document calls by reference.
+    internal static byte[] HealthProbeJpeg => _probeJpeg.Value;
+
+    private static readonly Lazy<byte[]> _probeJpeg = new(() =>
+    {
+        using var bmp = new SKBitmap(48, 48);
+        using var canvas = new SKCanvas(bmp);
+        canvas.Clear(SKColors.White);
+        using var img = SKImage.FromBitmap(bmp);
+        using var data = img.Encode(SKEncodedImageFormat.Jpeg, 80);
+        return data.ToArray();
+    });
+
+    /// <summary>
+    /// Direct model-health check for cycles that produced vision failures but
+    /// zero successes: OCR a tiny blank image. Success (any response, even
+    /// empty — a blank image legitimately has no text) proves the model can
+    /// run, so this cycle's failures are document-specific and may count
+    /// toward retirement; failure means an Ollama outage and nothing counts.
+    /// Without this, a batch whose leading candidates all fail deterministically
+    /// aborts every cycle before any success can occur — zero evidence, zero
+    /// strikes, and the queue wedges permanently behind the same head-of-line
+    /// documents (candidates are id-ordered). Costs one vision call, and only
+    /// on zero-success cycles.
+    /// </summary>
+    private async Task<bool> ProbeVisionHealthAsync(CancellationToken ct)
+    {
+        try
+        {
+            await vision.OcrImageAsync(HealthProbeJpeg, ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // genuine shutdown
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Vision health probe failed; treating this cycle's OCR failures as an Ollama outage (nothing retired).");
+            return false;
+        }
+    }
 
     // Returns true when the attachment has failed enough counted times to retire.
     private bool RecordVisionFailure(long attachmentId)
@@ -69,22 +121,23 @@ public sealed class AttachmentOcrService(
     }
 
     /// <summary>
-    /// End-of-cycle bookkeeping for vision failures. With at least one
-    /// successful vision call this cycle, the model is demonstrably able to
-    /// run — failures are document-specific, so they count toward retirement
-    /// (and hit 'failed' after <see cref="MaxVisionAttempts"/> counted
-    /// cycles). With zero successes we can't tell a poison document from a
-    /// wedged Ollama, so nothing is counted and everything retries next cycle.
+    /// End-of-cycle bookkeeping for vision failures. With evidence that the
+    /// model can run — a successful vision call this cycle, or a passing
+    /// health probe — failures are document-specific, so they count toward
+    /// retirement (and hit 'failed' after <see cref="MaxVisionAttempts"/>
+    /// counted cycles). Without that evidence we can't tell a poison document
+    /// from a wedged Ollama, so nothing is counted and everything retries
+    /// next cycle.
     /// </summary>
-    private void SettleVisionFailures(IReadOnlyList<long> failedAttachmentIds, int visionSuccesses, string pass)
+    private void SettleVisionFailures(IReadOnlyList<long> failedAttachmentIds, bool visionHealthy, string pass)
     {
         if (failedAttachmentIds.Count == 0) return;
 
-        if (visionSuccesses == 0)
+        if (!visionHealthy)
         {
             logger.LogWarning(
-                "{Pass}: every vision call this cycle failed ({Count} attachment(s)); not counting toward " +
-                "poison-document retirement — Ollama may be unable to run the vision model. Will retry next cycle.",
+                "{Pass}: every vision call this cycle failed, including the health probe ({Count} attachment(s)); " +
+                "not counting toward poison-document retirement — Ollama can't run the vision model. Will retry next cycle.",
                 pass, failedAttachmentIds.Count);
             return;
         }
@@ -196,6 +249,14 @@ public sealed class AttachmentOcrService(
                     ct.ThrowIfCancellationRequested();
                     var image = PdfRenderer.RenderPageJpeg(pdf, page);
                     var pageText = await vision.OcrAsync(image, ct).ConfigureAwait(false);
+                    // Each successful page-level call is model-health evidence.
+                    // Count it here, not on document completion: a multi-page
+                    // doc that deterministically fails on a later page would
+                    // otherwise contribute zero successes per cycle and retry
+                    // forever, burning every earlier page's vision call each
+                    // time without ever accruing a retirement strike.
+                    visionSuccesses++;
+                    consecutiveFailures = 0;
                     if (sb.Length > 0) sb.Append("\n\n");
                     sb.Append(pageText);
                 }
@@ -231,14 +292,14 @@ public sealed class AttachmentOcrService(
             messages.SaveOcrText(c.AttachmentId, c.MessageId, sb.ToString());
             _visionFailures.Remove(c.AttachmentId);
             done++;
-            visionSuccesses++;
-            consecutiveFailures = 0;
             logger.LogInformation(
                 "OCR'd attachment {AttachmentId} ({Pages} page(s), {Chars} chars); re-queued message {MessageId}.",
                 c.AttachmentId, pages, sb.Length, c.MessageId);
         }
 
-        SettleVisionFailures(failedThisCycle, visionSuccesses, "OCR");
+        bool visionHealthy = visionSuccesses > 0
+            || (failedThisCycle.Count > 0 && await ProbeVisionHealthAsync(ct).ConfigureAwait(false));
+        SettleVisionFailures(failedThisCycle, visionHealthy, "OCR");
         return done;
     }
 
@@ -383,7 +444,9 @@ public sealed class AttachmentOcrService(
                 c.AttachmentId, normalized.Width, normalized.Height, text.Length, c.MessageId);
         }
 
-        SettleVisionFailures(failedThisCycle, visionSuccesses, "Image OCR");
+        bool visionHealthy = visionSuccesses > 0
+            || (failedThisCycle.Count > 0 && await ProbeVisionHealthAsync(ct).ConfigureAwait(false));
+        SettleVisionFailures(failedThisCycle, visionHealthy, "Image OCR");
         return done;
     }
 }
