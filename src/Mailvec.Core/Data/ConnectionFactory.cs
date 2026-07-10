@@ -7,11 +7,26 @@ namespace Mailvec.Core.Data;
 
 public sealed class ConnectionFactory
 {
-    private readonly string _connectionString;
+    private string? _connectionString;
     private readonly string _dbPath;
     private readonly string? _vecExtensionPath;
     private readonly ILogger<ConnectionFactory>? _logger;
     private bool _permsHardened;
+
+    // Test seam: Microsoft.Data.Sqlite retries a busy statement until the
+    // command timeout, so contention tests against the production 30s would
+    // take 30s each. Init-only — production always runs the default. The
+    // connection string is built lazily (below) because init properties are
+    // assigned after the constructor runs.
+    internal int DefaultTimeoutSeconds { get; init; } = 30;
+
+    private string ConnectionString => _connectionString ??= new SqliteConnectionStringBuilder
+    {
+        DataSource = _dbPath,
+        Mode = SqliteOpenMode.ReadWriteCreate,
+        Cache = SqliteCacheMode.Default,
+        DefaultTimeout = DefaultTimeoutSeconds,
+    }.ToString();
 
     public ConnectionFactory(IOptions<ArchiveOptions> options, ILogger<ConnectionFactory>? logger = null)
     {
@@ -27,14 +42,6 @@ public sealed class ConnectionFactory
         // container bind-mount whose perms come from the host).
         HardenPath(dbDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, "archive directory");
 
-        _connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Default,
-            DefaultTimeout = 30,
-        }.ToString();
-
         _configuredVecPath = options.Value.SqliteVecExtensionPath;
         _vecExtensionPath = ResolveVecExtension(_configuredVecPath);
     }
@@ -43,7 +50,7 @@ public sealed class ConnectionFactory
 
     public SqliteConnection Open()
     {
-        var conn = new SqliteConnection(_connectionString);
+        var conn = new SqliteConnection(ConnectionString);
         conn.Open();
 
         if (_vecExtensionPath is not null)
