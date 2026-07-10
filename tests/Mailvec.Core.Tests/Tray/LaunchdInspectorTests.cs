@@ -74,4 +74,61 @@ public sealed class LaunchdInspectorTests
         Assert.Equal(1, info.LastExitCode);
         Assert.Null(info.Pid);
     }
+
+    // ── RunAsync subprocess behavior (stub executable, not launchctl) ───────
+
+    private static LaunchdInspector BuildWithStub(string scriptBody)
+    {
+        var script = Path.Combine(Path.GetTempPath(), "mailvec-runasync-" + Guid.NewGuid().ToString("N") + ".sh");
+        File.WriteAllText(script, "#!/bin/sh\n" + scriptBody);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return new LaunchdInspector(Microsoft.Extensions.Logging.Abstractions.NullLogger<LaunchdInspector>.Instance)
+        {
+            ExecutablePath = script,
+        };
+    }
+
+    [Fact]
+    public async Task RunAsync_drains_a_chatty_stderr_instead_of_deadlocking()
+    {
+        if (OperatingSystem.IsWindows()) return; // shell-script stub
+
+        // ~230KB to stderr — well past the ~64KB pipe buffer. Stderr was
+        // redirected but never drained, so the child blocked on the full pipe
+        // and rode the whole timeout into a spurious kill: exit -1 and
+        // "unloaded" tiles on /tray/status instead of the real output.
+        var inspector = BuildWithStub("""
+            i=0
+            while [ $i -lt 3000 ]; do echo "stderr noise line with enough padding to fill the pipe buffer quickly" >&2; i=$((i+1)); done
+            echo OK
+            exit 0
+            """);
+
+        var (exit, stdout) = await inspector.RunAsync([], TimeSpan.FromSeconds(10), default);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("OK", stdout.Trim());
+    }
+
+    [Fact]
+    public async Task RunAsync_timeout_kill_joins_the_reader_and_returns_partial_output()
+    {
+        if (OperatingSystem.IsWindows()) return; // shell-script stub
+
+        // A hung process gets killed at the timeout. The old code read a
+        // shared StringBuilder while the abandoned reader task might still be
+        // appending (StringBuilder is not thread-safe) and disposed the
+        // Process under it; now the kill closes the pipes, the drain task is
+        // joined, and the partial output comes back torn-free.
+        var inspector = BuildWithStub("""
+            echo PARTIAL
+            sleep 60
+            """);
+
+        var (exit, stdout) = await inspector.RunAsync([], TimeSpan.FromSeconds(1), default);
+
+        Assert.Equal(-1, exit);
+        Assert.Equal("PARTIAL", stdout.Trim());
+    }
 }
