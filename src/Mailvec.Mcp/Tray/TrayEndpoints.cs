@@ -17,6 +17,19 @@ namespace Mailvec.Mcp.Tray;
 /// </summary>
 public static class TrayEndpoints
 {
+    // Single-flight gate for /warm. The tray fires /warm on every search-pane
+    // open; without the gate, rapid open/close/open stacked concurrent cold
+    // KNN scans over the ~1.2 GB vector table — contending with each other
+    // and with the user's actual first search, the very thing the warm
+    // exists to speed up. One warm at a time; repeats while it runs are 202
+    // no-ops (the in-flight warm covers them, and the page cache it fills is
+    // shared).
+    private static int _warmInFlight;
+
+    // Internal for tests: true iff the caller acquired the warm slot.
+    internal static bool TryBeginWarm() => Interlocked.CompareExchange(ref _warmInFlight, 1, 0) == 0;
+    internal static void EndWarm() => Volatile.Write(ref _warmInFlight, 0);
+
     public static void MapTrayEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/tray").WithTags("tray");
@@ -95,6 +108,11 @@ public static class TrayEndpoints
         // warm the instant we return the 202. Best-effort: errors are swallowed.
         group.MapPost("/warm", (TraySearchService search) =>
         {
+            // Single-flight (see the gate above): a warm already in progress
+            // covers this request too.
+            if (!TryBeginWarm())
+                return Results.Accepted();
+
             _ = Task.Run(async () =>
             {
                 try
@@ -107,6 +125,10 @@ public static class TrayEndpoints
                         CancellationToken.None).ConfigureAwait(false);
                 }
                 catch { /* best-effort warm; nothing observes this task */ }
+                finally
+                {
+                    EndWarm();
+                }
             });
             return Results.Accepted();
         });
