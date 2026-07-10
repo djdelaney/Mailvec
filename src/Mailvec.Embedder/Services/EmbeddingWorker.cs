@@ -23,6 +23,9 @@ public sealed class EmbeddingWorker(
 {
     private int _processedThisRun;
 
+    // Test seam: guarded-write skips must not count as processed.
+    internal int ProcessedThisRun => _processedThisRun;
+
     // Poison-message quarantine. A message whose embed call permanently draws
     // a non-400 error is re-selected head-of-line (ORDER BY id) and fails the
     // whole batch every poll — all embedding halts indefinitely. After
@@ -198,11 +201,16 @@ public sealed class EmbeddingWorker(
                 var vecs = texts.Count == 0
                     ? Array.Empty<float[]>()
                     : await EmbedInBatchesAsync(texts, batchSize, ct).ConfigureAwait(false);
-                chunks.ReplaceChunksForMessage(m.Id, msgChunks, vecs, embeddedAt, m.ContentHash,
+                var committed = chunks.ReplaceChunksForMessage(m.Id, msgChunks, vecs, embeddedAt, m.ContentHash,
                     checkContentHash: true, expectedEmbedEpoch: m.EmbedEpoch,
                     expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel);
+                // The embed call succeeded either way — that's the Ollama-
+                // health evidence the strike accounting below keys off, so
+                // `successes` counts regardless. A guard-skipped write
+                // (message re-queued mid-embed) is not a *processed* message
+                // though: it stays embedded_at = NULL and re-embeds next poll.
                 successes++;
-                _processedThisRun++;
+                if (committed) _processedThisRun++;
                 _embedStrikes.Remove(m.Id);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

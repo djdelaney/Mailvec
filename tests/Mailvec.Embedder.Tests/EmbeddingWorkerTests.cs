@@ -192,6 +192,30 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     [Fact]
+    public async Task Isolation_pass_does_not_count_a_guard_skipped_write_as_processed()
+    {
+        // The message gets re-queued mid-embed (embed_epoch bumped — the
+        // extract-attachments / OCR / rebuild-bodies path), so the guarded
+        // write returns false. The embed call itself succeeded, which is
+        // valid Ollama-health evidence (the pass returns it as a success and
+        // records no strike), but the message was NOT processed: it stays
+        // unembedded for the next poll and must not inflate the processed
+        // counter that the progress log reports.
+        InsertMessage("iso@x", "S", new string('a', 300));
+        var worker = BuildWorker(new FakeEmbeddingClient(inputs =>
+        {
+            BumpEmbedEpoch(GetMessageId("iso@x"));
+            return [.. inputs.Select((_, i) => HotVector(i))];
+        }));
+
+        var processed = await worker.ProcessIsolationBatchAsync(batchSize: 16, ct: default);
+
+        processed.ShouldBe(1); // embed succeeded: health evidence, no batch failure
+        EmbeddedAt(GetMessageId("iso@x")).ShouldBeNull(); // but nothing was stamped
+        worker.ProcessedThisRun.ShouldBe(0); // and it doesn't count as processed
+    }
+
+    [Fact]
     public async Task Broken_ollama_never_quarantines_messages()
     {
         // When EVERY embed call fails there's no way to tell a poison message
@@ -616,6 +640,18 @@ public class EmbeddingWorkerTests : IDisposable
         cmd.Parameters.AddWithValue("$mid", messageIdHeader);
         return Convert.ToInt64(cmd.ExecuteScalar(),
             System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // Simulates a mid-embed re-queue (the extract-attachments / OCR /
+    // rebuild-bodies write path): bumps embed_epoch so the guarded chunk
+    // write refuses to stamp.
+    private void BumpEmbedEpoch(long messageId)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE messages SET embed_epoch = embed_epoch + 1, embedded_at = NULL WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        cmd.ExecuteNonQuery();
     }
 
     private string? EmbeddedAt(long id)
