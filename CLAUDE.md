@@ -14,6 +14,7 @@ Operator/release/contributor docs (read on demand):
 - `docs/contributing/attachments.md` — `view_attachment` implementation quirks.
 - `docs/contributing/attachment-indexing.md` — which attachment formats we extract text from, and every size/dimension/filetype gate that makes us skip a file (with the rationale). Read before "why isn't this attachment searchable?" or before loosening a skip/gate.
 - `docs/contributing/search-performance.md` — diagnosing search latency (tray vs CLI, warm vs cold vector cache, the `/tray/warm` pre-warm); read before "optimising" search.
+- `docs/contributing/local-dev-dataset.md` — post-Docker-migration local dev: the frozen-corpus strategy, agent teardown (`install.sh --uninstall`, not `stop.sh`), corpus refresh, and eval curation from VM logs.
 - `docs/contributing/mcpb.md` — `manifest.json` quirks + tool-shape rules that break the Claude Desktop install.
 - `docs/contributing/embedding-experiments.md` — A/B-testing embedding models / chunk sizes against a parallel DB copy with `mailvec switch-model` + env-var overrides; read before changing the embedding model.
 - `src/Mailvec.Tray/project.yml` — XcodeGen spec for the menu-bar tray app; regenerate the `.xcodeproj` with `xcodegen generate` whenever files are added/renamed.
