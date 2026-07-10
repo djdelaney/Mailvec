@@ -11,7 +11,8 @@
 #   2. cp ops/mbsyncrc.container.example mbsyncrc    # fill in User / Patterns
 #   3. mkdir -p secrets
 #      printf '%s' '<fastmail app password>' > secrets/fastmail_password
-#   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot
+#   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot — see
+#      "Migrating the archive from the Mac" in docs/deploy-docker.md
 #      (or set MAILVEC_REQUIRE_SEEDED_DB=0 in .env for a from-scratch build).
 #   5. docker compose up -d --build
 #

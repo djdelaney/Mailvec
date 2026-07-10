@@ -164,9 +164,12 @@ fi
 
 echo
 echo "Snapshot ready: $OUT (mode 0600 — unencrypted full-mail copy; delete it once imported)"
-echo "Next, on the destination machine:"
-echo "  ops/import-db.sh <snapshot.sqlite>"
-echo "  (then: mailvec status && mailvec doctor)"
+echo "Next, on the destination:"
+echo "  macOS:     ops/import-db.sh <snapshot.sqlite>"
+echo "  Docker VM: place it at ./data/archive.sqlite before 'up' — do NOT use"
+echo "             import-db.sh there (launchd-specific); see the 'Migrating the"
+echo "             archive from the Mac' section in docs/deploy-docker.md."
+echo "  (then: mailvec status && mailvec doctor / docker compose exec mcp mailvec status)"
 echo
 echo "Reminder: the destination's embedder config must use the same embedding"
 echo "model + dimensions ($MODEL) or it will refuse to start."
