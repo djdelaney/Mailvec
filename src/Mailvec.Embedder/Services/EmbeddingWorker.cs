@@ -30,9 +30,10 @@ public sealed class EmbeddingWorker(
     // one-message-at-a-time isolation to attribute the failure; a message
     // that fails QuarantineStrikes counted times is excluded from enumeration
     // until the process restarts. Failures only COUNT in isolation passes
-    // where at least one other message embedded fine — the same evidence rule
-    // as the OCR pass, so a broken/wedged Ollama (everything failing) never
-    // quarantines anything. Quarantined messages keep embedded_at = NULL
+    // with evidence Ollama can serve — another message embedding fine, or
+    // (when the whole window fails) a passing one-string health probe — the
+    // same evidence rule as the OCR pass, so a broken/wedged Ollama
+    // (everything failing, probe included) never quarantines anything. Quarantined messages keep embedded_at = NULL
     // (honest coverage numbers, retried on restart or content change) and
     // stay keyword-searchable.
     private const int ConsecutiveFailuresBeforeIsolation = 2;
@@ -216,12 +217,25 @@ public sealed class EmbeddingWorker(
 
         if (successes == 0)
         {
-            // Everything failed — indistinguishable from an Ollama-side
-            // problem. Count nothing; surface as a batch failure so the
-            // health beat keeps escalating and we retry next poll.
-            throw new InvalidOperationException(
-                $"All {failed.Count} message(s) failed to embed in isolation mode; Ollama may be unable to serve the model.",
-                failed[0].Ex);
+            // Everything failed. Distinguish "Ollama can't serve the model"
+            // from "the whole head-of-line window is poison" with one direct
+            // probe embed. Without it, a window (ORDER BY id) filled entirely
+            // with deterministic failures produced zero same-pass evidence
+            // every cycle — zero strikes, identical retries forever, and
+            // every message behind the window (including all new mail)
+            // starved permanently.
+            if (!await ProbeEmbedHealthAsync(ct).ConfigureAwait(false))
+            {
+                // Probe failed too — genuine Ollama-side problem. Count
+                // nothing; surface as a batch failure so the health beat
+                // keeps escalating and we retry next poll.
+                throw new InvalidOperationException(
+                    $"All {failed.Count} message(s) failed to embed in isolation mode; Ollama may be unable to serve the model.",
+                    failed[0].Ex);
+            }
+            logger.LogWarning(
+                "All {Count} isolation candidate(s) failed but the embed health probe succeeded; " +
+                "counting strikes against them so the queue can drain.", failed.Count);
         }
 
         foreach (var (id, ex) in failed)
@@ -247,7 +261,44 @@ public sealed class EmbeddingWorker(
         logger.LogInformation(
             "Isolation pass: {Successes} embedded, {Failed} failed, {Quarantined} quarantined total.",
             successes, failed.Count, _quarantined.Count);
+
+        if (successes == 0)
+        {
+            // Strikes were counted (the probe proved Ollama healthy), but
+            // nothing embedded — surface the cycle as a failure so isolation
+            // mode persists (strikes keep accruing every poll) and the health
+            // beat keeps flagging until the poisons quarantine out.
+            throw new InvalidOperationException(
+                $"All {failed.Count} isolation candidate(s) failed while the embed health probe succeeded; " +
+                "strikes recorded (see warnings above), retrying the queue next poll.",
+                failed[0].Ex);
+        }
         return successes;
+    }
+
+    /// <summary>
+    /// Direct Ollama health check for isolation passes with zero successes:
+    /// embed one trivial string. Success proves the model can serve, so the
+    /// pass's failures are message-specific and may count toward quarantine;
+    /// failure means an outage and nothing counts. Mirrors the OCR pass's
+    /// vision health probe.
+    /// </summary>
+    private async Task<bool> ProbeEmbedHealthAsync(CancellationToken ct)
+    {
+        try
+        {
+            await ollama.EmbedAsync(["mailvec embed health probe"], ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // genuine shutdown
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Embed health probe failed; treating isolation failures as an Ollama outage (no strikes).");
+            return false;
+        }
     }
 
     internal async Task<int> ProcessOneBatchAsync(int batchSize, CancellationToken ct)

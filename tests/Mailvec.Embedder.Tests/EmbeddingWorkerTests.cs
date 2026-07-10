@@ -156,6 +156,42 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     [Fact]
+    public async Task Full_poison_window_quarantines_via_the_health_probe_and_the_queue_drains()
+    {
+        // Two poison messages fill the entire head-of-line window (batchSize
+        // 2, ORDER BY id), so every isolation pass fails 100% of its
+        // candidates. Without the embed health probe that meant zero
+        // same-pass evidence -> zero strikes -> identical cycles forever, and
+        // the healthy message behind the window starved permanently. The
+        // probe (a one-string embed, which doesn't carry the poison marker)
+        // proves Ollama healthy so strikes accrue and both quarantine out.
+        InsertMessage("p1@x", "bad", "POISONMARKER " + new string('p', 300));
+        InsertMessage("p2@x", "bad", "POISONMARKER " + new string('q', 300));
+        InsertMessage("behind@x", "ok", new string('g', 300));
+        var worker = BuildWorker(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().Result;
+            if (body.Contains("POISONMARKER", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("boom") };
+            return Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))]);
+        });
+
+        for (int cycle = 0; cycle < 12; cycle++)
+        {
+            try { await worker.ProcessNextBatchAsync(batchSize: 2, ct: default); }
+            catch (InvalidOperationException) { }
+            catch (HttpRequestException) { }
+        }
+
+        // The poisons are honestly unembedded (quarantined, no fake stamp)...
+        EmbeddedAt(GetMessageId("p1@x")).ShouldBeNull();
+        EmbeddedAt(GetMessageId("p2@x")).ShouldBeNull();
+        // ...and the message that was starving behind the all-poison window
+        // made it through.
+        EmbeddedAt(GetMessageId("behind@x")).ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task Broken_ollama_never_quarantines_messages()
     {
         // When EVERY embed call fails there's no way to tell a poison message
