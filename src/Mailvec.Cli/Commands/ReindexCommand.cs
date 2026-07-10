@@ -62,6 +62,7 @@ internal static class ReindexCommand
             }
         }
 
+        @out.WriteLine("Clearing embeddings (one transaction over chunks + vectors; running services may log SQLITE_BUSY retries until it commits)...");
         var affected = chunks.ClearEmbeddings(folderFilter: folder);
         @out.WriteLine($"Cleared embeddings on {affected} messages ({(folder is null ? "all messages" : $"folder '{folder}'")}). The embedder will re-process them on its next poll.");
         return 0;
