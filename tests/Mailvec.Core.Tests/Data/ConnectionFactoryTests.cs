@@ -70,6 +70,23 @@ public sealed class ConnectionFactoryTests : IDisposable
     }
 
     [Fact]
+    public void Open_applies_every_promised_pragma_for_real()
+    {
+        // Regression guard for the silent-pragma-no-op class that already bit
+        // this repo once: Microsoft.Data.Sqlite's ExecuteNonQuery drops
+        // result-returning pragmas, so `journal_mode = WAL` in the schema
+        // script never took effect and DBs shipped in rollback-journal mode
+        // for months. Read every pragma ConnectionFactory promises back on a
+        // fresh connection so a future refactor that silently no-ops one
+        // fails here instead of in production behavior.
+        using var conn = NewFactory().Open();
+
+        Scalar(conn, "PRAGMA journal_mode;").ShouldBe("wal");
+        Scalar(conn, "PRAGMA busy_timeout;").ShouldBe(5000L);
+        Scalar(conn, "PRAGMA foreign_keys;").ShouldBe(1L);
+    }
+
+    [Fact]
     public void Open_caps_wal_growth_with_journal_size_limit()
     {
         // Without a journal_size_limit, SQLite reuses space inside the WAL but
