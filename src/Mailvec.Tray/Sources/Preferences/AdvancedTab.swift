@@ -80,9 +80,13 @@ struct AdvancedTab: View {
                         let pred = "subsystem == \"com.mailvec.tray\""
                         let script = "tell application \"Console\" to activate\n" +
                             "tell application \"System Events\" to keystroke \"\(pred)\""
-                        var err: NSDictionary?
-                        if NSAppleScript(source: script)?.executeAndReturnError(&err) == nil {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
+                        // Off-main via osascript (see CliRunner.runAppleScript)
+                        // — a wedged Console/System Events used to beachball
+                        // the tray from this button.
+                        CliRunner.runAppleScript(script) { failure in
+                            if failure != nil {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
+                            }
                         }
                     }
                     .controlSize(.small)
