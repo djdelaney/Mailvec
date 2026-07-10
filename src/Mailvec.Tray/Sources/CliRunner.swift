@@ -50,23 +50,61 @@ enum CliRunner {
             activate
         end tell
         """
-        var err: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&err)
-        if let err {
-            TrayLog.warn("CLI Terminal spawn failed", "\(err)")
+        runAppleScript(script) { failure in
+            guard let failure else { return }
+            TrayLog.warn("CLI Terminal spawn failed", failure)
             // Surface the failure — previously log-only, so a user who denied
             // the Automation prompt once had every CLI button silently do
             // nothing forever. -1743 = errAEEventNotPermitted.
-            let code = (err[NSAppleScript.errorNumber] as? Int) ?? 0
-            if code == -1743 {
+            if failure.contains("-1743") {
                 showAlert(
                     title: "Automation permission needed",
                     text: "macOS blocked Mailvec from opening Terminal. "
                         + "Allow it under System Settings → Privacy & Security → Automation → Mailvec.Tray → Terminal, then try again.")
             } else {
-                showAlert(
-                    title: "Couldn't open Terminal",
-                    text: (err[NSAppleScript.errorMessage] as? String) ?? "AppleScript error \(code).")
+                showAlert(title: "Couldn't open Terminal", text: failure)
+            }
+        }
+    }
+
+    /// Runs an AppleScript source via `/usr/bin/osascript` on a background
+    /// queue, calling `completion` on the main queue with nil on success or
+    /// the failure text otherwise.
+    ///
+    /// Why a subprocess and not NSAppleScript: NSAppleScript is
+    /// main-thread-only per Apple's thread-safety rules, and
+    /// executeAndReturnError is synchronous — from a button handler, a cold
+    /// Terminal launch blocked the menu bar for ~1-2s and a wedged target
+    /// app beachballed the tray for the full Apple Events timeout (~2 min).
+    /// osascript carries the same TCC Automation attribution (the tray is
+    /// the responsible process), so the permission prompts are unchanged.
+    static func runAppleScript(_ source: String, completion: ((String?) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            proc.arguments = ["-e", source]
+            let stderrPipe = Pipe()
+            proc.standardError = stderrPipe
+            proc.standardOutput = FileHandle.nullDevice
+            var failure: String?
+            do {
+                try proc.run()
+                // Read to EOF BEFORE waitUntilExit so stderr can't fill the
+                // pipe and deadlock against our wait.
+                let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                if proc.terminationStatus != 0 {
+                    let text = String(data: errData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    failure = text.isEmpty ? "osascript exited \(proc.terminationStatus)." : text
+                }
+            } catch {
+                failure = "osascript failed to launch: \(error.localizedDescription)"
+            }
+            if let completion {
+                DispatchQueue.main.async { completion(failure) }
+            } else if let failure {
+                TrayLog.warn("AppleScript failed", failure)
             }
         }
     }
