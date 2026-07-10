@@ -4,8 +4,11 @@ Planning note. Goal: keep the **local** MCP path on the desktop (MCPB/stdio + th
 launchd HTTP server on `127.0.0.1:3333`) exactly as-is, while exposing a **public,
 authenticated** endpoint so the **Claude iOS app** can reach Mailvec from anywhere.
 
-Status: design only — not yet built. The OAuth-compatibility step (★) must be
-verified by a live test connection before committing.
+Status: plan decided 2026-07-10 (research summary in the ★ gotcha below);
+not yet built. The sequence is: portal-first 30-minute test gate, Worker
+fallback if the portal fails claude.ai's handshake. The server-side
+tool-surface trim (`Mcp:DisabledTools`) is implemented and staged in
+compose.yml — uncomment it before the tunnel goes live.
 
 ---
 
@@ -117,8 +120,13 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
      restricting to your identity, connect clients to `https://<sub>.<domain>/mcp`.
    - *If that fails Claude's OAuth:* deploy a Worker with `workers-oauth-provider` that
      proxies to the tunnel origin.
-8. **(Recommended) Reduce the cloud tool surface** — disable high-exposure tools
-   (esp. `view_attachment`) on the portal, or filter them in the Worker proxy.
+8. **Reduce the cloud tool surface — server-side first.** Uncomment the
+   `Mcp__DisabledTools__*` lines in compose.yml (drops `view_attachment` and
+   `get_attachment_page_image` from tools/list AND tools/call at the server).
+   Server-side is the authoritative layer: it holds identically under the
+   portal, the Worker, or the direct LAN port — which bypasses the OAuth
+   front entirely. Portal per-tool toggles (or a Worker filter) are the
+   optional second layer, not the enforcement.
 9. **Register the connector on claude.ai (web)** with a **distinct name: "Mailvec (Cloud)"**
    and the `https://<sub>.<domain>/mcp` URL. Complete the OAuth flow once.
 10. **Verify on iOS** — the connector syncs down; confirm tools load and a search works.
@@ -129,11 +137,35 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
 
 ## Gotchas
 
-- **★ Portal OAuth may not satisfy Claude's connector.** Portals **do not add OAuth to the
-  upstream server** — they gate the *client-facing* leg via Access. Confirm the Access
-  OAuth advertises **DCR or CIMD + S256 + `.well-known` discovery** with a throwaway test
-  connection before relying on it. If it doesn't, fall back to the Worker +
-  `workers-oauth-provider` path, which is unambiguously Claude-compatible.
+- **★ Portal OAuth may not satisfy Claude's connector — evidence as of 2026-07-10.**
+  Portals **do not add OAuth to the upstream server** — they gate the *client-facing*
+  leg via Access Managed OAuth (GA 2026-03-20: DCR, PKCE, RFC 8414/9728 discovery on
+  the app hostname). Research findings:
+  - *Against:* anthropics/claude-ai-mcp#410 (2026-06-07, closed "not planned"):
+    claude.ai **web/mobile** failed instantly against a Managed OAuth portal
+    (401 without a `WWW-Authenticate: Bearer resource_metadata=...` header, and
+    claude.ai didn't probe the well-known fallback) while **Claude Code connected
+    to the identical URL** via fallback discovery.
+  - *For:* Anthropic's current connector-auth docs describe claude.ai falling back
+    to probing `/.well-known/oauth-protected-resource[/<path>]` when the header is
+    missing — the June gap may be closed from Anthropic's side.
+  - *Extra lever:* the custom-connector UI accepts a pre-registered client id
+    (+ optional secret), which removes DCR from the equation if Access supports a
+    manually registered client.
+  Net: the 30-minute throwaway test connection decides it. If it still fails, fall
+  back to the Worker + `workers-oauth-provider` path (v0.8.1, 2026-06-19, actively
+  maintained; implements 401+WWW-Authenticate, PRM, RFC 8414, DCR, CIMD, S256, and
+  refresh-token rotation — the full Anthropic checklist). The library only
+  dispatches to Worker handlers, but the authenticated `apiHandler` can simply be a
+  small proxy that `fetch()`es the tunnel origin and streams the response back
+  (`Mcp-Session-Id` passes through as an ordinary header; the forwarded Host is the
+  allowlisted public hostname, so HostGuard is satisfied). Put Access in front of
+  just the `/authorize` route for the human login; the Worker issues the tokens.
+  Claude requirements to hold either path to: redirect URI
+  `https://claude.ai/api/mcp/auth_callback`, S256 advertised in
+  `code_challenge_methods_supported`, PRM `resource` matching the entered URL
+  exactly, form-urlencoded token endpoint, 10s OAuth-endpoint latency budget, and
+  reachability from `160.79.104.0/21` for the MCP host AND the authorization host.
 
 - **The account-level connector also appears on Desktop.** Custom connectors are
   account-scoped and sync to **every** client. Registering "Mailvec (Cloud)" for iOS means
@@ -151,9 +183,14 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
   to be account-synced rather than per-device, use the **per-conversation** toggle on
   Desktop as the deterministic fallback.
 
-- **Exposure of `view_attachment`.** It reads raw Maildir bytes off disk. Once the endpoint
-  is internet-reachable (even gated), that's the highest-risk tool — drop it from the cloud
-  connector's surface.
+- **Exposure of `view_attachment` / `get_attachment_page_image`.** They feed
+  mail bytes (attacker-controlled by definition) to native parsers
+  (PDFium/SkiaSharp) and return whole raw documents. Once the endpoint is
+  internet-reachable (even gated), that's the highest-risk pair — dropped
+  server-side via `Mcp:DisabledTools` (staged in compose.yml), which also
+  covers the direct LAN port that bypasses the OAuth front. The Mac's local
+  stdio MCPB is a separate process with its own config, so local usage keeps
+  the full surface.
 
 - **Keep `/health` and `/tray/*` private.** The security model leans on "bind to
   `127.0.0.1`"; those endpoints are unauthenticated. The tunnel ingress must 404 them
@@ -172,9 +209,12 @@ it directly; iOS reaches it through the Cloudflare-gated tunnel.
 
 ## Open questions to resolve by testing
 
-1. Does the MCP Server Portal's Access OAuth complete Claude's connector handshake
-   (DCR/CIMD + S256)? If not → Worker fallback.
+1. Does the MCP Server Portal's Access OAuth complete claude.ai **web**'s connector
+   handshake today? (Claude Code demonstrably works; web/mobile failed in June —
+   see the ★ gotcha for both sides of the evidence.) If not → Worker fallback.
+   Also try the static-client-id variant before giving up on the portal.
 2. Is the connector enable/disable toggle **per-device** on Desktop, or account-synced?
-   Determines whether step 10 is permanent or per-conversation.
-3. Does per-tool disable on the portal cover `view_attachment`, or is the Worker filter
-   needed to trim the cloud surface?
+   Determines whether step 11 is permanent or per-conversation.
+3. ~~Does per-tool disable on the portal cover `view_attachment`?~~ Resolved
+   server-side: `Mcp:DisabledTools` enforces the trim regardless of the front;
+   portal toggles are an optional second layer.

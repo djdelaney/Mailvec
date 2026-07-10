@@ -50,6 +50,15 @@ services:
       Mcp__AllowedHosts__0: ${MCP_PUBLIC_HOSTNAME:-}
       Mcp__AllowedHosts__1: mcp
       Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
+      # REQUIRED before the tunnel goes live (docs/security.md): drop the two
+      # tools that feed mail bytes to native parsers (PDFium/SkiaSharp) and
+      # return whole raw documents. Server-side so the trim holds across the
+      # OAuth front AND the direct LAN port, which bypasses that front
+      # entirely. Uncomment at cloudflared go-live; an unknown name here
+      # fails startup on purpose (a typo would silently leave the tool
+      # exposed). See docs/remote-access-cloudflare.md.
+      # Mcp__DisabledTools__0: view_attachment
+      # Mcp__DisabledTools__1: get_attachment_page_image
     volumes:
       - ./data:/data
       - ./mail:/mail:ro

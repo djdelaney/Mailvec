@@ -192,10 +192,13 @@ docker compose exec mcp mailvec doctor
    (`get_attachment_page_image` or an embedder OCR cycle) to prove the
    PDFium/SkiaSharp natives at runtime, not just their presence on disk.
 4. **Eval parity run** against the latest baseline (see above).
-5. **Cloudflared go-live**: blocked on the separate security work (tunnel
-   Access policy / auth). When it lands: set `TUNNEL_TOKEN` +
-   `MCP_PUBLIC_HOSTNAME` in `.env` (without the hostname, HostGuard 403s all
-   tunnel traffic) and start with `docker compose --profile tunnel up -d`.
+5. **Cloudflared go-live**: blocked on the auth front (the portal-first /
+   Worker-fallback plan in docs/remote-access-cloudflare.md). When it lands:
+   **uncomment the `Mcp__DisabledTools__*` lines in compose.yml** (the
+   security.md-required tool-surface trim — server-side, so it also covers
+   the direct LAN port), set `TUNNEL_TOKEN` + `MCP_PUBLIC_HOSTNAME` in
+   `.env` (without the hostname, HostGuard 403s all tunnel traffic), and
+   start with `docker compose --profile tunnel up -d`.
 6. **Client switch-over**: Claude Code → tunnel URL (HTTP transport); Claude
    Desktop → remote connector instead of the MCPB stdio bundle. The tray app
    has no remote story yet (it polls `/tray/status`; future-ideas material).
