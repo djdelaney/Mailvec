@@ -118,6 +118,12 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     public string? FreshPathForMessageId(string messageId, DateTimeOffset since)
     {
         using var conn = connections.Open();
+        return FreshPathForMessageId(conn, messageId, since);
+    }
+
+    /// <summary>Connection-reusing overload for the scanner's per-entry repair loop.</summary>
+    public string? FreshPathForMessageId(SqliteConnection conn, string messageId, DateTimeOffset since)
+    {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT maildir_full_path FROM sync_state
