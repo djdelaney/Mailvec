@@ -146,6 +146,59 @@ public class MaildirWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task Errored_watcher_is_retired_so_the_next_Start_recreates_it()
+    {
+        // FSW's Error event can mean a permanently dead watcher (deleted or
+        // remounted watch root — often with no further events, ever). The
+        // old handler logged + pulsed but left _fsw set, so the timer-tick
+        // Start() retry no-op'd forever and event-driven scanning silently
+        // died, degrading to timer-only coverage.
+        using var watcher = BuildWatcher(_root, debounceMs: 100);
+        FileSystemWatcher? first = null;
+        watcher.CreateWatcher = root => first = new FileSystemWatcher(root);
+        watcher.Start();
+        first.ShouldNotBeNull();
+
+        watcher.HandleWatcherError(first!, new IOException("watch root vanished"));
+
+        // The error forces an immediate full-pass pulse for the dropped events...
+        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(2))).ShouldBeTrue();
+
+        // ...and the next timer tick's Start() recreates instead of no-opping.
+        FileSystemWatcher? second = null;
+        watcher.CreateWatcher = root => second = new FileSystemWatcher(root);
+        watcher.Start();
+        second.ShouldNotBeNull();
+
+        // Event-driven pulses flow through the replacement.
+        File.WriteAllText(Path.Combine(_root, "INBOX", "cur", "10.host:2,S"), "Subject: hi\n\nbody");
+        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5))).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_stale_instances_late_error_does_not_tear_down_its_replacement()
+    {
+        using var watcher = BuildWatcher(_root, debounceMs: 100);
+        FileSystemWatcher? first = null;
+        watcher.CreateWatcher = root => first = new FileSystemWatcher(root);
+        watcher.Start();
+        watcher.HandleWatcherError(first!, new IOException("dead"));
+
+        FileSystemWatcher? second = null;
+        watcher.CreateWatcher = root => second = new FileSystemWatcher(root);
+        watcher.Start();
+        second.ShouldNotBeNull();
+
+        // The first instance errors again, late — the replacement must survive.
+        watcher.HandleWatcherError(first!, new IOException("late error from retired instance"));
+
+        FileSystemWatcher? third = null;
+        watcher.CreateWatcher = root => third = new FileSystemWatcher(root);
+        watcher.Start();
+        third.ShouldBeNull(); // Start no-ops: the second instance is still active
+    }
+
+    [Fact]
     public void Dispose_closes_the_pulses_channel()
     {
         var watcher = BuildWatcher(_root, debounceMs: 50);
