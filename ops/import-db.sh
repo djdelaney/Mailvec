@@ -102,6 +102,25 @@ PAUSED=()
 
 agent_loaded() { launchctl print "$DOMAIN/$1" >/dev/null 2>&1; }
 
+# bootout is ASYNCHRONOUS — the call returns before launchd finishes tearing
+# the service down (install.sh's bootout_label polls for the same reason).
+# Swapping the DB file and rm'ing the -wal/-shm sidecars under a still-live
+# writer risks corrupting the backup mid-checkpoint or yanking sidecars a
+# writer still has open. A graceful .NET shutdown can ride launchd's
+# ExitTimeOut (20s default), so allow 30s — and ABORT rather than swap under
+# a possibly-live process (the EXIT trap still resumes what we paused).
+wait_for_exit() {
+  local label="$1"
+  local deadline=$(( $(date +%s) + 30 ))
+  while launchctl print "$DOMAIN/$label" >/dev/null 2>&1; do
+    if (( $(date +%s) >= deadline )); then
+      echo "error: $label is still running 30s after bootout — aborting so the DB isn't swapped under a live writer." >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+}
+
 resume() {
   for label in "${PAUSED[@]:-}"; do
     [[ -z "$label" ]] && continue
@@ -123,7 +142,12 @@ for label in "${WRITERS[@]}"; do
     echo "  paused $label"
   fi
 done
-sleep 1
+# Wait for the paused writers to actually exit (bootout only *requests* the
+# teardown) before touching the DB file or its sidecars.
+for label in "${PAUSED[@]:-}"; do
+  [[ -z "$label" ]] && continue
+  wait_for_exit "$label"
+done
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 if [[ -f "$DB" ]]; then

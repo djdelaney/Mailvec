@@ -63,6 +63,25 @@ mailvec_bin() {
 
 agent_loaded() { launchctl print "$DOMAIN/$1" >/dev/null 2>&1; }
 
+# bootout is ASYNCHRONOUS — the call returns before launchd finishes tearing
+# the service down (install.sh's bootout_label polls for the same reason).
+# Snapshotting while a writer is still dying risks a torn copy: its WAL
+# auto-checkpoint can rewrite main-file pages mid-cp, and the result can
+# still pass the row-count smoke test. A graceful .NET shutdown can ride
+# launchd's ExitTimeOut (20s default), so allow 30s — and ABORT rather than
+# copy a possibly-live file (the EXIT trap still resumes what we paused).
+wait_for_exit() {
+  local label="$1"
+  local deadline=$(( $(date +%s) + 30 ))
+  while launchctl print "$DOMAIN/$label" >/dev/null 2>&1; do
+    if (( $(date +%s) >= deadline )); then
+      echo "error: $label is still running 30s after bootout — aborting so a live writer can't tear the snapshot." >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+}
+
 resume() {
   # Bring back exactly the agents we paused (so we never bootstrap one the
   # user had intentionally unloaded). Best-effort: a failed bootstrap prints
@@ -89,8 +108,12 @@ for label in "${WRITERS[@]}"; do
     echo "  (skipped $label — not loaded)"
   fi
 done
-# Give in-flight writes a moment to flush before checkpointing.
-sleep 1
+# Wait for the paused writers to actually exit (bootout only *requests* the
+# teardown) before checkpointing and copying.
+for label in "${PAUSED[@]:-}"; do
+  [[ -z "$label" ]] && continue
+  wait_for_exit "$label"
+done
 
 echo "==> Checkpointing WAL into archive.sqlite"
 MAILVEC="$(mailvec_bin)"
