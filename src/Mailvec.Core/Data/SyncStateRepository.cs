@@ -115,13 +115,6 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     /// cutoff), or null. Used by the scanner's reconciliation to repair a
     /// messages row that still points at a just-deleted duplicate copy.
     /// </summary>
-    public string? FreshPathForMessageId(string messageId, DateTimeOffset since)
-    {
-        using var conn = connections.Open();
-        return FreshPathForMessageId(conn, messageId, since);
-    }
-
-    /// <summary>Connection-reusing overload for the scanner's per-entry repair loop.</summary>
     public string? FreshPathForMessageId(SqliteConnection conn, string messageId, DateTimeOffset since)
     {
         using var cmd = conn.CreateCommand();

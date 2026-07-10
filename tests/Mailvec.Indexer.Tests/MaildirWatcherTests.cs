@@ -215,6 +215,27 @@ public class MaildirWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task Rapid_event_bursts_coalesce_into_one_debounced_pulse()
+    {
+        // mbsync delivers rename bursts; each event landing inside the quiet
+        // window must extend the debounce (the loop-back path) rather than
+        // pulse per event. Generous timings so slow CI nodes don't flake:
+        // the gaps sit well inside the debounce window.
+        using var watcher = BuildWatcher(_root, debounceMs: 500);
+        watcher.Start();
+
+        for (int i = 0; i < 5; i++)
+        {
+            File.WriteAllText(Path.Combine(_root, "INBOX", "cur", $"burst-{i}.host:2,S"), "Subject: hi\n\nbody");
+            await Task.Delay(50);
+        }
+
+        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5))).ShouldBeTrue();
+        // The burst coalesced — no second pulse trails it.
+        (await WaitForPulseAsync(watcher, TimeSpan.FromMilliseconds(800))).ShouldBeFalse();
+    }
+
+    [Fact]
     public void Dispose_closes_the_pulses_channel()
     {
         var watcher = BuildWatcher(_root, debounceMs: 50);
