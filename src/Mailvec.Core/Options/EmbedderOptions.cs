@@ -14,7 +14,6 @@ public sealed class EmbedderOptions
     // path rare for typical English mail.
     public int ChunkSizeTokens { get; set; } = 200;
     public int ChunkOverlapTokens { get; set; } = 32;
-    public int MaxConcurrentRequests { get; set; } = 2;
 
     // Below this threshold (chars in the trimmed body), the message's body
     // is not embedded — only its attachments (if any) are. Rationale:
