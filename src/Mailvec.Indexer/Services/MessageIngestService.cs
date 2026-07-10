@@ -35,6 +35,14 @@ public sealed class MessageIngestService(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Hop off the startup thread before the migration + initial scan:
+        // everything before the first await runs synchronously inside
+        // Host.StartAsync, so a first-ever index of a large corpus would
+        // otherwise block host startup for its whole duration. (SIGTERM
+        // still works either way — the host links ApplicationStopping into
+        // stoppingToken — but startup shouldn't be wedged behind a scan.)
+        await Task.Yield();
+
         migrator.EnsureUpToDate();
 
         logger.LogInformation("Initial Maildir scan starting");
