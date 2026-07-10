@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Mailvec.Core.Tray;
@@ -27,6 +26,11 @@ public sealed class LaunchdInspector(ILogger<LaunchdInspector> logger)
     ];
 
     private static readonly TimeSpan PrintTimeout = TimeSpan.FromSeconds(3);
+
+    // Test seam: lets tests drive RunAsync through a stub executable instead
+    // of /bin/launchctl (there is no other way to exercise the pipe-drain and
+    // timeout-join behavior against a real subprocess).
+    internal string ExecutablePath { get; init; } = "/bin/launchctl";
 
     private static int Uid => Environment.UserName == "root" ? 0 : (int)getuid();
 
@@ -164,9 +168,9 @@ public sealed class LaunchdInspector(ILogger<LaunchdInspector> logger)
         return exit == 0;
     }
 
-    private async Task<(int ExitCode, string Stdout)> RunAsync(string[] args, TimeSpan timeout, CancellationToken ct)
+    internal async Task<(int ExitCode, string Stdout)> RunAsync(string[] args, TimeSpan timeout, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("/bin/launchctl")
+        var psi = new ProcessStartInfo(ExecutablePath)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -178,30 +182,49 @@ public sealed class LaunchdInspector(ILogger<LaunchdInspector> logger)
         using var proc = Process.Start(psi);
         if (proc is null) return (-1, string.Empty);
 
-        var stdout = new StringBuilder();
-        var readStdout = Task.Run(async () =>
-        {
-            string? line;
-            while ((line = await proc.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
-            {
-                stdout.AppendLine(line);
-            }
-        }, ct);
+        // Drain BOTH pipes, each into its own task-owned buffer. Stderr was
+        // redirected but never read: a child writing more than the ~64KB pipe
+        // buffer to stderr blocks on write and rides the whole timeout into a
+        // spurious kill (the classic both-pipes-full deadlock, converted to a
+        // stall by the timeout). And a shared StringBuilder returned while an
+        // abandoned reader might still append is a race — StringBuilder isn't
+        // thread-safe — so each drain returns its own string instead.
+        var readStdout = DrainAsync(proc.StandardOutput, ct);
+        var readStderr = DrainAsync(proc.StandardError, ct);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
         try
         {
             await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-            await readStdout.ConfigureAwait(false);
-            return (proc.ExitCode, stdout.ToString());
+            _ = await readStderr.ConfigureAwait(false); // drained for the pipe's sake; content unused
+            return (proc.ExitCode, await readStdout.ConfigureAwait(false));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Hung process — kill and report failure.
             try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
             logger.LogWarning("launchctl {Args} timed out after {Timeout}", string.Join(' ', args), timeout);
-            return (-1, stdout.ToString());
+            // The kill closes the pipes and the drains finish promptly; join
+            // (briefly bounded) so the Process is never disposed under a live
+            // reader and partial output isn't torn. Only an unkillable
+            // process (uninterruptible sleep) misses the grace — report
+            // empty output then rather than wait on it.
+            var grace = Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None);
+            var finished = await Task.WhenAny(readStdout, grace).ConfigureAwait(false);
+            return (-1, ReferenceEquals(finished, readStdout) ? await readStdout.ConfigureAwait(false) : string.Empty);
+        }
+    }
+
+    private static async Task<string> DrainAsync(StreamReader reader, CancellationToken ct)
+    {
+        try
+        {
+            return await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            return string.Empty; // pipe broke under a kill — partial output isn't worth a throw
         }
     }
 
