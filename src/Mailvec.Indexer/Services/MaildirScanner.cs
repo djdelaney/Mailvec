@@ -173,7 +173,13 @@ public sealed class MaildirScanner(
             var idsToMark = new List<long>(staleByMessageId.Count);
             foreach (var mid in staleByMessageId)
             {
-                var msg = messages.GetByMessageId(mid);
+                // Reuse the scan's connection (ctx is flushed — no tx open):
+                // a bulk server-side archive can stale thousands of entries,
+                // and one fresh connection per lookup (vec0 reload + PRAGMAs)
+                // stretched reconciliation by tens of seconds while the
+                // coalescing channel held back the next scan.
+                cancellationToken.ThrowIfCancellationRequested();
+                var msg = messages.GetByMessageId(conn, mid);
                 if (msg is { DeletedAt: null }) idsToMark.Add(msg.Id);
             }
             if (idsToMark.Count > 0)
@@ -194,14 +200,15 @@ public sealed class MaildirScanner(
         {
             if (entry.MessageId is null || !freshMessageIds.Contains(entry.MessageId)) continue;
 
-            var msg = messages.GetByMessageId(entry.MessageId);
+            cancellationToken.ThrowIfCancellationRequested();
+            var msg = messages.GetByMessageId(conn, entry.MessageId);
             if (msg is null || msg.DeletedAt is not null) continue;
 
             var currentAbs = Path.Combine(_maildirRoot, msg.MaildirPath, msg.MaildirFilename);
             if (!string.Equals(Path.GetFullPath(currentAbs), Path.GetFullPath(entry.MaildirFullPath), StringComparison.Ordinal))
                 continue; // row already points at a different (live) copy
 
-            var freshPath = syncState.FreshPathForMessageId(entry.MessageId, since: scanStart);
+            var freshPath = syncState.FreshPathForMessageId(conn, entry.MessageId, since: scanStart);
             if (freshPath is null) continue;
 
             var folderDir = Path.GetDirectoryName(Path.GetDirectoryName(freshPath));

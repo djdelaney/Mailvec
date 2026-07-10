@@ -398,6 +398,17 @@ public sealed class MessageRepository(ConnectionFactory connections)
     public Message? GetByMessageId(string messageId)
     {
         using var conn = connections.Open();
+        return GetByMessageId(conn, messageId);
+    }
+
+    /// <summary>
+    /// Connection-reusing overload for hot per-item loops — the scanner's
+    /// reconciliation pass calls this once per stale entry, and opening a
+    /// fresh connection each time (vec0 reload + PRAGMA setup) is the exact
+    /// overhead its rolling ScanContext exists to avoid on the forward pass.
+    /// </summary>
+    public Message? GetByMessageId(SqliteConnection conn, string messageId)
+    {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT * FROM messages WHERE message_id = $mid";
         cmd.Parameters.AddWithValue("$mid", messageId);
