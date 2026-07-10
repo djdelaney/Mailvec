@@ -134,6 +134,23 @@ resume() {
 }
 trap resume EXIT
 
+# --- Guard: Claude Desktop's stdio MCP children ----------------------------
+# launchd only manages the three agents below; Claude Desktop spawns its own
+# `Mailvec.Mcp --stdio` child per session, and those hold pooled SQLite
+# handles on the CURRENT archive file. After the swap they keep serving the
+# old (renamed .bak) inode — and if the connection pool later opens an extra
+# connection it gets the NEW file at the same path, mixing two databases in
+# one process where row ids differ. Read-only, so no corruption, but
+# silently wrong results until the client restarts.
+STDIO_PIDS="$(pgrep -f 'Mailvec\.Mcp.*--stdio' 2>/dev/null || true)"
+if [[ -n "$STDIO_PIDS" ]]; then
+  echo "WARN: Claude Desktop stdio MCP process(es) are running (pid: ${STDIO_PIDS//$'\n'/ })." >&2
+  echo "      They hold open handles on the current archive and will keep serving" >&2
+  echo "      the OLD data — or mix old and new row ids — after the swap." >&2
+  echo "      Quit Claude Desktop now, or restart it right after this import." >&2
+  echo
+fi
+
 echo "==> Pausing services"
 for label in "${WRITERS[@]}"; do
   if agent_loaded "$label"; then
@@ -214,3 +231,7 @@ echo "  mailvec doctor"
 echo
 echo "The first indexer pass will re-point Maildir paths to this machine's files"
 echo "and embed anything genuinely new. It will NOT re-OCR the recovered PDFs."
+if [[ -n "$STDIO_PIDS" ]]; then
+  echo
+  echo "REMINDER: restart Claude Desktop — its stdio MCP session(s) still hold the old archive."
+fi
