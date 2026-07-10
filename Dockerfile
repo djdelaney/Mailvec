@@ -46,13 +46,26 @@ RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 # Interval loop replacing the launchd StartInterval job. 600s default matches
 # the plist (tighter schedules hit mbsync's .mbsyncstate flock and fail with
 # "channel is locked" when a backlog pull overruns the interval).
+#
+# This runs as PID 1, which gets no default SIGTERM handler — without the
+# trap, every `docker stop` burned the full grace period and SIGKILLed the
+# loop (potentially mid-IMAP-sync, leaving the next run to hit the state
+# flock). The trap forwards TERM to the in-flight child so mbsync can
+# journal and exit, and the child always runs backgrounded + wait'ed
+# because POSIX sh delivers traps only after a *foreground* command
+# completes — a foreground sleep would defer the stop by up to the full
+# interval.
 set -u
 : "${MBSYNC_INTERVAL_SECONDS:=600}"
 : "${MBSYNC_MAILDIR:=/mail/Fastmail}"
 mkdir -p "${MBSYNC_MAILDIR}"
+child=
+trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child"; fi; exit 0' TERM INT
 while :; do
-    mbsync -a || echo "mbsync: sync failed (exit $?)" >&2
-    sleep "${MBSYNC_INTERVAL_SECONDS}"
+    mbsync -a & child=$!
+    wait "$child" || echo "mbsync: sync failed (exit $?)" >&2
+    sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
+    wait "$child"
 done
 EOF
 RUN chmod +x /usr/local/bin/mbsync-loop
