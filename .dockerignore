@@ -3,17 +3,29 @@
 #   .so for the image platform itself, and the Directory.Build.props glob
 #   would otherwise copy stale mac binaries into the Linux publish.
 # - src/Mailvec.Tray/: macOS SwiftUI app, not part of the container.
+# - data/, mail/, secrets/, mbsyncrc, .env: deploy-host state that lives in
+#   the compose dir (= this repo clone on the VM). The build stage does
+#   `COPY . .`, so without these exclusions every on-host build shipped the
+#   entire Maildir into the build context and copied the Fastmail password
+#   file into build-stage layers. Never let bind-mount state or secrets
+#   near the image.
 .git
 .dockerignore
 Dockerfile
 build/
 coverage/
+data/
 dist/
+mail/
+mbsyncrc
 runtimes/
+secrets/
 src/Mailvec.Tray/
+.env
 **/bin/
 **/obj/
 **/appsettings.Local.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite.bak.*
