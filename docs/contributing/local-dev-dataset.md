@@ -64,12 +64,17 @@ pure-code loop with no corpus at all.
    which now *is* the dev corpus, frozen in place, with every eval label
    still resolving.
 
-   The last writer closing also checkpoints and **removes the `-wal`/`-shm`
-   sidecars**, so the frozen corpus settles as a single self-contained
-   `archive.sqlite` — copy it around freely without the usual
-   "never copy a live DB without its WAL" footgun. (`mailvec status` and any
-   other CLI read re-creates a `-wal` for the duration; it's cleaned up again
-   when the process exits.)
+   The last writer closing also checkpoints and removes the `-wal`/`-shm`
+   sidecars, so with the agents gone the corpus settles into a single
+   self-contained `archive.sqlite`.
+
+   A later CLI read (`mailvec status`, `doctor`, …) re-creates the sidecars and
+   **leaves them there** — but at **0 bytes**, because a reader has nothing to
+   checkpoint. That's the state to expect, and it's why copying the frozen
+   `archive.sqlite` on its own is safe here despite the usual "never copy a live
+   DB without its WAL" rule: an empty WAL means the main file is already
+   complete. Check `ls -l archive.sqlite-wal` before trusting a copy — the rule
+   is suspended by the WAL being empty, not by the pipeline being stopped.
 
    **Why not `ops/stop.sh`:** its default deliberately leaves mbsync
    running, and `launchctl bootout` alone doesn't survive the next login —
