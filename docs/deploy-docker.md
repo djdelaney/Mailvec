@@ -137,28 +137,34 @@ Two kinds of pin, with different lifetimes:
 
 **The tag value is not free-form.** The repo-wide `<Version>` in
 `Directory.Build.props` stamps all four binaries and `serverInfo.version`,
-kept in lockstep with `manifest.json` and the tray by
-`ops/build-mcpb.sh --bump` (the only sanctioned bump path — see
-`ops/mcpb-release.md`). The `v*` tag must equal that version at the tagged
-commit, or the image's label and what its binaries report from
-`mailvec status` / the MCP handshake disagree forever.
+kept in lockstep with `manifest.json` and the tray by **`ops/release.sh`**
+(the only sanctioned bump path; `ops/build-mcpb.sh --bump` delegates to it).
+The `v*` tag must equal that version at the tagged commit, or the image's
+label and what its binaries report from `mailvec status` / the MCP handshake
+disagree forever — `publish-images.yml` enforces this: a `v*` push whose tag
+doesn't match `<Version>` fails before building anything.
 
 **Cutting a release** (dev machine, not the deploy host):
 
 ```sh
-# 1. If the current <Version> has already been released, bump first:
-ops/build-mcpb.sh --bump      # commit the bump; must be green on main
-# 2. Tag the green bump commit with the MATCHING version and push:
-git tag -a v0.1.29 -m "…" && git push origin v0.1.29
+# 1. If the current <Version> has already been released, bump first
+#    (--patch default; --minor for a tool-surface change or a schema
+#    migration — the "back up first" flag in the tag name, since a new
+#    image migrates the seeded archive in place):
+ops/release.sh                # commits the bump; must be green on main
+# 2. Tag the green bump commit with the MATCHING version and push
+#    (release.sh prints these exact commands):
+git tag -a v0.1.30 -m "…" && git push origin v0.1.30
 ```
 
-The tag push publishes `ghcr.io/<owner>/mailvec:v0.1.29` +
-`…/mailvec-mbsync:v0.1.29` (plus the commit's `sha-` tag). It does **not**
+The tag push publishes `ghcr.io/<owner>/mailvec:v0.1.30` +
+`…/mailvec-mbsync:v0.1.30` (plus the commit's `sha-` tag). It does **not**
 move `:latest` (green-main / manual-dispatch only) — and note the `v*`
-trigger is **not CI-gated**, unlike the green-main path, so the release
-rule is: only tag commits that already passed CI on main.
+trigger is **not test-gated**, unlike the green-main path (it only checks
+tag↔version agreement), so the release rule is: only tag commits that
+already passed CI on main.
 
-**Deploying it:** pin both vars in `.env` to `:v0.1.29`, then
+**Deploying it:** pin both vars in `.env` to `:v0.1.30`, then
 `docker compose pull && docker compose up -d` (backup first — the
 SchemaMigrator-on-start rule above), and verify the loop closes:
 `docker compose exec mcp mailvec status` must print the same version as
