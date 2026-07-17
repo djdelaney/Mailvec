@@ -1,5 +1,14 @@
 # Wiring Mailvec into local MCP-capable agents
 
+> **Scope: local, single-machine installs.** If you're running the Docker
+> deployment behind a Cloudflare tunnel
+> ([`docs/deploy-docker.md`](../deploy-docker.md),
+> [`docs/remote-access-cloudflare.md`](../remote-access-cloudflare.md)), none of
+> this applies — every client instead registers **one remote connector** at the
+> public hostname and authenticates through Cloudflare Access. That includes
+> Claude Desktop, which no longer uses the MCPB bundle in that setup. The pages
+> here remain correct for a loopback install on a single Mac.
+
 The Mailvec MCP server runs on your machine in two transports:
 
 - **stdio** — the agent spawns the server as a child process and talks JSON-RPC over its stdin/stdout. Standard for Claude Desktop, Gemini CLI, Codex CLI.

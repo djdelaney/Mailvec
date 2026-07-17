@@ -1,10 +1,17 @@
 # Local development after the Docker migration
 
-Once the pipeline runs in the Proxmox compose stack, the Mac stops being a
+The pipeline now runs in the Proxmox compose stack, so the Mac stops being a
 deployment and becomes the dev machine. The strategy: **develop against a
 frozen-in-time copy of the real archive**, with no launchd agents running.
 This page is the one-time teardown, the day-to-day workflow, and the refresh
 procedure.
+
+> **Status: done.** The teardown ran on **2026-07-16** — the four launchd
+> agents are booted out and their plists removed, mbsync included, and the tray
+> is quit. The Mac is a dev machine now; the archive below is frozen at
+> **~80k messages, 100% embedded**, with every eval label still resolving. The
+> teardown section is kept as a record and as the recipe if the Mac pipeline is
+> ever rebuilt.
 
 ## Why frozen-real (not truncated, not artificial)
 
@@ -30,7 +37,7 @@ for fast indexer-loop iteration where scanning the full archive per change is
 annoying, and **artificial data** in the unit tests, which cover the
 pure-code loop with no corpus at all.
 
-## One-time teardown (after the VM passes the parity gate)
+## One-time teardown (done 2026-07-16 — kept as the record + the rebuild recipe)
 
 1. **Take the pristine rollback snapshot first** — this copy is never opened
    again; the dev corpus is a different file (step 2 makes it so):
@@ -39,6 +46,12 @@ pure-code loop with no corpus at all.
    ops/export-db.sh --out ~/mailvec-rollback-$(date +%F).sqlite
    chmod 400 ~/mailvec-rollback-*.sqlite
    ```
+
+   **Skipped in the actual teardown.** By then the VM was production and
+   covered by the homelab's snapshot schedule with offsite shipping, so a
+   pristine Mac copy duplicated a rollback story that already existed. Keep
+   this step if you ever tear down a Mac pipeline *before* an equivalent
+   backed-up copy exists elsewhere — that's the condition it was written for.
 
 2. **Uninstall the agents — including mbsync:**
 
@@ -50,6 +63,13 @@ pure-code loop with no corpus at all.
    binaries, the `~/.local/bin/mailvec` shim, the logs, and the database —
    which now *is* the dev corpus, frozen in place, with every eval label
    still resolving.
+
+   The last writer closing also checkpoints and **removes the `-wal`/`-shm`
+   sidecars**, so the frozen corpus settles as a single self-contained
+   `archive.sqlite` — copy it around freely without the usual
+   "never copy a live DB without its WAL" footgun. (`mailvec status` and any
+   other CLI read re-creates a `-wal` for the duration; it's cleaned up again
+   when the process exits.)
 
    **Why not `ops/stop.sh`:** its default deliberately leaves mbsync
    running, and `launchctl bootout` alone doesn't survive the next login —

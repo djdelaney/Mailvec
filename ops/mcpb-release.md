@@ -1,5 +1,16 @@
 # MCPB release notes
 
+> **The MCPB bundle is no longer the author's Claude Desktop transport.** Desktop
+> now reaches Mailvec through the OAuth-gated remote connector
+> ([`docs/remote-access-cloudflare.md`](../docs/remote-access-cloudflare.md)),
+> so the bundle serves a local single-machine install rather than the live
+> deployment. Everything below still works and is still the sanctioned build
+> path — but note `ops/build-mcpb.sh --bump` remains **the only sanctioned way
+> to bump `<Version>`**, and that version also stamps the GHCR image tags the
+> homelab pins ([`docs/deploy-docker.md`](../docs/deploy-docker.md) → "Release
+> tags"). Don't retire this lane on the assumption it's dead weight; releases
+> flow through it.
+
 `ops/build-mcpb.sh` produces `dist/mailvec-<version>.mcpb`. It runs `dotnet publish -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=false`, copies `manifest.json` next to the published `server/` directory, and zips the result. Claude Desktop unpacks the bundle to `~/Library/Application Support/Claude/Claude Extensions/local.mcpb.<author>.mailvec/` (older builds used `.../Connectors/`) — not under `~/Documents`, so it sidesteps the TCC read block (see the MCP transport quirks in `CLAUDE.md`).
 
 ## Build choices
