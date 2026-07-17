@@ -18,9 +18,9 @@
 #            keychain; the identity override mirrors ops/build-tray.sh's
 #            fallback).
 #
-# The version-lockstep check mirrors the guard in ops/build-mcpb.sh so drift
-# between Directory.Build.props / manifest.json / project.yml fails a PR, not
-# the next release build.
+# The version-lockstep check mirrors the guard in ops/release.sh (and
+# ops/build-mcpb.sh's plain build) so drift between Directory.Build.props /
+# manifest.json / project.yml fails a PR, not the next release build.
 
 name: CI
 
@@ -62,7 +62,7 @@ jobs:
           tray = re.search(r'MARKETING_VERSION:\s*"(\d+\.\d+\.\d+)"', pathlib.Path("src/Mailvec.Tray/project.yml").read_text()).group(1)
           if not (manifest == props == tray):
               print(f"Version drift: manifest.json={manifest} Directory.Build.props={props} project.yml={tray}. "
-                    "Use ops/build-mcpb.sh --bump to keep them in lockstep.", file=sys.stderr)
+                    "Use ops/release.sh to keep them in lockstep.", file=sys.stderr)
               sys.exit(1)
           print(f"Version lockstep OK: {manifest}")
           PY

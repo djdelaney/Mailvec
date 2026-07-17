@@ -5,11 +5,12 @@
 > ([`docs/remote-access-cloudflare.md`](../docs/remote-access-cloudflare.md)),
 > so the bundle serves a local single-machine install rather than the live
 > deployment. Everything below still works and is still the sanctioned build
-> path — but note `ops/build-mcpb.sh --bump` remains **the only sanctioned way
-> to bump `<Version>`**, and that version also stamps the GHCR image tags the
-> homelab pins ([`docs/deploy-docker.md`](../docs/deploy-docker.md) → "Release
-> tags"). Don't retire this lane on the assumption it's dead weight; releases
-> flow through it.
+> path for the bundle — but **version bumps no longer flow through this lane**:
+> `ops/release.sh` is the only sanctioned way to bump `<Version>` (with
+> minor/major support; `ops/build-mcpb.sh --bump` delegates to it for patch
+> bumps). That version stamps the GHCR image tags the homelab pins
+> ([`docs/deploy-docker.md`](../docs/deploy-docker.md) → "Release tags"), so
+> a homelab release never needs to build a bundle.
 
 `ops/build-mcpb.sh` produces `dist/mailvec-<version>.mcpb`. It runs `dotnet publish -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=false`, copies `manifest.json` next to the published `server/` directory, and zips the result. Claude Desktop unpacks the bundle to `~/Library/Application Support/Claude/Claude Extensions/local.mcpb.<author>.mailvec/` (older builds used `.../Connectors/`) — not under `~/Documents`, so it sidesteps the TCC read block (see the MCP transport quirks in `CLAUDE.md`).
 
@@ -26,7 +27,7 @@
 ops/build-mcpb.sh --bump
 ```
 
-This patch-bumps **the** Mailvec version — `manifest.json`, the repo-wide `<Version>` in `Directory.Build.props` (stamps all four .NET binaries), and the tray's `MARKETING_VERSION` in `project.yml`, atomically — rebuilds, and `open`s the new `.mcpb` (which Claude Desktop intercepts as an install prompt). Then in Settings → Extensions toggle Mailvec off and confirm the install, quit + relaunch.
+This patch-bumps **the** Mailvec version (by delegating to `ops/release.sh --patch --no-commit` — `manifest.json`, the repo-wide `<Version>` in `Directory.Build.props` (stamps all four .NET binaries), and the tray's `MARKETING_VERSION` in `project.yml`, atomically), rebuilds, and `open`s the new `.mcpb` (which Claude Desktop intercepts as an install prompt). Then in Settings → Extensions toggle Mailvec off and confirm the install, quit + relaunch.
 
 - Toggling off (vs uninstalling) preserves user_config values across upgrades.
 - Without a version bump, Claude Desktop silently ignores the re-install — plain `build-mcpb.sh` is fine for "rebuild and inspect locally" but `--bump` is what you need to actually swap the running binary.
