@@ -15,7 +15,14 @@ public sealed class TempDatabase : IDisposable
     public string DatabasePath { get; }
     public ConnectionFactory Connections { get; }
 
-    public TempDatabase()
+    /// <param name="migrate">
+    /// Apply the schema up front (the default — what almost every test wants).
+    /// Pass false to get a genuinely empty file, for code whose contract is
+    /// "works against an unmigrated database". Pre-migrating hides that class
+    /// of bug: a component that assumed someone else had migrated first passed
+    /// every test here and only failed against a real cold start.
+    /// </param>
+    public TempDatabase(bool migrate = true)
     {
         DirectoryPath = Path.Combine(Path.GetTempPath(), "mailvec-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(DirectoryPath);
@@ -24,8 +31,11 @@ public sealed class TempDatabase : IDisposable
         var options = Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = DatabasePath });
         Connections = new ConnectionFactory(options);
 
-        var migrator = new SchemaMigrator(Connections, NullLogger<SchemaMigrator>.Instance);
-        migrator.EnsureUpToDate();
+        if (migrate)
+        {
+            var migrator = new SchemaMigrator(Connections, NullLogger<SchemaMigrator>.Instance);
+            migrator.EnsureUpToDate();
+        }
     }
 
     public void Dispose()

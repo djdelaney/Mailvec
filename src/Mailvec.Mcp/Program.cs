@@ -166,6 +166,10 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<VectorSearchService>();
     services.AddSingleton<HybridSearchService>();
     services.AddSingleton<AttachmentExtractor>();
+    // Reads mbsync's liveness beat off the Maildir mount — the sidecar can't
+    // write the metadata table the other workers beat into. See
+    // ServiceHeartbeat for why the three services report differently.
+    services.AddSingleton<MbsyncHeartbeatFile>();
     services.AddSingleton<HealthService>();
     services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
     // Tray-facing services (consumed by the REST /tray/* endpoints).

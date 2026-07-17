@@ -320,7 +320,11 @@ public class TrayStatusServiceTests
                 Pending: 0,
                 Recovered: 0,
                 ImagePending: 0,
-                ImageRecovered: 0));
+                ImageRecovered: 0),
+            // The tray's own service tiles come from LaunchdInspector, not from
+            // this list — these tests cover that path, so an empty list here is
+            // the accurate input, not a placeholder.
+            Services: []);
     }
 
     private static HealthReport ReportWith(long messagesTotal, long messagesDeleted, long embedded)

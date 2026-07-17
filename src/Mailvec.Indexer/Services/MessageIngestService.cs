@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Mailvec.Core.Data;
+using Mailvec.Core.Health;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -29,10 +30,32 @@ public sealed class MessageIngestService(
     SchemaMigrator migrator,
     MaildirScanner scanner,
     MaildirWatcher watcher,
+    MetadataRepository metadata,
     IOptions<IndexerOptions> indexerOptions,
     ILogger<MessageIngestService> logger)
     : BackgroundService
 {
+    /// <summary>
+    /// Record that a scan cycle completed, for the progress half of
+    /// <see cref="ServiceHeartbeat"/>. Called after every scan — including
+    /// scans that found nothing and scans that threw (see
+    /// <see cref="ServiceHeartbeat.RecordCycle"/> for why both count).
+    ///
+    /// Best-effort: this is the indexer telling the world it's working, and
+    /// failing to say so must never stop it from working.
+    /// </summary>
+    private void RecordScanCycle()
+    {
+        try
+        {
+            ServiceHeartbeat.RecordCycle(metadata, ServiceHeartbeat.Indexer);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to record indexer scan cycle");
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Hop off the startup thread before the migration + initial scan:
@@ -58,6 +81,10 @@ public sealed class MessageIngestService(
             // failure — a crash loop that never indexes anything. Logging and
             // carrying on lets the watcher + periodic timer retry instead.
             logger.LogError(ex, "Initial scan failed; will retry on the next watcher pulse or timer tick.");
+        }
+        finally
+        {
+            RecordScanCycle();
         }
 
         watcher.Start();
@@ -134,6 +161,14 @@ public sealed class MessageIngestService(
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "Scan failed");
+            }
+            finally
+            {
+                // The periodic timer guarantees this loop turns at least every
+                // ScanIntervalSeconds even with zero mail activity, which is
+                // what makes a stale cycle timestamp meaningful rather than
+                // just "nothing happened lately".
+                RecordScanCycle();
             }
         }
     }

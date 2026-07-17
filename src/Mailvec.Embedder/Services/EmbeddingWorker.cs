@@ -1,6 +1,7 @@
 using System.Globalization;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
+using Mailvec.Core.Health;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -69,6 +70,7 @@ public sealed class EmbeddingWorker(
                 var ocred = await RunOcrIfEnabledAsync(stoppingToken).ConfigureAwait(false);
 
                 var processed = await ProcessNextBatchAsync(batchSize, stoppingToken).ConfigureAwait(false);
+                RecordPollCycle();
                 if (processed > 0)
                 {
                     RecordBatchSuccess();
@@ -78,6 +80,8 @@ public sealed class EmbeddingWorker(
                     // Idle: nothing OCR'd and nothing embedded. Don't touch the
                     // success/failure counters — they reflect the outcome of
                     // the last *attempted* batch, not "the embedder is alive".
+                    // (The poll-cycle stamp above is the signal that DOES mean
+                    // "alive"; see ServiceHeartbeat on why the two are split.)
                     await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
                 }
                 // (ocred > 0 && processed == 0: OCR re-queued work — loop
@@ -500,6 +504,26 @@ public sealed class EmbeddingWorker(
     /// Reset the consecutive-failures counter; only attempted batches touch
     /// these keys, so an idle embedder doesn't keep stamping fresh timestamps.
     /// </summary>
+    /// <summary>
+    /// Stamp "the poll loop turned" for the progress half of
+    /// <see cref="ServiceHeartbeat"/> — unconditionally, including on an idle
+    /// cycle where <see cref="RecordBatchSuccess"/> deliberately stays silent.
+    /// That silence is correct for stuck-detection and useless for liveness,
+    /// which is exactly why this is a separate key. Best-effort: a failed
+    /// stamp must never break the embed loop.
+    /// </summary>
+    private void RecordPollCycle()
+    {
+        try
+        {
+            ServiceHeartbeat.RecordCycle(metadata, ServiceHeartbeat.Embedder);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to record embedder poll cycle");
+        }
+    }
+
     private void RecordBatchSuccess()
     {
         var nowIso = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);

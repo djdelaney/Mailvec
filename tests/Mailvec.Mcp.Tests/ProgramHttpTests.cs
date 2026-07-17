@@ -87,6 +87,63 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task Health_endpoint_carries_per_service_liveness()
+    {
+        // The /health body must expose the indexer/embedder/mbsync liveness the
+        // container deployment relies on (no launchctl to ask). This pins the
+        // wire shape: an array of {service, known, stale, ...}. It deliberately
+        // does NOT assert the known/stale *values* — the factory DB is shared
+        // across this class's tests (IClassFixture) and another test writes a
+        // beat, so a value assertion here would be order-dependent. The
+        // fresh-DB-is-unknown and beat-flips-to-live behaviours are pinned in
+        // Core's ServiceHeartbeat tests and in the beat test below respectively.
+        using var client = _factory.CreateClient();
+
+        var doc = JsonDocument.Parse(await (await client.GetAsync("/health")).Content.ReadAsStringAsync());
+
+        doc.RootElement.TryGetProperty("services", out var services).ShouldBeTrue();
+        services.ValueKind.ShouldBe(JsonValueKind.Array);
+
+        var names = services.EnumerateArray().Select(s => s.GetProperty("service").GetString()).ToList();
+        names.ShouldContain("indexer");
+        names.ShouldContain("embedder");
+        names.ShouldContain("mbsync");
+
+        foreach (var svc in services.EnumerateArray())
+        {
+            // Both flags present and boolean on every entry, whatever their value.
+            svc.GetProperty("known").ValueKind.ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+            svc.GetProperty("stale").ValueKind.ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+        }
+    }
+
+    [Fact]
+    public async Task Health_endpoint_reflects_a_live_beat()
+    {
+        // End-to-end through the real endpoint: write a beat the way a worker's
+        // HeartbeatService would, then confirm /health flips that service to
+        // known+live. This is the wire that connects a running background
+        // container to what a monitor or the tray can see.
+        using var client = _factory.CreateClient();
+        var metadata = new Mailvec.Core.Data.MetadataRepository(
+            new Mailvec.Core.Data.ConnectionFactory(
+                Microsoft.Extensions.Options.Options.Create(
+                    new Mailvec.Core.Options.ArchiveOptions { DatabasePath = _factory.DatabasePath })));
+
+        Mailvec.Core.Health.ServiceHeartbeat.Beat(
+            metadata, Mailvec.Core.Health.ServiceHeartbeat.Indexer, TimeSpan.FromSeconds(60));
+
+        var doc = JsonDocument.Parse(await (await client.GetAsync("/health")).Content.ReadAsStringAsync());
+
+        var indexer = doc.RootElement.GetProperty("services").EnumerateArray()
+            .Single(s => s.GetProperty("service").GetString() == "indexer");
+        indexer.GetProperty("known").GetBoolean().ShouldBeTrue();
+        indexer.GetProperty("stale").GetBoolean().ShouldBeFalse();
+        indexer.GetProperty("lastBeatAt").ValueKind.ShouldBe(JsonValueKind.String);
+        indexer.GetProperty("expectedIntervalSeconds").GetInt32().ShouldBe(60);
+    }
+
+    [Fact]
     public async Task Health_endpoint_responds_quickly_thanks_to_ping_timeout()
     {
         // CLAUDE.md gotcha: the OllamaClient.PingAsync wraps the call in a 2s

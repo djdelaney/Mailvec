@@ -540,7 +540,12 @@ internal static class DoctorCommand
                 LastFailureAt: null,
                 ConsecutiveFailures: 0,
                 LastFailureKind: null,
-                Stuck: false));
+                Stuck: false),
+            // Same reasoning as the embedder block above: doctor's /health probe
+            // is what surfaces live service state. Empty (not a synthesised
+            // "unknown" row per service) so a reader can't mistake this offline
+            // report for a liveness verdict.
+            Services: []);
     }
 
     // ---------------------------------------------------------------------

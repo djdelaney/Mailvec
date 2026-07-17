@@ -26,7 +26,11 @@ public sealed class HealthService(
     // reading rather than a crash.
     MessageRepository? messages = null,
     IVisionClient? vision = null,
-    IOptions<EmbedderOptions>? embedderOpts = null)
+    IOptions<EmbedderOptions>? embedderOpts = null,
+    // Same optional-dep rationale as above. Null => mbsync liveness reports
+    // "unknown", which is also the honest answer on a launchd install where
+    // no sidecar writes the beat file.
+    MbsyncHeartbeatFile? mbsyncHeartbeat = null)
 {
     public async Task<HealthReport> CheckAsync(CancellationToken ct = default)
     {
@@ -116,11 +120,21 @@ public sealed class HealthService(
 
         var embedder = BuildEmbedderHealth(backlog);
 
+        var services = BuildServiceLiveness();
+
         // OCR is deliberately NOT part of the degraded decision. Scanned PDFs are
         // a minority of the corpus and search works fine without them, so a
         // missing vision model or an OCR backlog is informational — surfaced in
         // the Ocr section and as a tray *warn*, never a /health 503. Broadening
         // the degraded set here would page on a non-critical, best-effort stage.
+        //
+        // Service liveness is excluded for a DIFFERENT reason, worth stating so
+        // nobody "fixes" it: /health is the mcp container's compose healthcheck.
+        // A stale indexer or embedder says nothing about whether MCP can serve
+        // search — folding it into Status would mark the *mcp* container
+        // unhealthy because a *sibling* container died, which is both wrong and
+        // actively confusing when triaging. Liveness rides along in Services for
+        // a client to render; it never flips the 503.
         var status = (ollamaReachable, modelMismatch, embedder.Stuck) switch
         {
             (false, _, _) => "degraded",
@@ -151,8 +165,24 @@ public sealed class HealthService(
                 ConfiguredModel: configModel,
                 EmbeddingModelAvailable: embeddingModelAvailable),
             Embedder: embedder,
-            Ocr: ocr);
+            Ocr: ocr,
+            Services: services);
     }
+
+    /// <summary>
+    /// Liveness for the three background services that can die independently
+    /// of the MCP server. The MCP server itself is deliberately absent: it's
+    /// the process answering this call, so its own liveness is implied, and it
+    /// stays read-only against the database rather than writing a beat to
+    /// state the obvious. See <see cref="ServiceHeartbeat"/>.
+    /// </summary>
+    private IReadOnlyList<ServiceLiveness> BuildServiceLiveness() =>
+    [
+        ServiceHeartbeat.Read(metadata, ServiceHeartbeat.Indexer),
+        ServiceHeartbeat.Read(metadata, ServiceHeartbeat.Embedder),
+        mbsyncHeartbeat?.Read()
+            ?? ServiceHeartbeat.Classify(MbsyncHeartbeatFile.Service, null, null, null),
+    ];
 
     /// <summary>
     /// Read the embedder's batch-outcome heartbeat (written by the Embedder
@@ -245,13 +275,20 @@ public sealed class HealthService(
     }
 }
 
+/// <summary>
+/// <c>Services</c> carries per-service liveness (indexer / embedder / mbsync).
+/// It is informational: it never contributes to <c>Status</c>, because /health
+/// is the mcp container's own healthcheck and a dead sibling container must
+/// not mark MCP unhealthy. See the comment at the Status switch.
+/// </summary>
 public sealed record HealthReport(
     string Status,
     DatabaseHealth Database,
     EmbeddingHealth Embeddings,
     OllamaHealth Ollama,
     EmbedderHealth Embedder,
-    OcrHealth Ocr);
+    OcrHealth Ocr,
+    IReadOnlyList<ServiceLiveness> Services);
 
 /// <summary>
 /// Snapshot of the OCR stage (the embedder's vision pass over both scanned PDFs

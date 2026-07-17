@@ -187,7 +187,7 @@ public class MessageIngestServiceTests : IDisposable
         var migrator = new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance);
 
         return new MessageIngestService(
-            migrator, scanner, watcher, indexerOpts,
+            migrator, scanner, watcher, new MetadataRepository(_connections), indexerOpts,
             NullLogger<MessageIngestService>.Instance);
     }
 }

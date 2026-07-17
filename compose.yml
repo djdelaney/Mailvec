@@ -125,6 +125,13 @@ services:
     restart: unless-stopped
     environment:
       MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-600}
+      # Liveness beat (read by mcp's /health via MbsyncHeartbeatFile) lands at
+      # dirname(MBSYNC_MAILDIR)/.mailvec-mbsync-heartbeat. MBSYNC_MAILDIR
+      # defaults to /mail/Fastmail (Dockerfile), so the beat is /mail/... and
+      # mcp derives the same path from dirname(Ingest__MaildirRoot=/mail/Fastmail).
+      # If you ever override MBSYNC_MAILDIR here, keep its PARENT equal to the
+      # parent of the mcp/indexer Ingest__MaildirRoot, or mbsync silently reads
+      # as "unknown" on /health forever (a path mismatch, not a real outage).
     volumes:
       - ./mail:/mail
       - ./mbsyncrc:/root/.mbsyncrc:ro
