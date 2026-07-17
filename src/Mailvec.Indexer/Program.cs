@@ -1,10 +1,12 @@
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Health;
 using Mailvec.Core.Logging;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Mailvec.Indexer.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -20,6 +22,7 @@ builder.Services.Configure<IndexerOptions>(builder.Configuration.GetSection(Inde
 
 builder.Services.AddSingleton<ConnectionFactory>();
 builder.Services.AddSingleton<SchemaMigrator>();
+builder.Services.AddSingleton<MetadataRepository>();
 builder.Services.AddSingleton<MessageRepository>();
 builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<SyncStateRepository>();
@@ -29,6 +32,15 @@ builder.Services.AddSingleton<MaildirScanner>();
 builder.Services.AddSingleton<MaildirWatcher>();
 
 builder.Services.AddHostedService<MessageIngestService>();
+
+// Liveness beat on its own timer, deliberately independent of the scan loop:
+// a multi-minute full scan must not be able to starve the beat and fake a
+// dead indexer. See ServiceHeartbeat.
+builder.Services.AddHostedService(sp => new HeartbeatService(
+    sp.GetRequiredService<SchemaMigrator>(),
+    sp.GetRequiredService<MetadataRepository>(),
+    ServiceHeartbeat.Indexer,
+    sp.GetRequiredService<ILogger<HeartbeatService>>()));
 
 var host = builder.Build();
 

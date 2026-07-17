@@ -76,7 +76,10 @@ internal static class CliServices
         services.AddSingleton<AttachmentTextExtractor>();
         // HealthService computes the same DB / embedding / Ollama snapshot the
         // MCP /health endpoint returns. `mailvec doctor` reuses it so the CLI
-        // and HTTP views can never disagree about what "healthy" means.
+        // and HTTP views can never disagree about what "healthy" means — which
+        // is also why MbsyncHeartbeatFile is registered here and not only in
+        // the MCP graph (CLAUDE.md: the two wirings must stay in lockstep).
+        services.AddSingleton<MbsyncHeartbeatFile>();
         services.AddSingleton<HealthService>();
 
         services.AddHttpClient<OllamaClient>((sp, client) =>

@@ -59,11 +59,36 @@ set -u
 : "${MBSYNC_INTERVAL_SECONDS:=600}"
 : "${MBSYNC_MAILDIR:=/mail/Fastmail}"
 mkdir -p "${MBSYNC_MAILDIR}"
+
+# Liveness beat, read by the MCP server's HealthService via
+# MbsyncHeartbeatFile (Mailvec.Core). This sidecar is the one service that
+# can't write the metadata table the others beat into — it's POSIX sh with no
+# SQLite — so it uses the Maildir bind mount it already shares with everything
+# else.
+#
+# Location: the PARENT of MBSYNC_MAILDIR, never inside it. MaildirScanner
+# walks the Maildir root, and Maildir++ names folders with a leading dot, so a
+# dotfile in the tree risks being parsed as a folder. Outside the root the
+# scanner never sees it.
+#
+# Format: ISO-8601 UTC, then the interval — the reader shouldn't have to know
+# this container's env to judge staleness. Written after every attempt,
+# including a failed sync: a loop retrying against a dead IMAP server is
+# alive, and that failure belongs in the log below, not in a fake death.
+HEARTBEAT="$(dirname "${MBSYNC_MAILDIR}")/.mailvec-mbsync-heartbeat"
+beat() {
+    printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_INTERVAL_SECONDS}" \
+        > "${HEARTBEAT}.tmp" 2>/dev/null \
+        && mv -f "${HEARTBEAT}.tmp" "${HEARTBEAT}" 2>/dev/null \
+        || true
+}
+
 child=
 trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child"; fi; exit 0' TERM INT
 while :; do
     mbsync -a & child=$!
     wait "$child" || echo "mbsync: sync failed (exit $?)" >&2
+    beat
     sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
     wait "$child"
 done

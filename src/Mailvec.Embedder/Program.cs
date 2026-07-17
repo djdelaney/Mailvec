@@ -2,6 +2,7 @@ using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
+using Mailvec.Core.Health;
 using Mailvec.Core.Logging;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
@@ -9,6 +10,7 @@ using Mailvec.Core.Vision;
 using Mailvec.Embedder.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http.Resilience;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -79,6 +81,16 @@ if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.Is
 }
 
 builder.Services.AddHostedService<EmbeddingWorker>();
+
+// Liveness beat on its own timer. Critical here specifically: one Ollama
+// batch or a single OCR page render routinely outlives the 30s poll
+// interval, so a beat emitted from the work loop would report a busy
+// embedder as dead. See ServiceHeartbeat.
+builder.Services.AddHostedService(sp => new HeartbeatService(
+    sp.GetRequiredService<SchemaMigrator>(),
+    sp.GetRequiredService<MetadataRepository>(),
+    ServiceHeartbeat.Embedder,
+    sp.GetRequiredService<ILogger<HeartbeatService>>()));
 
 var host = builder.Build();
 
