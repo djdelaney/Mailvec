@@ -10,17 +10,17 @@ The Anthropic / Google / OpenAI cloud clients (Claude.ai web app, Gemini in the 
 2. **OAuth 2.1 (PKCE).** Cloud connectors expect MCP's standard OAuth flow. The .NET MCP SDK has authentication scaffolding; the open call is the issuer — self-hosted, Cloudflare Access, or Tailscale identity in front are all viable, with different implications for who can approve a new login.
 3. **Per-tool authorization.** All current tools are read-only against the local DB and Maildir, so the simplest scope is "any authenticated user can call any tool." Revisit if mutating tools are added.
 
-Deferred because the value of "Claude.ai / ChatGPT / Gemini in the browser searching my email" is real but lower than the operational cost of running OAuth + a public tunnel for a single-user system. The Phase 5 local-agent path (Gemini CLI, Codex CLI, ChatGPT desktop) covers most of the same use cases without the auth surface or external tunnel dependency.
+**The Anthropic slice of this shipped.** Cloudflare Tunnel + Access Managed OAuth is live and serves every Claude surface — see [remote-access-cloudflare.md](remote-access-cloudflare.md) for the as-built wiring. So (1) and (2) above are solved *generically*: the tunnel and the OAuth front are vendor-agnostic infrastructure that a ChatGPT or Gemini connector could register against too.
 
-*Update: the Claude-iOS slice of this is no longer deferred — a concrete design exists in [remote-access-cloudflare.md](remote-access-cloudflare.md) (Cloudflare Tunnel + Access), and the Docker deployment already ships a `cloudflared` sidecar (`compose.yml`, `tunnel` profile) with go-live tracked in [deploy-docker.md](deploy-docker.md). The cross-vendor (ChatGPT/Gemini browser) part remains deferred.*
+**The cross-vendor part is still deferred, and the reason has changed.** It's no longer operational cost — that's a sunk cost now. It's (3): there is still no per-tool or per-client authorization. Today's model is "one identity, all seven tools, the whole mailbox." Adding a second vendor's connector means handing a second cloud that same unscoped access, and the Access policy has no way to say "this client gets `search_emails` but not `view_attachment`." That's a real design problem (Access service tokens per client? per-tool scopes at the origin?), not a config toggle — and it's the same hardening [security.md](security.md) parks under Phase 5. Un-defer when there's an actual reason to want a non-Claude cloud client, and expect to solve scoping first.
 
-## Tailnet-only access from another personal machine
+## ~~Tailnet-only access from another personal machine~~ (obsolete)
 
-A middle ground between local-only and public — laptop on the same Tailscale tailnet hitting the Mac mini's MCP server. Tailscale ACLs gate at the network layer, so no OAuth is needed; the change is two config knobs (`Mcp:BindAddress` from `127.0.0.1` to the tailnet IP, **and** the tailnet IP/hostname added to `Mcp:AllowedHosts` — HostGuard 403s any Host header that isn't loopback or allowlisted) plus a launchd plist re-render. Cheap when wanted; not built today.
+Was a middle ground between local-only and public: a laptop on the same Tailscale tailnet hitting the Mac mini's MCP server, gated by Tailscale ACLs at the network layer instead of OAuth. **Moot now.** The server no longer lives on the Mac, and the public OAuth-gated tunnel already reaches every device from anywhere — a tailnet path would be strictly more setup for strictly less reach. Kept only so the idea isn't re-proposed.
 
 ## Multi-user / federated identity
 
-Implied by any cloud-access path. Out of scope for this single-user system.
+Still out of scope — the archive is single-account and nothing scopes results per-caller, so a second identity on the Access policy would get the owner's entire mailbox rather than a view of their own. That's a data-model problem, not an auth-config one. See [security.md → What's out of scope](security.md#whats-out-of-scope).
 
 ## Packaged distribution (installer + notarized artifacts)
 

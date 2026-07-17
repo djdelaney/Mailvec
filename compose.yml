@@ -14,7 +14,10 @@
 #   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot — see
 #      "Migrating the archive from the Mac" in docs/deploy-docker.md
 #      (or set MAILVEC_REQUIRE_SEEDED_DB=0 in .env for a from-scratch build).
-#   5. docker compose up -d --build
+#   5. docker compose --profile tunnel up -d --build
+#      (--profile tunnel starts cloudflared, the only ingress to mcp; a plain
+#      `up -d` runs the pipeline but leaves it unreachable. Omit it only for
+#      a deliberately local/LAN-only bring-up.)
 #
 # ./data and ./mail must live on host-local disk: SQLite WAL needs real POSIX
 # file locking, so never place them on an NFS/SMB mount. The maildir is
@@ -61,13 +64,20 @@ services:
       Mcp__AllowedHosts__0: ${MCP_PUBLIC_HOSTNAME:-}
       Mcp__AllowedHosts__1: mcp
       Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
-      # REQUIRED before the tunnel goes live (docs/security.md): drop the two
-      # tools that feed mail bytes to native parsers (PDFium/SkiaSharp) and
-      # return whole raw documents. Server-side so the trim holds across the
-      # OAuth front AND the direct LAN port, which bypasses that front
-      # entirely. Uncomment at cloudflared go-live; an unknown name here
-      # fails startup on purpose (a typo would silently leave the tool
-      # exposed). See docs/remote-access-cloudflare.md.
+      # Drops the two tools that feed mail bytes to native parsers
+      # (PDFium/SkiaSharp) and return whole raw documents. Left OFF as a
+      # deliberate accepted risk: the embedder's OCR pass already feeds those
+      # same parsers unattended for every scanned attachment that arrives, and
+      # the Access gate admits one identity — so the trim would close the
+      # smaller half of an exposure that stays open either way.
+      #
+      # REINSTATE (uncomment) if any of that stops holding: a host port gets
+      # published below, a second identity joins the Access policy, the tunnel
+      # stops 404-ing /health + /tray/*, or a mutating tool lands. Full
+      # rationale + conditions: docs/security.md "What's accepted".
+      #
+      # An unknown name here fails startup on purpose (a typo would silently
+      # leave the tool exposed).
       # Mcp__DisabledTools__0: view_attachment
       # Mcp__DisabledTools__1: get_attachment_page_image
     volumes:
@@ -83,10 +93,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    # LAN access (pre-tunnel testing, or kept afterwards for on-network
-    # clients): uncomment to publish the port on the VM, and set
-    # MCP_LAN_HOSTNAME in .env to the address clients will use — HostGuard
-    # 403s it otherwise.
+    # No host port: the Cloudflare tunnel is the only ingress, and the
+    # security model's accepted risks depend on that. Publishing this exposes
+    # port 3333 to the whole LAN with NO auth — HostGuard is not an auth
+    # boundary, it only checks a spoofable Host header — bypassing the Access
+    # OAuth front entirely. If you do publish it (LAN-only testing), set
+    # MCP_LAN_HOSTNAME in .env or HostGuard 403s it, AND uncomment the
+    # Mcp__DisabledTools__* lines above. See docs/security.md.
     # ports:
     #   - "3333:3333"
 
@@ -119,10 +132,12 @@ services:
       - fastmail_password
 
   cloudflared:
-    # Behind a profile so the pipeline runs (and is LAN-testable) before the
-    # tunnel exists: plain `docker compose up -d` skips this service; add it
-    # at go-live with `docker compose --profile tunnel up -d` once
-    # TUNNEL_TOKEN and MCP_PUBLIC_HOSTNAME are set in .env.
+    # LIVE in the homelab: this is the only ingress to mcp, fronted by a
+    # Cloudflare Access self-hosted app (Managed OAuth). Bring the stack up
+    # with `docker compose --profile tunnel up -d` — a plain `up -d` SKIPS
+    # this service and silently leaves the deployment unreachable.
+    # Requires TUNNEL_TOKEN and MCP_PUBLIC_HOSTNAME in .env.
+    # See docs/remote-access-cloudflare.md.
     profiles: ["tunnel"]
     image: cloudflare/cloudflared:latest
     restart: unless-stopped

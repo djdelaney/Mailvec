@@ -1,14 +1,16 @@
 # Docker deployment (Proxmox homelab)
 
-Status as of 2026-07-06: image + compose stack built and smoke-tested locally
-(steps 1–6 below the fold); not yet deployed to the homelab. This documents
-the container strategy, the deployment strategy, and what's left.
+**Status: live.** The full Mailvec pipeline runs as a compose stack on the
+Docker VM on Proxmox, with **Ollama external** (the GPU-passthrough VM) and the
+MCP server exposed through a Cloudflare tunnel behind Access Managed OAuth
+([remote-access-cloudflare.md](remote-access-cloudflare.md)). The archive was
+seeded from a Mac snapshot; mbsync, OCR-on-Linux, and eval parity are all
+verified, and every Claude client now talks to the tunnel rather than the Mac.
+Nothing depends on the Mac being online.
 
-Target: the full Mailvec pipeline runs in a compose stack on the existing
-Docker VM on Proxmox, with **Ollama external** (the GPU-passthrough VM,
-already serving today's Mac deployment) and the MCP server exposed through a
-Cloudflare tunnel. Nothing depends on the Mac being online; the Mac becomes a
-pure MCP client.
+This documents the container strategy, the deployment strategy, and the
+remaining work (see [What's left](#whats-left) — the rollout is done; backups
+and the Mac decommission are not).
 
 ```
 fastmail ◄─IMAP── mbsync ──► ./mail ──► indexer ─┐
@@ -200,40 +202,52 @@ docker compose exec mcp mailvec doctor
   `-shm`** — those sidecars belong to the container's previous run, and a
   stale WAL applied onto the new main file corrupts it. This is the same
   footgun `ops/import-db.sh` handles on macOS; here it's manual.
-- **After parity holds**, stop the Mac pipeline (checklist item 7) — its
-  archive keeps diverging from the VM's the moment you export, so treat the
-  Mac copy as a frozen rollback, not a peer. The Mac's Claude Desktop stdio
-  MCP keeps serving the Mac's local copy until you switch clients over
-  (checklist item 6).
+- **After parity holds**, stop the Mac pipeline ([What's left](#whats-left)
+  #1) — its archive keeps diverging from the VM's the moment you export, so
+  treat the Mac copy as a frozen rollback, not a peer. (Clients have already
+  switched over, so the Mac's stdio MCP is no longer serving anything.)
 - **Ranking parity gate.** After the embedder settles, run
   `docker compose exec mcp mailvec eval` against the latest baseline in
   `baselines/`. Same model + same vectors means any drift implicates the
   .NET-on-Linux platform swap specifically.
-- **Exposure**: cloudflared sidecar, token-based tunnel, ingress →
-  `http://mcp:3333` (Streamable HTTP; `Mcp-Session-Id` passes through). The
-  MCP container publishes no host port by default. The DNS-rebinding
-  **HostGuard** (src/Mailvec.Mcp/HostGuard.cs, fronts every route) 403s any
-  Host header that isn't loopback or allowlisted — tunnel traffic carries the
-  public hostname, so `MCP_PUBLIC_HOSTNAME` in `.env` must be set when the
-  tunnel goes live (compose wires it to `Mcp:AllowedHosts`, alongside `mcp`
-  for in-network access). **Auth in front of the tunnel is tracked
-  separately** (see docs/security.md and future-ideas "cross-vendor access")
-  — `Mcp__BindAddress=0.0.0.0` inside the compose network is where the
-  README's bind-to-127.0.0.1 boundary stops applying, so the tunnel must not
-  go live before that work lands.
+- **Exposure**: cloudflared sidecar (compose `tunnel` profile), token-based
+  tunnel, ingress → `http://mcp:3333` (Streamable HTTP; `Mcp-Session-Id`
+  passes through), fronted by a Cloudflare Access self-hosted app using
+  Managed OAuth. The MCP container **publishes no host port** — the tunnel is
+  the only ingress, and keeping it that way is what the security model's
+  accepted risks rest on. The DNS-rebinding **HostGuard**
+  (src/Mailvec.Mcp/HostGuard.cs, fronts every route) 403s any Host header that
+  isn't loopback or allowlisted — tunnel traffic carries the public hostname,
+  so `MCP_PUBLIC_HOSTNAME` **must** be set in `.env` (compose wires it to
+  `Mcp:AllowedHosts`, alongside `mcp` for in-network access) or every tunnelled
+  request fails. `Mcp__BindAddress=0.0.0.0` inside the compose network is where
+  the old bind-to-127.0.0.1 boundary stops applying; Access is what replaced
+  it. Full model in [security.md](security.md), wiring in
+  [remote-access-cloudflare.md](remote-access-cloudflare.md).
 - **Health/monitoring**: compose healthcheck curls `/health` (30 s interval).
   Note `/health` returns 503 when Ollama is unreachable, so an Ollama VM
   outage shows as an *unhealthy mcp container* even though keyword search
   still works — informative, nothing restarts on it.
-- **Backups move to the VM**: cron the checkpoint-then-copy *flow* — the
-  `ops/export-db.sh` script itself is macOS-only (it pauses writers via
-  launchctl). The container equivalent:
+- **Backups are the VM's**, not Mailvec's: the Docker VM is covered by the
+  homelab's existing snapshot schedule with offsite shipping. That's a
+  **crash-consistent** layer — a snapshot can land mid-transaction, with the
+  `-wal` captured alongside the main file. SQLite is built for exactly that
+  (a crash-consistent volume snapshot is equivalent to a power cut, which WAL
+  recovery handles on next open), so this is a genuine backup, not a
+  hopeful one — **provided `./data` and its `-wal`/`-shm` sidecars sit on one
+  volume that snapshots atomically.** They do today; that's the invariant to
+  preserve if the storage layout ever changes.
+
+  An **app-consistent** copy is a stronger guarantee, and the only way to get
+  one is pause-checkpoint-copy. `ops/export-db.sh` is macOS-only (it pauses
+  writers via launchctl); the container equivalent is:
   `docker compose stop indexer embedder && docker compose exec mcp mailvec
   checkpoint && cp data/archive.sqlite <backup> && docker compose start
   indexer embedder` (mcp stays up — it's read-only against the DB, and the
-  CLI rides inside its container). Only a pause-checkpoint-copy sequence is
-  guaranteed-consistent; Proxmox/PBS snapshots are the crash-consistent
-  outer layer. Note `ConnectionFactory`
+  CLI rides inside its container). Worth running before anything that
+  migrates the DB in place (a new image — see the SchemaMigrator-on-start
+  warning above), and worth cronning only if VM-snapshot restores ever prove
+  unsatisfying in practice. Note `ConnectionFactory`
   hardens the DB dir/files to owner-only (0700/0600) on open — on the VM
   that owner is the container's root, so run backup reads via
   `docker compose exec` or as root on the host.
@@ -251,40 +265,56 @@ docker compose exec mcp mailvec doctor
 - macOS side unaffected: `dotnet build` clean, vec0-touching tests pass with
   the `runtimes/**` glob.
 
+## Done
+
+The rollout itself is complete. Kept as a record of what was verified, since
+each item was a distinct risk:
+
+1. ✅ **Deployed on the VM.** Repo cloned, compose.yml header steps followed
+   (`.env`, `mbsyncrc`, password secret, seeded DB, `up -d`). The real x86
+   build passed — the pre-deploy amd64 test had only ever run under Rosetta.
+2. ✅ **First real mbsync run**, with the indexer's reconciliation scan
+   completing behind it.
+3. ✅ **OCR on Linux**, proving the PDFium/SkiaSharp natives at runtime rather
+   than just on disk.
+4. ✅ **Eval parity** against the baseline — no drift from the .NET-on-Linux
+   platform swap.
+5. ✅ **Cloudflared go-live**, with `TUNNEL_TOKEN` + `MCP_PUBLIC_HOSTNAME` set
+   and the sidecar started via `docker compose --profile tunnel up -d`. The
+   auth front is a Cloudflare Access self-hosted app with Managed OAuth — **not**
+   the MCP Server Portal the plan had assumed
+   ([remote-access-cloudflare.md](remote-access-cloudflare.md) records why).
+   The `/health` + `/tray/*` 404s were verified from outside.
+   **Deviation:** the `Mcp__DisabledTools__*` tool-surface trim was **not**
+   applied — `view_attachment` and `get_attachment_page_image` remain exposed.
+   That's now a documented accepted risk with explicit invalidating
+   conditions, not an oversight; read
+   [security.md → What's accepted](security.md#whats-accepted) before changing
+   the Access policy or publishing a host port.
+6. ✅ **Client switch-over.** Every Claude surface (Code, Desktop, iOS,
+   claude.ai) uses the remote connector. The Claude Desktop MCPB/stdio bundle
+   is retired as a transport.
+7. ✅ **Mac pipeline decommissioned** (2026-07-16), via
+   `ops/install.sh --uninstall` — all four agents booted out and their plists
+   removed, so nothing re-bootstraps at login. Binaries, logs, the
+   `~/.local/bin/mailvec` shim, `~/Mail`, and the archive were all preserved;
+   the Mac is now a **development machine** running against that archive as a
+   frozen corpus ([local-dev-dataset.md](contributing/local-dev-dataset.md)).
+   The rollback snapshot from that doc's step 1 was **deliberately skipped** —
+   the VM is the production copy and carries the homelab's offsite backups, so
+   a pristine Mac copy would duplicate a rollback story that already exists.
+
 ## What's left
 
-1. **Deploy on the VM — LAN phase (no tunnel needed)**: clone repo, follow
-   the compose.yml header steps (`.env`, `mbsyncrc`, password secret, seed
-   DB, `up -d --build`). cloudflared sits behind the `tunnel` compose
-   profile, so plain `up -d` runs just the pipeline. For LAN clients,
-   uncomment the mcp `ports:` mapping and set `MCP_LAN_HOSTNAME` to the VM's
-   address (HostGuard 403s it otherwise), then point Claude Code at
-   `http://<vm-ip>:3333/` over HTTP transport. Everything below except
-   item 5 is testable in this phase. First `docker build` on real x86
-   hardware is the true amd64 test (local amd64 ran under Rosetta
-   emulation).
-2. **First real mbsync run** (not live-tested locally — needs IMAP
-   credentials): watch `docker compose logs mbsync` for the initial pull,
-   then confirm the indexer's reconciliation scan completes.
-3. **OCR spot-check on Linux**: render one scanned PDF end-to-end
-   (`get_attachment_page_image` or an embedder OCR cycle) to prove the
-   PDFium/SkiaSharp natives at runtime, not just their presence on disk.
-4. **Eval parity run** against the latest baseline (see above).
-5. **Cloudflared go-live**: blocked on the auth front (the portal-first /
-   Worker-fallback plan in docs/remote-access-cloudflare.md). When it lands:
-   **uncomment the `Mcp__DisabledTools__*` lines in compose.yml** (the
-   security.md-required tool-surface trim — server-side, so it also covers
-   the direct LAN port), set `TUNNEL_TOKEN` + `MCP_PUBLIC_HOSTNAME` in
-   `.env` (without the hostname, HostGuard 403s all tunnel traffic), and
-   start with `docker compose --profile tunnel up -d`.
-6. **Client switch-over**: Claude Code → tunnel URL (HTTP transport); Claude
-   Desktop → remote connector instead of the MCPB stdio bundle. The tray app
-   has no remote story yet (it polls `/tray/status`; future-ideas material).
-7. **Decommission the Mac pipeline** once parity holds — follow
-   [docs/contributing/local-dev-dataset.md](contributing/local-dev-dataset.md)
-   (rollback snapshot, then `ops/install.sh --uninstall`, mbsync included).
-   Don't use `ops/stop.sh` for this: it leaves mbsync running by default and
-   the plists re-bootstrap at the next login, so the pipeline quietly comes
-   back after a reboot. The Mac's archive then lives on as the frozen local
-   dev corpus.
-8. **Backup cron on the VM** (export-db flow) + PBS schedule.
+1. **The tray app has no remote story — open, deliberately parked.** It polls
+   `/tray/status`, which is in-network only and 404'd at the tunnel, so the
+   tray has no path to the live deployment. Three ways out, none chosen yet:
+   keep it as a local-dev-only tool against the frozen corpus; give `/tray/*`
+   an authenticated remote path (which means designing auth for the origin —
+   today it has none, by design); or retire it. Not urgent — nothing else
+   depends on it — but it shouldn't drift as unowned code indefinitely.
+
+Backups are **not** on this list: the Docker VM is covered by the homelab's
+existing snapshot schedule with offsite shipping. See the backup bullet above
+for what that does and doesn't guarantee, and the one storage-layout invariant
+it rests on.
