@@ -87,6 +87,24 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task Health_endpoint_reports_the_binary_version()
+    {
+        // Deploy verification leans on this: after pinning a v* image tag,
+        // one /health call must say which version is actually serving
+        // (docs/deploy-docker.md "Deploying it"). Pins presence and the
+        // three-part shape, and that it matches the stamped assembly version.
+        using var client = _factory.CreateClient();
+
+        var doc = JsonDocument.Parse(await (await client.GetAsync("/health")).Content.ReadAsStringAsync());
+
+        doc.RootElement.TryGetProperty("version", out var version).ShouldBeTrue();
+        var value = version.GetString();
+        value.ShouldNotBeNull();
+        value.ShouldMatch(@"^\d+\.\d+\.\d+$");
+        value.ShouldBe(typeof(Mailvec.Core.Health.HealthService).Assembly.GetName().Version?.ToString(3));
+    }
+
+    [Fact]
     public async Task Health_endpoint_carries_per_service_liveness()
     {
         // The /health body must expose the indexer/embedder/mbsync liveness the

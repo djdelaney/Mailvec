@@ -167,8 +167,9 @@ already passed CI on main.
 **Deploying it:** pin both vars in `.env` to `:v0.1.30`, then
 `docker compose pull && docker compose up -d` (backup first — the
 SchemaMigrator-on-start rule above), and verify the loop closes:
-`docker compose exec mcp mailvec status` must print the same version as
-the image tag.
+`/health` reports a `version` field
+(`docker compose exec mcp curl -s localhost:3333/health`) that must equal
+the image tag; `docker compose exec mcp mailvec status` prints the same.
 
 ## Migrating the archive from the Mac
 

@@ -175,6 +175,7 @@ public class DoctorHealthChecksTests
         OllamaHealth? ollama = null)
         => new(
             Status: "ok",
+            Version: "0.0.0",
             Database: database ?? Db(),
             Embeddings: embeddings ?? Emb(),
             Ollama: ollama ?? Oll(),
