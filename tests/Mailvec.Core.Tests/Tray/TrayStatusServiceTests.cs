@@ -292,6 +292,7 @@ public class TrayStatusServiceTests
     {
         return new HealthReport(
             Status: "ok",
+            Version: "0.0.0",
             Database: new DatabaseHealth(
                 Path: "/tmp/x.sqlite",
                 MessagesTotal: messagesTotal,

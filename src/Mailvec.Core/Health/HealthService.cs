@@ -32,6 +32,14 @@ public sealed class HealthService(
     // no sidecar writes the beat file.
     MbsyncHeartbeatFile? mbsyncHeartbeat = null)
 {
+    // The version /health reports. Core's own assembly, not the entry
+    // assembly: every Mailvec assembly is stamped from the one repo-wide
+    // <Version> in Directory.Build.props, so the value is identical to what
+    // serverInfo.version / `mailvec status` report — but Core's stamp stays
+    // correct under test hosts too (the entry assembly there is testhost).
+    private static readonly string BinaryVersion =
+        typeof(HealthService).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+
     public async Task<HealthReport> CheckAsync(CancellationToken ct = default)
     {
         var (total, deleted, embedded, chunks, lastIndexedAt) = ReadCounts();
@@ -145,6 +153,7 @@ public sealed class HealthService(
 
         return new HealthReport(
             Status: status,
+            Version: BinaryVersion,
             Database: new DatabaseHealth(
                 Path: PathExpansion.Expand(archiveOpts.Value.DatabasePath),
                 MessagesTotal: total,
@@ -280,9 +289,13 @@ public sealed class HealthService(
 /// It is informational: it never contributes to <c>Status</c>, because /health
 /// is the mcp container's own healthcheck and a dead sibling container must
 /// not mark MCP unhealthy. See the comment at the Status switch.
+/// <c>Version</c> is the running binary's version (same value as
+/// serverInfo.version and `mailvec status`) so a deploy can verify the pinned
+/// image tag against what's actually serving, with one /health call.
 /// </summary>
 public sealed record HealthReport(
     string Status,
+    string Version,
     DatabaseHealth Database,
     EmbeddingHealth Embeddings,
     OllamaHealth Ollama,

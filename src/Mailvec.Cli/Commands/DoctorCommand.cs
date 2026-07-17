@@ -503,6 +503,7 @@ internal static class DoctorCommand
 
         return new HealthReport(
             Status: mismatch ? "degraded" : "ok",
+            Version: typeof(DoctorCommand).Assembly.GetName().Version?.ToString(3) ?? "unknown",
             Database: new DatabaseHealth(
                 Path: PathExpansion.Expand(archive.DatabasePath),
                 MessagesTotal: total,
