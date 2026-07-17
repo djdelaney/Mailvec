@@ -126,7 +126,17 @@ public sealed class LaunchdInspectorTests
             sleep 60
             """);
 
-        var (exit, stdout) = await inspector.RunAsync([], TimeSpan.FromSeconds(1), default);
+        // The timeout budget starts when Process.Start returns, so it has to
+        // cover shell spawn + `echo PARTIAL` + flush before the kill fires —
+        // the whole point being that partial output emitted pre-kill survives.
+        // 1s was too tight on GitHub's macOS runners (subprocess spawn there
+        // has a fat tail under parallel-test load): the shell occasionally
+        // hadn't reached its first line before the kill, so stdout came back
+        // "" and this test flaked. 5s is ample margin for the spawn+flush while
+        // still killing the process ~55s before its sleep would end. This value
+        // is not the behaviour under test — the kill/drain/join is — so a
+        // generous timeout costs nothing but a few seconds on this one test.
+        var (exit, stdout) = await inspector.RunAsync([], TimeSpan.FromSeconds(5), default);
 
         Assert.Equal(-1, exit);
         Assert.Equal("PARTIAL", stdout.Trim());
