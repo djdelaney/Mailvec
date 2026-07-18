@@ -64,6 +64,12 @@ services:
       Mcp__AllowedHosts__0: ${MCP_PUBLIC_HOSTNAME:-}
       Mcp__AllowedHosts__1: mcp
       Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
+      # The mail-bearing /tray/* surface is disabled here by the IMAGE
+      # (Mcp__EnableTrayEndpoints=false, baked into the Dockerfile) — nothing to
+      # set in compose. Don't set it true on an internet-fronted deployment:
+      # /tray/* is unauthenticated at the origin and returns mail content. See
+      # docs/security.md "/health and /tray/*".
+      #
       # Drops the two tools that feed mail bytes to native parsers
       # (PDFium/SkiaSharp) and return whole raw documents. Left OFF as a
       # deliberate accepted risk: the embedder's OCR pass already feeds those
@@ -73,8 +79,8 @@ services:
       #
       # REINSTATE (uncomment) if any of that stops holding: a host port gets
       # published below, a second identity joins the Access policy, the tunnel
-      # stops 404-ing /health + /tray/*, or a mutating tool lands. Full
-      # rationale + conditions: docs/security.md "What's accepted".
+      # stops 404-ing /tray/*, or a mutating tool lands. Full rationale +
+      # conditions: docs/security.md "What's accepted".
       #
       # An unknown name here fails startup on purpose (a typo would silently
       # leave the tool exposed).

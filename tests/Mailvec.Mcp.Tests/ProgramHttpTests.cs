@@ -236,7 +236,65 @@ public class TrayEndpointsHttpTests : IClassFixture<MailvecMcpFactory>
     }
 }
 
-public sealed class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
+/// <summary>
+/// Covers the internet-fronted posture: Mcp:EnableTrayEndpoints=false (baked
+/// into the container image) must remove the mail-bearing /tray/* surface at
+/// the origin — defense-in-depth behind the tunnel's path-404 — while leaving
+/// /health mapped for monitoring.
+/// </summary>
+public class TrayDisabledHttpTests : IClassFixture<TrayDisabledMcpFactory>
+{
+    private readonly TrayDisabledMcpFactory _factory;
+
+    public TrayDisabledHttpTests(TrayDisabledMcpFactory factory) => _factory = factory;
+
+    [Theory]
+    [InlineData("/tray/folders")]
+    [InlineData("/tray/status")]
+    [InlineData("/tray/email/1")]
+    [InlineData("/tray/system")]
+    public async Task Tray_endpoints_are_unmapped_when_disabled(string path)
+    {
+        // 404 = no route. The mail-bearing endpoints (/tray/email, /tray/folders,
+        // /tray/search, /tray/system) must not exist at the origin at all — not
+        // merely be gated — so a misconfigured tunnel rule can't reach them.
+        using var client = _factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Health_stays_mapped_when_tray_is_disabled()
+    {
+        // /health is mapped independently of the tray surface — disabling tray
+        // must not take monitoring down with it. 503 here (Ollama unreachable in
+        // tests), never 404.
+        using var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/health");
+
+        response.StatusCode.ShouldNotBe(HttpStatusCode.NotFound);
+        JsonDocument.Parse(await response.Content.ReadAsStringAsync())
+            .RootElement.TryGetProperty("status", out _).ShouldBeTrue();
+    }
+}
+
+public sealed class TrayDisabledMcpFactory : MailvecMcpFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureAppConfiguration((_, config) =>
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Mcp:EnableTrayEndpoints"] = "false",
+            }));
+    }
+}
+
+public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
 {
     private readonly string _tempDir;
     private readonly string _dbPath;

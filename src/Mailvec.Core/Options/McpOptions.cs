@@ -28,6 +28,22 @@ public sealed class McpOptions
     /// </summary>
     public string[] DisabledTools { get; set; } = [];
 
+    /// <summary>
+    /// Whether to map the plain-REST <c>/tray/*</c> endpoints (consumed only by
+    /// the macOS menu-bar tray app). Default true for the loopback / launchd
+    /// install. **Set false on any internet-fronted deployment** — the tray
+    /// surface is unauthenticated at the origin and returns mail content
+    /// (<c>/tray/email/{id}</c> = full bodies, <c>/tray/folders</c> = folder map,
+    /// <c>/tray/search</c> = full-text search, <c>/tray/system</c> = IMAP
+    /// account), yet nothing consumes it in a container (the tray is a local
+    /// macOS client). Disabling it at the origin is defense-in-depth that holds
+    /// even if the tunnel's path-404 rule is ever wrong — the same
+    /// server-side-authoritative reasoning as <see cref="DisabledTools"/>. The
+    /// container image bakes this to false; see docs/security.md. <c>/health</c>
+    /// is mapped separately and is unaffected.
+    /// </summary>
+    public bool EnableTrayEndpoints { get; set; } = true;
+
     public int SearchDefaultLimit { get; set; } = 20;
     public int SearchMaxLimit { get; set; } = 100;
 
