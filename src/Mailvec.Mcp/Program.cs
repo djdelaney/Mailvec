@@ -117,8 +117,28 @@ static async Task RunHttp(string[] args)
             : Results.Json(report, statusCode: StatusCodes.Status503ServiceUnavailable);
     });
     // /tray/* serves the SwiftUI menu-bar app — plain REST, not MCP-framed.
-    // See TrayEndpoints.cs.
-    app.MapTrayEndpoints();
+    // Gated off on internet-fronted deployments (Mcp:EnableTrayEndpoints=false,
+    // baked into the container image): the surface is unauthenticated at the
+    // origin and returns mail content, and nothing consumes it in a container.
+    // Origin-side disable is defense-in-depth behind the tunnel's path-404 —
+    // it holds even if that ingress rule is ever misconfigured. See
+    // TrayEndpoints.cs and docs/security.md. /health above is unaffected.
+    // Read from the bound options (post-Build), NOT the builder-time mcpOpts:
+    // it's the DI-registered value, so an env var / appsettings override — and
+    // the container image's baked Mcp__EnableTrayEndpoints=false — is reflected
+    // here. (The builder-time mcpOpts is only used for Kestrel/middleware wiring
+    // that has to happen before Build.)
+    var trayEnabled = app.Services.GetRequiredService<IOptions<McpOptions>>().Value.EnableTrayEndpoints;
+    if (trayEnabled)
+    {
+        app.MapTrayEndpoints();
+    }
+    else
+    {
+        app.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Mailvec.Mcp.Startup")
+            .LogInformation("Tray endpoints (/tray/*) disabled by Mcp:EnableTrayEndpoints=false.");
+    }
     app.MapMcp();
     await app.RunAsync().ConfigureAwait(false);
 }

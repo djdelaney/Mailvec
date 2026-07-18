@@ -32,34 +32,58 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | **MCP HTTP (public)** | `mailvec.<domain>` via Cloudflare Tunnel → `mcp:3333` | **Cloudflare Access Managed OAuth (OAuth 2.1 / PKCE), single-identity policy** | the owner, from any Claude surface — and Anthropic's cloud, which is what actually issues the calls |
 | MCP HTTP (in-network) | `0.0.0.0:3333` inside the compose network (`Mcp__BindAddress`) | none — HostGuard only | the cloudflared sidecar and any other container on the network. **No host port is published**; publishing one exposes this unauthenticated to the LAN |
 | MCP stdio | child process of the spawning agent | inherits agent's identity | dormant — retired as the Claude Desktop transport; still available for local dev |
-| `/health`, `/tray/*` | same Kestrel as MCP HTTP | none at the origin; **Access covers the whole subdomain**, so they're OAuth-gated too | in-network only — **404'd at the tunnel** *and* behind Access (see below) |
+| `/health` | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a `/health`-path-scoped Access **service token** (Uptime Kuma) |
+| `/tray/*` | **not mapped in the container** (`Mcp:EnableTrayEndpoints=false`) *and* 404'd at the tunnel | served nowhere reachable | nobody — it's a local macOS-only surface |
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and** rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
 | SQLite file | bind mount on the VM | unix permissions (0600, container root) | root on the VM, and every container that mounts `./data` |
 | Maildir | bind mount on the VM | unix permissions; mounted **read-only** into every service except mbsync | same |
 
-**`/health` and `/tray/*` are unauthenticated at the origin** — they leak mail
-bodies (`/tray/email/<id>`), the IMAP username (`/tray/system`), and accept
-mutating POSTs (`/tray/control`, `/tray/attachment`). **Two independent layers
-keep them off the internet, and the redundancy is deliberate:**
+### `/health` and `/tray/*`
 
-1. **Cloudflare Access covers the entire subdomain**, not a path subset — so
-   these endpoints require OAuth exactly like MCP does.
-2. **The tunnel's public-hostname rules 404 them** *before* the catch-all that
-   forwards to `mcp:3333` (MCP is mounted at `/`, so there is no narrower path
-   to allow-list instead).
+Both are unauthenticated at the origin, but they carry very different data, so
+they have deliberately different postures: `/health` is forwarded through the
+tunnel for monitoring, while the mail-bearing `/tray/*` is kept off the internet
+by two independent barriers.
 
-Verified from outside at go-live and re-checked 2026-07-16: both
-`https://mailvec.<domain>/health` and `/tray/status` return **404**, not an
-Access login redirect — i.e. layer 2 fires first, with layer 1 behind it.
+**`/health` — intentionally forwarded, single-layer (Access).** It's the
+monitoring endpoint: Uptime Kuma polls it end-to-end *through the tunnel*, which
+also catches tunnel / Access / edge / cert failures an in-network probe can't.
+Its body is low-sensitivity operational data (status, counts, model, per-service
+liveness) — with one thing worth knowing: it includes the internal Ollama LAN
+IP. Access gates it, and the Kuma **service token is scoped to the `/health`
+path only** (a path-scoped Access app that takes precedence over the root app),
+so the monitoring credential can't reach MCP or the tray even if it leaks from
+Kuma's store. Single-layer is the accepted trade for having an external health
+probe; the endpoint carries nothing that warrants defense-in-depth.
 
-**Don't collapse this to one layer.** Scoping the Access app to a path subset,
-or reordering the ingress rules, each removes a layer *silently* — nothing
-fails loudly, the endpoints just become reachable. Layer 2 is the weaker of the
-two: the dashboard's path-matching semantics are undocumented for
-remotely-managed tunnels (see
-[remote-access-cloudflare.md → Still open](remote-access-cloudflare.md#still-open)),
-which is precisely why layer 1 exists. Re-run the `curl -i` checks after any
-change to either.
+**`/tray/*` — mail-bearing, so belt-and-braces.** These return mail content
+(`/tray/email/<id>` = full bodies, `/tray/folders` = folder map + counts,
+`/tray/search` = full-text search, `/tray/system` = IMAP account) and accept
+mutating POSTs (`/tray/control`, `/tray/attachment`), all unauthenticated at the
+origin. They exist for the local macOS tray app and have **no consumer in the
+container**. Two independent barriers now keep them unreachable, either
+sufficient on its own:
+
+1. **Disabled at the origin.** `Mcp:EnableTrayEndpoints=false` is baked into the
+   container image (Dockerfile), so `mcp` never maps `/tray/*` — a request gets
+   a plain Kestrel 404, no handler runs. Server-side and authoritative: it holds
+   regardless of the tunnel config, the same reasoning as `Mcp:DisabledTools`.
+   This is the load-bearing barrier.
+2. **404'd at the tunnel.** The cloudflared ingress 404s the `/tray/` path
+   before the catch-all that forwards to `mcp:3333`.
+
+(Access covering the subdomain is a third barrier against anonymous callers, but
+the origin disable is the one to rely on — it's server-side and independent of
+any Cloudflare config.)
+
+**Don't re-enable `/tray/*` on an internet-fronted deployment.** The surface has
+no per-request auth of its own; giving it a remote story means building that
+first (see [future-ideas.md](future-ideas.md)). The macOS / loopback install
+keeps `EnableTrayEndpoints=true` because there the surface is loopback-only.
+
+**Verify after any ingress or image change** (with a valid service token):
+`curl -i .../tray/folders` must return **404** (origin unmapped), and
+`curl -i .../health` must return the health JSON.
 
 ## The other shape: a loopback-only local install
 
@@ -96,7 +120,7 @@ After a rebind the browser still sends `Host: evil.com`, so the request is refus
 
 **The tunnel depends on this.** cloudflared forwards the original public `Host` header, so `MCP_PUBLIC_HOSTNAME` must be set in the VM's `.env` (compose wires it into `Mcp:AllowedHosts`, alongside `mcp` for in-network access) or **every request through the tunnel 403s**. See [remote-access-cloudflare.md](remote-access-cloudflare.md).
 
-The guard is defense-in-depth, **not** the auth boundary — that's Cloudflare Access. A `Host` header is trivially spoofed by anything that can already reach the origin, so HostGuard buys nothing against a caller inside the compose network or on the LAN if a port were published. It defends specifically against the browser-mediated rebinding vector. The tunnel's ingress rules must still 404 `/health` and `/tray/*` in their own right.
+The guard is defense-in-depth, **not** the auth boundary — that's Cloudflare Access. A `Host` header is trivially spoofed by anything that can already reach the origin, so HostGuard buys nothing against a caller inside the compose network or on the LAN if a port were published. It defends specifically against the browser-mediated rebinding vector. Note `/tray/*` is additionally unmapped in the container (`Mcp:EnableTrayEndpoints=false`) and 404'd at the tunnel — see [the endpoint posture above](#health-and-tray); `/health` is intentionally forwarded for monitoring.
 
 ## What's accepted
 

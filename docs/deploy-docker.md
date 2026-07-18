@@ -291,7 +291,11 @@ each item was a distinct risk:
    auth front is a Cloudflare Access self-hosted app with Managed OAuth — **not**
    the MCP Server Portal the plan had assumed
    ([remote-access-cloudflare.md](remote-access-cloudflare.md) records why).
-   The `/health` + `/tray/*` 404s were verified from outside.
+   **Endpoint posture:** `/health` is forwarded through the tunnel for Uptime
+   Kuma (single-layer Access, monitoring); `/tray/*` is disabled at the origin
+   (`Mcp:EnableTrayEndpoints=false`, baked into the image) *and* 404'd at the
+   tunnel, because it returns mail content and has no container consumer. See
+   [security.md → `/health` and `/tray/*`](security.md#health-and-tray).
    **Deviation:** the `Mcp__DisabledTools__*` tool-surface trim was **not**
    applied — `view_attachment` and `get_attachment_page_image` remain exposed.
    That's now a documented accepted risk with explicit invalidating
@@ -314,12 +318,15 @@ each item was a distinct risk:
 ## What's left
 
 1. **The tray app has no remote story — open, deliberately parked.** It polls
-   `/tray/status`, which is in-network only and 404'd at the tunnel, so the
-   tray has no path to the live deployment. Three ways out, none chosen yet:
-   keep it as a local-dev-only tool against the frozen corpus; give `/tray/*`
-   an authenticated remote path (which means designing auth for the origin —
-   today it has none, by design); or retire it. Not urgent — nothing else
-   depends on it — but it shouldn't drift as unowned code indefinitely.
+   `/tray/*`, which the container now disables outright
+   (`Mcp:EnableTrayEndpoints=false`) *and* the tunnel 404s — the surface
+   returns mail content with no per-request auth, so it stays off the
+   internet-fronted deployment. Three ways out, none chosen yet: keep it as a
+   local-dev-only tool against the frozen corpus; give `/tray/*` an
+   authenticated remote path (which means designing auth for the origin — today
+   it has none, by design — before re-enabling the flag); or retire it. Not
+   urgent — nothing else depends on it — but it shouldn't drift as unowned code
+   indefinitely.
 
 Backups are **not** on this list: the Docker VM is covered by the homelab's
 existing snapshot schedule with offsite shipping. See the backup bullet above

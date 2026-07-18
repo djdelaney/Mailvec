@@ -127,10 +127,18 @@ RUN chmod +x /usr/local/bin/mailvec-entrypoint
 # highest-precedence config source, so these beat the appsettings.json values
 # published alongside each binary. MAILVEC_LAUNCHD is deliberately NOT set:
 # the Serilog console sink is what feeds `docker logs`.
+#
+# Mcp__EnableTrayEndpoints=false is a SECURITY default, not just a tidy one: the
+# /tray/* surface is unauthenticated at the origin and returns mail content, and
+# nothing consumes it in a container (the tray is a local macOS client). Baking
+# false here means the container is safe by construction — even a compose file
+# that forgets to set it, and even if the tunnel's /tray/ path-404 rule is ever
+# misconfigured, serves no tray data. See docs/security.md.
 ENV Archive__DatabasePath=/data/archive.sqlite \
     Archive__SqliteVecExtensionPath=./vec0.so \
     Ingest__MaildirRoot=/mail \
     Mcp__BindAddress=0.0.0.0 \
+    Mcp__EnableTrayEndpoints=false \
     Mcp__AttachmentDownloadDir=/data/downloads \
     MAILVEC_LOG_DIR=/logs
 

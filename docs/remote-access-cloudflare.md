@@ -156,36 +156,42 @@ Two things in the compose stack are load-bearing for the tunnel:
   `docker compose --profile tunnel up -d`. The tunnel is remotely-managed:
   `tunnel --no-autoupdate run`, no `cloudflared tunnel login`, no config.yml.
 
-**Unauthenticated surfaces are 404'd at the tunnel, before the catch-all.** MCP
-is mounted at the root `/` (there is no dedicated "MCP path" to allow-list), so
-the shape is deny-then-forward — same hostname, path-differentiated, in this
-order:
+**Ingress: forward MCP + `/health`, 404 the mail-bearing `/tray/`.** MCP is
+mounted at the root `/` (there is no dedicated "MCP path" to allow-list), so the
+shape is path-differentiated on the same hostname, in this order:
 
 | # | Hostname | Path | Service |
 |---|---|---|---|
-| 1 | `mailvec.<domain>` | `health` | `http_status:404` |
-| 2 | `mailvec.<domain>` | `tray/` | `http_status:404` |
-| 3 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
-| 4 | *(catch-all)* | | `http_status:404` |
+| 1 | `mailvec.<domain>` | `tray/` | `http_status:404` |
+| 2 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
+| 3 | *(catch-all)* | | `http_status:404` |
 
-These 404s were verified from outside at go-live and re-checked 2026-07-16.
-**Re-verify with `curl -i https://mailvec.<domain>/health` and `/tray/status`
-after any change to the tunnel's public-hostname rules** — `/health` and
-`/tray/*` are unauthenticated at the origin (the security model assumed
-loopback/compose-network isolation), so a rule reordering exposes mail bodies
-via `/tray/email/<id>` and the IMAP username via `/tray/system`. Expect a
-**404**, not an Access login redirect: the 404 means the ingress rule fired
-before the origin was ever consulted.
+`/health` is deliberately **not** 404'd — it falls through rule 2 to `mcp:3333`
+so Uptime Kuma can poll it end-to-end through the tunnel (which also detects
+tunnel / Access / edge failures an in-network probe can't). See
+[security.md → `/health` and `/tray/*`](security.md#health-and-tray) for why
+`/health` is single-layer (low-sensitivity, monitoring) while `/tray/*` is
+belt-and-braces (mail content).
 
-**The Access app is scoped to the whole subdomain**, so those endpoints are
-OAuth-gated *as well as* 404'd — two independent layers. That redundancy is
-load-bearing, because this layer is the weaker one (path-matching semantics are
-undocumented, see [Still open](#still-open)). **Don't narrow the Access app to a
-path subset** on the theory that MCP is the only thing that needs gating; that
-silently makes the ingress rules the sole protection for mail bodies. The
-compose healthcheck curls `/health` from inside the network and is unaffected by
-any of this. Belt-and-braces third option if the rules ever get fragile: a
-zone-level WAF custom rule blocking URI paths `/health` and `/tray/*`.
+**`/tray/*` has two independent barriers**, and the origin one is load-bearing —
+do not rely on this ingress rule alone:
+
+1. **Origin:** `Mcp:EnableTrayEndpoints=false` (container image) — `mcp` never
+   maps `/tray/*`; a request 404s from Kestrel with no handler. Holds regardless
+   of tunnel config.
+2. **Tunnel:** rule 1 above 404s `/tray/` before the catch-all.
+
+**Verify after any ingress or image change** (authenticated with the `/health`
+service token): `curl -i .../tray/folders` → **404**, `curl -i .../health` →
+health JSON. The compose healthcheck curls `/health` from inside the network and
+is unaffected. Belt-and-braces third option if the rules get fragile: a
+zone-level WAF rule blocking URI path `/tray/*`.
+
+**Scope the monitoring service token to `/health`.** The Uptime Kuma service
+token passes Access; if it's authorized on the whole-subdomain app it can reach
+MCP (i.e. read mail) should it leak from Kuma's store. Put it on a **path-scoped
+Access app for `/health`** (a more-specific path app takes precedence over the
+root identity app), so the monitoring credential can only ever hit `/health`.
 
 The mcp container publishes **no host port** — the tunnel is the only ingress.
 Keep it that way: a published `ports:` mapping is reachable from the LAN
@@ -233,7 +239,7 @@ that not being true.
    remotely-managed tunnels. The external `curl -i` checks confirm the current
    rules behave; the semantics are still unpinned, so prefer the
    tunnel-configurations API over the dashboard field when editing them, and
-   re-run the checks. Lower stakes than it looks — Access covers the whole
-   subdomain, so a path rule that silently stopped matching would expose these
-   endpoints to *authenticated* callers (i.e. you), not the internet. That's the
-   entire reason not to narrow the Access scope.
+   re-run the checks. The stakes are bounded for the sensitive surface: even if
+   the `/tray/` 404 rule silently stopped matching, `/tray/*` is *also* disabled
+   at the origin (`Mcp:EnableTrayEndpoints=false`), so no mail data is served.
+   The ingress rule is the outer of two barriers, not the only one.
