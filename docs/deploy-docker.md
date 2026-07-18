@@ -144,25 +144,31 @@ label and what its binaries report from `mailvec status` / the MCP handshake
 disagree forever — `publish-images.yml` enforces this: a `v*` push whose tag
 doesn't match `<Version>` fails before building anything.
 
-**Cutting a release** (dev machine, not the deploy host):
+**Cutting a release** (dev machine, not the deploy host). One command does the
+whole disciplined flow — push, wait for THIS commit's CI to go green, then tag —
+and refuses to tag a red/cancelled run:
 
 ```sh
-# 1. If the current <Version> has already been released, bump first
-#    (--patch default; --minor for a tool-surface change or a schema
-#    migration — the "back up first" flag in the tag name, since a new
-#    image migrates the seeded archive in place):
-ops/release.sh                # commits the bump; must be green on main
-# 2. Tag the green bump commit with the MATCHING version and push
-#    (release.sh prints these exact commands):
-git tag -a v0.1.30 -m "…" && git push origin v0.1.30
+# --patch default; --minor for a tool-surface change or a schema migration
+# (the "back up first" flag in the tag name, since a new image migrates the
+# seeded archive in place). --ship needs the `gh` CLI and the main branch.
+ops/release.sh --minor --ship
+```
+
+Or drive it by hand (what `--ship` automates), e.g. behind a PR:
+
+```sh
+ops/release.sh --minor          # commits the bump; must go green on main
+git tag -a v0.1.30 -m "…" && git push origin v0.1.30   # only after CI is green
 ```
 
 The tag push publishes `ghcr.io/<owner>/mailvec:v0.1.30` +
 `…/mailvec-mbsync:v0.1.30` (plus the commit's `sha-` tag). It does **not**
 move `:latest` (green-main / manual-dispatch only) — and note the `v*`
 trigger is **not test-gated**, unlike the green-main path (it only checks
-tag↔version agreement), so the release rule is: only tag commits that
-already passed CI on main.
+tag↔version agreement). That non-gating is exactly why the release rule is
+"only tag commits that already passed CI on main," and why `--ship` exists to
+enforce it rather than leaving it to discipline.
 
 **Deploying it:** pin both vars in `.env` to `:v0.1.30`, then
 `docker compose pull && docker compose up -d` (backup first — the
