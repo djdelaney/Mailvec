@@ -35,18 +35,19 @@ public sealed class SearchEmailsTool(
 
     [McpServerTool(Name = "search_emails")]
     [Description(
-        "Search or browse the local email archive. " +
+        "Search or browse the user's mail — a complete, continuously-synced local mirror of their entire " +
+        "mailbox, from mail that arrived minutes ago to years of history (not a static or historical archive). " +
         "If `query` is provided, runs hybrid (keyword + semantic) ranked search by default. " +
         "If `query` is omitted, returns the most recent messages matching the filters, sorted by date descending — " +
         "use this for 'show me my recent INBOX mail' or 'find all email from invoice@anthropic.com' style requests. " +
         "For attachment-seeking asks ('what PDFs did I get last month', 'that email with the spreadsheet from Dan'), " +
         "set `attachmentType` (e.g. 'pdf', 'image') or `hasAttachments=true` — with or without a query. " +
-        "The archive may span 10+ years and hundreds of thousands of messages; every response includes " +
-        "`archiveStats` (totalMessages, oldestDate, latestDate) so you can gauge actual scope, and " +
-        "`appliedFilters` echoing the filters you used. " +
+        "The mailbox may span 10+ years and hundreds of thousands of messages; every response includes " +
+        "`archiveStats` (totalMessages, oldestDate, latestDate — latestDate tracks the user's newest mail, so it " +
+        "reaches the present) so you can gauge actual scope, and `appliedFilters` echoing the filters you used. " +
         "Strongly prefer setting `dateFrom`/`dateTo` whenever the user's question implies a time window " +
-        "('last week', 'last quarter', 'in 2023', 'recently', 'before I left $job', 'this year'); on a " +
-        "10-year archive, an unbounded query skews toward old mail and dilutes recent context. When in " +
+        "('last week', 'last quarter', 'in 2023', 'recently', 'before I left $job', 'this year'); across a " +
+        "full mailbox this size, an unbounded query skews toward old mail and dilutes recent context. When in " +
         "doubt for casual 'recently'-style asks, a 12-month lower bound is a safe default. " +
         "Each result carries the internal id, RFC message_id, folder, sender, date, snippet, and (for ranked queries) score breakdown. " +
         "When a match was driven by content inside a PDF/DOCX/text attachment rather than the email body, the result MAY include " +
@@ -70,7 +71,7 @@ public sealed class SearchEmailsTool(
                      "questions, scoping with `fromContains` (or `fromExact`) is even sharper than putting the domain in `query`.")]
         string? query = null,
         [Description("Search mode. Strongly prefer 'hybrid' (default): it fuses BM25 keyword ranking with vector similarity " +
-                     "via reciprocal rank fusion, and on this archive matches or beats either leg alone for almost every query. " +
+                     "via reciprocal rank fusion, and on this corpus matches or beats either leg alone for almost every query. " +
                      "Only drop to 'semantic' (vector only) when the user's query is purely conceptual AND contains no proper " +
                      "nouns, company/people names, domains, invoice/order numbers, URLs, or other exact-match tokens — pure " +
                      "vector loses the BM25 signal that catches those. Only use 'keyword' (BM25 only) when you have a precise " +
@@ -83,7 +84,7 @@ public sealed class SearchEmailsTool(
         string? folder = null,
         [Description("Earliest message date (inclusive), ISO 8601, e.g. '2024-01-01' or '2024-01-01T00:00:00Z'. " +
                      "Set this for any time-bounded question — even a loose lower bound (e.g. one year ago) " +
-                     "materially improves relevance on a multi-year archive. Omit only when the user is " +
+                     "materially improves relevance on a multi-year mailbox. Omit only when the user is " +
                      "explicitly asking across all-time history (e.g. 'the oldest email from X').")]
         string? dateFrom = null,
         [Description("Latest message date (inclusive), ISO 8601. Pair with `dateFrom` for explicit windows; " +

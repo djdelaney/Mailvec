@@ -251,6 +251,22 @@ static void ConfigureServerInfo(ModelContextProtocol.Server.McpServerOptions opt
         Title = "Mailvec",
         Version = asmVersion,
     };
+    // Sent to clients in the initialize handshake; clients typically fold it
+    // into the model's system prompt. This is the ONE place to establish the
+    // mental model, so the tool descriptions don't have to each re-litigate it.
+    // Why it exists: without it the only framing was the word "archive" scattered
+    // through tool descriptions, and models kept describing Mailvec to users as a
+    // static "email archive" (cold, historical) rather than what it is — a live,
+    // continuously-synced mirror of the whole mailbox including today's mail.
+    opts.ServerInstructions =
+        "Mailvec is a complete, continuously-synced local mirror of the user's entire mailbox — " +
+        "every message in every folder, from mail that arrived minutes ago to years of history. " +
+        "It is not a static or historical 'archive': new mail is pulled and indexed continuously, so it " +
+        "reflects the user's current, live mailbox up to the present. When you refer to it for the user, " +
+        "call it their mail or their mailbox (e.g. \"your email\"), not an \"archive\". " +
+        "Search covers all mail by default — use the dateFrom/dateTo filters to scope to a time window. " +
+        "The surface is read-only: you can search and read mail and attachments, but cannot send, reply, " +
+        "delete, or modify anything.";
 }
 
 // Required for WebApplicationFactory<Program> in tests to discover the entry point.
