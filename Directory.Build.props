@@ -14,7 +14,7 @@
       Tag releases as v(version) after the bump commit.
       (No double hyphen anywhere in this comment: XML forbids it.)
     -->
-    <Version>0.1.32</Version>
+    <Version>0.1.33</Version>
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
