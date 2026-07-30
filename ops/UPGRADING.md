@@ -17,7 +17,27 @@ dotnet restore && dotnet build
 - The `Microsoft.Extensions.*` cluster (Hosting, Configuration.Binder, Options, Logging.*, Http) moves together.
 - The Serilog cluster (Serilog + Sinks.* + Settings.Configuration + Extensions.Hosting) moves together.
 - `ModelContextProtocol` and `ModelContextProtocol.AspNetCore` must stay on the same version; the SDK assumes pinned-pair semantics.
+- **The MCP SDK sets a floor on the `Microsoft.Extensions.*` cluster, so the two clusters move together.** MCP 2.0.0 depends on `Microsoft.Extensions.*` / `System.*` at `10.0.10`; bumping MCP alone against a `10.0.9` cluster fails restore with `NU1109` (package downgrade) from an unrelated project — the error names `Mailvec.Cli.Tests` and a transitive `Diagnostics.Abstractions` chain, which points nowhere near the MCP bump that caused it. Bump both in the same commit.
+- **MCP 2.0.0 adds `Microsoft.Extensions.AI.Abstractions` to the graph** (a transitive of `ModelContextProtocol.Core`). Nothing references it directly; it matters only because it ships inside the self-contained MCPB bundle.
 - `MimeKit` and `AngleSharp` are independent — bump on their own cadence.
+
+### MCP SDK majors
+
+A major MCP SDK bump can change wire behaviour without changing a line of our code — verify the transport, not just the build. Going 1.4.0 → 2.0.0 flipped `HttpServerTransportOptions.Stateless` to true by default (see CLAUDE.md "MCP transport quirks"); we take that default. Post-bump check, with the server running:
+
+```sh
+# Sessionless call — must return results with no initialize and no session header.
+curl -s -X POST http://127.0.0.1:3333/ -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# Down-level handshake — must still return serverInfo + instructions.
+curl -s -X POST http://127.0.0.1:3333/ -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}'
+```
+
+Both must pass: the first is what current-revision clients do, the second is what the older Claude surfaces still do, and the SDK serves both off one binary. A `tools/call` that exercises the hybrid (Ollama) path is worth adding — the tool surface can look healthy in `tools/list` while embedding is broken.
 
 ## .NET SDK / runtime
 

@@ -48,7 +48,13 @@ The launchd plist sets `MAILVEC_LAUNCHD=1` to suppress Serilog's Console sink in
 
 ## Known quirks
 
-- **HTTP transport requires a session.** Streamable HTTP clients must `initialize` first, capture the `Mcp-Session-Id` response header, send `notifications/initialized`, and include the session header on every subsequent call. Claude Code handles this automatically, but if you ever `curl` the endpoint directly, calls without the session header silently 404.
+- **HTTP transport is sessionless.** As of MCP SDK 2.0 the Streamable HTTP transport is stateless by default, so there's no `initialize` handshake to complete and no `Mcp-Session-Id` to carry. `curl`-ing the endpoint directly works in one shot:
+
+  ```bash
+  curl -s -X POST http://127.0.0.1:3333/ -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+  ```
+
+  Clients still on an older protocol revision may open with `initialize` instead; that path is answered normally, it just returns no session header.
 - **No auth, 127.0.0.1 only.** Anything running on the same machine — under any local account — can call any tool. That's the threat model — see [`docs/security.md`](../security.md) (and [`docs/future-ideas.md`](../future-ideas.md) for the cloud-access framing).
 
 ## Verifying

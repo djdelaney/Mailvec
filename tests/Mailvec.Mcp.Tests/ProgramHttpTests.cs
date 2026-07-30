@@ -175,6 +175,65 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
 
         sw.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
     }
+
+    [Fact]
+    public async Task Mcp_endpoint_serves_tools_list_with_no_handshake_and_no_session()
+    {
+        // The MCP SDK is stateless by default as of 2.0 (the 2026-07-28 protocol
+        // revision) and we take that default — see CLAUDE.md "MCP transport
+        // quirks". Three things now depend on it being true: the one-shot curl
+        // recipes in docs/clients/claude-code.md and ops/UPGRADING.md, and
+        // docs/deploy-docker.md's claim that the tunnel needs no session
+        // affinity. Setting Stateless = false (the tempting move if someone
+        // wants server-initiated elicitation back) breaks all three at once and
+        // would otherwise only show up as a client-side 404 in production.
+        using var client = _factory.CreateClient();
+
+        var response = await client.SendAsync(JsonRpc("tools/list"));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        response.Headers.Contains("Mcp-Session-Id").ShouldBeFalse(
+            "stateless mode must not issue a session header");
+
+        var tools = ResultOf(await response.Content.ReadAsStringAsync())
+            .GetProperty("tools").EnumerateArray()
+            .Select(t => t.GetProperty("name").GetString()).ToList();
+        // The locked surface (CLAUDE.md "MCP API stability"), reachable without
+        // an initialize handshake.
+        tools.ShouldContain("search_emails");
+        tools.Count.ShouldBe(ToolSurface.All.Count);
+    }
+
+    /// <summary>
+    /// A bare JSON-RPC POST to the MCP endpoint. Streamable HTTP requires the
+    /// client to accept BOTH content types — omit either and the SDK answers
+    /// 406 before the request reaches a tool, which is an easy way to
+    /// misdiagnose a working server as broken when hand-rolling a curl probe.
+    /// </summary>
+    private static HttpRequestMessage JsonRpc(string method)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/")
+        {
+            Content = new StringContent(
+                $"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"{method}\"}}",
+                System.Text.Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
+        return request;
+    }
+
+    /// <summary>
+    /// Unwraps the JSON-RPC result, tolerating the SDK's SSE framing
+    /// ("event: message\ndata: {...}") as well as a plain JSON body.
+    /// </summary>
+    private static JsonElement ResultOf(string body)
+    {
+        const string dataPrefix = "data: ";
+        var idx = body.IndexOf(dataPrefix, StringComparison.Ordinal);
+        var json = idx >= 0 ? body[(idx + dataPrefix.Length)..] : body;
+        return JsonDocument.Parse(json).RootElement.GetProperty("result");
+    }
 }
 
 public class TrayEndpointsHttpTests : IClassFixture<MailvecMcpFactory>
