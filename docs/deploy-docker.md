@@ -224,8 +224,9 @@ docker compose exec mcp mailvec doctor
   `baselines/`. Same model + same vectors means any drift implicates the
   .NET-on-Linux platform swap specifically.
 - **Exposure**: cloudflared sidecar (compose `tunnel` profile), token-based
-  tunnel, ingress → `http://mcp:3333` (Streamable HTTP; `Mcp-Session-Id`
-  passes through), fronted by a Cloudflare Access self-hosted app using
+  tunnel, ingress → `http://mcp:3333` (Streamable HTTP, stateless — no
+  `Mcp-Session-Id` is issued, so no sticky routing or session affinity is
+  needed at the tunnel), fronted by a Cloudflare Access self-hosted app using
   Managed OAuth. The MCP container **publishes no host port** — the tunnel is
   the only ingress, and keeping it that way is what the security model's
   accepted risks rest on. The DNS-rebinding **HostGuard**
