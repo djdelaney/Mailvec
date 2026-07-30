@@ -39,6 +39,24 @@ curl -s -X POST http://127.0.0.1:3333/ -H 'Content-Type: application/json' \
 
 Both must pass: the first is what current-revision clients do, the second is what the older Claude surfaces still do, and the SDK serves both off one binary. A `tools/call` that exercises the hybrid (Ollama) path is worth adding — the tool surface can look healthy in `tools/list` while embedding is broken.
 
+#### Flipping stateful → stateless breaks connections that are already open
+
+**Every client connected at the moment of the switch keeps failing until it reconnects.** A client that handshook with the *old* stateful server was issued an `Mcp-Session-Id` and keeps sending it on every subsequent call; the stateless server rejects that header outright:
+
+```
+-32000 Bad Request: The Mcp-Session-Id header is not supported in stateless mode
+```
+
+This does **not** self-heal within the connection. The SDK returns a hard JSON-RPC error rather than a re-initialize nudge, so the client has no protocol-level signal to drop the now-invalid session and start over — it just keeps replaying the dead header. The fix is entirely client-side: reconnect the connector (reload it in the client's settings, or restart the session). Newly opened connections were never affected — they open against the stateless server, are issued no session id, and therefore send no session header.
+
+Observed for real on the 0.1.33 → 0.1.34 deploy (2026-07-30): one Claude connector that had been connected across the upgrade failed every call with the above, while a second connector entry against the same server worked normally — which is what isolates it to a stale client session rather than a server or protocol fault.
+
+Practical consequences when planning the deploy:
+
+- **The server is fine.** Don't debug the deployment on this symptom. The error text names the cause exactly, and `/health` plus a fresh client will both be green while an old connection is still failing.
+- **Warn anyone using a shared remote deployment**, since their connectors break at a moment they didn't choose. A single-user homelab is a "reconnect and move on"; a shared one is a support ticket per user.
+- It applies to the reverse flip too (stateless → stateful): a 2026-07-28 client sending a session id to a stateful server gets `-32022 UnsupportedProtocolVersion`. Treat any transport-mode change as client-affecting, not purely server-side.
+
 ## .NET SDK / runtime
 
 `net10.0` is declared once in `Directory.Build.props`; that's the only place to change it. There is no `global.json`, so the SDK floats to whatever's installed locally.
