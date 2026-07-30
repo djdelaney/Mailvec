@@ -381,6 +381,14 @@ public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
                 // Cap embedder timeout so a stuck call never costs more than the
                 // health endpoint's own 2s ping bound.
                 ["Ollama:RequestTimeoutSeconds"] = "5",
+                // Neutralize the developer's shared config. Every Mailvec binary
+                // reads ~/Library/Application Support/Mailvec/appsettings.Local.json
+                // (SharedConfig), so on a machine where the author has webmail
+                // links configured, a test asserting their presence passes for
+                // the wrong reason — and one asserting their absence fails only
+                // on that machine and only for them. Tests that want links on
+                // set the account id themselves.
+                ["Fastmail:AccountId"] = "",
             });
         });
     }
