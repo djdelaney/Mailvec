@@ -61,8 +61,14 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   Pull-only sync is enforced structurally: the maildir is mounted read-only
   into every service except mbsync.
 - **macOS-only code degrades, by design.** The `/tray/*` launchd inspector
-  returns "unloaded" without `launchctl`; `mailvec doctor` skips launchd
-  checks off-macOS. No code paths block Linux startup.
+  returns "unloaded" without `launchctl`. `mailvec doctor` detects the
+  container (`DOTNET_RUNNING_IN_CONTAINER` / `/.dockerenv`) and adapts rather
+  than warning: it reports compose as the supervisor instead of a missing
+  launchd, treats an absent `mbsync` binary as expected (sync runs in the
+  sidecar image), and probes `/health` on loopback rather than the configured
+  `0.0.0.0` bind. **Run it in the `mcp` service** — `indexer`/`embedder` share
+  the image but run no server, so a doctor there correctly reports `/health`
+  unreachable. No code paths block Linux startup.
 
 ## Deployment strategy
 

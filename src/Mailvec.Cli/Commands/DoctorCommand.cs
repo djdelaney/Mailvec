@@ -226,26 +226,13 @@ internal static class DoctorCommand
         }
         else
         {
-            checks.Add(DoctorCheck.Warn("launchd", $"skipped — only macOS is supported as a host today (running on {Environment.OSVersion.Platform}).", "services"));
+            checks.Add(NonLaunchdServicesCheck(InContainer(), Environment.OSVersion.Platform.ToString()));
         }
 
         // ---------------------------------------------------------------
         // External tools
         // ---------------------------------------------------------------
-        var mbsyncPath = ResolveOnPath("mbsync");
-        if (mbsyncPath is not null)
-        {
-            checks.Add(DoctorCheck.Ok("mbsync", mbsyncPath, "tools"));
-        }
-        else
-        {
-            // Only matters if the user wants unattended IMAP sync. Warn,
-            // don't fail — Mailvec itself doesn't shell out to mbsync at
-            // request time; it just reads the Maildir mbsync writes to.
-            checks.Add(DoctorCheck.Warn("mbsync",
-                "not on PATH. Mailvec doesn't invoke it at request time, but you'll need it (`brew install isync`) to schedule IMAP sync as a launchd agent.",
-                "tools"));
-        }
+        checks.Add(MbsyncToolCheck(ResolveOnPath("mbsync"), InContainer(), OperatingSystem.IsMacOS()));
 
         // mbsync exits 0 even when its sync fails (channel lock, DNS,
         // socket errors), so the launchctl-reported exit code above is
@@ -285,8 +272,7 @@ internal static class DoctorCommand
         // ---------------------------------------------------------------
         if (!skipNet)
         {
-            var url = $"http://{mcpOpts.BindAddress}:{mcpOpts.Port}/health";
-            checks.Add(await ProbeMcpHealthAsync(url, ct).ConfigureAwait(false));
+            checks.Add(await ProbeMcpHealthAsync(HealthProbeUrl(mcpOpts.BindAddress, mcpOpts.Port), ct).ConfigureAwait(false));
         }
         else
         {
@@ -687,9 +673,17 @@ internal static class DoctorCommand
         }
         catch (HttpRequestException)
         {
-            return DoctorCheck.Warn("MCP /health",
-                $"unreachable at {url}. The launchd agent might not be loaded — run `launchctl print gui/$UID/com.mailvec.mcp` or `ops/install.sh`.",
-                "mcp");
+            // Remediation has to match the deployment, or it sends the
+            // operator somewhere that doesn't exist. In a container there is
+            // no launchd and no ops/install.sh — and the likeliest cause is
+            // benign: indexer/embedder/mcp all run the SAME image, so a
+            // `docker compose exec indexer mailvec doctor` legitimately finds
+            // no server in its own namespace.
+            var remedy = InContainer()
+                ? "Only the `mcp` service serves it — indexer/embedder share the image but run no server, so this is expected from a sibling container. " +
+                  "Otherwise check `docker compose ps mcp` and `docker compose logs mcp`."
+                : "The launchd agent might not be loaded — run `launchctl print gui/$UID/com.mailvec.mcp` or `ops/install.sh`.";
+            return DoctorCheck.Warn("MCP /health", $"unreachable at {url}. {remedy}", "mcp");
         }
         catch (TaskCanceledException)
         {
@@ -700,6 +694,82 @@ internal static class DoctorCommand
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Where to probe /health, given the server's configured bind address.
+    ///
+    /// A wildcard bind ("listen on every interface") is not an address you can
+    /// connect TO. The container image bakes <c>Mcp__BindAddress=0.0.0.0</c>,
+    /// so the naive URL is <c>http://0.0.0.0:3333/health</c> — which Linux
+    /// happens to route to loopback but Windows and macOS refuse outright,
+    /// making doctor report a healthy server as unreachable purely because of
+    /// how it addressed it. Rewrite the wildcards to loopback; anything
+    /// specific is passed through untouched (a server bound to one interface
+    /// must be probed on that interface).
+    /// </summary>
+    internal static string HealthProbeUrl(string bindAddress, int port)
+    {
+        var host = bindAddress.Trim() switch
+        {
+            "0.0.0.0" or "*" or "+" => "127.0.0.1",
+            "::" or "[::]" or "::0" => "[::1]",
+            var other => other,
+        };
+        return $"http://{host}:{port}/health";
+    }
+
+    /// <summary>
+    /// The services-section verdict when there's no launchd to inspect.
+    /// Extracted (with <see cref="MbsyncToolCheck"/>) so the container
+    /// behaviour is testable from a Mac — otherwise the only way to see what
+    /// the actual deployment prints is to deploy.
+    /// </summary>
+    internal static DoctorCheck NonLaunchdServicesCheck(bool inContainer, string platform) =>
+        inContainer
+            // Not a warning: compose is the supervisor here, and the container
+            // IS the supported deployment (docs/deploy-docker.md). Warning
+            // about a missing launchd on the supported deployment trains the
+            // operator to skim doctor's warnings — which is exactly when a
+            // real one gets missed.
+            ? DoctorCheck.Ok("Supervisor", "compose (no launchd in a container)", "services")
+            : DoctorCheck.Warn("launchd", $"skipped — only macOS is supported as a host today (running on {platform}).", "services");
+
+    /// <summary>
+    /// The external-tool verdict for mbsync. Absent-from-PATH means different
+    /// things per deployment: on a host it's a real gap, in a container it's
+    /// the expected state because IMAP sync runs in its own sidecar image.
+    /// </summary>
+    internal static DoctorCheck MbsyncToolCheck(string? mbsyncPath, bool inContainer, bool isMacOs)
+    {
+        if (mbsyncPath is not null) return DoctorCheck.Ok("mbsync", mbsyncPath, "tools");
+
+        // The app image never ships mbsync — sync lives in the compose
+        // `mbsync` service (built FROM alpine). "Not on PATH" is correct
+        // there and must not warn; real sync health is covered by the stderr
+        // tail and the mbsync heartbeat file.
+        if (inContainer) return DoctorCheck.Ok("mbsync", "n/a — IMAP sync runs in the mbsync sidecar container", "tools");
+
+        // Only matters if the user wants unattended IMAP sync. Warn, don't
+        // fail — Mailvec never shells out to mbsync at request time; it just
+        // reads the Maildir mbsync writes to.
+        var install = isMacOs ? "brew install isync" : "install isync via your package manager";
+        return DoctorCheck.Warn("mbsync",
+            $"not on PATH. Mailvec doesn't invoke it at request time, but you'll need it (`{install}`) to schedule unattended IMAP sync.",
+            "tools");
+    }
+
+    /// <summary>
+    /// Whether this process is running inside a container, which changes what
+    /// several checks MEAN rather than just how they read: there is no
+    /// launchd, mbsync lives in a sidecar image, and the CLI may be executing
+    /// in a service that runs no MCP server. Microsoft's runtime images set
+    /// DOTNET_RUNNING_IN_CONTAINER; the marker files cover non-.NET-base and
+    /// Podman cases.
+    /// </summary>
+    internal static bool InContainer() =>
+        string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)
+        || File.Exists("/.dockerenv")
+        || File.Exists("/run/.containerenv");
 
     private static string? ResolveExtensionPath(string configured)
     {
