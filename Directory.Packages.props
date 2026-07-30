@@ -9,13 +9,13 @@
          runtimes/osx-arm64/native/vec0.dylib; fetch it via
          ops/fetch-sqlite-vec.sh. -->
     <PackageVersion Include="Microsoft.Data.Sqlite.Core"        Version="10.0.10" />
-    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3"     Version="3.0.3" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3"     Version="3.0.5" />
 
     <!-- MIME parsing -->
     <PackageVersion Include="MimeKit"                           Version="4.17.0" />
 
     <!-- HTML parsing for HTML-to-text conversion -->
-    <PackageVersion Include="AngleSharp"                        Version="1.5.1" />
+    <PackageVersion Include="AngleSharp"                        Version="1.6.0" />
 
     <!-- Attachment text extraction (PDF + DOCX). Pure-managed; no native deps. -->
     <PackageVersion Include="PdfPig"                            Version="0.1.15" />
@@ -28,7 +28,7 @@
          osx-x64 / linux-x64 / linux-arm64 (the latter via
          SkiaSharp.NativeAssets.Linux.NoDependencies, which needs no system
          fontconfig/freetype — ideal for a headless homelab box). -->
-    <PackageVersion Include="PDFtoImage"                       Version="5.2.1" />
+    <PackageVersion Include="PDFtoImage"                       Version="5.3.0" />
 
     <!-- TIFF decode for the image-OCR pass. SkiaSharp's native build ships no
          TIFF codec, so scanned-document TIFFs (common as email attachments) fail
@@ -48,10 +48,10 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions"     Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console"          Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Http"                     Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="10.7.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="10.8.0" />
 
     <!-- Serilog: rolling-file logging in-process, replaces a custom rotator. -->
-    <PackageVersion Include="Serilog"                                       Version="4.3.1" />
+    <PackageVersion Include="Serilog"                                       Version="4.4.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting"                    Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console"                         Version="6.1.1" />
     <PackageVersion Include="Serilog.Sinks.File"                            Version="7.0.0" />
@@ -62,11 +62,11 @@
     <PackageVersion Include="ModelContextProtocol.AspNetCore"   Version="2.0.0" />
 
     <!-- CLI -->
-    <PackageVersion Include="System.CommandLine"                Version="2.0.9" />
+    <PackageVersion Include="System.CommandLine"                Version="2.0.10" />
 
     <!-- Testing -->
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing"  Version="10.0.10" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk"            Version="18.7.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk"            Version="18.8.1" />
     <PackageVersion Include="xunit"                             Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio"         Version="3.1.5" />
     <PackageVersion Include="Shouldly"                          Version="4.3.0" />
@@ -74,7 +74,7 @@
     <!-- Test-only: decode rendered PNGs to assert dimensions / non-blank / per-
          region content for the PDF page-image tool. Matches the SkiaSharp
          version PDFtoImage resolves transitively. -->
-    <PackageVersion Include="SkiaSharp"                         Version="3.119.2" />
+    <PackageVersion Include="SkiaSharp"                         Version="4.150.1" />
   </ItemGroup>
 
 </Project>
