@@ -15,7 +15,7 @@
     <PackageVersion Include="MimeKit"                           Version="4.17.0" />
 
     <!-- HTML parsing for HTML-to-text conversion -->
-    <PackageVersion Include="AngleSharp"                        Version="1.6.0" />
+    <PackageVersion Include="AngleSharp"                        Version="1.7.0" />
 
     <!-- Attachment text extraction (PDF + DOCX). Pure-managed; no native deps. -->
     <PackageVersion Include="PdfPig"                            Version="0.1.15" />
@@ -74,7 +74,7 @@
     <!-- Test-only: decode rendered PNGs to assert dimensions / non-blank / per-
          region content for the PDF page-image tool. Matches the SkiaSharp
          version PDFtoImage resolves transitively. -->
-    <PackageVersion Include="SkiaSharp"                         Version="4.150.1" />
+    <PackageVersion Include="SkiaSharp"                         Version="4.151.0" />
   </ItemGroup>
 
 </Project>
