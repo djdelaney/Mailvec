@@ -144,4 +144,97 @@ public class DoctorCommandHelpersTests
         warn.ShouldBe(0);
         fail.ShouldBe(0);
     }
+
+    // -----------------------------------------------------------------
+    // Version check. The reason this exists: a green doctor run looks
+    // IDENTICAL on every release, so "did my deploy actually land?" needed a
+    // second command — and ops/redeploy.sh republishes services individually,
+    // so a launchd install can serve mixed binaries with all other checks
+    // passing.
+    // -----------------------------------------------------------------
+
+    [Fact]
+    public void Matching_versions_report_lockstep()
+    {
+        var check = DoctorCommand.BuildVersionCheck("0.1.36", "0.1.36", skipNet: false);
+
+        check.Status.ShouldBe("ok");
+        check.Section.ShouldBe("config");
+        check.Detail.ShouldContain("0.1.36");
+        check.Detail.ShouldContain("lockstep");
+    }
+
+    [Fact]
+    public void Mixed_binaries_warn_and_name_both_versions()
+    {
+        // The whole point of the check: ops/redeploy.sh mcp without cli (or
+        // vice versa) leaves a skew that every other check reports as fine.
+        // It warns rather than fails — mixed binaries are "fix this soon",
+        // not "Mailvec is down".
+        var check = DoctorCommand.BuildVersionCheck("0.1.35", "0.1.36", skipNet: false);
+
+        check.Status.ShouldBe("warn");
+        check.Detail.ShouldContain("0.1.35");
+        check.Detail.ShouldContain("0.1.36");
+        check.Detail.ShouldContain("redeploy");
+    }
+
+    [Fact]
+    public void Unreachable_server_still_prints_the_cli_version_without_a_second_warning()
+    {
+        // /health being down already has its own check. Warning here too
+        // would double-report one cause, and doctor's warnings are only
+        // useful while they stay scarce.
+        var check = DoctorCommand.BuildVersionCheck("0.1.36", serverVersion: null, skipNet: false);
+
+        check.Status.ShouldBe("ok");
+        check.Detail.ShouldContain("0.1.36");
+    }
+
+    [Fact]
+    public void No_net_reports_the_cli_version_and_says_why_it_did_not_compare()
+    {
+        var check = DoctorCommand.BuildVersionCheck("0.1.36", serverVersion: null, skipNet: true);
+
+        check.Status.ShouldBe("ok");
+        check.Detail.ShouldContain("0.1.36");
+        check.Detail.ShouldContain("--no-net");
+    }
+
+    [Fact]
+    public void Unknown_version_on_either_side_is_reported_not_treated_as_drift()
+    {
+        // An assembly with no version attribute reads as "unknown". Comparing
+        // it as a string would manufacture a drift warning out of missing
+        // metadata.
+        DoctorCommand.BuildVersionCheck("unknown", "0.1.36", skipNet: false).Status.ShouldBe("ok");
+        DoctorCommand.BuildVersionCheck("0.1.36", "unknown", skipNet: false).Status.ShouldBe("ok");
+    }
+
+    [Theory]
+    // The wire casing is the server's serializer policy, not ours — matching
+    // only one casing would silently read as "couldn't reach it".
+    [InlineData("{\"version\":\"0.1.36\",\"status\":\"ok\"}", "0.1.36")]
+    [InlineData("{\"Version\":\"0.1.36\"}", "0.1.36")]
+    public void TryReadVersion_extracts_the_version_regardless_of_casing(string body, string expected)
+    {
+        DoctorCommand.TryReadVersion(body).ShouldBe(expected);
+    }
+
+    [Theory]
+    // Anything unreadable must yield null, never a fabricated version: a
+    // proxy's HTML error page in front of /health would otherwise become a
+    // bogus drift warning.
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("<html>502 Bad Gateway</html>")]
+    [InlineData("{\"status\":\"ok\"}")]
+    [InlineData("{\"version\":null}")]
+    [InlineData("{\"version\":\"\"}")]
+    [InlineData("{\"version\":123}")]
+    [InlineData("[1,2,3]")]
+    public void TryReadVersion_returns_null_for_anything_it_cannot_read(string body)
+    {
+        DoctorCommand.TryReadVersion(body).ShouldBeNull();
+    }
 }

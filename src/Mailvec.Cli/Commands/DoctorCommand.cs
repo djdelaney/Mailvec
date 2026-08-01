@@ -270,14 +270,23 @@ internal static class DoctorCommand
         // ---------------------------------------------------------------
         // MCP HTTP /health — confirms the launchd agent is actually serving
         // ---------------------------------------------------------------
+        string? mcpVersion = null;
         if (!skipNet)
         {
-            checks.Add(await ProbeMcpHealthAsync(HealthProbeUrl(mcpOpts.BindAddress, mcpOpts.Port), ct).ConfigureAwait(false));
+            var (healthCheck, serverVersion) = await ProbeMcpHealthAsync(HealthProbeUrl(mcpOpts.BindAddress, mcpOpts.Port), ct).ConfigureAwait(false);
+            checks.Add(healthCheck);
+            mcpVersion = serverVersion;
         }
         else
         {
             checks.Add(DoctorCheck.Warn("MCP /health", "skipped (--no-net)", "mcp"));
         }
+
+        // Added last (it needs the /health answer) but shown first: "which
+        // build is this?" is the question you have before any of the others,
+        // and PrintHumanReport groups by section rather than by add order.
+        var cliVersion = typeof(DoctorCommand).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+        checks.Insert(0, BuildVersionCheck(cliVersion, mcpVersion, skipNet));
 
         return Emit(checks, json, Console.Out);
     }
@@ -647,7 +656,18 @@ internal static class DoctorCommand
         return DoctorCheck.Warn(label, "loaded but not running" + exitNote, "services");
     }
 
-    private static async Task<DoctorCheck> ProbeMcpHealthAsync(string url, CancellationToken ct)
+    /// <summary>
+    /// Probes /health and returns both the reachability check and the version
+    /// the server reported (null when we couldn't get a body to read).
+    ///
+    /// The version rides along rather than getting its own request because
+    /// <see cref="HealthReport"/> already carries it and this is the only
+    /// call that talks to the server — a second probe would double the 10s
+    /// worst case for a field we already have in hand. It's read on 503 too:
+    /// a degraded server still reports which binary is degraded, which is
+    /// exactly when you want to know.
+    /// </summary>
+    private static async Task<(DoctorCheck Check, string? ServerVersion)> ProbeMcpHealthAsync(string url, CancellationToken ct)
     {
         // 10s timeout. The /health endpoint legitimately takes 4–6s on the
         // first call after a redeploy: Ollama ping (up to 2s internal cap),
@@ -662,14 +682,15 @@ internal static class DoctorCommand
             var response = await http.GetAsync(url, ct).ConfigureAwait(false);
             if ((int)response.StatusCode == 200)
             {
-                return DoctorCheck.Ok("MCP /health", $"200 ok ({url})", "mcp");
+                var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                return (DoctorCheck.Ok("MCP /health", $"200 ok ({url})", "mcp"), TryReadVersion(body));
             }
             if ((int)response.StatusCode == 503)
             {
                 var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                return DoctorCheck.Warn("MCP /health", $"503 degraded — {Truncate(body, 200)}", "mcp");
+                return (DoctorCheck.Warn("MCP /health", $"503 degraded — {Truncate(body, 200)}", "mcp"), TryReadVersion(body));
             }
-            return DoctorCheck.Warn("MCP /health", $"unexpected status {(int)response.StatusCode} ({url})", "mcp");
+            return (DoctorCheck.Warn("MCP /health", $"unexpected status {(int)response.StatusCode} ({url})", "mcp"), null);
         }
         catch (HttpRequestException)
         {
@@ -683,12 +704,97 @@ internal static class DoctorCommand
                 ? "Only the `mcp` service serves it — indexer/embedder share the image but run no server, so this is expected from a sibling container. " +
                   "Otherwise check `docker compose ps mcp` and `docker compose logs mcp`."
                 : "The launchd agent might not be loaded — run `launchctl print gui/$UID/com.mailvec.mcp` or `ops/install.sh`.";
-            return DoctorCheck.Warn("MCP /health", $"unreachable at {url}. {remedy}", "mcp");
+            return (DoctorCheck.Warn("MCP /health", $"unreachable at {url}. {remedy}", "mcp"), null);
         }
         catch (TaskCanceledException)
         {
-            return DoctorCheck.Warn("MCP /health", $"no response within 10s ({url}).", "mcp");
+            return (DoctorCheck.Warn("MCP /health", $"no response within 10s ({url}).", "mcp"), null);
         }
+    }
+
+    /// <summary>
+    /// Pulls <c>version</c> out of a /health body. Property lookup is
+    /// case-insensitive because the wire casing is set by the server's
+    /// serializer options, not by us — matching only "version" would make
+    /// this silently return null (reading as "couldn't reach it") if that
+    /// policy ever changed. Any parse failure is null: a body we can't read
+    /// must not manufacture a version-drift warning.
+    /// </summary>
+    internal static string? TryReadVersion(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (!prop.NameEquals("version") && !string.Equals(prop.Name, "version", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                var value = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : null;
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON (a proxy error page, an HTML 503 from something in
+            // front of us). Nothing to report.
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// "Which build am I actually running, and is everything on it?"
+    ///
+    /// Two jobs. It always prints the CLI's own version — a green doctor run
+    /// is otherwise identical across releases, so confirming a deploy landed
+    /// meant a second command. And when /health answered, it compares that
+    /// version against the server's: <c>ops/redeploy.sh [indexer|embedder|mcp|cli
+    /// ...]</c> republishes services INDIVIDUALLY, so a launchd install can
+    /// sit on mixed binaries with every other check passing. That skew is the
+    /// precondition for the downgrade guard in
+    /// <see cref="SchemaMigrator.EnsureUpToDate"/>, and an older binary
+    /// silently lacks newer invariants (pre-v7 never bumps
+    /// <c>embed_epoch</c>) — so catching it here beats discovering it as
+    /// missing vectors later.
+    ///
+    /// Never fails, only warns: mixed binaries are a "fix this soon", not a
+    /// "Mailvec is broken". Unknown versions on either side are reported as
+    /// unknown rather than compared — an assembly with no version attribute
+    /// must not read as drift.
+    /// </summary>
+    internal static DoctorCheck BuildVersionCheck(string cliVersion, string? serverVersion, bool skipNet)
+    {
+        if (skipNet)
+        {
+            return DoctorCheck.Ok("Version", $"v{cliVersion} (cli; mcp not probed — --no-net)", "config");
+        }
+        if (serverVersion is null)
+        {
+            // /health didn't answer, or answered with nothing readable. That
+            // already has its own check further down; don't warn twice for
+            // one cause.
+            return DoctorCheck.Ok("Version", $"v{cliVersion} (cli; mcp version unavailable)", "config");
+        }
+        if (cliVersion == "unknown" || serverVersion == "unknown")
+        {
+            return DoctorCheck.Ok("Version", $"cli v{cliVersion}, mcp v{serverVersion}", "config");
+        }
+        if (string.Equals(cliVersion, serverVersion, StringComparison.Ordinal))
+        {
+            return DoctorCheck.Ok("Version", $"v{cliVersion} (cli + mcp in lockstep)", "config");
+        }
+
+        // Remediation has to match the deployment. In a container all four
+        // binaries ship in ONE image, so a mismatch never means "republish
+        // the CLI" — it means some container is still running an older image
+        // than the one you exec'd into.
+        var remedy = InContainer()
+            ? "the containers are on different images — `docker compose up -d` (add --force-recreate if a service was left behind)."
+            : "republish the stale one with `ops/redeploy.sh` — `dotnet build` alone doesn't update the installed binaries.";
+        return DoctorCheck.Warn("Version", $"cli v{cliVersion}, mcp /health reports v{serverVersion} — mixed binaries; {remedy}", "config");
     }
 
     // ---------------------------------------------------------------------
