@@ -19,7 +19,8 @@ dotnet restore && dotnet build
 - `ModelContextProtocol` and `ModelContextProtocol.AspNetCore` must stay on the same version; the SDK assumes pinned-pair semantics.
 - **The MCP SDK sets a floor on the `Microsoft.Extensions.*` cluster, so the two clusters move together.** MCP 2.0.0 depends on `Microsoft.Extensions.*` / `System.*` at `10.0.10`; bumping MCP alone against a `10.0.9` cluster fails restore with `NU1109` (package downgrade) from an unrelated project — the error names `Mailvec.Cli.Tests` and a transitive `Diagnostics.Abstractions` chain, which points nowhere near the MCP bump that caused it. Bump both in the same commit.
 - **MCP 2.0.0 adds `Microsoft.Extensions.AI.Abstractions` to the graph** (a transitive of `ModelContextProtocol.Core`). Nothing references it directly; it matters only because it ships inside the self-contained MCPB bundle.
-- `MimeKit` and `AngleSharp` are independent — bump on their own cadence.
+- **`SkiaSharp` follows `PDFtoImage`, never its own cadence.** PDFtoImage 5.3.0 declares `SkiaSharp [4.150.1, )`, and CPM means the single pinned version is what *both* the renderer and the test-side PNG decoder resolve to — so pinning below the floor breaks restore, and pinning ahead runs PDFium against a SkiaSharp it wasn't built with. Bump the two together. `.github/dependabot.yml` carries an `ignore` for SkiaSharp so it can't drift ahead one minor at a time; a *group* can't express this, because groups batch whatever updates exist rather than holding a member back.
+- `MimeKit` and `AngleSharp` are independent — bump on their own cadence. **AngleSharp still deserves a look on the way past**: it drives `HtmlToText`, so a behaviour change moves `body_text` for newly-parsed mail and for anything `rebuild-bodies` touches — which is the moment it reaches the index. Capture an eval baseline before a `rebuild-bodies --reembed` that follows an AngleSharp bump.
 
 ### MCP SDK majors
 

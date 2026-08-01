@@ -71,9 +71,13 @@
     <PackageVersion Include="xunit.runner.visualstudio"         Version="3.1.5" />
     <PackageVersion Include="Shouldly"                          Version="4.3.0" />
     <PackageVersion Include="coverlet.collector"                Version="10.0.1" />
-    <!-- Test-only: decode rendered PNGs to assert dimensions / non-blank / per-
-         region content for the PDF page-image tool. Matches the SkiaSharp
-         version PDFtoImage resolves transitively. -->
+    <!-- Test-only reference: decode rendered PNGs to assert dimensions /
+         non-blank / per-region content for the PDF page-image tool. NOT an
+         independent pin — CPM means this one version IS the SkiaSharp the
+         renderer uses too, so it must stay at or above the floor PDFtoImage
+         declares (5.3.0 asks for [4.150.1, )) and should track what PDFtoImage
+         was built against. Bump it with PDFtoImage, not on SkiaSharp's own
+         cadence; .github/dependabot.yml ignores it for exactly that reason. -->
     <PackageVersion Include="SkiaSharp"                         Version="4.151.0" />
   </ItemGroup>
 
