@@ -74,7 +74,7 @@
     <!-- Test-only: decode rendered PNGs to assert dimensions / non-blank / per-
          region content for the PDF page-image tool. Matches the SkiaSharp
          version PDFtoImage resolves transitively. -->
-    <PackageVersion Include="SkiaSharp"                         Version="4.150.1" />
+    <PackageVersion Include="SkiaSharp"                         Version="4.151.0" />
   </ItemGroup>
 
 </Project>
