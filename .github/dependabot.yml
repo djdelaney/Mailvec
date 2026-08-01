@@ -1,18 +1,32 @@
 # Dependabot config for Mailvec.
 #
-# Grouped to keep the PR count down, but the NuGet groups are shaped by the
-# cluster-pin invariants in ops/UPGRADING.md, NOT purely by update type. Those
-# clusters skew into obscure runtime DI/binding errors — or a restore failure
-# whose message points nowhere near the actual cause — if their members land in
-# separate PRs. The cluster groups are listed FIRST because Dependabot assigns
-# each dependency to the first group whose patterns match.
+# WHAT GROUPS DO AND DON'T DO — read this before adding one to "enforce" a
+# pin. A group batches the updates that are AVAILABLE in one run into a single
+# PR. It does NOT hold a member back when its partners have no update: if two
+# packages must move together and only one has a release, the group still ships
+# that one alone, just under the group's name. Observed here on 2026-08-01 —
+# a pdf-rendering group produced a SkiaSharp-only PR because PDFtoImage had no
+# release (#14, later superseded by #15).
+#
+# So the cluster-pin invariants in ops/UPGRADING.md are NOT enforced by this
+# file. They remain manual discipline. What the groups below buy is a smaller
+# PR count and, for the clusters, a PR that carries the whole cluster whenever
+# its members do all have updates — which is the common case and worth having.
+# Where a coupling genuinely must not be bumped independently, the tool is
+# `ignore` (see SkiaSharp), not a group.
+#
+# Group order matters: Dependabot assigns each dependency to the FIRST group
+# whose patterns match, so the cluster groups are listed before the
+# catch-all update-type ones.
 #
 # Central Package Management is on: every version lives in the root
 # Directory.Packages.props and csproj files carry no Version attribute. The
 # per-project `directories` list is how Dependabot finds the projects that
 # resolve against it — the root holds Mailvec.slnx (the .NET 10 XML solution
 # format), which Dependabot's NuGet support may not parse. Mailvec.Tray is
-# deliberately absent: it's a SwiftUI target with no csproj.
+# deliberately absent: it's a SwiftUI target with no csproj. Note the list is
+# not the full scope: Dependabot also discovered `.config/dotnet-tools.json`
+# on its own, which is why PRs can touch a directory not named here.
 
 version: 2
 updates:
@@ -33,7 +47,23 @@ updates:
       interval: "weekly"
     assignees:
       - "djdelaney"
+    ignore:
+      # NOT independently upgradable, so it gets `ignore` rather than a group.
+      # SkiaSharp must stay at or above the floor PDFtoImage declares
+      # (5.3.0 asks for [4.150.1, )) and is meant to track the version
+      # PDFtoImage was actually built against; the test-side decoder asserting
+      # on rendered PDF pages is the same assembly as the renderer's, so the
+      # pin is about matching PDFtoImage, not about SkiaSharp's own releases.
+      # Dependabot proposing it on SkiaSharp's cadence just walks it ahead of
+      # PDFtoImage one minor at a time. Bump it BY HAND when a PDFtoImage
+      # update lands — see ops/UPGRADING.md "Cluster-pin invariants".
+      - dependency-name: "SkiaSharp"
     groups:
+      # Each group below batches its cluster into one PR when the members have
+      # updates in the same run. It cannot force them to move together — see
+      # the header. Treat a group PR carrying only part of its cluster as a
+      # prompt to check ops/UPGRADING.md, not as a green light.
+      #
       # The MCP SDK floors the Microsoft.Extensions.* cluster (MCP 2.0.0 wants
       # 10.0.10), so bumping MCP against an older cluster fails restore with
       # NU1109 naming an unrelated project. ModelContextProtocol and
@@ -52,16 +82,11 @@ updates:
         patterns:
           - "Serilog"
           - "Serilog.*"
-      # SkiaSharp is pinned to match what PDFtoImage resolves transitively
-      # (see the comment on the SkiaSharp entry in Directory.Packages.props).
-      # Bumping either alone drifts the test-side decoder from the renderer.
-      pdf-rendering:
-        patterns:
-          - "PDFtoImage"
-          - "SkiaSharp"
       # Everything else — MimeKit, AngleSharp, PdfPig, OpenXml, LibTiff,
-      # SQLitePCLRaw, System.CommandLine, and the test packages — is
-      # independent and batches by update type.
+      # SQLitePCLRaw, PDFtoImage, System.CommandLine, and the test packages —
+      # is independent and batches by update type. AngleSharp is worth a closer
+      # read than its neighbours when it shows up here: it drives HtmlToText,
+      # so a change there moves body_text and therefore the index.
       nuget-minor-patch:
         update-types: ["minor", "patch"]
       nuget-major:
