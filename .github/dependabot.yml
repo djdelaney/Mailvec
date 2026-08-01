@@ -1,0 +1,78 @@
+# Dependabot config for Mailvec.
+#
+# Grouped to keep the PR count down, but the NuGet groups are shaped by the
+# cluster-pin invariants in ops/UPGRADING.md, NOT purely by update type. Those
+# clusters skew into obscure runtime DI/binding errors — or a restore failure
+# whose message points nowhere near the actual cause — if their members land in
+# separate PRs. The cluster groups are listed FIRST because Dependabot assigns
+# each dependency to the first group whose patterns match.
+#
+# Central Package Management is on: every version lives in the root
+# Directory.Packages.props and csproj files carry no Version attribute. The
+# per-project `directories` list is how Dependabot finds the projects that
+# resolve against it — the root holds Mailvec.slnx (the .NET 10 XML solution
+# format), which Dependabot's NuGet support may not parse. Mailvec.Tray is
+# deliberately absent: it's a SwiftUI target with no csproj.
+
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directories:
+      - "/src/Mailvec.Cli"
+      - "/src/Mailvec.Core"
+      - "/src/Mailvec.Embedder"
+      - "/src/Mailvec.Indexer"
+      - "/src/Mailvec.Mcp"
+      - "/src/Mailvec.Pdf"
+      - "/tests/Mailvec.Cli.Tests"
+      - "/tests/Mailvec.Core.Tests"
+      - "/tests/Mailvec.Embedder.Tests"
+      - "/tests/Mailvec.Indexer.Tests"
+      - "/tests/Mailvec.Mcp.Tests"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "djdelaney"
+    groups:
+      # The MCP SDK floors the Microsoft.Extensions.* cluster (MCP 2.0.0 wants
+      # 10.0.10), so bumping MCP against an older cluster fails restore with
+      # NU1109 naming an unrelated project. ModelContextProtocol and
+      # .AspNetCore must also match each other — the SDK assumes pinned-pair
+      # semantics. Microsoft.Data.Sqlite.Core and Mvc.Testing ride the same
+      # .NET servicing band, so they belong in the same PR.
+      dotnet-and-mcp:
+        patterns:
+          - "Microsoft.Extensions.*"
+          - "Microsoft.Data.Sqlite.Core"
+          - "Microsoft.AspNetCore.*"
+          - "ModelContextProtocol"
+          - "ModelContextProtocol.*"
+      # Serilog + sinks + settings move together.
+      serilog:
+        patterns:
+          - "Serilog"
+          - "Serilog.*"
+      # SkiaSharp is pinned to match what PDFtoImage resolves transitively
+      # (see the comment on the SkiaSharp entry in Directory.Packages.props).
+      # Bumping either alone drifts the test-side decoder from the renderer.
+      pdf-rendering:
+        patterns:
+          - "PDFtoImage"
+          - "SkiaSharp"
+      # Everything else — MimeKit, AngleSharp, PdfPig, OpenXml, LibTiff,
+      # SQLitePCLRaw, System.CommandLine, and the test packages — is
+      # independent and batches by update type.
+      nuget-minor-patch:
+        update-types: ["minor", "patch"]
+      nuget-major:
+        update-types: ["major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "djdelaney"
+    groups:
+      actions-all:
+        patterns: ["*"]
