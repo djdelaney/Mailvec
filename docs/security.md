@@ -32,7 +32,7 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | **MCP HTTP (public)** | `mailvec.<domain>` via Cloudflare Tunnel → `mcp:3333` | **Cloudflare Access Managed OAuth (OAuth 2.1 / PKCE), single-identity policy** | the owner, from any Claude surface — and Anthropic's cloud, which is what actually issues the calls |
 | MCP HTTP (in-network) | `0.0.0.0:3333` inside the compose network (`Mcp__BindAddress`) | none — HostGuard only | the cloudflared sidecar and any other container on the network. **No host port is published**; publishing one exposes this unauthenticated to the LAN |
 | MCP stdio | child process of the spawning agent | inherits agent's identity | dormant — retired as the Claude Desktop transport; still available for local dev |
-| `/up` (minimal: status + version) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a path-scoped Access **service token** (Uptime Kuma) — **migration pending, see below** |
+| `/up` (minimal: status/version + liveness booleans) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a path-scoped Access **service token** (Uptime Kuma) — **migration pending, see below** |
 | `/health` (detailed) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access | the owner. Also the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` |
 | `/tray/*` | **not mapped in the container** (`Mcp:EnableTrayEndpoints=false`) *and* 404'd at the tunnel | served nowhere reachable | nobody — it's a local macOS-only surface |
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and** rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
@@ -46,9 +46,14 @@ so they have deliberately different postures: `/up` is the internet-facing
 monitoring endpoint, `/health` is its detailed sibling, and the mail-bearing
 `/tray/*` is kept off the internet by two independent barriers.
 
-**`/up` — the minimal monitoring endpoint.** Body is `{status, version}` and
-nothing else; status codes are identical to `/health` (200 ok / 503 degraded),
-because monitors alert on the code. Uptime Kuma polls it end-to-end *through the
+**`/up` — the minimal monitoring endpoint.** The rule for its body is
+**booleans yes, values no**: `status`, `version`, and the flags the six Uptime
+Kuma monitors query — `ollama.reachable`, `embedder.stuck`,
+`embeddings.modelMismatch`, and per-service `stale`/`known`. Enough to say
+*something is wrong and which thing*, with nothing that says what anything **is**
+— no archive path, no corpus counts, no model identity, no Ollama address.
+Status codes are identical to `/health` (200 ok / 503 degraded), because
+monitors alert on the code. Uptime Kuma polls it end-to-end *through the
 tunnel*, which also catches tunnel / Access / edge / cert failures an in-network
 probe can't. Single-layer Access is the accepted trade for having an external
 probe — and with this body there is nothing left that would warrant
@@ -123,7 +128,7 @@ keeps `EnableTrayEndpoints=true` because there the surface is loopback-only.
 
 **Verify after any ingress or image change** (with a valid service token):
 `curl -i .../tray/folders` must return **404** (origin unmapped), and
-`curl -i .../up` must return `{"status":...,"version":...}`. Once the pending
+`curl -i .../up` must return the status/version/liveness-boolean body. Once the pending
 Access migration lands, add the negative check that actually proves the split:
 `curl -i .../health` with the **monitoring** token must be **denied**.
 
