@@ -293,6 +293,20 @@ public sealed class HealthService(
 /// serverInfo.version and `mailvec status`) so a deploy can verify the pinned
 /// image tag against what's actually serving, with one /health call.
 /// </summary>
+/// <summary>
+/// The minimal projection of <see cref="HealthReport"/> served by the MCP
+/// server's <c>/up</c> endpoint — the one an internet-facing monitor polls.
+/// Deliberately just the two fields: <c>Status</c> so the monitor can alert,
+/// <c>Version</c> so a deploy can confirm which build is actually serving.
+///
+/// Adding a field here widens what a leaked monitoring credential discloses.
+/// The ones deliberately absent are the archive's filesystem path, corpus
+/// counts, embedding model/dimensions, embedder failure detail, and the Ollama
+/// base URL — that last is an internal LAN address, on a host with no
+/// authentication of its own.
+/// </summary>
+public sealed record UpReport(string Status, string Version);
+
 public sealed record HealthReport(
     string Status,
     string Version,

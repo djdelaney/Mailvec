@@ -32,29 +32,55 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | **MCP HTTP (public)** | `mailvec.<domain>` via Cloudflare Tunnel → `mcp:3333` | **Cloudflare Access Managed OAuth (OAuth 2.1 / PKCE), single-identity policy** | the owner, from any Claude surface — and Anthropic's cloud, which is what actually issues the calls |
 | MCP HTTP (in-network) | `0.0.0.0:3333` inside the compose network (`Mcp__BindAddress`) | none — HostGuard only | the cloudflared sidecar and any other container on the network. **No host port is published**; publishing one exposes this unauthenticated to the LAN |
 | MCP stdio | child process of the spawning agent | inherits agent's identity | dormant — retired as the Claude Desktop transport; still available for local dev |
-| `/health` | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a `/health`-path-scoped Access **service token** (Uptime Kuma) |
+| `/up` (minimal: status + version) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a path-scoped Access **service token** (Uptime Kuma) — **migration pending, see below** |
+| `/health` (detailed) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access | the owner. Also the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` |
 | `/tray/*` | **not mapped in the container** (`Mcp:EnableTrayEndpoints=false`) *and* 404'd at the tunnel | served nowhere reachable | nobody — it's a local macOS-only surface |
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and** rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
 | SQLite file | bind mount on the VM | unix permissions (0600, container root) | root on the VM, and every container that mounts `./data` |
 | Maildir | bind mount on the VM | unix permissions; mounted **read-only** into every service except mbsync | same |
 
-### `/health` and `/tray/*`
+### `/up`, `/health` and `/tray/*`
 
-Both are unauthenticated at the origin, but they carry very different data, so
-they have deliberately different postures: `/health` is forwarded through the
-tunnel for monitoring, while the mail-bearing `/tray/*` is kept off the internet
-by two independent barriers.
+All three are unauthenticated at the origin, but they carry very different data,
+so they have deliberately different postures: `/up` is the internet-facing
+monitoring endpoint, `/health` is its detailed sibling, and the mail-bearing
+`/tray/*` is kept off the internet by two independent barriers.
 
-**`/health` — intentionally forwarded, single-layer (Access).** It's the
-monitoring endpoint: Uptime Kuma polls it end-to-end *through the tunnel*, which
-also catches tunnel / Access / edge / cert failures an in-network probe can't.
-Its body is low-sensitivity operational data (status, counts, model, per-service
-liveness) — with one thing worth knowing: it includes the internal Ollama LAN
-IP. Access gates it, and the Kuma **service token is scoped to the `/health`
-path only** (a path-scoped Access app that takes precedence over the root app),
-so the monitoring credential can't reach MCP or the tray even if it leaks from
-Kuma's store. Single-layer is the accepted trade for having an external health
-probe; the endpoint carries nothing that warrants defense-in-depth.
+**`/up` — the minimal monitoring endpoint.** Body is `{status, version}` and
+nothing else; status codes are identical to `/health` (200 ok / 503 degraded),
+because monitors alert on the code. Uptime Kuma polls it end-to-end *through the
+tunnel*, which also catches tunnel / Access / edge / cert failures an in-network
+probe can't. Single-layer Access is the accepted trade for having an external
+probe — and with this body there is nothing left that would warrant
+defense-in-depth.
+
+**`/health` — detailed, for callers that have already earned it.** Status,
+corpus counts, embedding model and dimensions, embedder failure detail, OCR
+backlog, per-service liveness, the archive's filesystem path, and the internal
+Ollama LAN URL. Its consumers are all local: the compose healthcheck (loopback,
+inside the container) and `mailvec doctor`'s HTTP probe (`docker compose exec`).
+Nothing outside the VM needs this body.
+
+**Why two paths rather than one endpoint with less detail.** The origin cannot
+authenticate anyone — Cloudflare Access is the entire gate — so path is the only
+axis on which different callers can be served different detail, and it happens
+to be the axis Access scopes on.
+
+**The name `/up` is load-bearing.** Access path wildcards partial-match *inside*
+a segment (`example.com/foo*/bar` covers `/food/bar`), so had this been
+`/healthz`, an app scoped `health*` would have covered `/health` too — handing
+the monitor the detailed body and quietly undoing the split. No wildcard over
+"health" reaches "up". **If either path is ever renamed, keep the two names
+prefix-disjoint.**
+
+> **Pending as of 2026-08-01.** `/up` exists in the server; the Cloudflare side
+> has *not* moved yet. Today Uptime Kuma still polls `/health`, and its service
+> token is admitted by the root Access application's `Any Access Service Token`
+> rule — so the monitoring credential currently reaches the whole MCP surface,
+> i.e. the entire mailbox. Narrowing that rule and creating a path-scoped app
+> for `/up` is tracked separately. Until that lands, treat the Kuma token as
+> equivalent to owner access, and do not describe `/health` as protected from
+> it. Verify with: Kuma token → `/up` succeeds, Kuma token → `/health` denied.
 
 **`/tray/*` — mail-bearing, so belt-and-braces.** These return mail content
 (`/tray/email/<id>` = full bodies, `/tray/folders` = folder map + counts,
@@ -83,7 +109,9 @@ keeps `EnableTrayEndpoints=true` because there the surface is loopback-only.
 
 **Verify after any ingress or image change** (with a valid service token):
 `curl -i .../tray/folders` must return **404** (origin unmapped), and
-`curl -i .../health` must return the health JSON.
+`curl -i .../up` must return `{"status":...,"version":...}`. Once the pending
+Access migration lands, add the negative check that actually proves the split:
+`curl -i .../health` with the **monitoring** token must be **denied**.
 
 ## Container hardening
 
@@ -162,7 +190,7 @@ After a rebind the browser still sends `Host: evil.com`, so the request is refus
 
 **The tunnel depends on this.** cloudflared forwards the original public `Host` header, so `MCP_PUBLIC_HOSTNAME` must be set in the VM's `.env` (compose wires it into `Mcp:AllowedHosts`, alongside `mcp` for in-network access) or **every request through the tunnel 403s**. See [remote-access-cloudflare.md](remote-access-cloudflare.md).
 
-The guard is defense-in-depth, **not** the auth boundary — that's Cloudflare Access. A `Host` header is trivially spoofed by anything that can already reach the origin, so HostGuard buys nothing against a caller inside the compose network or on the LAN if a port were published. It defends specifically against the browser-mediated rebinding vector. Note `/tray/*` is additionally unmapped in the container (`Mcp:EnableTrayEndpoints=false`) and 404'd at the tunnel — see [the endpoint posture above](#health-and-tray); `/health` is intentionally forwarded for monitoring.
+The guard is defense-in-depth, **not** the auth boundary — that's Cloudflare Access. A `Host` header is trivially spoofed by anything that can already reach the origin, so HostGuard buys nothing against a caller inside the compose network or on the LAN if a port were published. It defends specifically against the browser-mediated rebinding vector. Note `/tray/*` is additionally unmapped in the container (`Mcp:EnableTrayEndpoints=false`) and 404'd at the tunnel — see [the endpoint posture above](#up-health-and-tray); `/up` and `/health` are intentionally forwarded.
 
 ## What's accepted
 
