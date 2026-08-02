@@ -21,7 +21,13 @@ namespace Mailvec.Mcp;
 /// </summary>
 public static class HostGuard
 {
-    private static readonly string[] Loopback = ["localhost", "127.0.0.1", "::1"];
+    /// <summary>
+    /// Host-header names that are always allowed, whatever <c>Mcp:AllowedHosts</c>
+    /// says. Internal rather than private so <see cref="TrayExposureGuard"/>
+    /// classifies names against the same list — two copies would drift, and the
+    /// guard's job is to reason about exactly this set.
+    /// </summary>
+    internal static readonly string[] Loopback = ["localhost", "127.0.0.1", "::1"];
 
     public static HashSet<string> BuildAllowedHosts(IEnumerable<string>? configured)
     {

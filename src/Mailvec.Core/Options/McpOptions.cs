@@ -40,7 +40,15 @@ public sealed class McpOptions
     /// even if the tunnel's path-404 rule is ever wrong — the same
     /// server-side-authoritative reasoning as <see cref="DisabledTools"/>. The
     /// container image bakes this to false; see docs/security.md. <c>/health</c>
-    /// is mapped separately and is unaffected.
+    /// and <c>/up</c> are mapped separately and are unaffected.
+    ///
+    /// <para>**This is enforced, not merely defaulted.** Leaving it true on a
+    /// server that isn't loopback-only — a non-loopback <see cref="BindAddress"/>,
+    /// or a non-loopback name in <see cref="AllowedHosts"/> — makes the MCP
+    /// server refuse to start (<c>TrayExposureGuard</c>). Note the bind address
+    /// is the signal that matters: HostGuard always admits the loopback Host
+    /// names, so a 0.0.0.0 bind is reachable by anything that can route to the
+    /// port even with AllowedHosts entirely empty.</para>
     /// </summary>
     public bool EnableTrayEndpoints { get; set; } = true;
 

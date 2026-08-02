@@ -381,6 +381,45 @@ public class TrayDisabledHttpTests : IClassFixture<TrayDisabledMcpFactory>
     }
 }
 
+/// <summary>
+/// Pins that TrayExposureGuard is actually WIRED IN, not merely present.
+/// TrayExposureGuardTests covers the decision matrix by calling the guard
+/// directly, so deleting the two lines in Program.cs that invoke it would leave
+/// every one of those tests green while the dangerous config boots happily —
+/// the exact "tests pass, production broken" shape the MCP surface tests exist
+/// to prevent. This one goes through the real startup path.
+/// </summary>
+public class TrayExposureGuardWiringTests
+{
+    [Fact]
+    public void Server_refuses_to_start_with_tray_enabled_on_a_non_loopback_bind()
+    {
+        using var factory = new ExposedTrayMcpFactory();
+
+        // The guard throws during app startup, so the failure surfaces when the
+        // host is first built rather than on the request.
+        var ex = Should.Throw<InvalidOperationException>(() => factory.CreateClient());
+
+        ex.Message.ShouldContain("Mcp:EnableTrayEndpoints");
+        ex.Message.ShouldContain("0.0.0.0");
+    }
+}
+
+/// <summary>The refused combination: mail-bearing tray surface, off-host bind.</summary>
+public sealed class ExposedTrayMcpFactory : MailvecMcpFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureAppConfiguration((_, config) =>
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Mcp:EnableTrayEndpoints"] = "true",
+                ["Mcp:BindAddress"] = "0.0.0.0",
+            }));
+    }
+}
+
 public sealed class TrayDisabledMcpFactory : MailvecMcpFactory
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)

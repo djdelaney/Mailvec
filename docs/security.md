@@ -95,8 +95,22 @@ sufficient on its own:
    a plain Kestrel 404, no handler runs. Server-side and authoritative: it holds
    regardless of the tunnel config, the same reasoning as `Mcp:DisabledTools`.
    This is the load-bearing barrier.
-2. **404'd at the tunnel.** The cloudflared ingress 404s the `/tray/` path
+2. **The combination is unrepresentable.** `TrayExposureGuard` makes the server
+   **refuse to start** if the tray is enabled on anything but a loopback-only
+   deployment. So re-enabling it in a container isn't a risky setting — it's a
+   crash on boot with a message saying which knob to change. A default only
+   protects until someone overrides it; this holds even then.
+3. **404'd at the tunnel.** The cloudflared ingress 404s the `/tray/` path
    before the catch-all that forwards to `mcp:3333`.
+
+**What the guard treats as "exposed"** — and this is the part worth
+understanding, because the intuitive answer is wrong. The trigger is a
+non-loopback `Mcp:BindAddress`, or a non-loopback name in `Mcp:AllowedHosts`.
+It is deliberately **not** "is a public hostname configured", because HostGuard
+always admits the loopback Host names whatever `AllowedHosts` says: a server
+bound to `0.0.0.0` with an entirely empty `AllowedHosts` is still readable by
+anything that can route to the port — it just sends `Host: localhost`. Keying
+the guard off a configured hostname would miss exactly that shape.
 
 (Access covering the subdomain is a third barrier against anonymous callers, but
 the origin disable is the one to rely on — it's server-side and independent of
