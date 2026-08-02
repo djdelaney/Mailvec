@@ -296,16 +296,52 @@ public sealed class HealthService(
 /// <summary>
 /// The minimal projection of <see cref="HealthReport"/> served by the MCP
 /// server's <c>/up</c> endpoint — the one an internet-facing monitor polls.
-/// Deliberately just the two fields: <c>Status</c> so the monitor can alert,
-/// <c>Version</c> so a deploy can confirm which build is actually serving.
 ///
-/// Adding a field here widens what a leaked monitoring credential discloses.
-/// The ones deliberately absent are the archive's filesystem path, corpus
-/// counts, embedding model/dimensions, embedder failure detail, and the Ollama
-/// base URL — that last is an internal LAN address, on a host with no
-/// authentication of its own.
+/// <para>The rule for this shape is <b>booleans yes, values no</b>. Everything
+/// here answers "is something wrong", and nothing here says what the thing IS.
+/// Deliberately absent: the archive's filesystem path, corpus and chunk counts,
+/// embedding model identity and dimensions, embedder failure timestamps and
+/// kinds, OCR counts, per-service beat timestamps, and the Ollama base URL —
+/// that last being an internal LAN address, on a host with no authentication of
+/// its own. A leaked monitoring credential learns that the embedder is stuck,
+/// not how much mail there is or where any of it lives.</para>
+///
+/// <para><b>The field names are a wire contract with Uptime Kuma.</b> Six
+/// monitors evaluate JSONata against this body — <c>ollama.reachable</c>,
+/// <c>embedder.stuck</c>, <c>embeddings.modelMismatch</c>, and
+/// <c>services[service='indexer'|'embedder'|'mbsync'].stale</c>. The paths are
+/// deliberately identical to <see cref="HealthReport"/>'s so a query written
+/// against either endpoint works on both. Renaming or nesting anything here
+/// silently breaks a monitor: JSONata resolves the missing path to nothing, and
+/// a monitor that can never match its expected value just sits red (or, worse,
+/// green-because-nothing-matched, depending on the comparison). See
+/// docs/monitoring-uptime-kuma.md.</para>
 /// </summary>
-public sealed record UpReport(string Status, string Version);
+public sealed record UpReport(
+    string Status,
+    string Version,
+    UpEmbeddings Embeddings,
+    UpOllama Ollama,
+    UpEmbedder Embedder,
+    IReadOnlyList<UpServiceLiveness> Services);
+
+/// <summary>Whether the schema's embedding model disagrees with config — not which model.</summary>
+public sealed record UpEmbeddings(bool ModelMismatch);
+
+/// <summary>Whether Ollama answered — not its address, and not which model it serves.</summary>
+public sealed record UpOllama(bool Reachable);
+
+/// <summary>Whether the embedder is failing to drain — not since when, or with what error.</summary>
+public sealed record UpEmbedder(bool Stuck);
+
+/// <summary>
+/// Per-service liveness, minus the beat timestamps and cadence that
+/// <see cref="ServiceLiveness"/> carries. <c>Known</c> rides along because
+/// "unknown" and "stale" are different answers (a fresh database or a
+/// just-restarted worker is not a dead one) and a monitor author needs to be
+/// able to tell them apart.
+/// </summary>
+public sealed record UpServiceLiveness(string Service, bool Known, bool Stale);
 
 public sealed record HealthReport(
     string Status,

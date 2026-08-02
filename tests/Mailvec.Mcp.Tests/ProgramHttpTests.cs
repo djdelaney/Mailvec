@@ -60,16 +60,60 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         var body = await (await client.GetAsync("/up")).Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(body);
 
-        doc.RootElement.TryGetProperty("status", out _).ShouldBeTrue();
-        doc.RootElement.TryGetProperty("version", out _).ShouldBeTrue();
-        doc.RootElement.EnumerateObject().Count().ShouldBe(2);
+        // An exact allowlist, not a count: the rule for this body is "booleans
+        // yes, values no", and a new top-level block should have to be argued
+        // for here rather than arriving with a feature.
+        doc.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n)
+            .ShouldBe(["embedder", "embeddings", "ollama", "services", "status", "version"]);
 
         // Belt and braces on the specific disclosures that motivated the split
         // — a renamed field would slip past a property-name check.
         body.ShouldNotContain("baseUrl");        // internal Ollama LAN address
         body.ShouldNotContain(".sqlite");        // archive filesystem path
         body.ShouldNotContain("messagesTotal");  // corpus size
-        body.ShouldNotContain("schemaModel");    // embedding model config
+        body.ShouldNotContain("schemaModel");    // embedding model identity
+        body.ShouldNotContain("configModel");    // ditto
+        body.ShouldNotContain("chunkCount");     // corpus size
+        body.ShouldNotContain("lastFailureKind"); // embedder error detail
+        body.ShouldNotContain("lastBeatAt");     // per-service timestamps
+    }
+
+    /// <summary>
+    /// The six Uptime Kuma monitors evaluate JSONata against this body. A
+    /// renamed or re-nested field doesn't fail anything — JSONata resolves the
+    /// missing path to nothing and the monitor silently stops being able to
+    /// match its expected value. These are the exact paths from
+    /// docs/monitoring-uptime-kuma.md; keep them identical to /health's so one
+    /// query works against either endpoint.
+    /// </summary>
+    [Fact]
+    public async Task Up_body_carries_every_field_the_uptime_monitors_query()
+    {
+        using var client = _factory.CreateClient();
+        var doc = JsonDocument.Parse(await (await client.GetAsync("/up")).Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+
+        // ollama.reachable / embedder.stuck / embeddings.modelMismatch
+        root.GetProperty("ollama").GetProperty("reachable").ValueKind
+            .ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+        root.GetProperty("embedder").GetProperty("stuck").ValueKind
+            .ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+        root.GetProperty("embeddings").GetProperty("modelMismatch").ValueKind
+            .ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+
+        // services[service='indexer'|'embedder'|'mbsync'].stale
+        var services = root.GetProperty("services").EnumerateArray().ToList();
+        services.Select(s => s.GetProperty("service").GetString())
+            .ShouldBe(["indexer", "embedder", "mbsync"], ignoreOrder: true);
+        foreach (var s in services)
+        {
+            s.GetProperty("stale").ValueKind.ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+            s.GetProperty("known").ValueKind.ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+        }
+
+        // The single-monitor fallback query in the same doc is
+        // "status = 'ok' and $count(services[stale = true]) = 0".
+        root.GetProperty("status").GetString().ShouldNotBeNullOrEmpty();
     }
 
     [Fact]

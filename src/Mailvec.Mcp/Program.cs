@@ -118,8 +118,9 @@ static async Task RunHttp(string[] args)
     });
     // /up — the minimal monitoring endpoint, for a caller that should learn
     // whether Mailvec is healthy and nothing else. Same degraded logic and the
-    // SAME status codes as /health (200 ok / 503 degraded); only the body is
-    // trimmed, to status + version.
+    // SAME status codes as /health (200 ok / 503 degraded); the body is
+    // trimmed to booleans — is anything wrong — with none of the values that
+    // say what anything IS.
     //
     // Why a second path rather than trimming /health: the origin can't
     // authenticate anyone (Cloudflare Access is the whole gate), so path is the
@@ -144,7 +145,17 @@ static async Task RunHttp(string[] args)
     app.MapGet("/up", async (HealthService health, CancellationToken ct) =>
     {
         var report = await health.CheckAsync(ct).ConfigureAwait(false);
-        var minimal = new UpReport(report.Status, report.Version);
+        // Booleans yes, values no — see UpReport. The JSONata paths here are
+        // deliberately identical to /health's, because six Uptime Kuma monitors
+        // read them; changing a name silently breaks a monitor rather than
+        // failing anything. docs/monitoring-uptime-kuma.md has the table.
+        var minimal = new UpReport(
+            report.Status,
+            report.Version,
+            new UpEmbeddings(report.Embeddings.ModelMismatch),
+            new UpOllama(report.Ollama.Reachable),
+            new UpEmbedder(report.Embedder.Stuck),
+            [.. report.Services.Select(s => new UpServiceLiveness(s.Service, s.Known, s.Stale))]);
         return report.Status == "ok"
             ? Results.Ok(minimal)
             : Results.Json(minimal, statusCode: StatusCodes.Status503ServiceUnavailable);
