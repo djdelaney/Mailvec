@@ -117,6 +117,7 @@ services:
     volumes:
       - ./data:/data
       - ./mail:/mail:ro
+      - ./logs/mcp:/logs
     # A ceiling, not a reservation — nothing is set aside, so a limit above what
     # the VM has costs nothing until it's actually hit.
     #
@@ -154,6 +155,7 @@ services:
     volumes:
       - ./data:/data
       - ./mail:/mail:ro
+      - ./logs/indexer:/logs
     # PdfPig and OpenXML DOM-load whole documents, and Indexer:AttachmentMaxBytes
     # (25 MB) bounds the *input*, not how far the parse expands it.
     mem_limit: 2g
@@ -164,6 +166,7 @@ services:
     volumes:
       - ./data:/data
       - ./mail:/mail:ro    # OCR pass reads .eml bytes out of the maildir
+      - ./logs/embedder:/logs
     # The two halves of the decode-bomb defense: ImageRenderer.MaxDecodedPixels
     # caps a SINGLE decode at ~160 MB of raster, this caps the process around it
     # so a leak or a pathological batch can't walk past that either.
@@ -182,7 +185,7 @@ services:
     # outbound TLS connections and writes files it owns.
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    mem_limit: 512m
+    mem_limit: 1g
     # The sh loop, one mbsync child, one sleep — single digits in practice.
     pids_limit: 128
     environment:
@@ -197,6 +200,11 @@ services:
     volumes:
       - ./mail:/mail
       - ./mbsyncrc:/root/.mbsyncrc:ro
+      # No ./logs mount here on purpose: MAILVEC_LOG_DIR and Serilog exist
+      # only in the runtime stage. This image is Alpine + the mbsync-loop sh
+      # script, whose output is stderr (docker logs) and the heartbeat file
+      # under /mail. A logs mount would stay empty and mislead anyone
+      # debugging a sync failure.
     secrets:
       - fastmail_password
 
@@ -228,6 +236,22 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+      # Edge transport. cloudflared's default is `auto`: try QUIC (UDP), fall
+      # back to http2 if UDP connections can't be established. Parameterised
+      # rather than pinned because forcing a value is a PER-NETWORK workaround,
+      # not a recommendation — hardcoding http2 here would quietly downgrade
+      # every other deployment to route around one ISP. Values: auto | http2 |
+      # quic.
+      #
+      # Set TUNNEL_TRANSPORT_PROTOCOL=http2 in .env on a UDP-hostile path. The
+      # symptom is repeated "connIndex 3" reconnect flapping in the cloudflared
+      # log. Note `auto` does NOT rescue that case: its fallback is a
+      # connect-time decision, so a path where UDP connects cleanly and then
+      # MTU-breaks or gets throttled mid-session never triggers it — QUIC comes
+      # up, degrades, reconnects, forever. Only forcing http2 fixes it.
+      # cloudflared names the protocol it selected at startup; that's the
+      # confirmation the override took.
+      TUNNEL_TRANSPORT_PROTOCOL: ${TUNNEL_TRANSPORT_PROTOCOL:-auto}
     depends_on:
       - mcp
 
