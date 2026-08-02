@@ -95,11 +95,15 @@ origin. They exist for the local macOS tray app and have **no consumer in the
 container**. Two independent barriers now keep them unreachable, either
 sufficient on its own:
 
-1. **Disabled at the origin.** `Mcp:EnableTrayEndpoints=false` is baked into the
-   container image (Dockerfile), so `mcp` never maps `/tray/*` — a request gets
-   a plain Kestrel 404, no handler runs. Server-side and authoritative: it holds
-   regardless of the tunnel config, the same reasoning as `Mcp:DisabledTools`.
-   This is the load-bearing barrier.
+1. **Disabled at the origin**, twice over. `Mcp:EnableTrayEndpoints=false` is
+   baked into the container image (Dockerfile) *and* set explicitly in
+   `compose.yml`. Either alone is sufficient — `mcp` never maps `/tray/*`, so a
+   request gets a plain Kestrel 404 with no handler run. Server-side and
+   authoritative: it holds regardless of the tunnel config, the same reasoning
+   as `Mcp:DisabledTools`. This is the load-bearing barrier. The redundancy is
+   deliberate: the image default covers a compose file that forgets, and the
+   compose line states the deployment's posture where an operator will actually
+   read it, without needing to know what the image bakes in.
 2. **The combination is unrepresentable.** `TrayExposureGuard` makes the server
    **refuse to start** if the tray is enabled on anything but a loopback-only
    deployment. So re-enabling it in a container isn't a risky setting — it's a

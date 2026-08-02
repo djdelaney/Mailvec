@@ -83,13 +83,20 @@ services:
       Mcp__AllowedHosts__0: ${MCP_PUBLIC_HOSTNAME:-}
       Mcp__AllowedHosts__1: mcp
       Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
-      # The mail-bearing /tray/* surface is disabled here by the IMAGE
-      # (Mcp__EnableTrayEndpoints=false, baked into the Dockerfile) — nothing to
-      # set in compose. Setting it true here won't quietly expose mail: the
-      # server refuses to start when the tray is enabled on a non-loopback bind
-      # (TrayExposureGuard), and this container binds 0.0.0.0. You'd get a crash
-      # loop naming the knob, not an unauthenticated mailbox. See
-      # docs/security.md "/up, /health and /tray/*".
+      # The mail-bearing /tray/* surface, off. Three independent things now say
+      # so, and each covers a gap the others don't:
+      #   1. this line — the deployment's own stated posture, visible to anyone
+      #      reading compose.yml without having to go and read the Dockerfile;
+      #   2. the IMAGE default (Mcp__EnableTrayEndpoints=false, baked into the
+      #      Dockerfile), which still holds for a compose file that forgets;
+      #   3. TrayExposureGuard, which refuses to start the server at all when
+      #      the tray is enabled on a non-loopback bind — and this container
+      #      binds 0.0.0.0. Flipping this to "true" is a crash loop naming the
+      #      knob, not an unauthenticated mailbox.
+      # Redundant on purpose: /tray/* returns full message bodies, the folder
+      # map, full-text search and the IMAP account, with no auth of its own.
+      # See docs/security.md "/up, /health and /tray/*".
+      Mcp__EnableTrayEndpoints: "false"
       #
       # Drops the two tools that feed mail bytes to native parsers
       # (PDFium/SkiaSharp) and return whole raw documents. Left OFF as a
