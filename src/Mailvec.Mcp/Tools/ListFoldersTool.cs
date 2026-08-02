@@ -33,7 +33,7 @@ public sealed class ListFoldersTool(MessageRepository messages, IOptions<Archive
             SharedConfig.SharedConfigFileExists(),
             PathExpansion.Expand(archiveOptions.Value.DatabasePath));
         var response = new ListFoldersResponse(stats.Count, stats, setupHint);
-        callLog.LogResult(ToolName, new { count = response.Count }, startTs);
+        callLog.LogResult(ToolName, new { count = response.Count }, startTs, count: response.Count);
         return response;
     }
 }

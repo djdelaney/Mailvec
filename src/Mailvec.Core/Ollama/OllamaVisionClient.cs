@@ -77,8 +77,14 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            throw new HttpRequestException(
-                $"Ollama /api/generate failed {(int)response.StatusCode}: {body}", inner: null, statusCode: response.StatusCode);
+            // Body out of the message, onto Data — same reasoning as
+            // OllamaClient. This one is embedder-only so it reaches logs rather
+            // than a client, but the OCR request body is a rendered page of the
+            // user's mail, so an echoing error is exactly the case to avoid.
+            var ex = new HttpRequestException(
+                $"Ollama /api/generate failed {(int)response.StatusCode}.", inner: null, statusCode: response.StatusCode);
+            ex.Data["body"] = body;
+            throw ex;
         }
 
         var parsed = await response.Content.ReadFromJsonAsync<GenerateResponse>(ct).ConfigureAwait(false)

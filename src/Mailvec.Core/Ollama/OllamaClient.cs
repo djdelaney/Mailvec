@@ -150,11 +150,18 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            // The body stays OUT of the message. Exception messages travel: they
+            // reach durable logs via ex.ToString() and, from the search tool, an
+            // MCP client — i.e. off-network. An Ollama error body is usually its
+            // own JSON, but it is upstream-controlled and may echo the input,
+            // which here is mail content. Status code alone is what callers act on.
             var ex = new HttpRequestException(
-                $"Ollama /api/embed failed {(int)response.StatusCode}: {body}",
+                $"Ollama /api/embed failed {(int)response.StatusCode}.",
                 inner: null,
                 statusCode: response.StatusCode);
-            // Tag the body onto Data so callers can sniff for context-length errors.
+            // Tag the body onto Data so callers can sniff for context-length
+            // errors. Data is NOT rendered by ex.ToString(), so this keeps the
+            // oversize-batch fallback working without the body leaking with it.
             ex.Data["body"] = body;
             return (null, ex);
         }

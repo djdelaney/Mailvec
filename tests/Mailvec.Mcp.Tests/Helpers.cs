@@ -80,6 +80,24 @@ internal static class Helpers
             NullLogger<OllamaClient>.Instance);
     }
 
+    /// <summary>
+    /// An <see cref="OllamaClient"/> whose every call fails with an error body.
+    /// Lets a test drive the search tool's HttpRequestException catch path and
+    /// assert that neither the upstream body nor the endpoint reaches the
+    /// client-facing message.
+    /// </summary>
+    public static OllamaClient FailingOllama(string baseUrl, string errorBody)
+    {
+        HttpResponseMessage Respond(HttpRequestMessage _) =>
+            new(HttpStatusCode.InternalServerError) { Content = new StringContent(errorBody) };
+
+        var http = new HttpClient(new StubHandler(Respond)) { BaseAddress = new Uri(baseUrl) };
+        return new OllamaClient(
+            http,
+            Options.Create(new OllamaOptions { BaseUrl = baseUrl }),
+            NullLogger<OllamaClient>.Instance);
+    }
+
     public static float[] OneHot(int hotIndex, int dim = 1024)
     {
         var v = new float[dim];
