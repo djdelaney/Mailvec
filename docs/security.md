@@ -185,7 +185,15 @@ These are explicit decisions, not oversights:
 
   See [remote-access-cloudflare.md](remote-access-cloudflare.md) and [Future ideas](future-ideas.md).
 - **No rate limiting.** A chatty agent can burn VM CPU on SQLite reads and GPU-VM time on embedding queries. SQLite WAL handles concurrent readers fine and Ollama is the natural bottleneck on the embedding leg, so the worst case is "the homelab slows down briefly." The Access gate bounds who can do this to one identity; Cloudflare's edge absorbs unauthenticated flood traffic before it reaches the tunnel.
-- **`Mcp:LogToolCalls` is off by default.** When on, the server logs each tool call's argument summary — including the user's free-text query strings (potentially private) and `fromContains` / `fromExact` filter values. In the container these land in `MAILVEC_LOG_DIR=/logs` and in `docker logs` via the Serilog console sink. Useful for tuning but turning it on is a deliberate choice; recall the rolling files are 10MB each with the 14 most recent files retained on disk.
+- **`Mcp:LogToolCalls` is off by default.** When on, the server logs each tool call's arguments **and a summary of its results**. Both halves carry mailbox PII, and the result half is the one that surprises people:
+  - `search_emails` — the free-text query and `fromContains` / `fromExact` filters, plus the **top 5 hits' sender addresses, subjects and dates**.
+  - `get_email` — sender address and subject.
+  - `get_thread` — the root subject and up to 5 participant addresses.
+  - `view_attachment` — attachment filename and content type.
+
+  In the container these land in `MAILVEC_LOG_DIR=/logs` *and* in `docker logs` via the Serilog console sink — the latter goes to the Docker host's logging backend, which no Mailvec-side setting governs. Turning it on is a deliberate choice with a clear "off when done" expectation; recall the rolling files are 10MB each with the 14 most recent retained.
+
+  **You often don't need it.** The always-on `mcp-tool` line carries tool name, latency, and (where meaningful) result count and search mode — enough for "was that slow, and did it return anything?" without any PII. Reach for `LogToolCalls` only when you specifically need the content.
 - **Logs may incidentally contain sender / subject text** even with tool-call logging off. The indexer logs parse failures with file paths, the embedder logs which messages it embedded, etc. None of these include body content, but they aren't sanitized either. Treat the log directory as confidential.
 - **`~/Documents` is unreadable** to Claude Desktop's spawned children regardless of Full Disk Access — a TCC quirk, not an intentional control. Don't rely on it as a security boundary; it's a `com.apple.macl` ACL that a different client (e.g. Phase 5 stdio) might or might not be subject to.
 

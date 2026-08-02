@@ -25,7 +25,8 @@ public sealed class SearchEmailsTool(
     IOptions<FastmailOptions> fastmailOptions,
     IOptions<OllamaOptions> ollamaOptions,
     IOptions<ArchiveOptions> archiveOptions,
-    ToolCallLogger callLog)
+    ToolCallLogger callLog,
+    ILogger<SearchEmailsTool> logger)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
@@ -127,7 +128,8 @@ public sealed class SearchEmailsTool(
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
             var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
             var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters, setupHint);
-            callLog.LogResult(ToolName, BuildResultSummary(browseResp), startTs);
+            callLog.LogResult(ToolName, BuildResultSummary(browseResp), startTs,
+                count: browseResp.Count, mode: browseResp.Mode);
             return browseResp;
         }
 
@@ -154,15 +156,27 @@ public sealed class SearchEmailsTool(
             // so translate it into something the client can act on (this is
             // the single most common broken state on a fresh install: Ollama
             // not running, or the embedding model never pulled).
+            //
+            // The detail goes to the LOG, not the client. An MCP client here is
+            // Anthropic's cloud, so anything in this message leaves the network,
+            // and both obvious things to include leak the internal endpoint:
+            // Ollama:BaseUrl is the GPU VM's LAN address, and a connection-level
+            // HttpRequestException puts host:port in ex.Message. The model name
+            // stays — it's public, and it's the actionable half.
+            logger.LogWarning(ex,
+                "search_emails: embedding call to Ollama at {BaseUrl} failed; returning a sanitized error to the client.",
+                _ollama.BaseUrl);
             throw new McpException(
-                $"Semantic ranking is unavailable — the embedding call to Ollama at {_ollama.BaseUrl} failed ({ex.Message}). " +
-                $"Keyword search still works: retry this query with mode=keyword. " +
-                $"To restore semantic/hybrid search, make sure Ollama is running and the embedding model is pulled " +
-                $"(`ollama pull {_ollama.EmbeddingModel}`); `mailvec doctor` gives a precise diagnosis.");
+                "Semantic ranking is unavailable — the embedding call to Ollama failed. " +
+                "Keyword search still works: retry this query with mode=keyword. " +
+                "To restore semantic/hybrid search, make sure Ollama is running and the embedding model is pulled " +
+                $"(`ollama pull {_ollama.EmbeddingModel}`); `mailvec doctor` gives a precise diagnosis, " +
+                "including the configured endpoint.");
         }
 
         var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters, setupHint);
-        callLog.LogResult(ToolName, BuildResultSummary(response), startTs);
+        callLog.LogResult(ToolName, BuildResultSummary(response), startTs,
+            count: response.Count, mode: response.Mode);
         return response;
     }
 

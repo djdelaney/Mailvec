@@ -14,7 +14,8 @@ public class SearchEmailsToolTests
         TempDatabase db,
         Mailvec.Core.Ollama.OllamaClient? ollama = null,
         McpOptions? mcpOpts = null,
-        FastmailOptions? fastmailOpts = null)
+        FastmailOptions? fastmailOpts = null,
+        OllamaOptions? ollamaOpts = null)
     {
         var messages = new MessageRepository(db.Connections);
         var keyword = new KeywordSearchService(db.Connections);
@@ -24,9 +25,10 @@ public class SearchEmailsToolTests
             keyword, vector, hybrid, messages,
             Helpers.Mcp(mcpOpts),
             Helpers.Fastmail(fastmailOpts),
-            Helpers.Ollama(),
+            Helpers.Ollama(ollamaOpts),
             Helpers.Archive(),
-            Helpers.NoopLogger());
+            Helpers.NoopLogger(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance);
     }
 
     // ---------- Browse path (no query) ----------
@@ -302,5 +304,37 @@ public class SearchEmailsToolTests
         var msg = new Message { Id = 1, MessageId = "m@x", MaildirPath = "p", MaildirFilename = "f", Folder = "INBOX", BodyText = null };
 
         EmailHit.FromMessage(msg).Snippet.ShouldBe(string.Empty);
+    }
+
+    /// <summary>
+    /// An MCP client here is Anthropic's cloud, so this error message leaves the
+    /// network on every Ollama hiccup. Both natural things to put in it leak the
+    /// internal endpoint — <c>Ollama:BaseUrl</c> is the GPU VM's LAN address, and
+    /// a connection-level HttpRequestException carries host:port in its own
+    /// Message — and the upstream error body is attacker-adjacent content that
+    /// may echo the input. Nothing else in the suite fails if someone adds them
+    /// back "for debuggability", which is why this test exists. The operator
+    /// still gets the full detail: it goes to the log instead.
+    /// </summary>
+    [Fact]
+    public async Task Ollama_failure_message_to_the_client_leaks_neither_endpoint_nor_upstream_body()
+    {
+        using var db = new TempDatabase();
+        const string lanUrl = "http://192.168.7.42:11434";
+        const string echoedBody = "{\"error\":\"failed on input: MARKER-SECRET-SUBJECT\"}";
+
+        var tool = Build(
+            db,
+            ollama: Helpers.FailingOllama(lanUrl, echoedBody),
+            ollamaOpts: new OllamaOptions { BaseUrl = lanUrl });
+
+        var ex = await Should.ThrowAsync<McpException>(
+            async () => await tool.SearchEmails(query: "anything", mode: "semantic"));
+
+        ex.Message.ShouldNotContain("192.168.7.42");
+        ex.Message.ShouldNotContain("11434");
+        ex.Message.ShouldNotContain("MARKER-SECRET-SUBJECT");
+        // Still actionable: the recovery path and the public model name remain.
+        ex.Message.ShouldContain("mode=keyword");
     }
 }
