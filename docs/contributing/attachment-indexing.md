@@ -80,6 +80,28 @@ pixels — no readable content — and every vision call costs real seconds. On 
 real corpus the large majority of image attachments fall here. They stay
 `unsupported` (not an error — just "nothing worth OCRing").
 
+### Decoded-pixel ceiling → `failed`
+`ImageRenderer.MaxDecodedPixels` (**40 MP**, ≈160 MB of raster). This one is a
+*security* gate, not a yield gate: the decode allocates width×height×4 bytes and
+the encoded size is no proxy for that peak — PNG, WEBP and TIFF all compress a
+uniform raster enormously, so a file comfortably under the 25 MB
+`AttachmentMaxBytes` cap can expand to many GB. The bytes are attacker-chosen
+(anyone can mail an attachment) and the embedder's OCR pass decodes them
+*unattended*, so this is the one gate where the adversarial case, not the typical
+one, sets the number.
+
+Enforced on the **header**, before any pixel buffer exists: `SKCodec.Info` for
+the SkiaSharp formats, the IFD tags for TIFF. Over-ceiling images decode to null
+and are marked terminally `failed`, same as a HEIC — the queue drains rather than
+re-attempting the bomb every cycle. The same path serves MCP's `view_attachment`,
+so the ceiling covers the on-demand caller too.
+
+Raising it raises the worst-case peak RSS of the OCR pass by 4 bytes per pixel,
+against the embedder's 2g compose `mem_limit` — the two numbers are a pair, so
+moving one without the other either wastes the headroom or starts OOM-killing the
+container on legitimate scans. See [security.md → Container
+hardening](../security.md#container-hardening).
+
 ### Image OCR dimension / aspect gates → `no_text`
 Applied *after* decode (can't be expressed in SQL):
 `Embedder:ImageOcrMinDimension` (**200 px** short edge) and
@@ -133,6 +155,7 @@ The numbers above are defaults; the live values live in code:
   `ImageOcrMinDimension`, `ImageOcrMaxAspectRatio`, `ImageOcrEnabled`
 - `Mailvec.Core/Attachments/AttachmentTextExtractor.cs` → `MaxExtractedTextChars`,
   and `ResolveFormat` (the format/routing table)
+- `Mailvec.Pdf/ImageRenderer.cs` → `MaxDecodedPixels`
 - `Mailvec.Core/Data/MessageRepository.cs` → `ImageOcrMatch` (the image-OCR
   candidate gate, shared by the candidate query and the `/health` count) and
   `EnumerateImagesNeedingOcr`

@@ -85,6 +85,48 @@ keeps `EnableTrayEndpoints=true` because there the surface is loopback-only.
 `curl -i .../tray/folders` must return **404** (origin unmapped), and
 `curl -i .../health` must return the health JSON.
 
+## Container hardening
+
+Every acceptance above is about who can *call* Mailvec. This section is about
+what happens after something is already running code inside it — a distinct
+question, because the parsers eat attacker-chosen bytes by design. Anyone who
+can send mail can put a PDF or image in front of PDFium/SkiaSharp, and the
+embedder's OCR pass feeds them **unattended**, with no tool call and no user in
+the loop. "The MCP tools are read-only" is a statement about the tool surface,
+not a boundary that survives a compromised process.
+
+All five services therefore run with:
+
+| Control | What it buys |
+| --- | --- |
+| `cap_drop: [ALL]` | No Linux capabilities. Removes `DAC_OVERRIDE` (bypassing file permission bits), `FOWNER`, `NET_RAW` (raw sockets / spoofing), `SETUID`, and the rest. Nothing here needs any: the .NET services bind 3333 (unprivileged), mbsync makes outbound TLS connections, cloudflared dials out. |
+| `security_opt: [no-new-privileges:true]` | A setuid binary can't raise privileges — so a dropped capability stays dropped, and this holds even after the services move to a non-root UID. |
+| `mem_limit` | Caps blast radius per service (mcp 3g, indexer/embedder 2g, mbsync 512m, cloudflared 256m). A decode bomb or a parser leak kills **one container** instead of the Docker VM. |
+| `pids_limit` | Bounds task count (512 .NET / 256 cloudflared / 128 mbsync) so a fork bomb can't exhaust the VM's pid space. The cgroup controller counts threads, not just processes. |
+
+Two consequences worth knowing rather than rediscovering:
+
+- **`cap_drop: ALL` means container-root no longer bypasses permission bits.**
+  Steady state is unaffected — everything under `./data` and `./mail` is created
+  by these containers, so root already owns it. The exception is a **seeded**
+  `archive.sqlite` copied in by a non-root host user: without `DAC_OVERRIDE`,
+  0600-owned-by-someone-else is simply unreadable, and it surfaces as a bare
+  SQLite "unable to open database file". The seeding steps in
+  [deploy-docker.md](deploy-docker.md#migrating-the-archive-from-the-mac) chown
+  it to `0:0` for this reason.
+- **`mem_limit` charges page cache to the cgroup.** mcp's is deliberately roomy
+  because search latency depends on ~1.2 GB of chunk vectors sitting in the OS
+  file cache (process RSS is ~22 MB — they are not in the .NET heap). Tuning it
+  toward the working set doesn't OOM anything; the kernel just reclaims those
+  pages, and search degrades from ~0.3 s to ~2-3 s permanently, silently. See
+  [search-performance.md](contributing/search-performance.md).
+
+**Not yet done**: non-root UIDs, read-only root filesystems, network
+segmentation, and a read-only database connection for mcp (which today needs
+write access because `SchemaMigrator.EnsureUpToDate` runs at startup). So a
+compromised process still runs as root inside its container and can still write
+`./data` — these controls narrow the exit routes, they don't remove them.
+
 ## The other shape: a loopback-only local install
 
 `ops/install-all.sh` still produces the original single-Mac deployment — launchd services, MCP bound to `127.0.0.1:3333`, the MCPB bundle for Claude Desktop, the tray polling `/tray/*` over loopback. It remains supported and is what [`docs/clients/`](clients/README.md) documents. Its model is the one this page used to describe in full:

@@ -42,6 +42,25 @@ x-mailvec: &mailvec-common
     context: .
     target: runtime
   restart: unless-stopped
+  # Container hardening shared by the three .NET services. These bound what a
+  # compromised parser gets, which matters here because the parsers eat
+  # attacker-chosen bytes: anyone can mail an attachment, and the embedder's OCR
+  # pass feeds it to PDFium/SkiaSharp unattended. See docs/security.md
+  # "Container hardening".
+  #
+  # cap_drop ALL removes DAC_OVERRIDE and FOWNER along with everything else, so
+  # container-root no longer bypasses file permission bits. Steady state is fine
+  # (everything under ./data and ./mail is created by these containers, so root
+  # owns it), but a SEEDED archive.sqlite copied in by a non-root host user
+  # becomes unreadable — chown it to 0:0. See the seeding steps in
+  # docs/deploy-docker.md.
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  # The cgroup pids controller counts TASKS, so every .NET thread counts, not
+  # just processes — 512 is far above the ~20-40 these run at (plus whatever a
+  # `docker compose exec mcp mailvec ...` operator command adds) while still
+  # bounding a fork bomb long before the VM's own pid space is at risk.
+  pids_limit: 512
   environment: &mailvec-env
     Ingest__MaildirRoot: /mail/Fastmail
     Ollama__BaseUrl: ${OLLAMA_BASE_URL:-http://localhost:11434}
@@ -89,6 +108,17 @@ services:
     volumes:
       - ./data:/data
       - ./mail:/mail:ro
+    # A ceiling, not a reservation — nothing is set aside, so a limit above what
+    # the VM has costs nothing until it's actually hit.
+    #
+    # Deliberately roomy, and NOT to be tuned down casually: a cgroup memory
+    # limit charges PAGE CACHE to the container, and mcp's search latency rides
+    # on ~1.2 GB of chunk vectors living in the OS file cache. Process RSS is
+    # only ~22 MB — the vectors are not in the .NET heap. Set this near the
+    # working set and the kernel reclaims those pages rather than OOM-killing,
+    # so nothing crashes and nothing logs; search just degrades from ~0.3 s warm
+    # to ~2-3 s cold and stays there. See docs/contributing/search-performance.md.
+    mem_limit: 3g
     healthcheck:
       # /health returns 503 when degraded, which includes "Ollama unreachable"
       # — so an Ollama VM outage shows here as an unhealthy mcp container even
@@ -115,6 +145,9 @@ services:
     volumes:
       - ./data:/data
       - ./mail:/mail:ro
+    # PdfPig and OpenXML DOM-load whole documents, and Indexer:AttachmentMaxBytes
+    # (25 MB) bounds the *input*, not how far the parse expands it.
+    mem_limit: 2g
 
   embedder:
     <<: *mailvec-common
@@ -122,6 +155,10 @@ services:
     volumes:
       - ./data:/data
       - ./mail:/mail:ro    # OCR pass reads .eml bytes out of the maildir
+    # The two halves of the decode-bomb defense: ImageRenderer.MaxDecodedPixels
+    # caps a SINGLE decode at ~160 MB of raster, this caps the process around it
+    # so a leak or a pathological batch can't walk past that either.
+    mem_limit: 2g
 
   mbsync:
     image: ${MAILVEC_MBSYNC_IMAGE:-mailvec-mbsync:local}
@@ -129,6 +166,16 @@ services:
       context: .
       target: mbsync
     restart: unless-stopped
+    # Same hardening as the .NET services. mbsync is the one service holding a
+    # live credential (the Fastmail app password) and the only one with a
+    # WRITABLE Maildir mount, so a compromise here is worth bounding even though
+    # it parses nothing untrusted itself. Needs no capabilities: it makes
+    # outbound TLS connections and writes files it owns.
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    # The sh loop, one mbsync child, one sleep — single digits in practice.
+    pids_limit: 128
     environment:
       MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-600}
       # Liveness beat (read by mcp's /health via MbsyncHeartbeatFile) lands at
@@ -154,6 +201,21 @@ services:
     profiles: ["tunnel"]
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    # This container holds the tunnel credential and can reach the
+    # unauthenticated mcp origin, which makes it the highest-value target in the
+    # stack despite doing the least. It mounts no mailbox data (keep it that
+    # way) and needs no capabilities: the tunnel is an OUTBOUND connection and
+    # it binds no privileged port. Verified to start unimpaired under cap_drop.
+    # Expect one startup warning: cloudflared's ICMP proxy wants CAP_NET_RAW (or
+    # a ping socket) and disables itself without it. Unused here — this tunnel
+    # forwards HTTP to mcp:3333, nothing else — but it's the one line in the
+    # cloudflared log that will look new after this change.
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    # Go multiplexes goroutines onto few OS threads; the task count sits well
+    # under 50 even with the tunnel's connection pool busy.
+    pids_limit: 256
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}

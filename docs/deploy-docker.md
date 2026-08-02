@@ -200,6 +200,11 @@ ops/export-db.sh --to you@docker-vm:
 mkdir -p data
 mv ~/mailvec-archive-snapshot.sqlite data/archive.sqlite
 chmod 600 data/archive.sqlite
+# The chown is REQUIRED, not tidiness: the services run cap_drop: [ALL], so
+# container-root has no DAC_OVERRIDE and cannot read a 0600 file owned by the
+# host user who scp'd it. Skipping this fails at startup with a bare SQLite
+# "unable to open database file" that names no permission problem.
+sudo chown 0:0 data/archive.sqlite
 
 # 3. Bring the stack up. MAILVEC_REQUIRE_SEEDED_DB=1 (the default) makes the
 #    entrypoint refuse to start if the seed didn't land where expected.
@@ -220,7 +225,9 @@ docker compose exec mcp mailvec doctor
   `data/archive.sqlite` **and delete `data/archive.sqlite-wal` /
   `-shm`** — those sidecars belong to the container's previous run, and a
   stale WAL applied onto the new main file corrupts it. This is the same
-  footgun `ops/import-db.sh` handles on macOS; here it's manual.
+  footgun `ops/import-db.sh` handles on macOS; here it's manual. **Re-do the
+  `chown 0:0`** — the replacement file carries the copying user's ownership,
+  and the first run recreates the sidecars itself.
 - **After parity holds**, stop the Mac pipeline ([What's left](#whats-left)
   #1) — its archive keeps diverging from the VM's the moment you export, so
   treat the Mac copy as a frozen rollback, not a peer. (Clients have already
