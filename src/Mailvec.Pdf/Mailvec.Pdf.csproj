@@ -11,4 +11,10 @@
     <PackageReference Include="BitMiracle.LibTiff.NET" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- ImageRenderer's tests live in the Embedder suite (it's the embedder's
+         unattended OCR pass that drives this code hardest). -->
+    <InternalsVisibleTo Include="Mailvec.Embedder.Tests" />
+  </ItemGroup>
+
 </Project>
