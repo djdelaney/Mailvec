@@ -169,7 +169,7 @@ shape is path-differentiated on the same hostname, in this order:
 `/health` is deliberately **not** 404'd — it falls through rule 2 to `mcp:3333`
 so Uptime Kuma can poll it end-to-end through the tunnel (which also detects
 tunnel / Access / edge failures an in-network probe can't). See
-[security.md → `/health` and `/tray/*`](security.md#health-and-tray) for why
+[security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray) for why
 `/health` is single-layer (low-sensitivity, monitoring) while `/tray/*` is
 belt-and-braces (mail content).
 
@@ -187,11 +187,29 @@ health JSON. The compose healthcheck curls `/health` from inside the network and
 is unaffected. Belt-and-braces third option if the rules get fragile: a
 zone-level WAF rule blocking URI path `/tray/*`.
 
-**Scope the monitoring service token to `/health`.** The Uptime Kuma service
-token passes Access; if it's authorized on the whole-subdomain app it can reach
-MCP (i.e. read mail) should it leak from Kuma's store. Put it on a **path-scoped
-Access app for `/health`** (a more-specific path app takes precedence over the
-root identity app), so the monitoring credential can only ever hit `/health`.
+**Scope the monitoring service token to `/up`.** The Uptime Kuma service token
+passes Access; if it's authorized on the whole-subdomain app it can reach MCP
+(i.e. read mail) should it leak from Kuma's store. Put it on a **path-scoped
+Access app for `/up`** (a more-specific path app takes precedence over the root
+identity app, and does not inherit the parent's policies), so the monitoring
+credential can only ever hit the minimal endpoint.
+
+Two things that are easy to get wrong here:
+
+- **Scope the app to the exact path `up` — never a wildcard.** Access path
+  wildcards partial-match inside a segment (`example.com/foo*/bar` covers
+  `/food/bar`), so a wildcard is how a monitoring app accidentally grows to
+  cover paths you didn't intend. This is also why the minimal endpoint is `/up`
+  rather than `/healthz`: no wildcard over "health" can reach it.
+- **`/health` (the detailed body) must NOT be reachable by the monitoring
+  token.** It carries the archive path, corpus counts, model config and the
+  internal Ollama LAN URL. Its real consumers are loopback-only, so it needs no
+  service-token access at all.
+
+> **Not yet done as of 2026-08-01.** Kuma still polls `/health`, and the root
+> app's Service Auth policy admits `Any Access Service Token` — which means any
+> service token in the account, including Kuma's, currently reaches the whole
+> mailbox. Fixing that is the prerequisite for anything above being true.
 
 The mcp container publishes **no host port** — the tunnel is the only ingress.
 Keep it that way: a published `ports:` mapping is reachable from the LAN

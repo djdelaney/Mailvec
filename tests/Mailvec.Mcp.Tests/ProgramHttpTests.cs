@@ -32,6 +32,47 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task Up_endpoint_mirrors_health_status_code()
+    {
+        // The parity is the invariant, not the literal 503: monitors alert on
+        // the status code, so a /up that always returned 200 would read healthy
+        // forever while the archive was degraded — silently, since nothing
+        // logs a successful probe. Asserting parity rather than a fixed code
+        // keeps this meaningful if a future fixture stubs Ollama for an "ok"
+        // path, and fails the moment the two endpoints' logic diverges.
+        using var client = _factory.CreateClient();
+
+        var up = await client.GetAsync("/up");
+        var health = await client.GetAsync("/health");
+
+        up.StatusCode.ShouldBe(health.StatusCode);
+    }
+
+    [Fact]
+    public async Task Up_endpoint_body_discloses_only_status_and_version()
+    {
+        // /up exists to be polled by an internet-facing monitor whose
+        // credential is the likeliest of ours to leak, so the point of the
+        // endpoint IS the absence of these fields. Nothing else fails if
+        // someone "helpfully" enriches the body, which is why this is pinned.
+        using var client = _factory.CreateClient();
+
+        var body = await (await client.GetAsync("/up")).Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(body);
+
+        doc.RootElement.TryGetProperty("status", out _).ShouldBeTrue();
+        doc.RootElement.TryGetProperty("version", out _).ShouldBeTrue();
+        doc.RootElement.EnumerateObject().Count().ShouldBe(2);
+
+        // Belt and braces on the specific disclosures that motivated the split
+        // — a renamed field would slip past a property-name check.
+        body.ShouldNotContain("baseUrl");        // internal Ollama LAN address
+        body.ShouldNotContain(".sqlite");        // archive filesystem path
+        body.ShouldNotContain("messagesTotal");  // corpus size
+        body.ShouldNotContain("schemaModel");    // embedding model config
+    }
+
+    [Fact]
     public async Task Health_endpoint_returns_structured_json_body()
     {
         using var client = _factory.CreateClient();

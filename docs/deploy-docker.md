@@ -315,7 +315,7 @@ each item was a distinct risk:
    Kuma (single-layer Access, monitoring); `/tray/*` is disabled at the origin
    (`Mcp:EnableTrayEndpoints=false`, baked into the image) *and* 404'd at the
    tunnel, because it returns mail content and has no container consumer. See
-   [security.md → `/health` and `/tray/*`](security.md#health-and-tray).
+   [security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray).
    **Deviation:** the `Mcp__DisabledTools__*` tool-surface trim was **not**
    applied — `view_attachment` and `get_attachment_page_image` remain exposed.
    That's now a documented accepted risk with explicit invalidating

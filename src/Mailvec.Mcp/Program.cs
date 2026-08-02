@@ -116,6 +116,39 @@ static async Task RunHttp(string[] args)
             ? Results.Ok(report)
             : Results.Json(report, statusCode: StatusCodes.Status503ServiceUnavailable);
     });
+    // /up — the minimal monitoring endpoint, for a caller that should learn
+    // whether Mailvec is healthy and nothing else. Same degraded logic and the
+    // SAME status codes as /health (200 ok / 503 degraded); only the body is
+    // trimmed, to status + version.
+    //
+    // Why a second path rather than trimming /health: the origin can't
+    // authenticate anyone (Cloudflare Access is the whole gate), so path is the
+    // only axis available to serve different detail to different callers — and
+    // it's the axis Access scopes on. /health stays detailed for the loopback
+    // consumers that need it (the compose healthcheck, `mailvec doctor`'s HTTP
+    // probe, the tray on local installs); /up is what the internet-facing
+    // monitor polls, so a leaked monitoring credential yields no archive path,
+    // no corpus counts, no model config, and — the one that matters most — not
+    // the internal Ollama LAN address.
+    //
+    // NOT named /healthz on purpose. Access path wildcards partial-match inside
+    // a segment (`example.com/foo*/bar` covers `/food/bar`), so an app scoped
+    // `health*` would cover /health AND /healthz, handing the monitor the
+    // detailed body and quietly undoing the split. No wildcard over "health"
+    // reaches "up". Keep the two path names prefix-disjoint if either is ever
+    // renamed. See docs/security.md.
+    //
+    // The status-code parity with /health is load-bearing: monitors alert on
+    // the code, not the body. A version of this that always returned 200 would
+    // look healthy forever. Pinned by ProgramHttpTests.
+    app.MapGet("/up", async (HealthService health, CancellationToken ct) =>
+    {
+        var report = await health.CheckAsync(ct).ConfigureAwait(false);
+        var minimal = new UpReport(report.Status, report.Version);
+        return report.Status == "ok"
+            ? Results.Ok(minimal)
+            : Results.Json(minimal, statusCode: StatusCodes.Status503ServiceUnavailable);
+    });
     // /tray/* serves the SwiftUI menu-bar app — plain REST, not MCP-framed.
     // Gated off on internet-fronted deployments (Mcp:EnableTrayEndpoints=false,
     // baked into the container image): the surface is unauthenticated at the
