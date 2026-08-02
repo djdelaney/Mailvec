@@ -161,7 +161,16 @@ static async Task RunHttp(string[] args)
     // the container image's baked Mcp__EnableTrayEndpoints=false — is reflected
     // here. (The builder-time mcpOpts is only used for Kestrel/middleware wiring
     // that has to happen before Build.)
-    var trayEnabled = app.Services.GetRequiredService<IOptions<McpOptions>>().Value.EnableTrayEndpoints;
+    var resolvedMcpOpts = app.Services.GetRequiredService<IOptions<McpOptions>>().Value;
+    // Refuse the one combination that silently publishes the mailbox: the
+    // unauthenticated, mail-bearing /tray/* surface on a server reachable from
+    // off-host. Checked against the DI-resolved options (not builder-time
+    // mcpOpts) so an env var or appsettings override is what's judged — the
+    // same reason trayEnabled is read from here. See TrayExposureGuard.
+    if (TrayExposureGuard.Violation(resolvedMcpOpts) is { } trayViolation)
+        throw new InvalidOperationException(trayViolation);
+
+    var trayEnabled = resolvedMcpOpts.EnableTrayEndpoints;
     if (trayEnabled)
     {
         app.MapTrayEndpoints();

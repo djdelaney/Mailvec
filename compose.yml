@@ -85,9 +85,11 @@ services:
       Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
       # The mail-bearing /tray/* surface is disabled here by the IMAGE
       # (Mcp__EnableTrayEndpoints=false, baked into the Dockerfile) — nothing to
-      # set in compose. Don't set it true on an internet-fronted deployment:
-      # /tray/* is unauthenticated at the origin and returns mail content. See
-      # docs/security.md "/health and /tray/*".
+      # set in compose. Setting it true here won't quietly expose mail: the
+      # server refuses to start when the tray is enabled on a non-loopback bind
+      # (TrayExposureGuard), and this container binds 0.0.0.0. You'd get a crash
+      # loop naming the knob, not an unauthenticated mailbox. See
+      # docs/security.md "/up, /health and /tray/*".
       #
       # Drops the two tools that feed mail bytes to native parsers
       # (PDFium/SkiaSharp) and return whole raw documents. Left OFF as a
