@@ -49,12 +49,39 @@ public class MessageRepositoryTests
         var repo = new MessageRepository(db.Connections);
         var now = DateTimeOffset.UtcNow;
 
-        long id1 = repo.Upsert(Sample(subject: "Original"), "INBOX", "INBOX/new", "1736780100.1.host", now);
+        long id1 = repo.Upsert(Sample(subject: "Original"), "INBOX", "INBOX/cur", "1736780100.1.host:2,S", now);
         long id2 = repo.Upsert(Sample(subject: "Edited"), "INBOX", "INBOX/cur", "1736780100.1.host:2,S", now);
 
         id2.ShouldBe(id1);
         repo.CountAll().ShouldBe(1);
         repo.GetById(id1).ShouldNotBeNull().Subject.ShouldBe("Edited");
+    }
+
+    [Fact]
+    public void Upsert_from_a_copy_at_another_path_does_not_rewrite_the_attributed_row()
+    {
+        // One Message-ID, two live copies whose bodies differ (a list copy with
+        // an appended footer vs. the Sent copy). Attribution is first-seen-wins,
+        // and content follows attribution — otherwise the row would describe
+        // copy A's location and copy B's bytes, and every part_index resolved
+        // against the attributed .eml would address the wrong document.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = repo.Upsert(Sample(subject: "Original", contentHash: "hash-a"), "INBOX", "INBOX/cur", "a.host:2,S", now);
+        var outcome = repo.Upsert(Sample(subject: "Other copy", contentHash: "hash-b"), "Lists", "Lists/cur", "b.host:2,S", now);
+
+        outcome.Id.ShouldBe(id);
+        outcome.ContentChanged.ShouldBeFalse();     // no re-embed churn from the other copy
+        outcome.AttachmentsReset.ShouldBeFalse();
+        var msg = repo.GetById(id).ShouldNotBeNull();
+        msg.Subject.ShouldBe("Original");
+        msg.MaildirFilename.ShouldBe("a.host:2,S");
+        // mbsync's new/ -> cur/ rename lands here too (the copy arrives at a new
+        // path): the scanner's rename-repair pass repoints the row and clears
+        // the survivor's sync_state content_hash, so the next scan re-parses it
+        // as the attributed copy. See MaildirScannerTests.
     }
 
     [Fact]

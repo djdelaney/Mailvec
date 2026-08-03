@@ -201,6 +201,7 @@ internal static class ExtractAttachmentsCommand
         long messagesProcessed = 0;
         long messagesWithNewText = 0;
         long attachmentsExtracted = 0;
+        long messagesSkippedStale = 0;
         var statusCounts = new Dictionary<string, long>(StringComparer.Ordinal);
 
         // Cursor pagination by messages.id (rowid-ordered). We don't OFFSET
@@ -232,7 +233,9 @@ internal static class ExtractAttachmentsCommand
                     continue;
                 }
 
-                if (TryProcessMessage(connections, extractor, msg, maildirFile, reextractKind, statusCounts, err, out var newTextCount, out var attachmentsThisMessage))
+                var outcome = TryProcessMessage(connections, extractor, msg, maildirFile, reextractKind, statusCounts, err, out var newTextCount, out var attachmentsThisMessage);
+                if (outcome == MessageOutcome.Stale) messagesSkippedStale++;
+                if (outcome == MessageOutcome.Processed)
                 {
                     attachmentsExtracted += attachmentsThisMessage;
                     if (newTextCount > 0)
@@ -259,6 +262,13 @@ internal static class ExtractAttachmentsCommand
 
         @out.WriteLine();
         @out.WriteLine($"Processed {messagesProcessed:N0} message(s); stamped {attachmentsExtracted:N0} attachment(s).");
+        if (messagesSkippedStale > 0)
+        {
+            // Never let a bounded run read as full coverage.
+            @out.WriteLine(
+                $"Skipped {messagesSkippedStale:N0} message(s) that changed underneath the backfill (the indexer re-parsed them mid-run); " +
+                "re-run to pick them up.");
+        }
         if (statusCounts.Count > 0)
         {
             @out.WriteLine("Status breakdown:");
@@ -282,7 +292,7 @@ internal static class ExtractAttachmentsCommand
     /// <c>messages.attachment_text</c> at the end so the FTS5 trigger picks
     /// up newly-extracted text.
     /// </summary>
-    private static bool TryProcessMessage(
+    private static MessageOutcome TryProcessMessage(
         ConnectionFactory connections,
         AttachmentTextExtractor extractor,
         MessageRow msg,
@@ -309,7 +319,7 @@ internal static class ExtractAttachmentsCommand
         catch (Exception ex)
         {
             err.WriteLine($"  msg {msg.Id}: parse failed ({ex.GetType().Name}: {ex.Message}); skipping.");
-            return false;
+            return MessageOutcome.ParseFailed;
         }
 
         // MessageParts.Indexable — not mime.Attachments — per the part_index
@@ -325,12 +335,26 @@ internal static class ExtractAttachmentsCommand
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
+        // Now that we hold the write lock, re-check that the parse above still
+        // describes this row (see MessageSnapshotUnchanged). Everything below
+        // maps extraction results onto rows by part_index, so a message the
+        // indexer re-parsed underneath us would get the OLD file's text stamped
+        // onto its CURRENT attachments — searchable under content it doesn't
+        // contain, with the status stamp ensuring no later run revisits it.
+        // Leaving it untouched is always safe: an unstamped candidate is simply
+        // picked up by the next run, against a fresh parse.
+        if (!MessageSnapshotUnchanged(conn, tx, msg))
+        {
+            tx.Rollback();
+            return MessageOutcome.Stale;
+        }
+
         var candidates = LoadCandidatesForMessage(conn, tx, msg.Id, reextractKind);
         if (candidates.Count == 0)
         {
             // Race or dup-call: another extract pass already stamped these.
             tx.Commit();
-            return true;
+            return MessageOutcome.Processed;
         }
 
         var stamp = DateTimeOffset.UtcNow.ToString("O");
@@ -384,7 +408,7 @@ internal static class ExtractAttachmentsCommand
         }
 
         tx.Commit();
-        return true;
+        return MessageOutcome.Processed;
     }
 
     private static IReadOnlyList<MessageRow> LoadMessagePage(ConnectionFactory connections, long cursor, int pageSize, string? reextractKind)
@@ -392,7 +416,7 @@ internal static class ExtractAttachmentsCommand
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
-            SELECT m.id, m.maildir_path, m.maildir_filename
+            SELECT m.id, m.maildir_path, m.maildir_filename, m.content_hash
             FROM messages m
             WHERE m.deleted_at IS NULL
               AND m.id > $cursor
@@ -413,9 +437,40 @@ internal static class ExtractAttachmentsCommand
             list.Add(new MessageRow(
                 Id: reader.GetInt64(0),
                 MaildirPath: reader.GetString(1),
-                MaildirFilename: reader.GetString(2)));
+                MaildirFilename: reader.GetString(2),
+                ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3)));
         }
         return list;
+    }
+
+    /// <summary>
+    /// Does the message still look the way it did when this page was loaded?
+    /// The <c>.eml</c> is parsed outside the write transaction (PdfPig on a
+    /// large document must not hold the writer lock), so a concurrent indexer
+    /// can re-parse the message and replace its attachment rows in between —
+    /// leaving us holding a parse of a file this row no longer points at, whose
+    /// part_index-keyed results would be stamped onto the current rows.
+    /// <c>content_hash</c> covers the whole multipart structure (hence which
+    /// bytes live at each part_index) and the Maildir location decides which
+    /// <c>.eml</c> is authoritative for the row, so together they answer
+    /// "is this still the document I parsed?". Call it while holding the write
+    /// transaction; a false means commit nothing.
+    /// </summary>
+    private static bool MessageSnapshotUnchanged(SqliteConnection conn, SqliteTransaction? tx, MessageRow snapshot)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT content_hash, maildir_path, maildir_filename FROM messages WHERE id = $id AND deleted_at IS NULL";
+        cmd.Parameters.AddWithValue("$id", snapshot.Id);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return false;   // purged or soft-deleted since the page load
+        var hash = reader.IsDBNull(0) ? null : reader.GetString(0);
+        // Ordinal string compare, so a legacy NULL hash on both sides matches
+        // (same "NULL means unchanged" rule MessageRepository.Upsert uses).
+        return string.Equals(hash, snapshot.ContentHash, StringComparison.Ordinal)
+            && string.Equals(reader.GetString(1), snapshot.MaildirPath, StringComparison.Ordinal)
+            && string.Equals(reader.GetString(2), snapshot.MaildirFilename, StringComparison.Ordinal);
     }
 
     private static List<AttachmentCandidate> LoadCandidatesForMessage(SqliteConnection conn, SqliteTransaction tx, long messageId, string? reextractKind)
@@ -482,6 +537,9 @@ internal static class ExtractAttachmentsCommand
         cmd.ExecuteNonQuery();
     }
 
-    private sealed record MessageRow(long Id, string MaildirPath, string MaildirFilename);
+    /// <summary>What one message's pass did — see <see cref="MessageSnapshotUnchanged"/> for Stale.</summary>
+    private enum MessageOutcome { Processed, ParseFailed, Stale }
+
+    private sealed record MessageRow(long Id, string MaildirPath, string MaildirFilename, string? ContentHash);
     private sealed record AttachmentCandidate(long Id, int PartIndex, string? FileName, string? ContentType, long? SizeBytes);
 }

@@ -33,9 +33,14 @@ public sealed class MessageRepository(ConnectionFactory connections)
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
     /// <summary>
-    /// Insert or update a message. Keyed on Message-ID (RFC 5322); resending the
-    /// same Message-ID with a different Maildir path updates the path in place,
-    /// which covers mbsync's new/ -> cur/ rename and the ingest re-scan path.
+    /// Insert or update a message. Keyed on Message-ID (RFC 5322). A live row's
+    /// (folder, maildir_path, maildir_filename) triple is first-seen-wins and
+    /// its content comes only from that attributed copy — resending the same
+    /// Message-ID from a *different* path is a no-op returning the existing id.
+    /// mbsync's new/ -> cur/ rename and genuine folder moves are handled by the
+    /// scanner's rename-repair pass instead (which repoints the row and clears
+    /// the survivor's sync_state content_hash so the next scan re-parses it);
+    /// see the attribution comment below for why.
     /// Returns the row id and whether the message body content changed compared
     /// to the prior row (always false on a fresh insert; true only when a row
     /// with the same Message-ID existed and its <c>content_hash</c> differed
@@ -61,18 +66,60 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // "treat as unchanged".
         string? priorHash = null;
         var rowExists = false;
+        long priorId = 0;
+        string? priorPath = null;
+        string? priorFilename = null;
+        var priorDeleted = false;
         using (var probe = conn.CreateCommand())
         {
             probe.Transaction = tx;
-            probe.CommandText = "SELECT content_hash FROM messages WHERE message_id = $mid";
+            probe.CommandText = "SELECT content_hash, id, maildir_path, maildir_filename, deleted_at FROM messages WHERE message_id = $mid";
             probe.Parameters.AddWithValue("$mid", parsed.MessageId);
             using var reader = probe.ExecuteReader();
             if (reader.Read())
             {
                 rowExists = true;
                 priorHash = reader.IsDBNull(0) ? null : reader.GetString(0);
+                priorId = reader.GetInt64(1);
+                priorPath = reader.GetString(2);
+                priorFilename = reader.GetString(3);
+                priorDeleted = !reader.IsDBNull(4);
             }
         }
+
+        // Content follows attribution. A Message-ID can live in several folders
+        // at once, and those copies are NOT always byte-identical — a
+        // mailing-list copy carries an appended footer its Sent counterpart
+        // doesn't. Folder attribution is first-seen-wins (see the conflict
+        // clause below), so accepting body/attachment content from whichever
+        // copy happened to be parsed last left the row describing copy A's
+        // location and copy B's bytes. Everything that resolves a part_index
+        // against the attributed .eml — view_attachment, the embedder's OCR
+        // pass — then reads a document the metadata never described. It also
+        // made content_hash alternate between the copies, so every rescan that
+        // re-parsed both looked like a body change and burned a full re-embed.
+        //
+        // A non-attributed live copy therefore contributes nothing to this row
+        // beyond its sync_state membership (which the scanner writes
+        // separately, so folder filters and list_folders are unaffected).
+        // Consequence to know about: a genuine body change to a non-attributed
+        // copy is ignored until that copy becomes the attributed one — which
+        // the scanner's rename-repair pass handles by clearing the survivor's
+        // sync_state content_hash, forcing a re-parse on the next scan.
+        //
+        // Soft-deleted rows are exempt: resurrection legitimately re-points
+        // location AND content at the copy that brought the message back.
+        var isAttributedCopy = !rowExists
+            || priorDeleted
+            || (string.Equals(priorPath, maildirRelativePath, StringComparison.Ordinal)
+                && string.Equals(priorFilename, maildirFilename, StringComparison.Ordinal));
+
+        if (!isAttributedCopy)
+        {
+            tx.Commit();
+            return new UpsertOutcome(priorId, ContentChanged: false, IsNewInsert: false);
+        }
+
         var contentChanged = rowExists && priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);
         var isNewInsert = !rowExists;
 
@@ -737,7 +784,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
-            SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder
+            SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder, m.content_hash
             FROM attachments a
             JOIN messages m ON m.id = a.message_id
             WHERE a.extraction_status = $noText
@@ -751,19 +798,19 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
         var list = new List<OcrCandidate>();
         using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            list.Add(new OcrCandidate(
-                AttachmentId: reader.GetInt64(0),
-                PartIndex: reader.GetInt32(1),
-                MessageId: reader.GetInt64(2),
-                MessageIdHeader: reader.GetString(3),
-                MaildirPath: reader.GetString(4),
-                MaildirFilename: reader.GetString(5),
-                Folder: reader.GetString(6)));
-        }
+        while (reader.Read()) list.Add(ReadOcrCandidate(reader));
         return list;
     }
+
+    private static OcrCandidate ReadOcrCandidate(SqliteDataReader reader) => new(
+        AttachmentId: reader.GetInt64(0),
+        PartIndex: reader.GetInt32(1),
+        MessageId: reader.GetInt64(2),
+        MessageIdHeader: reader.GetString(3),
+        MaildirPath: reader.GetString(4),
+        MaildirFilename: reader.GetString(5),
+        Folder: reader.GetString(6),
+        ContentHash: reader.IsDBNull(7) ? null : reader.GetString(7));
 
     /// <summary>
     /// Image attachments the indexer left at 'unsupported' that are worth a
@@ -802,7 +849,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
-            SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder
+            SELECT a.id, a.part_index, m.id, m.message_id, m.maildir_path, m.maildir_filename, m.folder, m.content_hash
             FROM attachments a
             JOIN messages m ON m.id = a.message_id
             WHERE a.extraction_status = $unsupported
@@ -818,18 +865,44 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
         var list = new List<OcrCandidate>();
         using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            list.Add(new OcrCandidate(
-                AttachmentId: reader.GetInt64(0),
-                PartIndex: reader.GetInt32(1),
-                MessageId: reader.GetInt64(2),
-                MessageIdHeader: reader.GetString(3),
-                MaildirPath: reader.GetString(4),
-                MaildirFilename: reader.GetString(5),
-                Folder: reader.GetString(6)));
-        }
+        while (reader.Read()) list.Add(ReadOcrCandidate(reader));
         return list;
+    }
+
+    // ── OCR write-back identity guard ────────────────────────────────────────
+    //
+    // Every OCR write-back happens minutes after the candidate was selected —
+    // file read, page renders, and vision calls all sit in between — so the
+    // indexer can replace the parent's attachment rows in the meantime.
+    // attachments.id is an INTEGER PRIMARY KEY *without* AUTOINCREMENT, so a
+    // row deleted from the tail of the rowid space hands its id to the next
+    // insert, possibly one belonging to a completely different message.
+    //
+    // Guarding on candidate status alone does NOT establish identity: a freshly
+    // parsed scanned PDF lands at exactly 'no_text' (an image at 'unsupported'),
+    // so the replacement passes the status check and inherits the previous
+    // document's transcription — marked searchable, and never re-selected
+    // because the write moved it off the queue. Match the full identity
+    // instead: the row still belongs to the same message at the same part
+    // index, AND the parent's content_hash (which covers the whole multipart
+    // structure, hence which bytes live at that part) hasn't moved. A snapshot
+    // that no longer matches means the document changed underneath us — write
+    // nothing and let the re-parsed row be re-selected on its own terms.
+    private const string OcrIdentityMatch = """
+        id = $id
+          AND message_id = $mid
+          AND part_index = $part
+          AND EXISTS (SELECT 1 FROM messages m WHERE m.id = $mid AND m.content_hash IS $hash)
+        """;
+
+    private static void BindOcrIdentity(SqliteCommand cmd, OcrCandidate candidate)
+    {
+        cmd.Parameters.AddWithValue("$id", candidate.AttachmentId);
+        cmd.Parameters.AddWithValue("$mid", candidate.MessageId);
+        cmd.Parameters.AddWithValue("$part", candidate.PartIndex);
+        // `IS` (not `=`) so a legacy NULL hash on both sides counts as a match;
+        // `= NULL` is NULL, which would reject every pre-v3 row forever.
+        cmd.Parameters.AddWithValue("$hash", (object?)candidate.ContentHash ?? DBNull.Value);
     }
 
     /// <summary>
@@ -840,16 +913,21 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// re-decoded every cycle. (Decode *failures* go through
     /// <see cref="MarkAttachmentOcrFailed"/> instead.)
     /// </summary>
-    public void MarkAttachmentImageNoText(long attachmentId)
+    public void MarkAttachmentImageNoText(OcrCandidate candidate)
     {
+        ArgumentNullException.ThrowIfNull(candidate);
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        // Only move a still-'unsupported' row (guards against rowid reuse — see
-        // SaveOcrText). A row that changed underneath us shouldn't be retyped.
-        cmd.CommandText = "UPDATE attachments SET extraction_status = $noText WHERE id = $id AND extraction_status = $unsupported;";
+        // Full identity match (see OcrIdentityMatch) plus the candidate status:
+        // retiring a row that moved underneath us would strand a different
+        // image as permanently unsearchable, with nothing left to re-select it.
+        cmd.CommandText = $"""
+            UPDATE attachments SET extraction_status = $noText
+            WHERE {OcrIdentityMatch} AND extraction_status = $unsupported;
+            """;
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
-        cmd.Parameters.AddWithValue("$id", attachmentId);
+        BindOcrIdentity(cmd, candidate);
         cmd.ExecuteNonQuery();
     }
 
@@ -911,8 +989,11 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// embedded_at (the re-embed's ReplaceChunksForMessage replaces its chunks).
     /// One transaction. The messages UPDATE fires the FTS sync trigger.
     /// </summary>
-    public void SaveOcrText(long attachmentId, long messageId, string text)
+    public void SaveOcrText(OcrCandidate candidate, string text)
     {
+        ArgumentNullException.ThrowIfNull(candidate);
+        var messageId = candidate.MessageId;
+
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
@@ -920,31 +1001,34 @@ public sealed class MessageRepository(ConnectionFactory connections)
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
-            // Guard on the candidate statuses. attachments.id is a rowid without
-            // AUTOINCREMENT, so a concurrent indexer content-change that
-            // DELETE+INSERTs the row can reuse this id for a *different*
-            // attachment between candidate selection and this write. Stamping
-            // OCR text onto a row that's no longer a pending OCR candidate would
-            // marry the old bytes' transcription to the new attachment (and mark
-            // it searchable). If the row moved on, write nothing.
-            cmd.CommandText = """
+            // Full identity match (see OcrIdentityMatch) plus the candidate
+            // statuses. Status alone can't tell "still my document" from "a
+            // different pending scan that inherited this rowid" — both read
+            // 'no_text' — and stamping the old bytes' transcription onto the
+            // new document marks it searchable under text it doesn't contain,
+            // with no path left to correct it. If anything moved, write nothing.
+            cmd.CommandText = $"""
                 UPDATE attachments
                 SET extracted_text = $text, extraction_status = $ocr, extracted_at = $now
-                WHERE id = $id AND extraction_status IN ($noText, $unsupported);
+                WHERE {OcrIdentityMatch} AND extraction_status IN ($noText, $unsupported);
                 """;
             cmd.Parameters.AddWithValue("$text", text);
             cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
             cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
             cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
             cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
-            cmd.Parameters.AddWithValue("$id", attachmentId);
+            BindOcrIdentity(cmd, candidate);
             updated = cmd.ExecuteNonQuery();
         }
 
         if (updated == 0)
         {
-            // Row was replaced/reprocessed since selection — don't rewrite the
-            // message's FTS/embedding state off a stale assumption.
+            // Row was replaced/reprocessed/reassigned since selection — don't
+            // rewrite the message's FTS/embedding state off a stale assumption.
+            // Bailing here is also what keeps attachment_text consistent: the
+            // rebuild below keys on the SNAPSHOT's messageId, which after a
+            // rowid reuse is no longer the row's parent, so committing would
+            // leave the new parent's FTS out of step with its own rows.
             tx.Rollback();
             return;
         }
@@ -1113,17 +1197,24 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// Mark an attachment 'failed' so the OCR pass stops re-selecting a PDF that
     /// PDFium can't even open (a poison doc would otherwise be retried forever).
     /// </summary>
-    public void MarkAttachmentOcrFailed(long attachmentId)
+    public void MarkAttachmentOcrFailed(OcrCandidate candidate)
     {
+        ArgumentNullException.ThrowIfNull(candidate);
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        // Guard on candidate statuses (rowid reuse — see SaveOcrText); only a
-        // row still pending OCR should be retired to 'failed'.
-        cmd.CommandText = "UPDATE attachments SET extraction_status = $failed WHERE id = $id AND extraction_status IN ($noText, $unsupported);";
+        // Full identity match (see OcrIdentityMatch) plus the candidate
+        // statuses; only the row we actually failed to read gets retired. A
+        // skipped mark is safe — the replacement row is simply re-selected next
+        // cycle against its own snapshot, so a genuinely poison document still
+        // retires (one cycle later) instead of head-of-line blocking forever.
+        cmd.CommandText = $"""
+            UPDATE attachments SET extraction_status = $failed
+            WHERE {OcrIdentityMatch} AND extraction_status IN ($noText, $unsupported);
+            """;
         cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
-        cmd.Parameters.AddWithValue("$id", attachmentId);
+        BindOcrIdentity(cmd, candidate);
         cmd.ExecuteNonQuery();
     }
 
@@ -1371,6 +1462,14 @@ public sealed record AttachmentEmbeddingPayload(
 /// A scanned-PDF attachment the embedder's OCR pass should process, plus the
 /// message fields needed to read its bytes from the Maildir.
 /// </summary>
+/// <remarks>
+/// This record is also the identity snapshot every OCR write-back is validated
+/// against — see <c>OcrIdentityMatch</c>. Pass the candidate through to
+/// <see cref="MessageRepository.SaveOcrText"/> /
+/// <see cref="MessageRepository.MarkAttachmentOcrFailed"/> /
+/// <see cref="MessageRepository.MarkAttachmentImageNoText"/> unchanged; an
+/// attachment id on its own does not identify a document.
+/// </remarks>
 public sealed record OcrCandidate(
     long AttachmentId,
     int PartIndex,
@@ -1378,7 +1477,11 @@ public sealed record OcrCandidate(
     string MessageIdHeader,
     string MaildirPath,
     string MaildirFilename,
-    string Folder)
+    string Folder,
+    // The parent's content_hash at selection time. It covers the whole
+    // multipart structure, so it's what decides whether the bytes at PartIndex
+    // are still the document we OCR'd. NULL on legacy pre-v3 rows.
+    string? ContentHash = null)
 {
     /// <summary>Minimal Message for <see cref="MaildirAttachmentReader"/> (only the path fields are read).</summary>
     public Message ToMessage() => new()
