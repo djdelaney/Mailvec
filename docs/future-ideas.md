@@ -87,6 +87,74 @@ separate problems, one trigger:
    when the trigger arrives; still needs re-processing affected messages and
    a re-baseline.
 
+## Near-realtime mail via an IMAP IDLE watcher
+
+**The problem.** New mail becomes searchable somewhere between instantly and
+~10 minutes after it arrives, and the spread is almost entirely one term. The
+chain is: mbsync pulls it (`MBSYNC_INTERVAL_SECONDS`, **600s**) → the indexer's
+`MaildirWatcher` sees the new file (500ms debounce, effectively immediate) →
+the embedder picks it up (30s poll). Everything downstream of mbsync is already
+event-driven; mbsync is the only polling step, and it dominates.
+
+**Why not just lower the interval.** Already considered and rejected once — the
+600s figure is inherited from the launchd plist for a reason recorded in the
+Dockerfile: tighter schedules hit mbsync's `.mbsyncstate` flock and fail with
+`channel is locked` when a backlog pull overruns the interval. Polling harder
+trades latency for a failure mode that gets *worse* the more mail there is to
+sync. An IDLE watcher sidesteps it by not polling at all — it syncs when the
+server says there's something to sync.
+
+**The shape.** [`goimapnotify`](https://gitlab.com/shackra/goimapnotify) (or
+similar) holds an IMAP IDLE connection and runs a command on new mail; it's the
+conventional pairing with isync. Either a new sidecar or folded into the
+existing `mbsync` image (Alpine + isync + one Go binary). It needs no
+capabilities — outbound TLS only — so it inherits the current hardening posture
+(`cap_drop: [ALL]`, `no-new-privileges`, mem/pids limits) unchanged, and it
+wants the same Fastmail app password, already a compose file-secret.
+
+**Four things to get right, two of which this repo has already learned
+elsewhere:**
+
+1. **Syncs must still be serialized.** IDLE-triggered runs can collide with each
+   other and with the periodic backstop, which is the same `.mbsyncstate` flock
+   collision that capped the interval in the first place — event-driven doesn't
+   make it go away, it makes it bursty. The pattern is already in the codebase:
+   `MessageIngestService` funnels the watcher pulse and the periodic timer
+   through a coalescing single-slot channel with one consumer, precisely so two
+   scans can't overlap. Same problem, same fix.
+2. **Keep a periodic sync as a backstop, just longer.** IDLE connections drop
+   silently; a pure-event design misses mail for as long as nobody notices the
+   connection died. IDLE plus a 15–30 min fallback, rather than IDLE instead of
+   polling.
+3. **The liveness beat must not ride the sync events.** This is the sharp one.
+   Today `mbsync-loop` writes its heartbeat after every attempt, which is honest
+   only because attempts are on a fixed 600s cadence that the beat file
+   declares. Event-driven syncing breaks that: a quiet night legitimately
+   produces no events, and a beat-on-sync design would read as *dead* rather
+   than idle — the exact failure `ServiceHeartbeat` already documents ("the
+   liveness beat must never be emitted from the work loop", learned when one
+   Ollama batch outlived the embedder's poll interval). The watcher needs its
+   own timer-based beat. The good news is the file format already
+   self-describes: `MbsyncHeartbeatFile` reads the interval from the beat's
+   second line and `ServiceHeartbeat` judges staleness against it, so as long as
+   the watcher writes *its beat cadence* (not its sync cadence), `/health`,
+   `/up` and the `mailvec-mbsync` Kuma monitor all adapt with no code change.
+4. **Folder scope and connection count.** IDLE is per-mailbox, so watching every
+   Fastmail folder means a connection per folder. Realistically: watch `INBOX`,
+   trigger a full `mbsync -a`, and let the backstop cover the rest. Worth
+   checking Fastmail's per-account connection limits before widening.
+
+**One semantic change to note:** a stale mbsync heartbeat currently means "the
+loop stopped." Afterwards it would mean "the watcher died, *or* the IDLE
+connection dropped and the backstop also failed" — still actionable, but the
+alert text should say so.
+
+**Un-defer when** the latency is actually felt — someone asking about a mail
+they know arrived and getting nothing. Until then the cheap experiment is to
+drop `MBSYNC_INTERVAL_SECONDS` and see whether the flock contention the 600s
+figure was chosen to avoid actually materialises on this corpus; that answer is
+worth having before building anything.
+
 ## Still open (small)
 
 Carried forward from the original design doc — none are committed work, all gated on a problem actually being observed:
