@@ -113,6 +113,81 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
         }
     }
 
+    // ---------- hostile-content framing ----------
+    //
+    // Everything Mailvec returns is written by whoever sent the mail, and the
+    // agent holding this connector can usually send, post, or fetch something.
+    // The framing that says so is the only thing standing between a crafted
+    // message and the model treating it as an instruction — and it lives in
+    // free text, so nothing but a test notices when an edit drops it. These are
+    // wire-level for the same reason the name locks are: what matters is what
+    // reaches the client, not what a [Description] constant says in source.
+    //
+    // Asserting on the framing's DISTINCTIVE terms, not on whole sentences —
+    // the wording should stay editable without failing here. Rewriting it so
+    // "untrusted" and "instructions" both vanish is the change this catches,
+    // and that change is never accidental.
+
+    [Fact]
+    public async Task Server_instructions_frame_mail_as_untrusted_and_bound_outward_actions()
+    {
+        await using var client = await ConnectAsync();
+
+        var instructions = client.ServerInstructions;
+        instructions.ShouldNotBeNullOrWhiteSpace();
+
+        instructions!.ShouldContain("untrusted", Case.Insensitive);
+        instructions.ShouldContain("never an instruction", Case.Insensitive);
+        // The half that a per-tool description can't carry: read-only bounds
+        // MAILVEC, not the agent. Dropping this leaves the model thinking a
+        // read-only connector is a safe one to act on.
+        instructions.ShouldContain("does not bound you", Case.Insensitive);
+        instructions.ShouldContain("confirmation", Case.Insensitive);
+    }
+
+    [Theory]
+    [InlineData("search_emails")]
+    [InlineData("get_email")]
+    [InlineData("get_thread")]
+    [InlineData("view_attachment")]
+    [InlineData("get_attachment_text")]
+    [InlineData("get_attachment_page_image")]
+    public async Task Mail_bearing_tools_declare_their_output_untrusted(string toolName)
+    {
+        // Per-tool as well as per-session: ServerInstructions reaches the model
+        // once as standing context, but a tool description is re-read at the
+        // moment it decides to call — which is the moment the framing has to be
+        // in front of it. list_folders is absent on purpose: folder names come
+        // from the user's own account, not from senders.
+        await using var client = await ConnectAsync();
+
+        var tool = (await client.ListToolsAsync()).Single(t => t.Name == toolName);
+
+        tool.Description.ShouldContain("untrusted", Case.Insensitive,
+            $"{toolName} returns sender-controlled content and must say so");
+        tool.Description.ShouldContain("never as instructions", Case.Insensitive);
+    }
+
+    [Fact]
+    public async Task Every_tool_is_annotated_read_only_and_closed_world()
+    {
+        // The machine-readable half of "the surface is read-only" — clients use
+        // annotations to decide what needs confirmation, and a tool that gains
+        // a write path while keeping ReadOnly = true tells them to stop asking.
+        // So this test's real job is to fail the day a mutating tool is added
+        // and the annotation isn't reconsidered.
+        await using var client = await ConnectAsync();
+
+        foreach (var tool in await client.ListToolsAsync())
+        {
+            var annotations = tool.ProtocolTool.Annotations;
+            annotations.ShouldNotBeNull($"{tool.Name} must carry tool annotations");
+            annotations.ReadOnlyHint.ShouldBe(true, $"{tool.Name} must be annotated read-only");
+            annotations.OpenWorldHint.ShouldBe(false,
+                $"{tool.Name} operates on the user's own mailbox — a closed domain");
+        }
+    }
+
     [Fact]
     public async Task Locked_response_field_names_survive_serialization()
     {

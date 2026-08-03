@@ -84,7 +84,12 @@ public static class TrayExposureGuard
     /// Unparseable addresses count as non-loopback. Program.cs rejects those
     /// separately and earlier, so this is only reached defensively — and
     /// "couldn't tell" must not resolve to "safe" in a guard like this one.
+    ///
+    /// <para>Shared with the origin-authentication warning in Program.cs, which
+    /// asks the same question this guard does ("is this server reachable from
+    /// off-host?") about a different risk. One implementation so the two can't
+    /// disagree about what counts as exposed.</para>
     /// </summary>
-    private static bool IsLoopbackBind(string? bindAddress) =>
+    public static bool IsLoopbackBind(string? bindAddress) =>
         IPAddress.TryParse(bindAddress, out var ip) && IPAddress.IsLoopback(ip);
 }

@@ -145,7 +145,9 @@ Cloudflare side is reconfigured. All of them are satisfied by the Access layer,
 
 ## Origin-side wiring (this repo)
 
-Two things in the compose stack are load-bearing for the tunnel:
+Two things in the compose stack are load-bearing for the tunnel (a third,
+[origin validation of the Access assertion](#origin-validation-of-the-access-assertion-mcpaccess),
+is optional and off by default):
 
 - **`MCP_PUBLIC_HOSTNAME` must be set in `.env`.** cloudflared forwards the
   original public `Host` header, and [`HostGuard`](../src/Mailvec.Mcp/HostGuard.cs)
@@ -163,15 +165,37 @@ shape is path-differentiated on the same hostname, in this order:
 | # | Hostname | Path | Service |
 |---|---|---|---|
 | 1 | `mailvec.<domain>` | `tray/` | `http_status:404` |
-| 2 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
-| 3 | *(catch-all)* | | `http_status:404` |
+| 2 | `mailvec.<domain>` | `health` | `http_status:404` |
+| 3 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
+| 4 | *(catch-all)* | | `http_status:404` |
 
-`/health` is deliberately **not** 404'd — it falls through rule 2 to `mcp:3333`
-so Uptime Kuma can poll it end-to-end through the tunnel (which also detects
-tunnel / Access / edge failures an in-network probe can't). See
-[security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray) for why
-`/health` is single-layer (low-sensitivity, monitoring) while `/tray/*` is
-belt-and-braces (mail content).
+> **Rule 2 is a pending operator action.** These rules live in the Cloudflare
+> dashboard, not in this repo, so nothing in a commit can apply it — add it by
+> hand. The origin already refuses off-box `/health` on its own
+> (`Mcp:RestrictHealthToLoopback`, default true, which is the load-bearing
+> barrier); this rule is the outer of the two, exactly like `/tray/`.
+
+**`/up` is the forwarded monitoring endpoint; `/health` is not.** Uptime Kuma
+polls `/up` end-to-end through the tunnel, which detects tunnel / Access / edge
+failures an in-network probe can't. `/health` is its detailed sibling and
+discloses the archive path, corpus counts, embedding model identity and the
+internal Ollama LAN address — `/up` exists precisely so nothing external needs
+any of that. Its real consumers are all loopback (the compose healthcheck,
+`mailvec doctor` under `docker compose exec`, the tray on local installs), so
+keeping it off-box costs nothing. See
+[security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray).
+
+**Verify** rule 2 after adding it (as the owner, from outside):
+
+```bash
+curl -i https://mailvec.<domain>/health   # 404
+curl -i https://mailvec.<domain>/up       # 200 or 503, with the boolean body
+```
+
+```bash
+# And that the loopback consumers are unaffected:
+docker compose exec mcp curl -fsS http://127.0.0.1:3333/health   # full report
+```
 
 **`/tray/*` has two independent barriers**, and the origin one is load-bearing —
 do not rely on this ingress rule alone:
@@ -227,6 +251,66 @@ without any OAuth, bypassing the Access front entirely, and the
 that not being true.
 
 ---
+
+## Origin validation of the Access assertion (`Mcp:Access`)
+
+Optional second layer, **off by default**. With it configured, the MCP server
+validates the `Cf-Access-Jwt-Assertion` header itself instead of trusting
+anything that can reach `mcp:3333`. Rationale and threat model:
+[security.md → Origin authentication](security.md#origin-authentication-mcpaccess).
+The short version: the Access policy lives in Cloudflare's dashboard, unversioned
+and untested, and this makes the origin's half of the gate checkable in CI — plus
+it enforces the `/up` monitoring split at the origin rather than trusting the
+edge path scoping.
+
+**Values you need**, both from the Zero Trust dashboard:
+
+| `.env` key | Where |
+|---|---|
+| `MCP_ACCESS_TEAM_DOMAIN` | Settings → your team domain, as a full `https://` URL |
+| `MCP_ACCESS_AUDIENCE` | Access → Applications → *the Mailvec app* → Overview → **Application Audience (AUD) Tag** |
+| `MCP_ACCESS_MONITORING_AUDIENCE` | the AUD tag of the separate path-scoped `up` application, if you have one |
+
+Then set `MCP_ACCESS_ENABLED=true` (literal `true`, not `1` — .NET's binder only
+understands `true`/`false`, and an unbindable value reads as false) and
+`docker compose up -d mcp`.
+
+**A half configuration refuses to start**, naming the missing knob — deliberately,
+since `Enabled` without an audience would validate signature and issuer while
+admitting every application in the account. So would a `MonitoringAudience` equal
+to `Audience`, which reads like a restriction and grants the whole mailbox; that
+also refuses to start.
+
+**Verify after enabling** (from outside the network — a browser session that has
+cleared Access, plus the monitoring token):
+
+```bash
+# Owner, through the tunnel: normal MCP + health.
+curl -i https://mailvec.<domain>/health          # 200 or 503, with a body
+
+# Monitoring token: /up yes, mailbox no. THIS is the check worth having —
+# it now fails at the origin even if the Access policy is wrong.
+curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
+  https://mailvec.<domain>/up                    # 200 or 503
+curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
+  https://mailvec.<domain>/health                # 403 — audience not permitted here
+```
+
+```bash
+# From the VM, bypassing the tunnel: no assertion, no access.
+docker compose exec cloudflared wget -qS -O- http://mcp:3333/health   # 401
+```
+
+The last one is the acceptance that matters most — it's the shape a published
+host port or a compromised sibling container would take, and before this it
+returned the mailbox.
+
+**Don't remove the loopback exemption** (`Mcp__Access__AllowLoopback`). The
+compose healthcheck curls `127.0.0.1:3333/health` from inside the mcp container
+and has no assertion; turning the exemption off marks the container permanently
+unhealthy. Loopback is not reachable from off-box — cloudflared and every
+sibling arrive over the compose network with a real address and are never
+exempt, which is exactly what the `docker compose exec` check above proves.
 
 ## Gotchas
 

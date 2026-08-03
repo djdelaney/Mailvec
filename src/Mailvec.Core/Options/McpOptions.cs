@@ -52,8 +52,70 @@ public sealed class McpOptions
     /// </summary>
     public bool EnableTrayEndpoints { get; set; } = true;
 
+    /// <summary>
+    /// Cloudflare Access assertion validation at the origin. Off by default —
+    /// see <see cref="AccessOptions"/> for why that's the right default rather
+    /// than a gap.
+    /// </summary>
+    public AccessOptions Access { get; set; } = new();
+
+    /// <summary>
+    /// Serve <c>/health</c> only to callers on the loopback interface; everyone
+    /// else gets a 404. Default true, and it costs nothing because **every
+    /// documented consumer is already loopback**: the compose healthcheck curls
+    /// <c>127.0.0.1:3333/health</c> from inside the mcp container,
+    /// <c>mailvec doctor</c>'s probe rewrites a <c>0.0.0.0</c> bind to
+    /// <c>127.0.0.1</c> (<c>DoctorCommand.HealthProbeUrl</c>), and the tray polls
+    /// loopback on local installs. Nothing off-box has ever needed this body.
+    ///
+    /// <para>What it's for: <c>/health</c> is the detailed sibling of
+    /// <c>/up</c> and discloses the archive's filesystem path, corpus counts,
+    /// embedding model identity, and — the one that matters — the internal
+    /// Ollama LAN address. <c>/up</c> exists precisely so that an external
+    /// monitor never needs any of that, so forwarding <c>/health</c> off-box
+    /// hands out the disclosure <c>/up</c> was built to avoid.</para>
+    ///
+    /// <para>404 rather than 403, matching how the tunnel treats
+    /// <c>/tray/</c>: a refusal confirms the endpoint is there, and there is no
+    /// caller who benefits from learning that.</para>
+    ///
+    /// <para>This is the load-bearing barrier, in the same sense as
+    /// <see cref="EnableTrayEndpoints"/>: it's server-side, so it holds
+    /// regardless of what the tunnel's ingress rules say. The matching
+    /// <c>health</c> 404 rule at the tunnel is defense in depth. Set false only
+    /// if something genuinely off-box needs the detailed body — and prefer
+    /// pointing it at <c>/up</c> instead.</para>
+    /// </summary>
+    public bool RestrictHealthToLoopback { get; set; } = true;
+
     public int SearchDefaultLimit { get; set; } = 20;
     public int SearchMaxLimit { get; set; } = 100;
+
+    /// <summary>
+    /// Maximum messages <c>get_thread</c> returns in one response. Every other
+    /// mail-bearing tool is bounded by something the caller passes — search by
+    /// <see cref="SearchMaxLimit"/>, attachment text by its <c>maxChars</c>
+    /// window — but a thread's size is chosen by whoever replied to it, not by
+    /// the caller, so without a cap the response size is an input from the
+    /// senders. Mailing lists and long CC chains are the realistic shape.
+    /// Truncation is chronological-prefix (oldest kept) and always reported:
+    /// the response carries <c>truncated</c> plus a <c>totalCount</c> that
+    /// exceeds <c>count</c>, so the model can say so rather than silently
+    /// summarising half a thread.
+    /// </summary>
+    public int ThreadMaxMessages { get; set; } = 100;
+
+    /// <summary>
+    /// Aggregate cap, in characters, on the body text <c>get_thread</c> returns
+    /// when <c>includeBodies=true</c> — the message cap alone doesn't bound the
+    /// response, since 100 messages carrying a 2 MB quoted-history tail each is
+    /// still unbounded in bytes. Spent oldest-first; once exhausted, later
+    /// entries get a truncated (possibly empty) body with <c>bodyTruncated</c>
+    /// set, and the thread's <c>truncated</c> flag is raised. ~200k chars is
+    /// roughly 50k tokens — already the outer edge of what one tool result
+    /// should carry, and get_email reaches any individual body in full.
+    /// </summary>
+    public int ThreadMaxBodyChars { get; set; } = 200_000;
 
     /// <summary>
     /// When true, the MCP server emits one INFO log line per tool invocation showing

@@ -92,6 +92,12 @@ updates:
       nuget-major:
         update-types: ["major"]
 
+  # Actions are pinned to full commit SHAs (with the version in a trailing
+  # comment), not movable major tags — a tag like `v7` is repointable by the
+  # action's owner, so it names a moving target that runs with this repo's
+  # token, and publish-images.yml grants `packages: write`. Dependabot
+  # understands the SHA-plus-comment form and rewrites both halves together,
+  # which is what makes the pins maintainable rather than a one-off freeze.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -100,4 +106,22 @@ updates:
       - "djdelaney"
     groups:
       actions-all:
+        patterns: ["*"]
+
+  # Container base images. Present so the DIGEST pins — cloudflared in
+  # compose.yml, and all three FROM lines in the Dockerfile — get refreshed on a
+  # schedule. A digest pin with nothing bumping it decays into "permanently
+  # running the image we happened to pin", trading a supply-chain risk for an
+  # unpatched-CVE one, and that bites hardest on `dotnet/aspnet`, whose moving
+  # tag is how .NET servicing patches would otherwise arrive. **Removing this
+  # ecosystem means reverting those FROMs to tags** — see docs/security.md.
+  # `/` covers compose.yml and the Dockerfile.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "djdelaney"
+    groups:
+      docker-all:
         patterns: ["*"]
