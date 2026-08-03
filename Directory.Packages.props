@@ -60,6 +60,11 @@
     <!-- MCP server -->
     <PackageVersion Include="ModelContextProtocol"              Version="2.0.0" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore"   Version="2.0.0" />
+    <!-- Cloudflare Access assertion validation at the origin (AccessAuth.cs).
+         Rides the same 10.0.x servicing band as the Microsoft.Extensions.*
+         cluster — it pulls Microsoft.IdentityModel.* transitively, and that's
+         where the JWKS caching/refresh actually lives. -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.10" />
 
     <!-- CLI -->
     <PackageVersion Include="System.CommandLine"                Version="2.0.10" />

@@ -69,6 +69,12 @@ In Kuma's monitor config, put the two headers in the **Headers** field as JSON:
 > The JSONata paths are identical on both endpoints by design, so a monitor
 > written against one works against the other — moving an existing setup is a
 > URL edit and nothing else.
+>
+> **Since 0.2.0 this is enforced, not just advised**: the origin serves
+> `/health` to loopback callers only and 404s everything else
+> (`Mcp:RestrictHealthToLoopback`). A monitor still pointed at `/health` through
+> the tunnel will go permanently down — which is the migration signal, but check
+> here first if that's what you're seeing.
 
 A healthy response:
 
@@ -235,11 +241,26 @@ curl -i -s \
   -H "CF-Access-Client-Id: $CF_ID" -H "CF-Access-Client-Secret: $CF_SECRET" \
   "https://mailvec.<domain>/up"
 
-# Should be DENIED by Access. This is the check that proves the split works:
-# the monitoring token must not reach the detailed body.
+# Should NOT return the detailed body. Since 0.2.0 the origin serves /health to
+# loopback callers only (Mcp:RestrictHealthToLoopback), so this is a 404 from
+# Mailvec itself whether or not Access denies it first — which means it no
+# longer distinguishes "Access is scoped correctly" from "Access is wide open
+# but the origin saved us". Keep it as a disclosure check; use the next one to
+# test the Access split.
 curl -i -s \
   -H "CF-Access-Client-Id: $CF_ID" -H "CF-Access-Client-Secret: $CF_SECRET" \
   "https://mailvec.<domain>/health"
+
+# THE check that proves the Access split: the MCP root is the mail surface and
+# is gated by Access alone. A monitoring token must be denied here. If this
+# returns a tool list, the token is admitted by the root application and can
+# read the whole mailbox.
+curl -i -s -X POST \
+  -H "CF-Access-Client-Id: $CF_ID" -H "CF-Access-Client-Secret: $CF_SECRET" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  "https://mailvec.<domain>/"
 
 # Should return HTTP 404 (mail surface is closed — must NOT return JSON):
 curl -i -s \
@@ -250,10 +271,14 @@ curl -i -s \
 If `/up` returns a `302`/login page instead of JSON, the service token
 isn't authorized on the path-scoped Access app yet.
 
-**If `/health` returns JSON, stop.** The token is still admitted by the root
-application — most likely its Service Auth policy still reads *Any Access
-Service Token* — and the monitoring credential can currently reach the whole
-MCP surface, i.e. the mailbox. That's a scoping bug, not a monitoring one.
+**If the MCP root returns a tool list, stop.** The token is still admitted by
+the root application — most likely its Service Auth policy still reads *Any
+Access Service Token* — and the monitoring credential can currently reach the
+whole MCP surface, i.e. the mailbox. That's a scoping bug, not a monitoring one.
+(Since 0.2.0 `Mcp:Access` can enforce this at the origin too, by audience: see
+[security.md → Origin authentication](security.md#origin-authentication-mcpaccess).
+It's off by default, so until you enable it the Access policy is the only thing
+standing here.)
 
 ## Notes on Kuma's JSON Query monitor
 

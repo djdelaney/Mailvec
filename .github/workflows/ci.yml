@@ -39,15 +39,15 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up .NET 10 SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: "10.0.x"
 
       - name: Cache NuGet packages
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
@@ -76,12 +76,34 @@ jobs:
       - name: Test
         run: dotnet test --configuration Release --no-build --logger "console;verbosity=normal"
 
+      # Dependabot opens PRs weekly; this catches the window in between — an
+      # advisory published against a version already pinned here produces no PR
+      # until the next run, and nothing else in CI would notice. Transitive
+      # included because that's where they actually land (nothing references
+      # Microsoft.IdentityModel.* directly; it arrives under JwtBearer).
+      #
+      # `--vulnerable` exits 0 even when it finds something, so the grep is what
+      # makes this a gate rather than a log line. Runs after the tests so a
+      # security advisory doesn't mask a real test failure.
+      - name: Audit NuGet dependencies for known vulnerabilities
+        run: |
+          set -o pipefail
+          dotnet list Mailvec.slnx package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          if grep -qE '^\s*>' audit.txt; then
+            echo "::error::Vulnerable NuGet package(s) found — see the table above."
+            echo "Bump the offending package in Directory.Packages.props. If it is a transitive"
+            echo "with no fixed version yet, add an explicit PackageVersion pin to a patched"
+            echo "release, or record a reviewed exception here with an expiry."
+            exit 1
+          fi
+          echo "No known vulnerable packages."
+
   tray:
     name: Tray build + wire-contract tests
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install XcodeGen
         run: brew install xcodegen
