@@ -58,16 +58,17 @@ In Kuma's monitor config, put the two headers in the **Headers** field as JSON:
 
 ## The `/up` response (field reference)
 
-> **Changed in 0.1.37.** These monitors used to poll `/health`. They now poll
-> `/up`, and the Kuma token is scoped so it can no longer reach `/health` at
-> all. **The JSONata queries below are unchanged** — `/up` carries the same
-> paths — so the migration is a URL edit on six monitors and nothing else.
+> **Monitor `/up`, not `/health`** (`/up` exists from 0.1.37). `/health`
+> returns the archive's filesystem path, corpus and chunk counts, the embedding
+> model and its dimensions, embedder failure detail, and the internal Ollama LAN
+> URL. A credential that only needs to prove liveness should receive none of
+> that — and this one sits in Kuma's config store, which makes it the likeliest
+> of the deployment's credentials to leak. `/up` carries the same signals with
+> the values stripped: booleans yes, values no.
 >
-> Why: `/health` returns the archive's filesystem path, corpus and chunk
-> counts, the embedding model and its dimensions, embedder failure detail, and
-> the internal Ollama LAN URL. A credential that only needs to prove liveness
-> shouldn't receive any of that, and this one lives in Kuma's config store.
-> `/up` is the same signals with the values stripped: booleans yes, values no.
+> The JSONata paths are identical on both endpoints by design, so a monitor
+> written against one works against the other — moving an existing setup is a
+> URL edit and nothing else.
 
 A healthy response:
 
@@ -137,18 +138,18 @@ status = 'ok' and $count(services[stale = true]) = 0
 Expected value `true`. Downside: the alert just says "Mailvec unhealthy" — you
 curl to find out why.
 
-## The setting that is currently biting you: Accepted Status Codes → `200-299, 503`
+## The setting that will bite you: Accepted Status Codes → `200-299, 503`
 
-> **Measured 2026-08-01: this is NOT set.** All six monitors read
-> `["200-299"]` in Kuma's live `monitorList`. This section used to be written as
-> if it were configured; it never was. Treat what follows as a **fix to apply**,
-> not a setting to preserve.
+**Set this on every monitor, and check it on any you inherited** — Kuma's
+default is `200-299`, so this is wrong until someone makes it right, and the
+symptom looks like something else entirely.
 
 `/up` returns **503** whenever degraded. Kuma marks any non-2xx **down before
-evaluating the JSONata**, so with the current `200-299` every monitor pointed at
-this endpoint trips together — including `mailvec-indexer` during an Ollama
-reboot, when the indexer is perfectly fine. That is present behaviour, not a
-hypothetical: **every Ollama restart already reds all six.**
+evaluating the JSONata**, so on the default every monitor pointed at this
+endpoint trips together — `mailvec-indexer` goes red during an Ollama reboot,
+when the indexer is perfectly fine. The tell is *all* the Mailvec monitors
+alerting simultaneously for something only one of them describes; Kuma's
+incident history will show them going down in lockstep.
 
 Accepting `503` makes each monitor's JSONata the sole decider, so they stay
 independent and each reports only its own failure.
