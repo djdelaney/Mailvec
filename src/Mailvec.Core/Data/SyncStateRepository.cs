@@ -129,6 +129,29 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         return cmd.ExecuteScalar() as string;
     }
 
+    /// <summary>
+    /// Drop the recorded content_hash for one path, forcing the next scan to
+    /// re-parse it instead of taking the mtime fast path (which requires a
+    /// non-null hash — the same "retry me" marker a failed ingest writes).
+    /// </summary>
+    /// <remarks>
+    /// Load-bearing for the scanner's rename-repair pass. Once a message row is
+    /// repointed at a surviving copy, its stored body/attachment metadata still
+    /// came from the copy that just vanished — and <c>MessageRepository.Upsert</c>
+    /// only accepts content from the attributed copy, so without this the
+    /// survivor would ride the fast path forever and the row would never
+    /// re-align. That also covers a rename that changed the file's content:
+    /// the parse at the new path isn't yet attributed, so its change would
+    /// otherwise be recorded in sync_state and never applied to the message.
+    /// </remarks>
+    public void ClearContentHash(SqliteConnection conn, string maildirFullPath)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE sync_state SET content_hash = NULL WHERE maildir_full_path = $path";
+        cmd.Parameters.AddWithValue("$path", maildirFullPath);
+        cmd.ExecuteNonQuery();
+    }
+
     public int Remove(IEnumerable<string> maildirFullPaths)
     {
         using var conn = connections.Open();

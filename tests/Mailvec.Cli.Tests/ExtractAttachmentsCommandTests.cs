@@ -162,6 +162,150 @@ public class ExtractAttachmentsCommandTests : IDisposable
         status.ShouldBe("failed");
     }
 
+    // ── Stale-parse guard ────────────────────────────────────────────────────
+    //
+    // The .eml is parsed OUTSIDE the write transaction on purpose (PdfPig on a
+    // large document must not hold the writer lock), which leaves a window for
+    // the indexer to re-parse the message and replace its attachment rows. The
+    // parse in hand then describes a file the row no longer points at, and its
+    // part_index-keyed results would be stamped onto the current rows.
+
+    [Fact]
+    public void A_message_that_changed_after_the_page_load_is_skipped_rather_than_stamped()
+    {
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+        var messages = sp.GetRequiredService<MessageRepository>();
+
+        // Two candidates in one page, ordered by messages.id. The first has no
+        // .eml on disk, so the command writes to stderr while working through
+        // the page — the hook we use to mutate the SECOND message after its
+        // snapshot was taken but before it is processed. That is exactly the
+        // window a concurrent indexer lands in.
+        messages.Upsert(SampleParsed("ghost@x", "missing.pdf", "application/pdf"), "INBOX", "INBOX/cur", "ghost.eml", DateTimeOffset.UtcNow);
+
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "victim.eml");
+        File.WriteAllText(emlPath, """
+            Message-ID: <victim@x>
+            From: alice@example.com
+            To: bob@example.com
+            Subject: Test
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="b"
+
+            --b
+            Content-Type: text/plain
+
+            Body.
+            --b
+            Content-Type: text/plain; name="notes.txt"
+            Content-Disposition: attachment; filename="notes.txt"
+
+            ZQTELEMETRY from the pre-change parse.
+            --b--
+            """);
+        messages.Upsert(SampleParsed("victim@x", "notes.txt", "text/plain"), "INBOX", "INBOX/cur", "victim.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var err = new MutateOnFirstWrite(() => SetContentHash(sp, "victim@x", "h-changed-by-the-indexer"));
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
+
+        exit.ShouldBe(0);
+        // The row must be left alone — an unstamped candidate is picked up by
+        // the next run against a fresh parse; a wrongly-stamped one never is.
+        StatusOf(sp, "victim@x").ShouldBeNull();
+        ExtractedTextOf(sp, "victim@x").ShouldBeNull();
+        // ...and the run must say so rather than silently doing less.
+        writer.ToString().ShouldContain("changed underneath");
+    }
+
+    [Fact]
+    public void An_unchanged_message_is_not_treated_as_stale()
+    {
+        // Same shape as above minus the mutation: the guard must not reject the
+        // ordinary case (notably a legacy NULL content_hash on both sides).
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+        var messages = sp.GetRequiredService<MessageRepository>();
+
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "ok.eml");
+        File.WriteAllText(emlPath, """
+            Message-ID: <ok@x>
+            From: alice@example.com
+            To: bob@example.com
+            Subject: Test
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="b"
+
+            --b
+            Content-Type: text/plain
+
+            Body.
+            --b
+            Content-Type: text/plain; name="notes.txt"
+            Content-Disposition: attachment; filename="notes.txt"
+
+            ZQTELEMETRY quarterly notes.
+            --b--
+            """);
+        messages.Upsert(SampleParsed("ok@x", "notes.txt", "text/plain"), "INBOX", "INBOX/cur", "ok.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, new StringWriter());
+
+        exit.ShouldBe(0);
+        StatusOf(sp, "ok@x").ShouldBe("done");
+        ExtractedTextOf(sp, "ok@x").ShouldNotBeNull().ShouldContain("ZQTELEMETRY");
+        writer.ToString().ShouldNotContain("changed underneath");
+    }
+
+    /// <summary>Runs <paramref name="onFirstWrite"/> once, the first time anything is written.</summary>
+    private sealed class MutateOnFirstWrite(Action onFirstWrite) : StringWriter
+    {
+        private bool _fired;
+
+        public override void Write(string? value)
+        {
+            base.Write(value);
+            if (_fired) return;
+            _fired = true;
+            onFirstWrite();
+        }
+    }
+
+    private static ParsedMessage SampleParsed(string id, string attachmentName, string contentType) => new(
+        MessageId: id, ThreadId: id, Subject: "Test",
+        FromAddress: "alice@example.com", FromName: null,
+        ToAddresses: [], CcAddresses: [],
+        DateSent: DateTimeOffset.UtcNow,
+        BodyText: "Body.", BodyHtml: null,
+        RawHeaders: $"Message-ID: <{id}>\r\n",
+        SizeBytes: 200, ContentHash: $"h-{id}",
+        Attachments: [new ParsedAttachment(0, attachmentName, contentType, 50L, ExtractedText: null, ExtractionStatus: null)]);
+
+    private static void SetContentHash(IServiceProvider sp, string messageIdHeader, string hash)
+    {
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE messages SET content_hash = $h WHERE message_id = $mid";
+        cmd.Parameters.AddWithValue("$h", hash);
+        cmd.Parameters.AddWithValue("$mid", messageIdHeader);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static string? StatusOf(IServiceProvider sp, string messageIdHeader) =>
+        AttachmentCol(sp, messageIdHeader, "extraction_status");
+
+    private static string? ExtractedTextOf(IServiceProvider sp, string messageIdHeader) =>
+        AttachmentCol(sp, messageIdHeader, "extracted_text");
+
+    private static string? AttachmentCol(IServiceProvider sp, string messageIdHeader, string column)
+    {
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {column} FROM attachments WHERE message_id = (SELECT id FROM messages WHERE message_id = $mid)";
+        cmd.Parameters.AddWithValue("$mid", messageIdHeader);
+        return cmd.ExecuteScalar() as string;
+    }
+
     [Fact]
     public void Reextract_calendar_recovers_ics_rows_and_leaves_others_untouched()
     {

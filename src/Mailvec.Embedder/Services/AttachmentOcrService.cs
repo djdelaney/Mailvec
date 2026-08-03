@@ -129,32 +129,35 @@ public sealed class AttachmentOcrService(
     /// from a wedged Ollama, so nothing is counted and everything retries
     /// next cycle.
     /// </summary>
-    private void SettleVisionFailures(IReadOnlyList<long> failedAttachmentIds, bool visionHealthy, string pass)
+    private void SettleVisionFailures(IReadOnlyList<OcrCandidate> failed, bool visionHealthy, string pass)
     {
-        if (failedAttachmentIds.Count == 0) return;
+        if (failed.Count == 0) return;
 
         if (!visionHealthy)
         {
             logger.LogWarning(
                 "{Pass}: every vision call this cycle failed, including the health probe ({Count} attachment(s)); " +
                 "not counting toward poison-document retirement — Ollama can't run the vision model. Will retry next cycle.",
-                pass, failedAttachmentIds.Count);
+                pass, failed.Count);
             return;
         }
 
-        foreach (var id in failedAttachmentIds)
+        // Carry the whole candidate, not just its id: the retirement write is
+        // identity-guarded against the snapshot (see MessageRepository's
+        // OcrIdentityMatch), so an id alone can no longer address a document.
+        foreach (var c in failed)
         {
-            if (RecordVisionFailure(id))
+            if (RecordVisionFailure(c.AttachmentId))
             {
                 logger.LogWarning(
                     "{Pass}: attachment {AttachmentId} failed {Max}x in cycles where other documents OCR'd fine; " +
                     "marking failed to unblock the queue.",
-                    pass, id, MaxVisionAttempts);
-                messages.MarkAttachmentOcrFailed(id);
+                    pass, c.AttachmentId, MaxVisionAttempts);
+                messages.MarkAttachmentOcrFailed(c);
             }
             else
             {
-                logger.LogWarning("{Pass}: vision call failed for attachment {AttachmentId}; will retry next cycle.", pass, id);
+                logger.LogWarning("{Pass}: vision call failed for attachment {AttachmentId}; will retry next cycle.", pass, c.AttachmentId);
             }
         }
     }
@@ -181,7 +184,7 @@ public sealed class AttachmentOcrService(
         int done = 0;
         int visionSuccesses = 0;
         int consecutiveFailures = 0;
-        var failedThisCycle = new List<long>();
+        var failedThisCycle = new List<OcrCandidate>();
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
@@ -223,7 +226,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                messages.MarkAttachmentOcrFailed(c);
                 continue;
             }
 
@@ -237,7 +240,7 @@ public sealed class AttachmentOcrService(
                 // PDFium can't open it -> permanently unreadable. Mark failed so
                 // we don't re-select a poison PDF every cycle.
                 logger.LogWarning(ex, "OCR: cannot open PDF for attachment {AttachmentId}; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                messages.MarkAttachmentOcrFailed(c);
                 continue;
             }
 
@@ -276,7 +279,7 @@ public sealed class AttachmentOcrService(
                 // poison-document retirement or get written off as an Ollama
                 // outage. Repeated consecutive failures mean the model likely
                 // can't run at all — stop burning a timeout per candidate.
-                failedThisCycle.Add(c.AttachmentId);
+                failedThisCycle.Add(c);
                 if (++consecutiveFailures >= MaxConsecutiveCycleFailures)
                 {
                     logger.LogWarning(ex,
@@ -289,7 +292,7 @@ public sealed class AttachmentOcrService(
                 continue;
             }
 
-            messages.SaveOcrText(c.AttachmentId, c.MessageId, sb.ToString());
+            messages.SaveOcrText(c, sb.ToString());
             _visionFailures.Remove(c.AttachmentId);
             done++;
             logger.LogInformation(
@@ -329,7 +332,7 @@ public sealed class AttachmentOcrService(
         int done = 0;
         int visionSuccesses = 0;
         int consecutiveFailures = 0;
-        var failedThisCycle = new List<long>();
+        var failedThisCycle = new List<OcrCandidate>();
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
@@ -362,7 +365,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "Image OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                messages.MarkAttachmentOcrFailed(c);
                 continue;
             }
 
@@ -373,7 +376,7 @@ public sealed class AttachmentOcrService(
             {
                 logger.LogInformation(
                     "Image OCR: attachment {AttachmentId} did not decode as an image; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c.AttachmentId);
+                messages.MarkAttachmentOcrFailed(c);
                 continue;
             }
 
@@ -388,7 +391,7 @@ public sealed class AttachmentOcrService(
                 logger.LogInformation(
                     "Image OCR gate: attachment {AttachmentId} {W}x{H} (short {Short}px, aspect {Aspect:F1}) — skipping as non-content.",
                     c.AttachmentId, normalized.Width, normalized.Height, shortEdge, aspect);
-                messages.MarkAttachmentImageNoText(c.AttachmentId);
+                messages.MarkAttachmentImageNoText(c);
                 continue;
             }
 
@@ -408,7 +411,7 @@ public sealed class AttachmentOcrService(
                 // end of cycle whether these count toward retirement (only
                 // when another call succeeded this cycle, proving the model
                 // can run) or get written off as an Ollama outage.
-                failedThisCycle.Add(c.AttachmentId);
+                failedThisCycle.Add(c);
                 if (++consecutiveFailures >= MaxConsecutiveCycleFailures)
                 {
                     logger.LogWarning(ex,
@@ -431,13 +434,13 @@ public sealed class AttachmentOcrService(
             // case here — mark terminal rather than persisting an empty 'ocr' row.
             if (string.IsNullOrWhiteSpace(text))
             {
-                messages.MarkAttachmentImageNoText(c.AttachmentId);
+                messages.MarkAttachmentImageNoText(c);
                 logger.LogInformation(
                     "Image OCR: attachment {AttachmentId} produced no text; marked no_text.", c.AttachmentId);
                 continue;
             }
 
-            messages.SaveOcrText(c.AttachmentId, c.MessageId, text);
+            messages.SaveOcrText(c, text);
             done++;
             logger.LogInformation(
                 "OCR'd image attachment {AttachmentId} ({W}x{H}, {Chars} chars); re-queued message {MessageId}.",

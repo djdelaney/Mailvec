@@ -218,6 +218,14 @@ public sealed class MaildirScanner(
                 MaildirPaths.FolderNameFor(_maildirRoot, folderDir),
                 MaildirPaths.RelativeFolderPath(_maildirRoot, freshPath),
                 Path.GetFileName(freshPath));
+            // Repointing moves attribution but not content: the row's body,
+            // content_hash and attachment rows still came from the copy that
+            // just vanished, and MessageRepository.Upsert only accepts content
+            // from the attributed copy. The survivor was already walked this
+            // scan, so without clearing its recorded hash it would ride the
+            // mtime fast path forever and the row would never re-align.
+            // Costs one re-parse of that file on the next scan.
+            syncState.ClearContentHash(conn, freshPath);
             repaired++;
         }
         if (repaired > 0)

@@ -537,6 +537,91 @@ public class MaildirScannerTests : IDisposable
         File.Exists(Path.Combine(_root, after.MaildirPath, after.MaildirFilename)).ShouldBeTrue();
     }
 
+    // ── Divergent duplicate copies ───────────────────────────────────────────
+    //
+    // One Message-ID can legitimately live in several folders, and those copies
+    // are not always byte-identical: a mailing-list copy carries an appended
+    // footer the Sent copy doesn't. Folder attribution is first-seen-wins, so
+    // without a matching rule for CONTENT the row ends up describing copy A's
+    // location and copy B's bytes — and everything that resolves a part_index
+    // against the attributed .eml (view_attachment, the OCR pass) then reads
+    // the wrong document.
+
+    /// <summary>Two copies of one Message-ID whose bodies genuinely differ.</summary>
+    private void WriteDivergentPair(string messageId, string inboxMarker, string otherMarker)
+    {
+        WriteEml("INBOX", "cur", "dv1.host:2,S", $"shared body {inboxMarker}", messageId);
+        WriteEml("Lists", "cur", "dv2.host:2,S", $"shared body {otherMarker}", messageId);
+    }
+
+    private string MarkerFor(Mailvec.Core.Models.Message msg) =>
+        msg.Folder == "INBOX" ? "INBOXCOPY" : "LISTSCOPY";
+
+    [Fact]
+    public void Divergent_duplicate_copies_leave_the_row_aligned_with_the_attributed_file()
+    {
+        WriteDivergentPair("dv@x", "INBOXCOPY", "LISTSCOPY");
+
+        _scanner.ScanAll();
+
+        // Whichever copy won attribution, the stored body must be the body of
+        // the file the row points at — otherwise a part_index resolved against
+        // that file addresses a document the metadata never described.
+        var msg = _messages.GetByMessageId("dv@x").ShouldNotBeNull();
+        var onDisk = File.ReadAllText(Path.Combine(_root, msg.MaildirPath, msg.MaildirFilename));
+        onDisk.ShouldContain(MarkerFor(msg));                 // sanity: the pair really did diverge
+        msg.BodyText.ShouldNotBeNull().ShouldContain(MarkerFor(msg));
+    }
+
+    [Fact]
+    public void Divergent_duplicate_copies_do_not_re_queue_the_message_on_every_rescan()
+    {
+        WriteDivergentPair("churn@x", "INBOXCOPY", "LISTSCOPY");
+        _scanner.ScanAll();
+        var msg = _messages.GetByMessageId("churn@x").ShouldNotBeNull();
+
+        _chunks.ReplaceChunksForMessage(
+            msg.Id,
+            [new Mailvec.Core.Embedding.TextChunk(0, "chunk text", 1)],
+            [Hot(0)],
+            DateTimeOffset.UtcNow);
+        EmbeddedAt(msg.Id).ShouldNotBeNull();
+
+        // Rewrite BOTH copies with their same contents: mtimes bump, so the
+        // fast path is skipped and both are re-parsed, but nothing actually
+        // changed. With the row's content_hash alternating between the two
+        // copies, every such rescan looks like a body change and burns a full
+        // re-embed of the message — forever.
+        WriteDivergentPair("churn@x", "INBOXCOPY", "LISTSCOPY");
+
+        _scanner.ScanAll();
+
+        EmbeddedAt(msg.Id).ShouldNotBeNull();
+        _chunks.CountForMessage(msg.Id).ShouldBe(1);
+    }
+
+    [Fact]
+    public void Repointing_to_a_divergent_survivor_realigns_the_stored_content()
+    {
+        WriteDivergentPair("repoint-dv@x", "INBOXCOPY", "LISTSCOPY");
+        _scanner.ScanAll();
+
+        // Delete exactly the attributed copy. Reconciliation repoints the row
+        // at the survivor — which leaves the row describing the DELETED copy's
+        // bytes unless the survivor is re-parsed, and the survivor rides the
+        // mtime fast path forever.
+        var before = _messages.GetByMessageId("repoint-dv@x").ShouldNotBeNull();
+        File.Delete(Path.Combine(_root, before.MaildirPath, before.MaildirFilename));
+
+        _scanner.ScanAll();                       // repoints location
+        _scanner.ScanAll();                       // must re-parse the survivor
+
+        var after = _messages.GetByMessageId("repoint-dv@x").ShouldNotBeNull();
+        after.DeletedAt.ShouldBeNull();
+        after.Folder.ShouldNotBe(before.Folder);
+        after.BodyText.ShouldNotBeNull().ShouldContain(MarkerFor(after));
+    }
+
     [Fact]
     public void Mbsync_new_to_cur_rename_does_not_create_a_duplicate()
     {
