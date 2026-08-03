@@ -32,7 +32,7 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | **MCP HTTP (public)** | `mailvec.<domain>` via Cloudflare Tunnel → `mcp:3333` | **Cloudflare Access Managed OAuth (OAuth 2.1 / PKCE), single-identity policy** | the owner, from any Claude surface — and Anthropic's cloud, which is what actually issues the calls |
 | MCP HTTP (in-network) | `0.0.0.0:3333` inside the compose network (`Mcp__BindAddress`) | none — HostGuard only | the cloudflared sidecar and any other container on the network. **No host port is published**; publishing one exposes this unauthenticated to the LAN |
 | MCP stdio | child process of the spawning agent | inherits agent's identity | dormant — retired as the Claude Desktop transport; still available for local dev |
-| `/up` (minimal: status/version + liveness booleans) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a path-scoped Access **service token** (Uptime Kuma) — **migration pending, see below** |
+| `/up` (minimal: status/version + liveness booleans) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a **path-scoped** Access service token for the external monitor (see below — the scoping is a requirement, and one worth verifying rather than assuming) |
 | `/health` (detailed) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access | the owner. Also the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` |
 | `/tray/*` | **not mapped in the container** (`Mcp:EnableTrayEndpoints=false`) *and* 404'd at the tunnel | served nowhere reachable | nobody — it's a local macOS-only surface |
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and** rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
@@ -78,14 +78,24 @@ the monitor the detailed body and quietly undoing the split. No wildcard over
 "health" reaches "up". **If either path is ever renamed, keep the two names
 prefix-disjoint.**
 
-> **Pending as of 2026-08-01.** `/up` exists in the server; the Cloudflare side
-> has *not* moved yet. Today Uptime Kuma still polls `/health`, and its service
-> token is admitted by the root Access application's `Any Access Service Token`
-> rule — so the monitoring credential currently reaches the whole MCP surface,
-> i.e. the entire mailbox. Narrowing that rule and creating a path-scoped app
-> for `/up` is tracked separately. Until that lands, treat the Kuma token as
-> equivalent to owner access, and do not describe `/health` as protected from
-> it. Verify with: Kuma token → `/up` succeeds, Kuma token → `/health` denied.
+**The split only holds if the monitoring credential is actually scoped**, and
+that lives in Cloudflare's control plane rather than in this repo — so it is a
+requirement to verify, never a property to assume. Two rules and a check:
+
+- The monitor's service token belongs on a **path-scoped Access application for
+  the exact path `up`** — never a wildcard, since Access path wildcards
+  partial-match inside a segment (`example.com/foo*/bar` covers `/food/bar`), so
+  `up*` or `health*` quietly widens what the token reaches.
+- **Never `Any Access Service Token` on the root application.** That rule admits
+  every service token in the account — including ones created later, for
+  unrelated things — and the root app is the whole MCP surface, i.e. the whole
+  mailbox. Name the specific token instead.
+
+**Verify** (with the monitoring token, from outside the network): `/up` returns
+the status JSON, and **`/health` and `/` are both denied**. If either returns
+content, the token is being admitted by the root application — almost always the
+`Any Access Service Token` rule above — and the monitoring credential can read
+mail. Treat it as owner-equivalent until that's fixed.
 
 **`/tray/*` — mail-bearing, so belt-and-braces.** These return mail content
 (`/tray/email/<id>` = full bodies, `/tray/folders` = folder map + counts,

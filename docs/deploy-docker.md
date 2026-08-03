@@ -279,6 +279,51 @@ docker compose exec mcp mailvec doctor
   that owner is the container's root, so run backup reads via
   `docker compose exec` or as root on the host.
 
+## Applying a compose change to a running stack
+
+Three things that are easy to get wrong and quiet when you do. All follow from
+the container hardening (`cap_drop: [ALL]`, `no-new-privileges`, `mem_limit`,
+`pids_limit` — see [security.md → Container hardening](security.md#container-hardening)).
+
+**Use `docker compose up -d`, never `docker compose restart`.** `restart` reuses
+each container's existing config, so it applies *none* of the hardening — the
+stack comes back looking perfectly healthy with full capabilities and no
+resource limits, and nothing anywhere says the change didn't take. `up -d`
+recreates containers whose config changed, which is what actually applies it.
+
+**Confirm it took**, since the failure above is invisible:
+
+```sh
+docker compose exec mcp grep CapEff /proc/1/status     # must be all zeros
+docker inspect mailvec-mcp-1 --format \
+  'CapDrop={{.HostConfig.CapDrop}} Mem={{.HostConfig.Memory}} Pids={{.HostConfig.PidsLimit}}'
+```
+
+**Check bind-mount ownership before recreating.** `cap_drop: [ALL]` removes
+`DAC_OVERRIDE`, so container-root no longer bypasses file permission bits.
+Anything under `./data`, `./mail` or `./logs` created *by the containers* is
+root-owned and fine; anything copied in by a host user is not:
+
+```sh
+sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/
+```
+
+Anything with a non-zero UID/GID whose mode denies "other" needs
+`sudo chown 0:0 <path>`. Two bite hardest, and neither says "permission":
+
+- **`data/archive.sqlite`** — a snapshot copied in at `0600` by your own user
+  fails the whole stack with a bare SQLite `unable to open database file`. The
+  `MAILVEC_REQUIRE_SEEDED_DB` guard can't catch it either: it uses `[ -s ]`,
+  which stats rather than opens, so an unreadable-but-present file passes.
+- **`mbsyncrc`** — bind-mounted to `/root/.mbsyncrc`. Unreadable means IMAP sync
+  stops while every other service stays green.
+
+Let Docker create the `./logs/<service>` bind sources rather than pre-creating
+them: Docker makes them root-owned, which container-root can write and chmod to
+0700. A directory you created is one the container cannot write, and Serilog's
+failure there is silent — see the log-permissions note in
+[logs.md](logs.md).
+
 ## Verified so far
 
 - linux-arm64 (native) and linux-x64 (under emulation) images build; fresh

@@ -206,10 +206,19 @@ Two things that are easy to get wrong here:
   internal Ollama LAN URL. Its real consumers are loopback-only, so it needs no
   service-token access at all.
 
-> **Not yet done as of 2026-08-01.** Kuma still polls `/health`, and the root
-> app's Service Auth policy admits `Any Access Service Token` — which means any
-> service token in the account, including Kuma's, currently reaches the whole
-> mailbox. Fixing that is the prerequisite for anything above being true.
+**Verify the scoping rather than assuming it** — it lives in Cloudflare's
+dashboard, not in this repo, so nothing here can enforce it. With the monitoring
+token, from outside the network: `/up` returns the status JSON, and **`/health`
+and `/` must both be denied**. If either returns content, the token is being
+admitted by the **root** application and the monitor can read mail.
+
+The usual cause is the root app's Service Auth policy set to **`Any Access
+Service Token`** rather than a named one. That rule admits every service token
+in the account — including any created later for something unrelated — so the
+monitoring credential, and anything else headless you ever add, silently gets
+the whole mailbox. Before changing it, list Zero Trust → **Access → Service
+Auth**: that inventory is the de facto access list to the archive, and it's the
+only place the widening is visible.
 
 The mcp container publishes **no host port** — the tunnel is the only ingress.
 Keep it that way: a published `ports:` mapping is reachable from the LAN
