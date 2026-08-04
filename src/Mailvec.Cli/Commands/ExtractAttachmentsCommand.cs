@@ -249,7 +249,7 @@ internal static class ExtractAttachmentsCommand
                     continue;
                 }
 
-                var outcome = TryProcessMessage(connections, extractor, msg, maildirFile, reextractKind, statusCounts, err, out var newTextCount, out var attachmentsThisMessage);
+                var outcome = TryProcessMessage(connections, extractor, msg, maildirFile, reextractKind, !noReembed, statusCounts, err, out var newTextCount, out var attachmentsThisMessage);
                 if (outcome == MessageOutcome.Stale) messagesSkippedStale++;
                 if (outcome == MessageOutcome.Processed)
                 {
@@ -259,12 +259,23 @@ internal static class ExtractAttachmentsCommand
                         messagesWithNewText++;
                         if (!noReembed)
                         {
-                            // ClearEmbeddingsForMessage opens its own
-                            // connection + transaction. Cheap (a single
-                            // message's worth of chunks) and isolates the
-                            // failure mode — if the embedder is mid-write
-                            // and we collide, we just retry on the next pass.
-                            chunks.ClearEmbeddingsForMessage(msg.Id);
+                            // NOT load-bearing: TryProcessMessage already
+                            // cleared embedded_at and bumped embed_epoch inside
+                            // the transaction that wrote the text, so the
+                            // re-embed is guaranteed with or without this call.
+                            // This just drops the stale chunks/vectors promptly
+                            // instead of leaving them to be overwritten on the
+                            // embedder's next pass. Its own connection +
+                            // transaction, so a collision with a mid-write
+                            // embedder costs nothing.
+                            try
+                            {
+                                chunks.ClearEmbeddingsForMessage(msg.Id);
+                            }
+                            catch (SqliteException ex)
+                            {
+                                err.WriteLine($"  msg {msg.Id}: stale-vector cleanup deferred to the embedder ({ex.SqliteErrorCode}).");
+                            }
                         }
                     }
                 }
@@ -323,6 +334,7 @@ internal static class ExtractAttachmentsCommand
         MessageRow msg,
         string maildirFile,
         string? reextractKind,
+        bool reembed,
         Dictionary<string, long> statusCounts,
         TextWriter err,
         out int newTextCount,
@@ -467,6 +479,33 @@ internal static class ExtractAttachmentsCommand
                 """;
             refresh.Parameters.AddWithValue("$mid", msg.Id);
             refresh.ExecuteNonQuery();
+        }
+
+        // Re-queue for embedding in the SAME transaction that wrote the text.
+        // This is the correctness half; the ClearEmbeddingsForMessage call at
+        // the call site only drops the stale vectors promptly (same split as
+        // MaildirScanner.TryIngest — see CLAUDE.md "Re-queue on content change
+        // is atomic with the body write").
+        //
+        // As two transactions it was a permanent, silent divergence: a crash
+        // or SQLITE_BUSY between them leaves new attachment_text in FTS beside
+        // pre-extraction vectors and a stamped embedded_at — and because the
+        // default candidate predicate is `extraction_status IS NULL`, which
+        // this transaction just made non-null, a re-run does NOT re-select
+        // these rows. Nothing else ever would either: the embedder only takes
+        // `embedded_at IS NULL`. The row stays wrong forever.
+        //
+        // embed_epoch must move too, not just embedded_at: content_hash is
+        // untouched here, so the embedder's hash guard alone would let an
+        // in-flight embed stamp straight over this re-queue.
+        if (reembed && newTextCount > 0)
+        {
+            using var requeue = conn.CreateCommand();
+            requeue.Transaction = tx;
+            requeue.CommandText =
+                "UPDATE messages SET embedded_at = NULL, embed_epoch = embed_epoch + 1 WHERE id = $mid";
+            requeue.Parameters.AddWithValue("$mid", msg.Id);
+            requeue.ExecuteNonQuery();
         }
 
         tx.Commit();

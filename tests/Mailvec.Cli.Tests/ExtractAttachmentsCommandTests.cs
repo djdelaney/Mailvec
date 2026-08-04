@@ -450,6 +450,105 @@ public class ExtractAttachmentsCommandTests : IDisposable
         return cmd.ExecuteScalar() as string;
     }
 
+    private static object? MessageCol(IServiceProvider sp, string messageIdHeader, string column)
+    {
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT {column} FROM messages WHERE message_id = $mid";
+        cmd.Parameters.AddWithValue("$mid", messageIdHeader);
+        var v = cmd.ExecuteScalar();
+        return v is DBNull ? null : v;
+    }
+
+    private static void StampEmbedded(IServiceProvider sp, string messageIdHeader)
+    {
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE messages SET embedded_at = $t WHERE message_id = $mid";
+        cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+        cmd.Parameters.AddWithValue("$mid", messageIdHeader);
+        cmd.ExecuteNonQuery();
+    }
+
+    // ── Re-queue must be atomic with the attachment-text write ───────────────
+    //
+    // These pin the fix for a permanent, silent divergence. The re-queue used
+    // to run in a SEPARATE transaction after the text commit, and the inline
+    // comment claimed a failure there would "retry on the next pass". It would
+    // not: the default candidate predicate is `extraction_status IS NULL`, and
+    // the committed transaction just made it non-null, so a re-run skips these
+    // rows entirely. Nothing else re-triggers either — the embedder only takes
+    // `embedded_at IS NULL`. The result was new attachment text in FTS beside
+    // pre-extraction vectors, forever, with no error.
+    //
+    // embed_epoch matters as much as embedded_at: content_hash is untouched by
+    // extraction, so the embedder's hash guard alone would let an in-flight
+    // embed stamp straight over the re-queue.
+
+    [Fact]
+    public void Extraction_requeues_the_message_atomically_with_the_text()
+    {
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+        SeedTextAttachmentMessage(sp, "requeue@x", "requeue.eml");
+        StampEmbedded(sp, "requeue@x");
+        var epochBefore = Convert.ToInt64(MessageCol(sp, "requeue@x", "embed_epoch"), System.Globalization.CultureInfo.InvariantCulture);
+
+        ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, new StringWriter(), new StringWriter());
+
+        AttachmentCol(sp, "requeue@x", "extraction_status").ShouldBe("done");
+        MessageCol(sp, "requeue@x", "attachment_text").ShouldNotBeNull();
+        MessageCol(sp, "requeue@x", "embedded_at")
+            .ShouldBeNull("extraction wrote new attachment text, so the message must be re-queued for embedding");
+        // Greater-than, not +1: the in-transaction bump and the prompt
+        // ClearEmbeddingsForMessage cleanup each bump once. Harmless — the
+        // embedder's guard tests the epoch for *change*, not magnitude — and
+        // asserting movement rather than an exact count keeps this test honest
+        // if the cleanup call is ever dropped as the optimization it is.
+        Convert.ToInt64(MessageCol(sp, "requeue@x", "embed_epoch"), System.Globalization.CultureInfo.InvariantCulture)
+            .ShouldBeGreaterThan(epochBefore, "embed_epoch must move or an in-flight embed can stamp over the re-queue");
+    }
+
+    [Fact]
+    public void Extraction_with_no_reembed_leaves_the_embedding_state_alone()
+    {
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+        SeedTextAttachmentMessage(sp, "noreembed@x", "noreembed.eml");
+        StampEmbedded(sp, "noreembed@x");
+        var epochBefore = Convert.ToInt64(MessageCol(sp, "noreembed@x", "embed_epoch"), System.Globalization.CultureInfo.InvariantCulture);
+
+        ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: true, reextractKind: null, new StringWriter(), new StringWriter());
+
+        AttachmentCol(sp, "noreembed@x", "extraction_status").ShouldBe("done");
+        MessageCol(sp, "noreembed@x", "embedded_at").ShouldNotBeNull("--no-reembed opts out of the re-queue");
+        Convert.ToInt64(MessageCol(sp, "noreembed@x", "embed_epoch"), System.Globalization.CultureInfo.InvariantCulture).ShouldBe(epochBefore);
+    }
+
+    private void SeedTextAttachmentMessage(IServiceProvider sp, string messageIdHeader, string fileName)
+    {
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", fileName);
+        var mime = new MimeMessage { Subject = "s" };
+        mime.From.Add(new MailboxAddress("", "a@x"));
+        mime.To.Add(new MailboxAddress("", "b@x"));
+        mime.Headers.Add("Message-ID", $"<{messageIdHeader}>");
+        var memo = new MimePart("text", "plain")
+        {
+            Content = new MimeContent(new MemoryStream("attachment body"u8.ToArray())),
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "memo.txt" },
+            ContentTransferEncoding = ContentEncoding.Base64,
+        };
+        mime.Body = new Multipart("mixed") { new TextPart("plain") { Text = "See attached." }, memo };
+        using (var fs = File.Create(emlPath)) mime.WriteTo(fs);
+
+        sp.GetRequiredService<MessageRepository>().Upsert(
+            new ParsedMessage(
+                MessageId: messageIdHeader, ThreadId: messageIdHeader, Subject: "s",
+                FromAddress: "a@x", FromName: null, ToAddresses: [], CcAddresses: [],
+                DateSent: DateTimeOffset.UtcNow, BodyText: "See attached.", BodyHtml: null,
+                RawHeaders: $"Message-ID: <{messageIdHeader}>\r\n", SizeBytes: 200, ContentHash: "h",
+                Attachments: [new ParsedAttachment(0, "memo.txt", "text/plain", 15L, ExtractedText: null, ExtractionStatus: null)]),
+            "INBOX", "INBOX/cur", fileName, DateTimeOffset.UtcNow);
+    }
+
     [Fact]
     public void Reextract_calendar_recovers_ics_rows_and_leaves_others_untouched()
     {
