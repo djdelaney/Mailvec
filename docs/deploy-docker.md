@@ -279,6 +279,59 @@ docker compose exec mcp mailvec doctor
   that owner is the container's root, so run backup reads via
   `docker compose exec` or as root on the host.
 
+## Never edit `compose.yml` through a management UI
+
+The live stack is managed by [Dockge](https://github.com/louislam/dockge), which
+is compose-file-first — stacks are plain files on disk — **but it has an
+editor, and that is the hazard.**
+
+`compose.yml` leans on a YAML anchor (`x-mailvec: &mailvec-common`) with `<<:`
+merge keys shared across mcp / indexer / embedder. **Any YAML round-trip through
+a management UI expands anchors and drops comments.** Values survive — the
+image digest pins and `${VAR:-default}` substitutions still resolve — but the
+shared block flattens and the file stops matching the commit it came from. That
+is silent at the time and shows up as an enormous unexplained diff at the next
+deploy, by which point you can't tell an intentional change from UI damage.
+
+**Edit on disk, from the repo, and verify:**
+
+```sh
+git checkout <tag-or-sha> -- compose.yml
+md5sum compose.yml
+git show <tag-or-sha>:compose.yml | md5sum      # must match
+```
+
+Related, same cause: **a private GHCR pull triggered inside Dockge does not see
+the host-side `docker login`.** Pull from the host CLI. This bites on any
+release that changes both images.
+
+## Sizing `mem_limit` — it scales with corpus size, and overrunning it is silent
+
+`mcp`'s `mem_limit` is 3g, and that number is **not** a constant that suits every
+archive. Search latency depends on the chunk-vector working set sitting in the
+OS page cache, and **a cgroup limit charges page cache to the container**, so
+exceeding it doesn't OOM anything — the kernel just reclaims those pages and
+search degrades from ~0.3 s to ~2–3 s, permanently, with no error, no log line,
+and nothing visible to `mailvec doctor` or any `/up` monitor. It is the most
+easily-missed failure mode in the stack precisely because nothing breaks.
+
+Reference point (measured 2026-08-03): **76,208 messages / 292,808 chunks /
+4.51 GB archive → `memory.peak` 2.0 G within 8 hours of start, against the 3 g
+ceiling.** Note 8 hours is not long enough to distinguish "warmed and plateaued"
+from "still climbing" — take your own reading over days, not hours.
+
+```sh
+# Peak since container start, versus the configured ceiling.
+docker compose exec mcp cat /sys/fs/cgroup/memory.peak
+docker inspect mailvec-mcp-1 --format 'limit={{.HostConfig.Memory}}'
+```
+
+If peak is creeping toward the ceiling, raise `mem_limit` rather than tuning it
+down toward the working set — the headroom is the point. An archive several
+times this size needs a proportionally larger limit and currently has no other
+signal telling its operator so. See
+[search-performance.md](contributing/search-performance.md).
+
 ## Applying a compose change to a running stack
 
 Three things that are easy to get wrong and quiet when you do. All follow from

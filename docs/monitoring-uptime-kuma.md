@@ -4,6 +4,41 @@ Runbook for configuring [Uptime Kuma](https://github.com/louislam/uptime-kuma)
 to watch the Mailvec homelab deployment. Self-contained — hand this to an agent
 or operator and they can build the monitors without further context.
 
+> ## ⚠️ Read this before trusting anything below about live state
+>
+> **This document describes a target configuration, not an observed one.** Two
+> earlier revisions asserted live Cloudflare/Kuma state that turned out to be
+> wrong, and the second nearly took monitoring down during a release: it said
+> the monitors polled `/up` when all six were still on `/health`, and a change
+> that 404s `/health` was about to ship on the strength of that sentence.
+>
+> **So: verify, never assume.** Anything here about what Kuma or Cloudflare is
+> *currently* configured to do is a claim with a date on it, and the date is
+> what tells you whether to re-check. Read the live config first:
+>
+> ```bash
+> # Kuma's own monitor list — URL and accepted status codes for every monitor.
+> # (Kuma API, or read monitorList from its UI/DB — see your Kuma deployment.)
+> ```
+>
+> When you change something here, prefer writing *how to check* over *what the
+> answer was.* A verification command ages correctly; a table of last year's
+> config does not.
+>
+> ### Live state as last verified — 2026-08-03
+>
+> | Thing | State | Matches this doc's target? |
+> |---|---|---|
+> | The six Mailvec monitors' URL | `https://mailvec.<domain>/health` | ❌ **No** — migration to `/up` pending |
+> | Accepted Status Codes on all six | `200-299` | ❌ **No** — must include `503` |
+> | Path-scoped Access application for `/up` | **does not exist** | ❌ **No** — prerequisite not yet built |
+> | Root Access app service-auth policy | `Any Access Service Token` | ❌ **No** — see [security.md](security.md#whats-accepted) |
+>
+> **Consequence for anyone shipping `Mcp:RestrictHealthToLoopback`** (default
+> true from 0.2.0, which 404s `/health` off-box): **migrate the monitors to
+> `/up` first**, while `/health` still answers. See
+> [Migrating existing monitors](#migrating-existing-monitors-from-health-to-up).
+
 ## What this monitors, and why external
 
 Mailvec runs as a Docker compose stack (indexer, embedder, mcp, mbsync) behind
@@ -143,6 +178,38 @@ status = 'ok' and $count(services[stale = true]) = 0
 ```
 Expected value `true`. Downside: the alert just says "Mailvec unhealthy" — you
 curl to find out why.
+
+## Migrating existing monitors from `/health` to `/up`
+
+Do this **before** deploying a build with `Mcp:RestrictHealthToLoopback=true`
+(the default from 0.2.0), which makes `/health` return 404 to anything off-box.
+Sequenced so that a mistake is a one-monitor rollback rather than an outage.
+
+**Do it in two passes, not one.** The URL change and the Accepted-Status-Codes
+change are independent, and bundling them means three suspects when something
+goes red.
+
+**Pass 1 — repoint the URL, while `/health` still answers.**
+
+1. Pick one monitor as a canary (`mailvec-ollama` is a good choice — a single
+   boolean, easy to reason about). Change only its URL to
+   `https://mailvec.<domain>/up`.
+2. Confirm it stays green through at least two poll intervals. The JSONata does
+   not need editing: **the paths are identical on both endpoints by design**, so
+   a monitor written against `/health` works unchanged against `/up`.
+3. Repoint the remaining five.
+
+**Pass 2 — fix Accepted Status Codes** (see the section below for why). Add
+`503` to every Mailvec monitor: `200-299, 503`.
+
+> ⚠️ This has always been wrong, on `/health` too — it is not a regression
+> introduced by the migration, and fixing it is not optional cleanup. With
+> `200-299` only, an Ollama outage turns **all six** monitors red regardless of
+> what each one's JSONata asks, because Kuma marks any non-2xx down before
+> evaluating the query. The migration is simply the natural moment to fix it.
+
+**Only then** deploy the build that restricts `/health`, and add the tunnel's
+`^/health$` → 404 rule in the same window.
 
 ## The setting that will bite you: Accepted Status Codes → `200-299, 503`
 

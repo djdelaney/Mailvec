@@ -64,6 +64,16 @@ probe can't. Single-layer Access is the accepted trade for having an external
 probe — and with this body there is nothing left that would warrant
 defense-in-depth.
 
+**The cost of `/health` being loopback-only, stated as accepted.** From 0.2.0
+there is **no way to see detailed health from outside the LAN** — no embedding
+coverage percentage, no `consecutiveFailures`, no `expectedIntervalSeconds`, no
+database block. That is the point of the change, not a side effect, but it is a
+real loss: the next remote debugging session will reach for it and find a 404.
+The replacement is `docker compose exec mcp curl -fsS http://127.0.0.1:3333/health`,
+which needs host access. If that trade ever stops being worth it, the answer is
+to widen `/up`'s body deliberately — a conversation about the trust boundary —
+not to re-expose `/health`.
+
 **`/health` — detailed, for callers that have already earned it.** Status,
 corpus counts, embedding model and dimensions, embedder failure detail, OCR
 backlog, per-service liveness, the archive's filesystem path, and the internal
@@ -99,6 +109,25 @@ requirement to verify, never a property to assume. Two rules and a check:
   every service token in the account — including ones created later, for
   unrelated things — and the root app is the whole MCP surface, i.e. the whole
   mailbox. Name the specific token instead.
+
+  > ⛔ **This is the live state, verified 2026-08-03 — not a hypothetical.** The
+  > root application's service-auth policy is `Include · Any Access Service
+  > Token`, in place unedited since tunnel go-live (2026-07-16). One token
+  > exists, shared by Claude Code on two Macs *and* all six Uptime Kuma
+  > monitors, so **the monitoring credential is currently owner-equivalent** —
+  > treat it that way until the policy is narrowed.
+  >
+  > **The trap worth naming: the policy is *called* `Claude Code token`.** The
+  > name reads as already-scoped; the rule underneath it is not token-specific.
+  > That gap is why this survived a year of review, including two passes over
+  > this very document. When auditing Access, read the *rule*, never the policy
+  > name.
+  >
+  > **Ordering constraint — narrowing this must come LAST.** The any-token rule
+  > is what makes a zero-downtime credential migration possible: mint a scoped
+  > monitoring token → repoint the six monitors → create the path-scoped `/up`
+  > application → *then* narrow the root policy. Tightening first locks out the
+  > monitors and Claude Code simultaneously.
 
 **Verify** (with the monitoring token, from outside the network): `/up` returns
 the status JSON, and **`/health` and `/` are both denied**. If either returns
