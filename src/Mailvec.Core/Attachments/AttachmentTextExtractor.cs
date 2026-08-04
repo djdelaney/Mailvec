@@ -43,7 +43,16 @@ namespace Mailvec.Core.Attachments;
 ///
 /// All stable status values; persisted in attachments.extraction_status.
 /// </summary>
-public sealed class AttachmentTextExtractor(
+/// <remarks>
+/// Not sealed, and <see cref="Extract"/> is virtual, purely as a test seam:
+/// `mailvec extract-attachments` must never call this while holding SQLite's
+/// writer lock (BeginTransaction issues BEGIN IMMEDIATE, and a PdfPig parse
+/// under that lock stalls the indexer, embedder, OCR write-back and MCP
+/// startup migration). The only way to pin that structurally is to let a test
+/// subclass observe, from inside Extract, whether the lock is free. Production
+/// code has one implementation — do not add another.
+/// </remarks>
+public class AttachmentTextExtractor(
     IOptions<IndexerOptions> indexerOptions,
     ILogger<AttachmentTextExtractor> logger)
 {
@@ -73,7 +82,7 @@ public sealed class AttachmentTextExtractor(
 
     private readonly long _maxBytes = indexerOptions.Value.AttachmentMaxBytes;
 
-    public ExtractionResult Extract(MimeEntity entity, string? fileName, string? contentType, long? declaredSize)
+    public virtual ExtractionResult Extract(MimeEntity entity, string? fileName, string? contentType, long? declaredSize)
     {
         ArgumentNullException.ThrowIfNull(entity);
 
