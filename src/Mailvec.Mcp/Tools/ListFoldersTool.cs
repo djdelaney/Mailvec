@@ -17,7 +17,7 @@ public sealed class ListFoldersTool(MessageRepository messages, IOptions<Archive
 {
     private const string ToolName = "list_folders";
 
-    [McpServerTool(Name = "list_folders")]
+    [McpServerTool(Name = "list_folders", ReadOnly = true, OpenWorld = false)]
     [Description(
         "List all Maildir folders that contain messages, with per-folder counts and date ranges. " +
         "Use this to discover the folder names before passing one to search_emails as a filter. " +

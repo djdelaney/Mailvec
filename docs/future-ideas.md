@@ -22,6 +22,48 @@ Was a middle ground between local-only and public: a laptop on the same Tailscal
 
 Still out of scope — the archive is single-account and nothing scopes results per-caller, so a second identity on the Access policy would get the owner's entire mailbox rather than a view of their own. That's a data-model problem, not an auth-config one. See [security.md → What's out of scope](security.md#whats-out-of-scope).
 
+## Adversarial testing of the prompt-injection framing
+
+**The one deferred item that makes a shipped control weaker than it looks**, so
+it's written down rather than left implied.
+
+Mailvec classifies everything it returns as untrusted sender-controlled data —
+in `ServerInstructions`, in every mail-bearing tool description
+(`ToolText.UntrustedContent`), and via `ReadOnly`/`OpenWorld` tool annotations.
+`McpSurfaceTests` pins all of it at the wire. **But those tests assert the text
+*reaches the client*, not that a model *acts on it*.** A crafted message that
+talked an agent into chaining Mailvec output into another connector would pass
+every test in this repo today. The framing is a mitigation of unmeasured
+strength; the test count says nothing about its efficacy.
+
+What closing it would actually take — closer in shape to the `baselines/` eval
+harness than to a unit test:
+
+- **Hostile fixtures across every channel the framing claims to cover**: plain
+  text body, hidden HTML (the `font-size:0` / preheader tricks `HtmlToText`
+  already strips for other reasons), an attachment filename, extracted PDF text,
+  and OCR'd text rendered *into* a page image. The last is the interesting one —
+  it's the only channel where the payload never exists as text anywhere in the
+  pipeline, so nothing upstream could filter it even in principle.
+- **A real model with a second, observable, harmless tool attached** — the
+  measurement is whether the model reaches for that tool, not whether it says
+  something alarming. Without a second tool there's no exfiltration path to
+  observe and the test proves nothing.
+- **A pass criterion that survives model updates.** Injection success is
+  probabilistic, so a single run is noise; this needs a rate over N trials and a
+  threshold, which is why it belongs with the eval harness rather than in
+  `dotnet test`. It will also need re-running on model changes, like a ranking
+  baseline.
+
+Deliberately **not** the answer: regex/heuristic detection of "injection-looking"
+text. It fails open on everything it doesn't match while reading like a control
+that works, and it would make this item look closed. See
+[security.md → Hostile mail content](security.md#hostile-mail-content-indirect-prompt-injection).
+
+Un-defer when either a mutating tool lands (raising what a successful injection
+gets you from "read your own mail" to "act on your behalf"), or Mailvec is
+routinely used alongside connectors that can send or post.
+
 ## Packaged distribution (installer + notarized artifacts)
 
 Today the **only** way to get any part of Mailvec is to build from source: clone

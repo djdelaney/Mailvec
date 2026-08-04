@@ -15,7 +15,15 @@
 # A separate lightweight `mbsync` stage (compose target: mbsync) replaces the
 # com.mailvec.mbsync launchd interval job for container deployments.
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# Bases are pinned by DIGEST; the version tag stays in the comment for humans.
+# A tag like `10.0` is a moving pointer that picks up .NET servicing patches —
+# which is exactly why it must not be what a reproducible build resolves. The
+# tradeoff is real and worth stating: a digest pin freezes those patches too, so
+# it is only safe because .github/dependabot.yml has the `docker` ecosystem
+# enabled and bumps these weekly. If Dependabot is ever turned off, go back to
+# tags rather than sitting on a frozen base.
+#   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0 AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
@@ -39,7 +47,7 @@ RUN set -eux; \
 # Pull-only IMAP sync sidecar. Config comes from a bind-mounted /root/.mbsyncrc
 # (see ops/mbsyncrc.container.example); the Fastmail app password from a
 # compose file-secret the config's PassCmd cats.
-FROM alpine:3.21 AS mbsync
+FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d AS mbsync
 RUN apk add --no-cache isync ca-certificates
 RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 #!/bin/sh
@@ -97,7 +105,7 @@ RUN chmod +x /usr/local/bin/mbsync-loop
 CMD ["mbsync-loop"]
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:f1126d438ccc359f51cc6d4701a8deae513856cf10f5fe645d29ea6403dcac6b AS runtime
 # curl is for the compose healthcheck against /health.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \

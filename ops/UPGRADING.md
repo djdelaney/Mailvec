@@ -74,6 +74,14 @@ Bundle size grows roughly with each runtime major.
 
 Pinned by the `VERSION="..."` default in `ops/fetch-sqlite-vec.sh` (today `0.1.9`). Bump by editing the script. For one-off testing: `SQLITE_VEC_VERSION=x.y.z ./ops/fetch-sqlite-vec.sh`.
 
+**A version bump is also a checksum bump — the script fails closed until you do it.** Each release asset's SHA-256 is pinned in `expected_sha()`, because this library is loaded into *every* Mailvec process through SQLite's extension API: it is arbitrary code execution by design, and a GitHub release asset can be replaced after the tag exists. There is no bypass flag, deliberately. The bump loop is:
+
+1. Set the new `VERSION` and run the script once **per RID** (`osx-arm64`, `linux-x64`, `linux-arm64` — the Docker build fetches the two Linux ones, so all three need recording or the image build breaks).
+2. Each run fails with the SHA-256 it computed and prints the exact `expected_sha()` line to paste.
+3. **Confirm each digest against the upstream release page before pasting it.** Pasting whatever the script printed makes the pin a record of what you downloaded, not of what upstream published — which is the one thing it exists to distinguish.
+
+A *mismatch* against a recorded version (as opposed to a missing record) means either upstream replaced the asset or the download was tampered with. Don't paste over it to make the error go away; find out which.
+
 After fetching, run a semantic search against the existing DB before committing — vec0's stored format has been stable across 0.1.x but a breaking change would silently corrupt similarity scores rather than fail loudly.
 
 The dylib is also bundled into `dist/mailvec-<version>.mcpb` via `Directory.Build.props`'s `<None>` copy, so a dylib bump requires `ops/build-mcpb.sh --bump` to ship to Claude Desktop users.

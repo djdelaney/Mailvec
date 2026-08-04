@@ -145,7 +145,9 @@ Cloudflare side is reconfigured. All of them are satisfied by the Access layer,
 
 ## Origin-side wiring (this repo)
 
-Two things in the compose stack are load-bearing for the tunnel:
+Two things in the compose stack are load-bearing for the tunnel (a third,
+[origin validation of the Access assertion](#origin-validation-of-the-access-assertion-mcpaccess),
+is optional and off by default):
 
 - **`MCP_PUBLIC_HOSTNAME` must be set in `.env`.** cloudflared forwards the
   original public `Host` header, and [`HostGuard`](../src/Mailvec.Mcp/HostGuard.cs)
@@ -162,16 +164,57 @@ shape is path-differentiated on the same hostname, in this order:
 
 | # | Hostname | Path | Service |
 |---|---|---|---|
-| 1 | `mailvec.<domain>` | `tray/` | `http_status:404` |
-| 2 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
-| 3 | *(catch-all)* | | `http_status:404` |
+| 1 | `mailvec.<domain>` | `tray/*` | `http_status:404` |
+| 2 | `mailvec.<domain>` | `^/health$` | `http_status:404` |
+| 3 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
+| 4 | *(catch-all)* | | `http_status:404` |
 
-`/health` is deliberately **not** 404'd — it falls through rule 2 to `mcp:3333`
-so Uptime Kuma can poll it end-to-end through the tunnel (which also detects
-tunnel / Access / edge failures an in-network probe can't). See
-[security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray) for why
-`/health` is single-layer (low-sensitivity, monitoring) while `/tray/*` is
-belt-and-braces (mail content).
+> ### `path` is an unanchored regular expression, not a prefix
+>
+> Cloudflare's docs are explicit: "Rules can match the request's path to a
+> regular expression", parsed with Go's `regexp` syntax — which anchors nothing
+> by default. Their own example, `\.(jpg|png|css|js)$`, matches anywhere in the
+> path. So a bare `health` rule matches **any path containing "health"**, and
+> the existing `tray/*` rule is a regex whose `/*` means "zero or more slashes"
+> — it works, but by accident rather than by prefix semantics.
+>
+> **Anchor deliberately.** `^/health$` matches that path and nothing else. Same
+> reasoning that made the minimal endpoint `/up` rather than `/healthz`: a loose
+> pattern over "health" silently widens what it covers, and the failure is
+> invisible until someone probes for it. (Rule 1 predates this and is left
+> alone here — retightening a working rule is its own change, but `^/tray/`
+> would be the correct form.)
+
+> **Rule 2 is a pending operator action.** These rules live in the Cloudflare
+> dashboard, not in this repo, so nothing in a commit can apply it — add it by
+> hand, in the same window as the 0.2.0 deploy. The origin already refuses
+> off-box `/health` on its own (`Mcp:RestrictHealthToLoopback`, default true,
+> which is the load-bearing barrier); this rule is the outer of the two, exactly
+> like `/tray/`. **Migrate the Uptime Kuma monitors to `/up` before either** —
+> as of 2026-08-03 all six still poll `/health`. See
+> [monitoring-uptime-kuma.md](monitoring-uptime-kuma.md#migrating-existing-monitors-from-health-to-up).
+
+**`/up` is the forwarded monitoring endpoint; `/health` is not.** Uptime Kuma
+polls `/up` end-to-end through the tunnel, which detects tunnel / Access / edge
+failures an in-network probe can't. `/health` is its detailed sibling and
+discloses the archive path, corpus counts, embedding model identity and the
+internal Ollama LAN address — `/up` exists precisely so nothing external needs
+any of that. Its real consumers are all loopback (the compose healthcheck,
+`mailvec doctor` under `docker compose exec`, the tray on local installs), so
+keeping it off-box costs nothing. See
+[security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray).
+
+**Verify** rule 2 after adding it (as the owner, from outside):
+
+```bash
+curl -i https://mailvec.<domain>/health   # 404
+curl -i https://mailvec.<domain>/up       # 200 or 503, with the boolean body
+```
+
+```bash
+# And that the loopback consumers are unaffected:
+docker compose exec mcp curl -fsS http://127.0.0.1:3333/health   # full report
+```
 
 **`/tray/*` has two independent barriers**, and the origin one is load-bearing —
 do not rely on this ingress rule alone:
@@ -181,11 +224,12 @@ do not rely on this ingress rule alone:
    of tunnel config.
 2. **Tunnel:** rule 1 above 404s `/tray/` before the catch-all.
 
-**Verify after any ingress or image change** (authenticated with the `/health`
-service token): `curl -i .../tray/folders` → **404**, `curl -i .../health` →
-health JSON. The compose healthcheck curls `/health` from inside the network and
-is unaffected. Belt-and-braces third option if the rules get fragile: a
-zone-level WAF rule blocking URI path `/tray/*`.
+**Verify after any ingress or image change**: `curl -i .../tray/folders` →
+**404**, `curl -i .../up` → the boolean status body. From 0.2.0 `curl -i
+.../health` → **404** as well (the origin serves it to loopback only); the
+compose healthcheck curls it from inside the container and is unaffected.
+Belt-and-braces third option if the rules get fragile: a zone-level WAF rule
+blocking URI path `/tray/*`.
 
 **Scope the monitoring service token to `/up`.** The Uptime Kuma service token
 passes Access; if it's authorized on the whole-subdomain app it can reach MCP
@@ -193,6 +237,19 @@ passes Access; if it's authorized on the whole-subdomain app it can reach MCP
 Access app for `/up`** (a more-specific path app takes precedence over the root
 identity app, and does not inherit the parent's policies), so the monitoring
 credential can only ever hit the minimal endpoint.
+
+> ⚠️ **This is a target, not the current state — verified 2026-08-03.** There is
+> exactly **one** Access application on the hostname: whole-host, no path
+> scoping. **No path-scoped `/up` application exists**, and the root app's
+> service-auth policy is `Any Access Service Token`. So today the monitoring
+> token is owner-equivalent — it can reach the whole MCP surface. That is a
+> tracked finding with a gated remediation plan, not news; see
+> [security.md → What's accepted](security.md#whats-accepted) for the ordering
+> constraint (**narrowing the root policy must come last**, because the
+> any-token rule is what makes a zero-downtime credential migration possible).
+> Earlier revisions of this document asserted the path-scoped app existed. Treat
+> every claim here about live Cloudflare state as dated, and re-read the
+> dashboard rather than this file.
 
 Two things that are easy to get wrong here:
 
@@ -227,6 +284,77 @@ without any OAuth, bypassing the Access front entirely, and the
 that not being true.
 
 ---
+
+## Origin validation of the Access assertion (`Mcp:Access`)
+
+Optional second layer, **off by default**. With it configured, the MCP server
+validates the `Cf-Access-Jwt-Assertion` header itself instead of trusting
+anything that can reach `mcp:3333`. Rationale and threat model:
+[security.md → Origin authentication](security.md#origin-authentication-mcpaccess).
+The short version: the Access policy lives in Cloudflare's dashboard, unversioned
+and untested, and this makes the origin's half of the gate checkable in CI — plus
+it enforces the `/up` monitoring split at the origin rather than trusting the
+edge path scoping.
+
+**Values you need**, both from the Zero Trust dashboard:
+
+| `.env` key | Where |
+|---|---|
+| `MCP_ACCESS_TEAM_DOMAIN` | Settings → your team domain, as a full `https://` URL |
+| `MCP_ACCESS_AUDIENCE` | Access → Applications → *the Mailvec app* → **Additional settings → AUD tag** |
+| `MCP_ACCESS_MONITORING_AUDIENCE` | the AUD tag of the separate path-scoped `up` application, if you have one (as of 2026-08-03, one does not) |
+
+> **The AUD tag is not on the application's Overview/Details tab.** In the
+> current Cloudflare One dashboard it lives under **Additional settings → AUD
+> tag** — noted because looking for it in the obvious place costs a round of
+> searching.
+>
+> ⚠️ **The same panel has a "Revoke existing tokens" button, which rotates the
+> AUD.** Harmless today. Once `Mcp:Access` is live it is a foot-gun: rotating
+> invalidates every issued JWT *and* changes the value the origin is configured
+> to expect, so it 401s every Claude surface at once and stays broken until
+> `MCP_ACCESS_AUDIENCE` is updated and the container restarted.
+
+Then set `MCP_ACCESS_ENABLED=true` (literal `true`, not `1` — .NET's binder only
+understands `true`/`false`, and an unbindable value reads as false) and
+`docker compose up -d mcp`.
+
+**A half configuration refuses to start**, naming the missing knob — deliberately,
+since `Enabled` without an audience would validate signature and issuer while
+admitting every application in the account. So would a `MonitoringAudience` equal
+to `Audience`, which reads like a restriction and grants the whole mailbox; that
+also refuses to start.
+
+**Verify after enabling** (from outside the network — a browser session that has
+cleared Access, plus the monitoring token):
+
+```bash
+# Owner, through the tunnel: normal MCP + health.
+curl -i https://mailvec.<domain>/health          # 200 or 503, with a body
+
+# Monitoring token: /up yes, mailbox no. THIS is the check worth having —
+# it now fails at the origin even if the Access policy is wrong.
+curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
+  https://mailvec.<domain>/up                    # 200 or 503
+curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
+  https://mailvec.<domain>/health                # 403 — audience not permitted here
+```
+
+```bash
+# From the VM, bypassing the tunnel: no assertion, no access.
+docker compose exec cloudflared wget -qS -O- http://mcp:3333/health   # 401
+```
+
+The last one is the acceptance that matters most — it's the shape a published
+host port or a compromised sibling container would take, and before this it
+returned the mailbox.
+
+**Don't remove the loopback exemption** (`Mcp__Access__AllowLoopback`). The
+compose healthcheck curls `127.0.0.1:3333/health` from inside the mcp container
+and has no assertion; turning the exemption off marks the container permanently
+unhealthy. Loopback is not reachable from off-box — cloudflared and every
+sibling arrive over the compose network with a real address and are never
+exempt, which is exactly what the `docker compose exec` check above proves.
 
 ## Gotchas
 
