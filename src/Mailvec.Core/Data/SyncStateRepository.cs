@@ -144,9 +144,17 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     /// the parse at the new path isn't yet attributed, so its change would
     /// otherwise be recorded in sync_state and never applied to the message.
     /// </remarks>
-    public void ClearContentHash(SqliteConnection conn, string maildirFullPath)
+    /// <summary>
+    /// Clears the recorded content hash so the next scan re-parses this file
+    /// (the mtime fast path requires a non-null hash). Pass <paramref name="tx"/>
+    /// to enlist in the caller's transaction — the scanner's rename repair
+    /// does, because this write and the row repoint must land together or not
+    /// at all. See <c>MessageRepository.UpdateMaildirLocation</c>'s overload.
+    /// </summary>
+    public void ClearContentHash(SqliteConnection conn, string maildirFullPath, SqliteTransaction? tx = null)
     {
         using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "UPDATE sync_state SET content_hash = NULL WHERE maildir_full_path = $path";
         cmd.Parameters.AddWithValue("$path", maildirFullPath);
         cmd.ExecuteNonQuery();

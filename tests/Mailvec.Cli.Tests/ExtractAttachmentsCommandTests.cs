@@ -7,6 +7,7 @@ using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MimeKit;
@@ -130,8 +131,77 @@ public class ExtractAttachmentsCommandTests : IDisposable
         reader.GetString(1).ShouldContain("Quarterly");
     }
 
+    // ── Extraction must not hold SQLite's writer lock ────────────────────────
+
     [Fact]
-    public void Missing_eml_file_stamps_attachments_failed_so_we_do_not_loop_forever()
+    public void Extraction_runs_with_the_writer_lock_free()
+    {
+        // BeginTransaction() issues BEGIN IMMEDIATE (deferred defaults to
+        // false), so a transaction opened around the extract loop holds
+        // SQLite's single writer slot for the whole MIME decode + PdfPig /
+        // OpenXml parse — blocking the indexer, the embedder, the OCR
+        // write-back, every maintenance command and MCP startup migration for
+        // as long as the document takes. That is exactly what this command
+        // used to do, while carrying a comment claiming it didn't.
+        //
+        // The probing extractor tries to take the writer lock from an
+        // independent connection while it is being called. If the backfill
+        // holds it, that attempt waits out the busy timeout and throws — so a
+        // regression makes this test slow AND red, not just red.
+        using var sp = BuildProvider(maildirRoot: _maildirRoot, probeWriterLock: true);
+
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "lock.eml");
+        var mime = new MimeMessage { Subject = "lock" };
+        mime.From.Add(new MailboxAddress("", "a@x"));
+        mime.To.Add(new MailboxAddress("", "b@x"));
+        mime.Headers.Add("Message-ID", "<lock@x>");
+        var memo = new MimePart("text", "plain")
+        {
+            Content = new MimeContent(new MemoryStream("attachment body"u8.ToArray())),
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "memo.txt" },
+            ContentTransferEncoding = ContentEncoding.Base64,
+        };
+        mime.Body = new Multipart("mixed") { new TextPart("plain") { Text = "See attached." }, memo };
+        using (var fs = File.Create(emlPath)) mime.WriteTo(fs);
+
+        var messages = sp.GetRequiredService<MessageRepository>();
+        messages.Upsert(
+            new ParsedMessage(
+                MessageId: "lock@x", ThreadId: "lock@x", Subject: "lock",
+                FromAddress: "a@x", FromName: null, ToAddresses: [], CcAddresses: [],
+                DateSent: DateTimeOffset.UtcNow, BodyText: "See attached.", BodyHtml: null,
+                RawHeaders: "Message-ID: <lock@x>\r\n", SizeBytes: 200, ContentHash: "h",
+                Attachments: [new ParsedAttachment(0, "memo.txt", "text/plain", 15L, ExtractedText: null, ExtractionStatus: null)]),
+            "INBOX", "INBOX/cur", "lock.eml", DateTimeOffset.UtcNow);
+
+        ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, new StringWriter(), new StringWriter());
+
+        var probe = (WriterLockProbingExtractor)sp.GetRequiredService<AttachmentTextExtractor>();
+        probe.Calls.ShouldBe(1, "the extractor must actually have run, or this proves nothing");
+        probe.WriterLockWasFree.ShouldBeTrue(
+            "extract-attachments held SQLite's writer lock while parsing an attachment");
+
+        // And the result still lands — moving the parse out of the transaction
+        // must not cost the write.
+        AttachmentCol(sp, "lock@x", "extraction_status").ShouldBe("done");
+    }
+
+    // ── Missing source ───────────────────────────────────────────────────────
+    //
+    // This replaces a test that asserted the opposite ("...stamps attachments
+    // failed so we do not loop forever"). That behaviour was the bug: on an
+    // ordinary mbsync rename the snapshot's path vanishes while the bytes live
+    // on unchanged at the new path, and because the content is unchanged
+    // MessageRepository.Upsert never calls ReplaceAttachments — so the 'failed'
+    // stamps survive the rescan. The default candidate predicate is
+    // `extraction_status IS NULL`, so nothing ever revisits them: permanently
+    // unsearchable attachments, no error, nothing left to re-trigger.
+    //
+    // Re-attempting a genuinely-deleted message costs one File.Exists per run,
+    // which is the correct trade. Don't "optimise" it back into a stamp.
+
+    [Fact]
+    public void Missing_eml_file_leaves_attachments_untouched_for_a_later_run()
     {
         using var sp = BuildProvider(maildirRoot: _maildirRoot);
 
@@ -158,8 +228,82 @@ public class ExtractAttachmentsCommandTests : IDisposable
         using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT extraction_status FROM attachments WHERE message_id = (SELECT id FROM messages WHERE message_id='ghost@x')";
-        var status = cmd.ExecuteScalar() as string;
-        status.ShouldBe("failed");
+        // Still NULL — so it remains a candidate for the next run, which is
+        // what makes a rename recoverable without manual database repair.
+        cmd.ExecuteScalar().ShouldBe(DBNull.Value);
+    }
+
+    [Fact]
+    public void A_renamed_message_is_reported_as_skipped_not_counted_as_covered()
+    {
+        // The run summary must never let a bounded run read as full coverage —
+        // same rule the stale-skip count follows.
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+        var messages = sp.GetRequiredService<MessageRepository>();
+        var parsed = new ParsedMessage(
+            MessageId: "moved@x", ThreadId: "moved@x", Subject: "moved",
+            FromAddress: "alice@example.com", FromName: null,
+            ToAddresses: [], CcAddresses: [],
+            DateSent: DateTimeOffset.UtcNow,
+            BodyText: "", BodyHtml: null,
+            RawHeaders: "Message-ID: <moved@x>\r\n",
+            SizeBytes: 100, ContentHash: "h",
+            Attachments: [new ParsedAttachment(1, "moved.pdf", "application/pdf", 100L, ExtractedText: null, ExtractionStatus: null)]);
+        messages.Upsert(parsed, "INBOX", "INBOX/cur", "moved.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, new StringWriter());
+
+        writer.ToString().ShouldContain("Maildir source was missing");
+    }
+
+    [Fact]
+    public void A_second_run_after_the_source_reappears_extracts_normally()
+    {
+        // The whole point of not stamping: recovery is automatic. First run
+        // finds nothing on disk, second run — after the file turns up at the
+        // path the row points at, as it would once the indexer reconciles a
+        // rename — extracts as usual.
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+        var messages = sp.GetRequiredService<MessageRepository>();
+        var parsed = new ParsedMessage(
+            MessageId: "late@x", ThreadId: "late@x", Subject: "late",
+            FromAddress: "alice@example.com", FromName: null,
+            ToAddresses: [], CcAddresses: [],
+            DateSent: DateTimeOffset.UtcNow,
+            BodyText: "", BodyHtml: null,
+            RawHeaders: "Message-ID: <late@x>\r\n",
+            SizeBytes: 100, ContentHash: "h",
+            Attachments: [new ParsedAttachment(0, "late.txt", "text/plain", 20L, ExtractedText: null, ExtractionStatus: null)]);
+        messages.Upsert(parsed, "INBOX", "INBOX/cur", "late.eml", DateTimeOffset.UtcNow);
+
+        ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, new StringWriter(), new StringWriter());
+
+        // Now stage the .eml where the row says it is — what an indexer
+        // reconciliation of the rename amounts to from this command's side.
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "late.eml");
+        var mime = new MimeMessage { Subject = "late" };
+        mime.From.Add(new MailboxAddress("", "alice@example.com"));
+        mime.To.Add(new MailboxAddress("", "b@x"));
+        mime.Headers.Add("Message-ID", "<late@x>");
+        var memo = new MimePart("text", "plain")
+        {
+            Content = new MimeContent(new MemoryStream("recovered attachment text"u8.ToArray())),
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "late.txt" },
+            ContentTransferEncoding = ContentEncoding.Base64,
+        };
+        mime.Body = new Multipart("mixed") { new TextPart("plain") { Text = "See attached." }, memo };
+        using (var fs = File.Create(emlPath)) mime.WriteTo(fs);
+
+        ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, new StringWriter(), new StringWriter());
+
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT extraction_status, extracted_text FROM attachments WHERE message_id = (SELECT id FROM messages WHERE message_id='late@x')";
+        using var reader = cmd.ExecuteReader();
+        reader.Read().ShouldBeTrue();
+        reader.GetString(0).ShouldBe("done");
+        reader.GetString(1).ShouldContain("recovered");
     }
 
     // ── Stale-parse guard ────────────────────────────────────────────────────
@@ -628,7 +772,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
         return ms.ToArray();
     }
 
-    private ServiceProvider BuildProvider(string maildirRoot)
+    private ServiceProvider BuildProvider(string maildirRoot, bool probeWriterLock = false)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -640,9 +784,49 @@ public class ExtractAttachmentsCommandTests : IDisposable
         services.AddSingleton<MessageRepository>();
         services.AddSingleton<MetadataRepository>();
         services.AddSingleton<ChunkRepository>();
-        services.AddSingleton<AttachmentTextExtractor>();
+        if (probeWriterLock)
+            services.AddSingleton<AttachmentTextExtractor, WriterLockProbingExtractor>();
+        else
+            services.AddSingleton<AttachmentTextExtractor>();
         var sp = services.BuildServiceProvider();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         return sp;
+    }
+
+    /// <summary>
+    /// Extractor that, from inside Extract, tries to take SQLite's writer lock
+    /// on an INDEPENDENT connection. Succeeding means the backfill was not
+    /// holding it while parsing — which is the invariant under test.
+    /// </summary>
+    private sealed class WriterLockProbingExtractor(
+        ConnectionFactory connections,
+        IOptions<IndexerOptions> indexerOptions,
+        ILogger<AttachmentTextExtractor> logger)
+        : AttachmentTextExtractor(indexerOptions, logger)
+    {
+        public int Calls { get; private set; }
+        public bool WriterLockWasFree { get; private set; } = true;
+
+        public override ExtractionResult Extract(MimeEntity entity, string? fileName, string? contentType, long? declaredSize)
+        {
+            Calls++;
+            try
+            {
+                using var conn = connections.Open();
+                // BEGIN IMMEDIATE — takes the writer lock outright.
+                using var tx = conn.BeginTransaction();
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = "UPDATE metadata SET value = value WHERE key = 'schema_version'";
+                cmd.ExecuteNonQuery();
+                tx.Commit();
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException)
+            {
+                // Blocked out by the backfill's own transaction — the bug.
+                WriterLockWasFree = false;
+            }
+            return base.Extract(entity, fileName, contentType, declaredSize);
+        }
     }
 }
