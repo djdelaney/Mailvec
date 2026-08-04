@@ -85,7 +85,17 @@ public class MaildirAttachmentReaderTests : IDisposable
             MaildirFilename = "nope.eml", Folder = "INBOX", HasAttachments = true,
         };
         var ex = Should.Throw<FileNotFoundException>(() => Reader().ReadBytes(ghost, 0));
-        ex.Message.ShouldContain("not found");
+
+        // The message is sanitized because both MCP attachment tools surface it
+        // verbatim to the remote client; the path rides on FileName instead, for
+        // the on-box consumers (CLI backfill, embedder OCR) that need to know
+        // WHICH file is missing. Assert both halves — a future change that
+        // folded the path back into the message would otherwise pass.
+        ex.Message.ShouldContain("no longer available");
+        ex.Message.ShouldContain("9", Case.Insensitive);
+        ex.Message.ShouldNotContain("nope.eml");
+        ex.Message.ShouldNotContain("ghost@x", Case.Insensitive);
+        ex.FileName.ShouldNotBeNull().ShouldContain("nope.eml");
     }
 
     [Fact]
