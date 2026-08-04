@@ -177,6 +177,24 @@ public sealed class MaildirWatcher : IDisposable
     private readonly Lock _gate = new();
     private Task? _debounceTask;
 
+    /// <summary>
+    /// Test seam: is the debounce loop currently running? It nulls
+    /// <c>_debounceTask</c> under the gate on the way out, so this is the
+    /// loop's own termination signal rather than an inference from it.
+    /// </summary>
+    /// <remarks>
+    /// Exists because the alternative — "assert no pulse arrives in the next
+    /// N milliseconds" — is not a test of termination, it is a test of the
+    /// runner's timing. A stall longer than N lets a legitimate straggler
+    /// pulse land inside the silence window and fails the build for nothing,
+    /// which this test did twice before the seam existed. Widening N only
+    /// moves the threshold; asking the loop directly removes it.
+    /// </remarks>
+    internal bool DebounceLoopRunning
+    {
+        get { lock (_gate) { return _debounceTask is not null; } }
+    }
+
     private void OnEvent(string fullPath)
     {
         // Ignore events whose path inside the watched root contains a tmp/

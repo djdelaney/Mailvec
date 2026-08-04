@@ -219,13 +219,21 @@ public class MaildirWatcherTests : IDisposable
     {
         // mbsync delivers rename bursts; events landing inside the quiet
         // window extend the debounce (the loop-back path) rather than pulse
-        // per event. NOTE deliberately soft assertions: "exactly one pulse"
-        // flaked on CI — a runner stall longer than the debounce window
-        // between two writes legitimately splits the burst into two pulses
-        // (each scan still sees the whole filesystem, so that's correct
-        // behavior, not a bug). The stall-immune invariants are: a burst
-        // produces at least one pulse, and once genuinely quiet the loop
-        // EXITS — it must not keep pulsing without new events.
+        // per event. The invariants: a burst produces at least one pulse, and
+        // once genuinely quiet the loop EXITS rather than spinning forever.
+        //
+        // How termination is asserted matters. This used to be "no pulse
+        // arrives in the next 800ms", which is not a test of termination but
+        // of the runner's timing — a stall longer than the window lets a
+        // legitimate straggler land inside it, and the burst is allowed to
+        // split into several pulses (each scan still sees the whole
+        // filesystem, so that is correct behaviour). It red-flagged CI twice
+        // for exactly that, and the first fix — softening "exactly one pulse"
+        // — treated the symptom. Widening the window would too: it only moves
+        // the threshold. So ask the loop instead. It nulls _debounceTask under
+        // the gate on its way out, which is the signal itself rather than an
+        // inference from silence, and a slow runner now just means we wait
+        // longer for a result that is still correct.
         using var watcher = BuildWatcher(_root, debounceMs: 500);
         watcher.Start();
 
@@ -235,12 +243,30 @@ public class MaildirWatcherTests : IDisposable
             await Task.Delay(50);
         }
 
-        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5))).ShouldBeTrue();
+        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5))).ShouldBeTrue(
+            "a burst of writes must produce at least one pulse");
 
-        // Drain any legitimate split-burst stragglers, then require silence:
-        // with no new events, a settled debounce loop must produce nothing.
-        while (await WaitForPulseAsync(watcher, TimeSpan.FromMilliseconds(800))) { }
-        (await WaitForPulseAsync(watcher, TimeSpan.FromMilliseconds(800))).ShouldBeFalse();
+        // The budget is generous on purpose: a stall delays termination, it
+        // does not prevent it, so over-waiting costs nothing and under-waiting
+        // is the whole bug being fixed. A loop that never exits fails here.
+        var settled = await WaitForAsync(() => !watcher.DebounceLoopRunning, TimeSpan.FromSeconds(15));
+
+        settled.ShouldBeTrue(
+            "the debounce loop must exit once events stop; a running loop keeps pulsing forever");
+    }
+
+    /// <summary>
+    /// Poll until <paramref name="condition"/> holds or the budget elapses.
+    /// </summary>
+    private static async Task<bool> WaitForAsync(Func<bool> condition, TimeSpan budget)
+    {
+        var deadline = DateTime.UtcNow + budget;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return true;
+            await Task.Delay(25).ConfigureAwait(false);
+        }
+        return condition();
     }
 
     [Fact]
