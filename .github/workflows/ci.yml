@@ -31,7 +31,20 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on PR branches — only the tip matters there, and a
+  # push during a run means the earlier commit is already history.
+  #
+  # NOT on main, where cancelling loses information that nothing recreates.
+  # Two pushes close together used to cancel the first commit's run, leaving it
+  # on main with no verdict of its own; the next commit's green run covers the
+  # tree, not that commit, so a bisect lands on a revision CI never judged.
+  # Worse, publish-images is gated on CI *success* via workflow_run, so a
+  # cancelled run publishes nothing — the commit gets no image, and the skipped
+  # publish looks identical to one declined for a red suite. Both happened
+  # repeatedly on 2026-08-04 and cost a false "CI failed" diagnosis.
+  #
+  # Main is low-volume and the runs are minutes, so serialising them is cheap.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   dotnet:
