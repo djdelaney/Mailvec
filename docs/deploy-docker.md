@@ -1,22 +1,20 @@
-# Docker deployment (Proxmox homelab)
+# Docker deployment
 
-**Status: live.** The full Mailvec pipeline runs as a compose stack on the
-Docker VM on Proxmox, with **Ollama external** (the GPU-passthrough VM) and the
-MCP server exposed through a Cloudflare tunnel behind Access Managed OAuth
-([remote-access-cloudflare.md](remote-access-cloudflare.md)). The archive was
-seeded from a Mac snapshot; mbsync, OCR-on-Linux, and eval parity are all
-verified, and every Claude client now talks to the tunnel rather than the Mac.
-Nothing depends on the Mac being online.
+Running the full Mailvec pipeline as a Docker compose stack — the supported
+alternative to the macOS launchd install, and the shape to use for an
+always-on server. **Ollama runs outside the stack** (its own host, ideally
+GPU-backed), and the MCP server is optionally exposed through a Cloudflare
+tunnel behind Access ([remote-access-cloudflare.md](remote-access-cloudflare.md)).
 
-This documents the container strategy, the deployment strategy, and what the
-rollout verified. The rollout is complete — the Mac was decommissioned
-2026-07-16 and backups ride the homelab's existing snapshot schedule. The tray's
-remote story is the only thing still open; see [What's left](#whats-left).
+This documents the container strategy, the deployment strategy, and a
+[rollout checklist](#rollout-checklist) of the things worth verifying on a new
+deployment. It deliberately records **no** live state for any particular
+install — see the checklist's note on where that belongs.
 
 ```
-fastmail ◄─IMAP── mbsync ──► ./mail ──► indexer ─┐
-                                                  ▼
-cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder ──► ollama VM (GPU, LAN)
+IMAP host ◄─IMAP── mbsync ──► ./mail ──► indexer ─┐
+                                                   ▼
+cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder ──► ollama host (GPU, LAN)
 ```
 
 ## Container strategy
@@ -29,8 +27,8 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   PATH as `mailvec`, so operator commands are
   `docker compose exec mcp mailvec status|doctor|eval|checkpoint ...`.
 - **Arch handling.** BuildKit's `TARGETARCH` maps to the RID (amd64 →
-  `linux-x64`, arm64 → `linux-arm64`), so `--platform linux/amd64` builds the
-  Proxmox image from an Apple Silicon dev machine. `ops/fetch-sqlite-vec.sh`
+  `linux-x64`, arm64 → `linux-arm64`), so `--platform linux/amd64` builds an
+  x86 server image from an Apple Silicon dev machine. `ops/fetch-sqlite-vec.sh`
   takes the RID as an argument and runs *inside* the build — the image never
   depends on host-fetched natives (`.dockerignore` excludes `runtimes/` for
   the same reason). The fetched `vec0.so` is copied to `./vec0.so` next to
@@ -39,8 +37,9 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
 - **Native deps are NuGet-supplied on Linux.** PDFtoImage brings PDFium +
   SkiaSharp via `SkiaSharp.NativeAssets.Linux.NoDependencies` (no fontconfig
   needed — see the comment in Directory.Packages.props). Present in the
-  published output, and exercised by a real OCR render on the VM at rollout
-  (item 3 below) — disk presence alone never proved the natives would load.
+  published output, but confirm with a real OCR render on the host
+  ([checklist](#rollout-checklist) item 5) — disk presence alone never proves
+  the natives will load.
 - **Config via env vars only.** Env vars are the highest-precedence config
   source, so the image bakes container-shaped defaults (`/data/archive.sqlite`,
   `/mail`, `Mcp__BindAddress=0.0.0.0`, `MAILVEC_LOG_DIR=/logs`) and compose
@@ -74,17 +73,18 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
 
 ## Deployment strategy
 
-- **Where**: the existing Docker VM on Proxmox, as one compose project
+- **Where**: a Linux Docker host, as one compose project
   ([compose.yml](../compose.yml) — setup steps are in its header comment).
   Bind mounts `./data` (SQLite) and `./mail` (Maildir) must be **VM-local
   disk**: SQLite WAL needs real POSIX locking; never NFS/SMB. Multi-container
   WAL sharing on one local bind mount is the same multi-process pattern as
-  the Mac's launchd services.
-- **Ollama**: external over LAN. The same instance already serves the Mac, so
-  bind address, version floor, and pulled models (embedding + vision) are
-  proven — the compose `.env` reuses the same `Ollama:BaseUrl`. GPU-backed
-  OCR means `Embedder:OcrEnabled` stays on from day one.
-- **Seeding: snapshot, not rebuild.** One final `ops/export-db.sh` on the Mac
+  the macOS launchd services.
+- **Ollama**: external over LAN. If you already run an instance for a macOS
+  install, reuse it — its bind address, version floor, and pulled models
+  (embedding + vision) are then already proven, and the compose `.env` takes
+  the same `Ollama:BaseUrl`. GPU-backed OCR means `Embedder:OcrEnabled` can
+  stay on from day one.
+- **Seeding: snapshot, not rebuild.** One final `ops/export-db.sh` on the macOS install
   (checkpointed copy — never a live file + `-wal`), placed at
   `./data/archive.sqlite` on the VM. The embedding server/model/dimensions
   are bit-identical to what built the archive, so nothing re-embeds. After
@@ -137,7 +137,7 @@ Two kinds of pin, with different lifetimes:
   deployment. The *running* container survives (its image is local), but a
   re-pull, host rebuild, or rollback against a pruned tag fails.
 - **`v<version>`** (and `latest`) — **never pruned**. Use `v*` for the
-  homelab's production pin and for anything you may want to roll back to.
+  production pin and for anything you may want to roll back to.
   A `v*` tag is the same image bytes as its underlying `sha-` — one
   durable, human-meaningful name for the same digest (which also protects
   that build's `sha-` tag from pruning: tags on one digest share a package
@@ -185,7 +185,7 @@ SchemaMigrator-on-start rule above), and verify the loop closes:
 (`docker compose exec mcp curl -s localhost:3333/health`) that must equal
 the image tag; `docker compose exec mcp mailvec status` prints the same.
 
-## Migrating the archive from the Mac
+## Migrating the archive from a macOS install
 
 `ops/import-db.sh` does **not** apply here — it is the macOS destination path
 (launchctl pause/resume, Application Support layout). The container
@@ -230,10 +230,10 @@ docker compose exec mcp mailvec doctor
   footgun `ops/import-db.sh` handles on macOS; here it's manual. **Re-do the
   `chown 0:0`** — the replacement file carries the copying user's ownership,
   and the first run recreates the sidecars itself.
-- **After parity holds**, stop the Mac pipeline ([What's left](#whats-left)
-  #1) — its archive keeps diverging from the VM's the moment you export, so
-  treat the Mac copy as a frozen rollback, not a peer. (Clients have already
-  switched over, so the Mac's stdio MCP is no longer serving anything.)
+- **After parity holds**, stop the macOS pipeline (`ops/install.sh --uninstall`)
+  — its archive keeps diverging from the VM's the moment you export, so
+  treat the macOS copy as a frozen rollback, not a peer. (Point your clients at
+  the container first, so the macOS stdio MCP is no longer serving anything.)
 - **Ranking parity gate.** After the embedder settles, run
   `docker compose exec mcp mailvec eval` against the latest baseline in
   `baselines/`. Same model + same vectors means any drift implicates the
@@ -257,8 +257,8 @@ docker compose exec mcp mailvec doctor
   Note `/health` returns 503 when Ollama is unreachable, so an Ollama VM
   outage shows as an *unhealthy mcp container* even though keyword search
   still works — informative, nothing restarts on it.
-- **Backups are the VM's**, not Mailvec's: the Docker VM is covered by the
-  homelab's existing snapshot schedule with offsite shipping. That's a
+- **Backups are the host's**, not Mailvec's: cover the Docker host with
+  whatever snapshot schedule and offsite shipping you run. That's a
   **crash-consistent** layer — a snapshot can land mid-transaction, with the
   `-wal` captured alongside the main file. SQLite is built for exactly that
   (a crash-consistent volume snapshot is equivalent to a power cut, which WAL
@@ -317,7 +317,7 @@ search degrades from ~0.3 s to ~2–3 s, permanently, with no error, no log line
 and nothing visible to `mailvec doctor` or any `/up` monitor. It is the most
 easily-missed failure mode in the stack precisely because nothing breaks.
 
-Reference point (measured 2026-08-03): **76,208 messages / 292,808 chunks /
+Reference point, from one measured corpus: **76,208 messages / 292,808 chunks /
 4.51 GB archive → `memory.peak` 2.0 G within 8 hours of start, against the 3 g
 ceiling.** Note 8 hours is not long enough to distinguish "warmed and plateaued"
 from "still climbing" — take your own reading over days, not hours.
@@ -379,82 +379,57 @@ them: Docker makes them root-owned, which container-root can write and chmod to
 failure there is silent — see the log-permissions note in
 [logs.md](logs.md).
 
-## Verified so far
+## Rollout checklist
 
-- linux-arm64 (native) and linux-x64 (under emulation) images build; fresh
-  schema v8 creates through `vec0.so` on both; `vec0.so` confirmed ELF x86-64
-  in the amd64 image.
-- Compose bring-up of mcp/indexer/embedder against the real Ollama VM: mcp
-  healthy, `/health` 200, three-way first-boot migration race fine, workers
-  log cleanly to `docker logs`.
-- Entrypoint guard refuses missing-DB start (exit 1) and passes when seeded
-  or disabled. `mailvec` CLI shim works via `docker run`/`exec`.
-- macOS side unaffected: `dotnet build` clean, vec0-touching tests pass with
-  the `runtimes/**` glob.
+Each of these was a distinct risk when this stack was first stood up, and each
+is worth confirming on a new deployment rather than assuming. Record the results
+wherever you keep operational notes — deliberately not here, since a checklist
+someone has ticked off is a claim about one machine.
 
-## Done
+1. **Both architectures build and run.** linux-arm64 natively, linux-x64 under
+   emulation; fresh schema creates through `vec0.so` on both. Confirm the
+   emulated build again on real hardware — an amd64 image that has only ever run
+   under Rosetta has not been tested.
+2. **Compose bring-up against your Ollama host.** `mcp` healthy, `/health` 200
+   from inside the container, the three-way first-boot migration race resolving
+   cleanly, workers logging to `docker logs`.
+3. **The entrypoint guard.** Refuses a missing-DB start (exit 1), passes when
+   seeded or explicitly disabled. The `mailvec` CLI shim works under both
+   `docker run` and `docker exec`.
+4. **First real mbsync run**, with the indexer's reconciliation scan completing
+   behind it.
+5. **OCR on Linux** — this proves the PDFium/SkiaSharp natives load at runtime,
+   which their presence on disk does not.
+6. **Eval parity** against a baseline captured before the move, so a .NET
+   platform swap can't silently shift ranking.
+7. **Tunnel go-live**, with `TUNNEL_TOKEN` + `MCP_PUBLIC_HOSTNAME` set and the
+   sidecar started via `docker compose --profile tunnel up -d`.
+8. **Endpoint posture.** `/up` is the endpoint external monitors poll; `/health`
+   is loopback-only from 0.2.0 (`Mcp:RestrictHealthToLoopback`); `/tray/*` is
+   disabled at the origin (`Mcp:EnableTrayEndpoints=false`, baked into the
+   image) *and* 404'd at the tunnel, because it returns mail content and has no
+   container consumer. See
+   [security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray),
+   and migrate any monitor still on `/health` **before** shipping the loopback
+   restriction.
+9. **The tool surface you actually want.** The `Mcp__DisabledTools__*` trim for
+   `view_attachment` / `get_attachment_page_image` is staged-but-commented in
+   `compose.yml` and left off by default — a documented accepted risk with
+   explicit invalidating conditions, not an oversight. Read
+   [security.md → What's accepted](security.md#whats-accepted) and decide for
+   your own deployment before exposing the tunnel or publishing a host port.
+10. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
+    see the backup bullet above for what that does and doesn't guarantee, and
+    the one storage-layout invariant it rests on.
 
-The rollout itself is complete. Kept as a record of what was verified, since
-each item was a distinct risk:
-
-1. ✅ **Deployed on the VM.** Repo cloned, compose.yml header steps followed
-   (`.env`, `mbsyncrc`, password secret, seeded DB, `up -d`). The real x86
-   build passed — the pre-deploy amd64 test had only ever run under Rosetta.
-2. ✅ **First real mbsync run**, with the indexer's reconciliation scan
-   completing behind it.
-3. ✅ **OCR on Linux**, proving the PDFium/SkiaSharp natives at runtime rather
-   than just on disk.
-4. ✅ **Eval parity** against the baseline — no drift from the .NET-on-Linux
-   platform swap.
-5. ✅ **Cloudflared go-live**, with `TUNNEL_TOKEN` + `MCP_PUBLIC_HOSTNAME` set
-   and the sidecar started via `docker compose --profile tunnel up -d`. The
-   auth front is a Cloudflare Access self-hosted app with Managed OAuth — **not**
-   the MCP Server Portal the plan had assumed
-   ([remote-access-cloudflare.md](remote-access-cloudflare.md) records why).
-   **Endpoint posture at go-live:** `/health` was forwarded through the tunnel
-   for Uptime Kuma (single-layer Access, monitoring). **That is a record of
-   2026-07-16, not current guidance** — `/up` is the endpoint monitors should
-   poll, and from 0.2.0 the origin serves `/health` to loopback callers only
-   (`Mcp:RestrictHealthToLoopback`). Where the six monitors actually point is
-   live state: check it, don't infer it from here
-   ([monitoring-uptime-kuma.md](monitoring-uptime-kuma.md) carries the dated
-   observation and the migration procedure). `/tray/*` is disabled at the origin
-   (`Mcp:EnableTrayEndpoints=false`, baked into the image) *and* 404'd at the
-   tunnel, because it returns mail content and has no container consumer. See
-   [security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray).
-   **Deviation:** the `Mcp__DisabledTools__*` tool-surface trim was **not**
-   applied — `view_attachment` and `get_attachment_page_image` remain exposed.
-   That's now a documented accepted risk with explicit invalidating
-   conditions, not an oversight; read
-   [security.md → What's accepted](security.md#whats-accepted) before changing
-   the Access policy or publishing a host port.
-6. ✅ **Client switch-over.** Every Claude surface (Code, Desktop, iOS,
-   claude.ai) uses the remote connector. The Claude Desktop MCPB/stdio bundle
-   is retired as a transport.
-7. ✅ **Mac pipeline decommissioned** (2026-07-16), via
-   `ops/install.sh --uninstall` — all four agents booted out and their plists
-   removed, so nothing re-bootstraps at login. Binaries, logs, the
-   `~/.local/bin/mailvec` shim, `~/Mail`, and the archive were all preserved;
-   the Mac is now a **development machine** running against that archive as a
-   frozen corpus ([local-dev-dataset.md](contributing/local-dev-dataset.md)).
-   The rollback snapshot from that doc's step 1 was **deliberately skipped** —
-   the VM is the production copy and carries the homelab's offsite backups, so
-   a pristine Mac copy would duplicate a rollback story that already exists.
-
-## What's left
+## Known gaps
 
 1. **The tray app has no remote story — open, deliberately parked.** It polls
-   `/tray/*`, which the container now disables outright
-   (`Mcp:EnableTrayEndpoints=false`) *and* the tunnel 404s — the surface
-   returns mail content with no per-request auth, so it stays off the
-   internet-fronted deployment. Three ways out, none chosen yet: keep it as a
-   local-dev-only tool against the frozen corpus; give `/tray/*` an
-   authenticated remote path (which means designing auth for the origin — today
-   it has none, by design — before re-enabling the flag); or retire it. Not
-   urgent — nothing else depends on it — but it shouldn't drift as unowned code
-   indefinitely.
-
-Backups are **not** on this list: the Docker VM is covered by the homelab's
-existing snapshot schedule with offsite shipping. See the backup bullet above
-for what that does and doesn't guarantee, and the one storage-layout invariant
-it rests on.
+   `/tray/*`, which the container disables outright
+   (`Mcp:EnableTrayEndpoints=false`) *and* the tunnel 404s — the surface returns
+   mail content with no per-request auth, so it stays off any internet-fronted
+   deployment. Three ways out, none chosen: keep it as a local-only tool against
+   a local install; give `/tray/*` an authenticated remote path (which means
+   designing auth for the origin — today it has none, by design — before
+   re-enabling the flag); or retire it. Nothing else depends on it, but it
+   shouldn't drift as unowned code indefinitely.
