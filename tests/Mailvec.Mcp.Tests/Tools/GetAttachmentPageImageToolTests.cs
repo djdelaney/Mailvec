@@ -62,6 +62,27 @@ public class GetAttachmentPageImageToolTests : IDisposable
             Helpers.NoopLogger());
     }
 
+    [Fact]
+    public void Missing_maildir_file_does_not_leak_the_path_or_Message_ID_to_the_client()
+    {
+        // Second wire surface for the same reader. Asserted separately because
+        // the shared fix lives in MaildirAttachmentReader, and a future change
+        // that reintroduced per-tool exception formatting would only be caught
+        // where a test actually looks. See the twin in ViewAttachmentToolTests.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = repo.Upsert(
+            Helpers.Sample("ghost-img@x", attachments: [new ParsedAttachment(0, "scan.pdf", "application/pdf", 100L)]),
+            "INBOX", "INBOX/cur", "ghost-img.eml", DateTimeOffset.UtcNow);
+
+        var ex = Should.Throw<McpException>(() => Build(db).GetAttachmentPageImage(partIndex: 0, id: id));
+
+        ex.Message.ShouldNotContain(_maildirRoot);
+        ex.Message.ShouldNotContain("ghost-img.eml");
+        ex.Message.ShouldNotContain("ghost-img@x", Case.Insensitive);
+        ex.Message.ShouldContain(id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     // ---------- native-load smoke test ----------
 
     [Fact]

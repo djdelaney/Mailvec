@@ -144,7 +144,38 @@ public class ViewAttachmentToolTests : IDisposable
             "INBOX", "INBOX/cur", "ghost.eml", DateTimeOffset.UtcNow);
 
         var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: id));
-        ex.Message.ShouldContain("not found");
+        ex.Message.ShouldContain("no longer available");
+    }
+
+    [Fact]
+    public void Missing_maildir_file_does_not_leak_the_path_or_Message_ID_to_the_client()
+    {
+        // An McpException's message IS the JSON-RPC error string sent to the
+        // caller. On the remote-connector deployment that leaves the VM and is
+        // processed by Anthropic, so a stale DB row must not hand out the
+        // archive's filesystem layout — the same disclosure that
+        // Mcp:RestrictHealthToLoopback exists to keep off-box.
+        //
+        // Note this is not just about the string we compose:
+        // FileNotFoundException is free to fold its FileName into Message, so
+        // "we didn't interpolate the path" would not be evidence. Assert on
+        // what the caller actually receives.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = repo.Upsert(
+            Helpers.Sample("ghost-leak@x", attachments: [new ParsedAttachment(0, "foo.pdf", "application/pdf", 100L)]),
+            "INBOX", "INBOX/cur", "ghost-leak.eml", DateTimeOffset.UtcNow);
+
+        var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: id));
+
+        ex.Message.ShouldNotContain(_maildirRoot);
+        ex.Message.ShouldNotContain("ghost-leak.eml");
+        ex.Message.ShouldNotContain("ghost-leak@x", Case.Insensitive);
+        ex.Message.ShouldNotContain("INBOX/cur");
+        // Still actionable for the user, and still names the row so an
+        // operator can correlate with the local log.
+        ex.Message.ShouldContain(id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        ex.Message.ShouldContain("rescan");
     }
 
     [Fact]

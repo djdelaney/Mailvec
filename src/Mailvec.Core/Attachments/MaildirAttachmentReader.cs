@@ -32,10 +32,22 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
         var maildirFile = ResolveMaildirFile(message);
         if (!File.Exists(maildirFile))
         {
+            // The MESSAGE must stay free of the resolved path and the RFC
+            // Message-ID: both MCP attachment tools surface FileNotFoundException
+            // by rethrowing ex.Message as an McpException, which becomes the
+            // JSON-RPC error string sent to the client — off-box, and through
+            // Anthropic on the remote-connector deployment. Leaking the archive's
+            // filesystem layout there would undo the same disclosure control
+            // Mcp:RestrictHealthToLoopback exists to enforce.
+            //
+            // The path still travels, on FileName, where local consumers can log
+            // it (the CLI backfill and the embedder's OCR pass both run on-box
+            // and legitimately need to know which file is missing). Keep new
+            // detail on properties, never in Message.
             throw new FileNotFoundException(
-                $"Maildir file not found for message {message.Id} ({message.MessageId}). " +
-                $"The file may have been moved or deleted; an indexer rescan should fix it. " +
-                $"Looked at: {maildirFile}");
+                $"Source message {message.Id} is no longer available at its recorded location. " +
+                "It was probably moved or deleted; an indexer rescan should fix it.",
+                maildirFile);
         }
 
         using var stream = File.OpenRead(maildirFile);
