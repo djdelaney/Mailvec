@@ -1,4 +1,4 @@
-# CI for Mailvec. Two independent jobs:
+# CI for Mailvec. Three independent jobs:
 #
 #   dotnet — fetch vec0.dylib, build all projects (TreatWarningsAsErrors is on,
 #            so a warning fails here), run the full xUnit suite. No Ollama is
@@ -6,10 +6,19 @@
 #            uses stub HTTP handlers, and ProgramHttpTests deliberately points
 #            Ollama:BaseUrl at a dead port to cover the unreachable path
 #            deterministically. The suite DOES exercise real native deps
-#            (sqlite-vec, PDFium/SkiaSharp page rendering), which is why this
-#            must run on a macOS arm64 runner (macos-latest is Apple Silicon;
-#            Mailvec dropped Intel support and fetch-sqlite-vec.sh refuses
-#            x86_64).
+#            (sqlite-vec, PDFium/SkiaSharp page rendering), so this covers the
+#            macOS RID specifically — macos-latest is Apple Silicon, and
+#            fetch-sqlite-vec.sh refuses Intel Macs.
+#
+#            This job used to be described as macOS-ONLY-capable, on the
+#            grounds that the fetch script "refuses x86_64". It refuses
+#            Darwin-x86_64 (Intel Macs); Linux-x86_64 has always been
+#            supported. That misreading is why the Linux job below took so
+#            long to exist.
+#
+#   dotnet-linux — the same suite on the deploy platform. See the comment on
+#            the job for why a macOS-only suite could not catch a per-RID
+#            native break, and did not for three days.
 #
 #   tray   — XcodeGen + xcodebuild test. This runs the Swift wire-contract
 #            tests, which are the only automated guard on the tray/server
@@ -110,6 +119,61 @@ jobs:
             exit 1
           fi
           echo "No known vulnerable packages."
+
+
+  # The deploy target is Linux, and until this job existed nothing exercised it.
+  # That is not theoretical: managed SkiaSharp was bumped to 4.151.0 on
+  # 2026-08-01 while the Linux native package stayed at 4.150.1 (it arrives via
+  # PDFtoImage, not as SkiaSharp's own dependency the way the macOS and Win32
+  # ones do). Every PDF render and the whole OCR pass threw on Linux for three
+  # days, in published images, while this workflow stayed green — because macOS
+  # resolves a matching native. A macOS-only suite is structurally incapable of
+  # catching a per-RID resolution break.
+  #
+  # Cheap to add: Linux runners bill at 1x against macOS's 10x, and this job is
+  # the faster of the two. It does NOT replace the macOS job — macOS is a
+  # supported install target (launchd agents, the tray, the MCPB bundle) and the
+  # development platform, so dropping it would just relocate the blind spot.
+  #
+  # Note this still isn't the container: it tests against the SDK image's
+  # runtime, not the Dockerfile's layout. A break in how the image copies
+  # natives would need an image smoke test, which is separate work.
+  dotnet-linux:
+    name: Build + .NET tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # Installs runtimes/linux-x64/native/vec0.so. ConnectionFactory resolves
+      # it for the current RID when the configured (macOS-shaped) default path
+      # finds nothing — no per-job env var needed.
+      - name: Fetch sqlite-vec extension
+        run: ./ops/fetch-sqlite-vec.sh
+
+      - name: Build
+        run: dotnet build --configuration Release
+
+      # Full suite, unfiltered and with nothing skipped for the platform. It
+      # passes as-is: the only test that needed the OS was LaunchdInspector's,
+      # and that was fixed in the code (launchctl's absence now degrades to "no
+      # agents", which is what CLAUDE.md always claimed it did) rather than
+      # papered over with a skip. If a test ever genuinely cannot run here,
+      # gate that test — do not narrow this filter.
+      - name: Test
+        run: dotnet test --configuration Release --no-build --logger "console;verbosity=normal"
 
   tray:
     name: Tray build + wire-contract tests

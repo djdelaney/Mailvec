@@ -179,8 +179,27 @@ public sealed class LaunchdInspector(ILogger<LaunchdInspector> logger)
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
 
-        using var proc = Process.Start(psi);
+        // launchctl is macOS-only, and this type is reached from code that also
+        // runs on Linux (the container's /tray/* surface, `mailvec doctor`).
+        // Process.Start THROWS Win32Exception when the binary is absent — it
+        // does not return null — so without this catch the "degrades to
+        // unloaded off macOS" behaviour that CLAUDE.md describes was never
+        // actually implemented: it surfaced as an unhandled exception instead.
+        // Callers already treat (-1, "") as "no agents loaded", which is the
+        // truthful answer on a machine that has no launchd.
+        Process? proc;
+        try
+        {
+            proc = Process.Start(psi);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)
+        {
+            logger.LogDebug(ex, "launchctl is unavailable at {Path}; reporting no loaded agents.", ExecutablePath);
+            return (-1, string.Empty);
+        }
+
         if (proc is null) return (-1, string.Empty);
+        using var _proc = proc;
 
         // Drain BOTH pipes, each into its own task-owned buffer. Stderr was
         // redirected but never read: a child writing more than the ~64KB pipe
