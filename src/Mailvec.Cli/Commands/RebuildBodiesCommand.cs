@@ -109,7 +109,23 @@ internal static class RebuildBodiesCommand
             using var tx = conn.BeginTransaction();
             using var update = conn.CreateCommand();
             update.Transaction = tx;
-            update.CommandText = "UPDATE messages SET body_text = $body WHERE id = $id";
+            // Under --reembed the invalidation rides in the SAME statement as
+            // the body write. It used to run once, after every batch had
+            // committed, which left an interruption window: crash or DB error
+            // after batch N and the rows in batches 1..N carry new body_text
+            // beside chunks and an embedded_at built from the old text, with
+            // nothing in the database marking them for repair. A re-run does
+            // fix it (every row is re-derived from body_html), but only if
+            // someone knows to run one — and a half-finished maintenance
+            // command is exactly when nobody does.
+            //
+            // embed_epoch moves too: body_text changes here without
+            // content_hash changing (the hash covers MimeMessage.Body bytes,
+            // not the converter output), so the embedder's hash guard alone
+            // would let an in-flight embed stamp over the re-queue.
+            update.CommandText = reembed
+                ? "UPDATE messages SET body_text = $body, embedded_at = NULL, embed_epoch = embed_epoch + 1 WHERE id = $id"
+                : "UPDATE messages SET body_text = $body WHERE id = $id";
             var bodyParam = update.CreateParameter();
             bodyParam.ParameterName = "$body";
             update.Parameters.Add(bodyParam);
@@ -134,6 +150,9 @@ internal static class RebuildBodiesCommand
         if (reembed)
         {
             var chunks = sp.GetRequiredService<ChunkRepository>();
+            // Every updated row was already re-queued in its own batch
+            // transaction, so this is the prompt stale-vector cleanup, not the
+            // correctness step — the same split as MaildirScanner.TryIngest.
             @out.WriteLine("Clearing embeddings (one transaction over chunks + vectors; running services may log SQLITE_BUSY retries until it commits)...");
             var cleared = chunks.ClearEmbeddings(folderFilter: null);
             @out.WriteLine($"Cleared embeddings on {cleared:N0} messages. Run the embedder to regenerate.");

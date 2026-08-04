@@ -283,25 +283,42 @@ public sealed class MaildirScanner(
         try
         {
             // Fast path: if sync_state remembers this exact path AND the file
-            // hasn't been modified since the last scan recorded it, the parse
-            // would just rebuild the same ParsedMessage we already have on
-            // disk. Skip the parse entirely (PDF / DOCX text extraction is
-            // expensive) and just refresh last_seen_at so the deletion-
-            // reconciliation pass doesn't soft-delete it. Mbsync flag rewrites
-            // bump mtime, so the optimization is robust against IMAP flag
-            // changes that don't actually mutate body content.
+            // on disk is byte-for-byte the one we recorded, the parse would
+            // just rebuild the same ParsedMessage. Skip it entirely (PDF /
+            // DOCX text extraction is expensive) and refresh last_seen_at so
+            // the deletion-reconciliation pass doesn't soft-delete the row.
+            //
+            // The identity test is EQUALITY against the mtime + size we
+            // observed at the last ingest, not an inequality against when we
+            // observed it. That distinction is the whole point: last_seen_at
+            // is when Mailvec looked, so `mtime <= last_seen_at` is satisfied
+            // by any file whose content changed while its mtime stayed at or
+            // below the previous scan's start — and because each scan then
+            // re-stamps last_seen_at later without parsing, the skip
+            // self-perpetuates and the row is pinned to content that is no
+            // longer on disk, permanently and silently. mbsync never produces
+            // that shape (new files carry current times; flag changes are
+            // renames, which land at a fresh path and miss this lookup), but
+            // every restore tool does — rsync -a, cp -p and tar -x all
+            // preserve mtime by design. Equality costs the same: we already
+            // stat the file, and size rides along on the same call.
             //
             // ContentHash must be non-null to take the fast path: a NULL hash
             // is the "last ingest attempt failed" marker written by the catch
             // below. Without it, a single transient failure (SQLITE_BUSY, I/O
-            // blip) on a *changed* file would stamp last_seen_at past the
-            // file's mtime and the change would be skipped on every future
-            // scan — permanently masking the new content.
+            // blip) on a *changed* file would record the new file's identity
+            // as though it had been ingested, and the change would be skipped
+            // on every future scan — permanently masking the new content.
             prior = syncState.Get(ctx.Connection, ctx.Transaction, filePath);
+            var info = new FileInfo(filePath);
+            var mtimeUtc = info.LastWriteTimeUtc;
+            var sizeBytes = info.Length;
             if (prior is { MessageId: not null, ContentHash: not null }
-                && File.GetLastWriteTimeUtc(filePath) <= prior.LastSeenAt.UtcDateTime)
+                && FileIdentityUnchanged(prior, mtimeUtc, sizeBytes))
             {
-                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash, folderName);
+                syncState.Upsert(
+                    ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash, folderName,
+                    fileMtimeUtc: mtimeUtc, fileSize: sizeBytes);
                 ctx.NoteWrite();
                 return IngestOutcome.Ok;
             }
@@ -328,7 +345,14 @@ public sealed class MaildirScanner(
                     "Content changed for message_id={MessageId} (id={Id}); cleared embeddings.",
                     parsed.MessageId, outcome.Id);
             }
-            syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash, folderName);
+            // Record the identity observed BEFORE the parse, not a fresh stat
+            // here. If the file changed while we were reading it, the stale
+            // recorded identity makes the next scan re-parse (safe, one wasted
+            // parse); re-stat-ing now would record the new file's identity
+            // against the old file's content and skip it forever.
+            syncState.Upsert(
+                ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash, folderName,
+                fileMtimeUtc: mtimeUtc, fileSize: sizeBytes);
             ctx.NoteWrite();
             return IngestOutcome.Ok;
         }
@@ -348,7 +372,13 @@ public sealed class MaildirScanner(
             // failure on a changed file silently mask the change forever.
             try
             {
-                syncState.Upsert(ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, contentHash: null, folderName);
+                // File identity is NULLed alongside content_hash, for the
+                // same reason: this row is a "retry me" marker, and recording
+                // an identity we never successfully ingested would let the
+                // next scan treat the failure as a completed ingest.
+                syncState.Upsert(
+                    ctx.Connection, ctx.Transaction, filePath, prior?.MessageId, indexedAt, contentHash: null, folderName,
+                    fileMtimeUtc: null, fileSize: null);
                 ctx.NoteWrite();
             }
             catch (Exception refreshEx)
@@ -426,6 +456,42 @@ public sealed class MaildirScanner(
                 stack.Push(sub);
             }
         }
+    }
+
+    /// <summary>
+    /// Is the file on disk the one we recorded at the last ingest?
+    /// </summary>
+    /// <remarks>
+    /// Equality on the observed mtime + size. Both are written together by the
+    /// same <c>Upsert</c>, so a row has either both or neither.
+    ///
+    /// <para>A NULL identity means the row predates migration 009 (or was
+    /// written by a path that couldn't observe one). Those fall back to the
+    /// old <c>mtime &lt;= last_seen_at</c> comparison for exactly one scan —
+    /// the caller records the real identity on the same pass, so every live
+    /// row converges after one full scan. The alternative, treating NULL as a
+    /// miss, would re-parse the entire corpus on first run after upgrade
+    /// (every PDF and DOCX re-extracted) to close a window that only a restore
+    /// tool can open. Not worth it; the fallback is what the code did anyway
+    /// until the row is refreshed.</para>
+    ///
+    /// <para><b>Residual gap, known and accepted:</b> a replacement that keeps
+    /// BOTH the mtime and the byte count is still skipped. Only hashing the
+    /// file would catch that, and hashing every file on every scan is the
+    /// exact cost this fast path exists to avoid (it dominates indexer CPU on
+    /// a real corpus). mtime+size closes the realistic restore case — rsync/cp
+    /// /tar preserve mtime, but a restored file whose content actually changed
+    /// almost never lands on the same byte count. If that ever stops being
+    /// good enough, the next step is a cheap content signature, NOT relaxing
+    /// this back to a comparison against scan time.</para>
+    /// </remarks>
+    private static bool FileIdentityUnchanged(SyncStateEntry prior, DateTime mtimeUtc, long sizeBytes)
+    {
+        if (prior.FileMtimeUtc is not { } recordedMtime)
+            return mtimeUtc <= prior.LastSeenAt.UtcDateTime;
+
+        return recordedMtime.UtcDateTime == mtimeUtc
+            && prior.FileSize == sizeBytes;
     }
 }
 

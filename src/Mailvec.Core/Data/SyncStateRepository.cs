@@ -2,7 +2,17 @@ using Microsoft.Data.Sqlite;
 
 namespace Mailvec.Core.Data;
 
-public sealed record SyncStateEntry(string MaildirFullPath, string? MessageId, DateTimeOffset LastSeenAt, string? ContentHash, string? Folder = null);
+public sealed record SyncStateEntry(
+    string MaildirFullPath,
+    string? MessageId,
+    DateTimeOffset LastSeenAt,
+    string? ContentHash,
+    string? Folder = null,
+    // The file identity observed at the last ingest. NULL on rows written
+    // before v9 (and on the legacy fallback path) — the scanner treats NULL as
+    // "no recorded identity" rather than a match. See migration 009.
+    DateTimeOffset? FileMtimeUtc = null,
+    long? FileSize = null);
 
 public sealed class SyncStateRepository(ConnectionFactory connections)
 {
@@ -22,7 +32,7 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            SELECT maildir_full_path, message_id, last_seen_at, content_hash, folder
+            SELECT maildir_full_path, message_id, last_seen_at, content_hash, folder, file_mtime_utc, file_size
             FROM sync_state
             WHERE maildir_full_path = $path
             """;
@@ -35,31 +45,53 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
             MessageId: reader.IsDBNull(1) ? null : reader.GetString(1),
             LastSeenAt: DateTimeOffset.Parse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture),
             ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3),
-            Folder: reader.IsDBNull(4) ? null : reader.GetString(4));
+            Folder: reader.IsDBNull(4) ? null : reader.GetString(4),
+            FileMtimeUtc: reader.IsDBNull(5)
+                ? null
+                : DateTimeOffset.Parse(reader.GetString(5), System.Globalization.CultureInfo.InvariantCulture),
+            FileSize: reader.IsDBNull(6) ? null : reader.GetInt64(6));
     }
 
     // `folder` has no default on purpose: sync_state doubles as the
     // folder-membership table for search (SearchFilterSql's EXISTS probe and
     // FolderStats both read it), so every writer must supply the copy's folder
     // or membership silently drifts NULL and folder filters stop matching.
-    public void Upsert(SqliteConnection conn, SqliteTransaction tx, string maildirFullPath, string? messageId, DateTimeOffset lastSeenAt, string? contentHash, string? folder)
+    // `folder` and the two file-identity parameters have no defaults on
+    // purpose. Omitting the identity silently writes NULL, which puts the row
+    // back on the legacy comparison and reopens the preserved-mtime skip that
+    // migration 009 exists to close — a caller that can't supply it should say
+    // so by passing null explicitly.
+    public void Upsert(
+        SqliteConnection conn,
+        SqliteTransaction tx,
+        string maildirFullPath,
+        string? messageId,
+        DateTimeOffset lastSeenAt,
+        string? contentHash,
+        string? folder,
+        DateTimeOffset? fileMtimeUtc,
+        long? fileSize)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO sync_state (maildir_full_path, message_id, last_seen_at, content_hash, folder)
-            VALUES ($path, $mid, $seen, $hash, $folder)
+            INSERT INTO sync_state (maildir_full_path, message_id, last_seen_at, content_hash, folder, file_mtime_utc, file_size)
+            VALUES ($path, $mid, $seen, $hash, $folder, $mtime, $size)
             ON CONFLICT(maildir_full_path) DO UPDATE SET
-                message_id   = excluded.message_id,
-                last_seen_at = excluded.last_seen_at,
-                content_hash = excluded.content_hash,
-                folder       = excluded.folder;
+                message_id     = excluded.message_id,
+                last_seen_at   = excluded.last_seen_at,
+                content_hash   = excluded.content_hash,
+                folder         = excluded.folder,
+                file_mtime_utc = excluded.file_mtime_utc,
+                file_size      = excluded.file_size;
             """;
         cmd.Parameters.AddWithValue("$path", maildirFullPath);
         cmd.Parameters.AddWithValue("$mid", (object?)messageId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$seen", lastSeenAt.ToString("O"));
         cmd.Parameters.AddWithValue("$hash", (object?)contentHash ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$folder", (object?)folder ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$mtime", (object?)fileMtimeUtc?.ToString("O") ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$size", (object?)fileSize ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 

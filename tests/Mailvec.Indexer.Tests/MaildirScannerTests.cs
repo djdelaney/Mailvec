@@ -429,6 +429,51 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    public void Rescan_reparses_a_file_whose_content_changed_under_a_restored_mtime()
+    {
+        // The fast path used to compare the file's mtime against
+        // sync_state.last_seen_at — the time Mailvec LOOKED, not the metadata
+        // it saw. Any file whose bytes changed while its mtime stayed at or
+        // below the previous scan's start satisfied that comparison, and since
+        // each scan re-stamped last_seen_at to a later value without parsing,
+        // the skip perpetuated itself: body text, attachments, FTS and vectors
+        // pinned forever to content no longer on disk, with no error.
+        //
+        // mbsync can't produce this (new files carry current times; flag
+        // changes are renames, which land at a fresh path and miss the
+        // path-keyed lookup). Restores do it by design — rsync -a, cp -p and
+        // tar -x all preserve mtime — which is exactly when the archive most
+        // needs to notice that bytes moved.
+        //
+        // The fix compares the RECORDED mtime + size for equality, so a
+        // restored timestamp no longer implies unchanged content.
+        var path = WriteEml("INBOX", "cur", "restored.host:2,S", "original body", "restored@x");
+        _scanner.ScanAll();
+        var msg = _messages.GetByMessageId("restored@x").ShouldNotBeNull();
+        msg.BodyText.ShouldNotBeNull().ShouldContain("original body");
+
+        // Second scan populates the v9 identity columns for rows written
+        // before them (the legacy-fallback branch), so the equality check is
+        // actually armed for the third scan below.
+        _scanner.ScanAll();
+        var mtimeBefore = File.GetLastWriteTimeUtc(path);
+
+        // Replace the content and restore the original mtime, exactly as a
+        // backup restore would. The replacement is deliberately a different
+        // LENGTH: mtime+size cannot distinguish an equal-size replacement at
+        // an identical mtime, and this test must not imply otherwise. See the
+        // residual-gap note on FileIdentityUnchanged.
+        WriteEml("INBOX", "cur", "restored.host:2,S", "a completely different and much longer replacement body", "restored@x");
+        File.SetLastWriteTimeUtc(path, mtimeBefore);
+        File.GetLastWriteTimeUtc(path).ShouldBe(mtimeBefore, "the test must actually restore the mtime, or it proves nothing");
+
+        _scanner.ScanAll();
+
+        _messages.GetById(msg.Id).ShouldNotBeNull().BodyText.ShouldNotBeNull()
+            .ShouldContain("much longer replacement body");
+    }
+
+    [Fact]
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     [System.Runtime.Versioning.SupportedOSPlatform("linux")]
     public void Transient_ingest_failure_on_a_changed_file_does_not_mask_the_change()
