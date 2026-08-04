@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The schema is `schema/001_initial.sql` + migrations under `schema/migrations/` — silent-corruption-prone invariants are captured in this file under "Schema & data invariants". `CHANGELOG.md` is the phase-by-phase build history. Design rationale that didn't make it into code lives in `docs/security.md` (threat model) and `docs/future-ideas.md` (deferred work + still-open questions).
 
+**Ops runbooks describe how to VERIFY live state, never what it was.** The Cloudflare and Uptime Kuma configuration lives outside this repo, unversioned, and a doc that asserts it drifts silently. Both `docs/monitoring-uptime-kuma.md` and `docs/remote-access-cloudflare.md` have now been wrong about live state in a way that nearly caused an outage — the monitoring runbook said the six Kuma monitors polled `/up` when all six were on `/health`, and a change that 404s `/health` was about to ship on the strength of that sentence. When you must record observed state, **date it and mark it as observed**, so the reader knows to re-check rather than trust. A verification command ages correctly; a table of last quarter's config does not.
+
 Operator/release/contributor docs (read on demand):
 - `ops/UPGRADING.md` — bumping NuGet packages, the .NET SDK, sqlite-vec, SQLite, Ollama floor.
 - `docs/deploy-docker.md` — the **live** Proxmox homelab deployment: container/compose strategy, external Ollama, GHCR image pins, archive migration; read before touching `Dockerfile`, `compose.yml`, or the Linux RID paths in `ops/fetch-sqlite-vec.sh`.

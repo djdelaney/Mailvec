@@ -164,16 +164,35 @@ shape is path-differentiated on the same hostname, in this order:
 
 | # | Hostname | Path | Service |
 |---|---|---|---|
-| 1 | `mailvec.<domain>` | `tray/` | `http_status:404` |
-| 2 | `mailvec.<domain>` | `health` | `http_status:404` |
+| 1 | `mailvec.<domain>` | `tray/*` | `http_status:404` |
+| 2 | `mailvec.<domain>` | `^/health$` | `http_status:404` |
 | 3 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
 | 4 | *(catch-all)* | | `http_status:404` |
 
+> ### `path` is an unanchored regular expression, not a prefix
+>
+> Cloudflare's docs are explicit: "Rules can match the request's path to a
+> regular expression", parsed with Go's `regexp` syntax — which anchors nothing
+> by default. Their own example, `\.(jpg|png|css|js)$`, matches anywhere in the
+> path. So a bare `health` rule matches **any path containing "health"**, and
+> the existing `tray/*` rule is a regex whose `/*` means "zero or more slashes"
+> — it works, but by accident rather than by prefix semantics.
+>
+> **Anchor deliberately.** `^/health$` matches that path and nothing else. Same
+> reasoning that made the minimal endpoint `/up` rather than `/healthz`: a loose
+> pattern over "health" silently widens what it covers, and the failure is
+> invisible until someone probes for it. (Rule 1 predates this and is left
+> alone here — retightening a working rule is its own change, but `^/tray/`
+> would be the correct form.)
+
 > **Rule 2 is a pending operator action.** These rules live in the Cloudflare
 > dashboard, not in this repo, so nothing in a commit can apply it — add it by
-> hand. The origin already refuses off-box `/health` on its own
-> (`Mcp:RestrictHealthToLoopback`, default true, which is the load-bearing
-> barrier); this rule is the outer of the two, exactly like `/tray/`.
+> hand, in the same window as the 0.2.0 deploy. The origin already refuses
+> off-box `/health` on its own (`Mcp:RestrictHealthToLoopback`, default true,
+> which is the load-bearing barrier); this rule is the outer of the two, exactly
+> like `/tray/`. **Migrate the Uptime Kuma monitors to `/up` before either** —
+> as of 2026-08-03 all six still poll `/health`. See
+> [monitoring-uptime-kuma.md](monitoring-uptime-kuma.md#migrating-existing-monitors-from-health-to-up).
 
 **`/up` is the forwarded monitoring endpoint; `/health` is not.** Uptime Kuma
 polls `/up` end-to-end through the tunnel, which detects tunnel / Access / edge
@@ -205,11 +224,12 @@ do not rely on this ingress rule alone:
    of tunnel config.
 2. **Tunnel:** rule 1 above 404s `/tray/` before the catch-all.
 
-**Verify after any ingress or image change** (authenticated with the `/health`
-service token): `curl -i .../tray/folders` → **404**, `curl -i .../health` →
-health JSON. The compose healthcheck curls `/health` from inside the network and
-is unaffected. Belt-and-braces third option if the rules get fragile: a
-zone-level WAF rule blocking URI path `/tray/*`.
+**Verify after any ingress or image change**: `curl -i .../tray/folders` →
+**404**, `curl -i .../up` → the boolean status body. From 0.2.0 `curl -i
+.../health` → **404** as well (the origin serves it to loopback only); the
+compose healthcheck curls it from inside the container and is unaffected.
+Belt-and-braces third option if the rules get fragile: a zone-level WAF rule
+blocking URI path `/tray/*`.
 
 **Scope the monitoring service token to `/up`.** The Uptime Kuma service token
 passes Access; if it's authorized on the whole-subdomain app it can reach MCP
@@ -217,6 +237,19 @@ passes Access; if it's authorized on the whole-subdomain app it can reach MCP
 Access app for `/up`** (a more-specific path app takes precedence over the root
 identity app, and does not inherit the parent's policies), so the monitoring
 credential can only ever hit the minimal endpoint.
+
+> ⚠️ **This is a target, not the current state — verified 2026-08-03.** There is
+> exactly **one** Access application on the hostname: whole-host, no path
+> scoping. **No path-scoped `/up` application exists**, and the root app's
+> service-auth policy is `Any Access Service Token`. So today the monitoring
+> token is owner-equivalent — it can reach the whole MCP surface. That is a
+> tracked finding with a gated remediation plan, not news; see
+> [security.md → What's accepted](security.md#whats-accepted) for the ordering
+> constraint (**narrowing the root policy must come last**, because the
+> any-token rule is what makes a zero-downtime credential migration possible).
+> Earlier revisions of this document asserted the path-scoped app existed. Treat
+> every claim here about live Cloudflare state as dated, and re-read the
+> dashboard rather than this file.
 
 Two things that are easy to get wrong here:
 
@@ -268,8 +301,19 @@ edge path scoping.
 | `.env` key | Where |
 |---|---|
 | `MCP_ACCESS_TEAM_DOMAIN` | Settings → your team domain, as a full `https://` URL |
-| `MCP_ACCESS_AUDIENCE` | Access → Applications → *the Mailvec app* → Overview → **Application Audience (AUD) Tag** |
-| `MCP_ACCESS_MONITORING_AUDIENCE` | the AUD tag of the separate path-scoped `up` application, if you have one |
+| `MCP_ACCESS_AUDIENCE` | Access → Applications → *the Mailvec app* → **Additional settings → AUD tag** |
+| `MCP_ACCESS_MONITORING_AUDIENCE` | the AUD tag of the separate path-scoped `up` application, if you have one (as of 2026-08-03, one does not) |
+
+> **The AUD tag is not on the application's Overview/Details tab.** In the
+> current Cloudflare One dashboard it lives under **Additional settings → AUD
+> tag** — noted because looking for it in the obvious place costs a round of
+> searching.
+>
+> ⚠️ **The same panel has a "Revoke existing tokens" button, which rotates the
+> AUD.** Harmless today. Once `Mcp:Access` is live it is a foot-gun: rotating
+> invalidates every issued JWT *and* changes the value the origin is configured
+> to expect, so it 401s every Claude surface at once and stays broken until
+> `MCP_ACCESS_AUDIENCE` is updated and the container restarted.
 
 Then set `MCP_ACCESS_ENABLED=true` (literal `true`, not `1` — .NET's binder only
 understands `true`/`false`, and an unbindable value reads as false) and
