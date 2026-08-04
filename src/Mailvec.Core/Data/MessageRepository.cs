@@ -1266,7 +1266,34 @@ public sealed class MessageRepository(ConnectionFactory connections)
     public void UpdateMaildirLocation(long id, string folder, string maildirRelativePath, string maildirFilename)
     {
         using var conn = connections.Open();
+        UpdateMaildirLocation(conn, null, id, folder, maildirRelativePath, maildirFilename);
+    }
+
+    /// <summary>
+    /// Overload that joins the caller's connection and transaction.
+    /// </summary>
+    /// <remarks>
+    /// Exists so the scanner's rename repair can repoint the row and clear the
+    /// survivor's <c>sync_state.content_hash</c> in ONE transaction. Those two
+    /// writes are a pair: repointing moves attribution but not content, so the
+    /// hash clear is what forces the next scan to re-parse the survivor and
+    /// re-align the row. As two autocommit writes, a crash or SQLite error
+    /// between them left the row pointing at the new path while still holding
+    /// the vanished copy's body, content_hash, attachments, FTS text and
+    /// vectors — permanently, because the survivor kept a non-null hash and so
+    /// rode the mtime fast path forever, and because the repair pass skips any
+    /// row that already points somewhere live. Nothing would ever detect it.
+    /// </remarks>
+    public void UpdateMaildirLocation(
+        SqliteConnection conn,
+        SqliteTransaction? tx,
+        long id,
+        string folder,
+        string maildirRelativePath,
+        string maildirFilename)
+    {
         using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             UPDATE messages
             SET folder = $folder, maildir_path = $path, maildir_filename = $file

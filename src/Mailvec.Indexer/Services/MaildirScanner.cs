@@ -213,11 +213,8 @@ public sealed class MaildirScanner(
 
             var folderDir = Path.GetDirectoryName(Path.GetDirectoryName(freshPath));
             if (folderDir is null) continue;
-            messages.UpdateMaildirLocation(
-                msg.Id,
-                MaildirPaths.FolderNameFor(_maildirRoot, folderDir),
-                MaildirPaths.RelativeFolderPath(_maildirRoot, freshPath),
-                Path.GetFileName(freshPath));
+            // ONE transaction, because these two writes are a pair.
+            //
             // Repointing moves attribution but not content: the row's body,
             // content_hash and attachment rows still came from the copy that
             // just vanished, and MessageRepository.Upsert only accepts content
@@ -225,7 +222,28 @@ public sealed class MaildirScanner(
             // scan, so without clearing its recorded hash it would ride the
             // mtime fast path forever and the row would never re-align.
             // Costs one re-parse of that file on the next scan.
-            syncState.ClearContentHash(conn, freshPath);
+            //
+            // As two autocommit writes this had a permanent-corruption window:
+            // a crash or SQLITE_BUSY after the repoint and before the clear
+            // left the row pointing at the new path while holding the vanished
+            // copy's content, and nothing could ever detect or repair it — the
+            // survivor kept a non-null hash (so the mtime fast path skipped
+            // it), and this repair pass skips any row already pointing at a
+            // live copy. Both writes now commit together or neither does; a
+            // failure leaves the stale sync_state entry intact (it is only
+            // removed after this loop), so the next scan retries the repair.
+            using (var repairTx = conn.BeginTransaction())
+            {
+                messages.UpdateMaildirLocation(
+                    conn,
+                    repairTx,
+                    msg.Id,
+                    MaildirPaths.FolderNameFor(_maildirRoot, folderDir),
+                    MaildirPaths.RelativeFolderPath(_maildirRoot, freshPath),
+                    Path.GetFileName(freshPath));
+                syncState.ClearContentHash(conn, freshPath, repairTx);
+                repairTx.Commit();
+            }
             repaired++;
         }
         if (repaired > 0)

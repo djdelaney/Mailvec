@@ -559,6 +559,132 @@ public class MessageRepositoryTests
         FtsRowidsForTerm(db, "alpha").ShouldBe(new long[] { keepId });
     }
 
+    // ── Rename repair is atomic ──────────────────────────────────────────────
+    //
+    // The scanner's rename repair repoints a message AND clears the survivor's
+    // sync_state.content_hash. Those are a pair: repointing moves attribution
+    // but not content, so the hash clear is what forces the next scan to
+    // re-parse and re-align the row. As two autocommit writes, a crash between
+    // them left the row pointing at the new path while holding the vanished
+    // copy's body, attachments, FTS text and vectors — permanently, because the
+    // survivor kept a non-null hash (mtime fast path skips it) and the repair
+    // pass skips rows already pointing somewhere live.
+    //
+    // These pin the enabling property: both writes enlist in the CALLER's
+    // transaction, so they commit together or not at all. Verified by rollback,
+    // which is the only way to observe "didn't commit" without fault injection.
+
+    [Fact]
+    public void UpdateMaildirLocation_enlists_in_the_caller_transaction()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var id = repo.Upsert(Sample("move@x"), "INBOX", "INBOX/cur", "orig.eml", DateTimeOffset.UtcNow);
+
+        using (var conn = db.Connections.Open())
+        using (var tx = conn.BeginTransaction())
+        {
+            repo.UpdateMaildirLocation(conn, tx, id, "Archive", "Archive/cur", "moved.eml");
+            tx.Rollback();
+        }
+
+        // Rolled back — if this overload opened its own connection (as the
+        // parameterless one does) the write would have autocommitted and
+        // survived, which is exactly the bug.
+        var after = repo.GetById(id).ShouldNotBeNull();
+        after.MaildirFilename.ShouldBe("orig.eml");
+        after.MaildirPath.ShouldBe("INBOX/cur");
+        after.Folder.ShouldBe("INBOX");
+    }
+
+    [Fact]
+    public void UpdateMaildirLocation_commits_with_the_caller_transaction()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var id = repo.Upsert(Sample("move2@x"), "INBOX", "INBOX/cur", "orig.eml", DateTimeOffset.UtcNow);
+
+        using (var conn = db.Connections.Open())
+        using (var tx = conn.BeginTransaction())
+        {
+            repo.UpdateMaildirLocation(conn, tx, id, "Archive", "Archive/cur", "moved.eml");
+            tx.Commit();
+        }
+
+        var after = repo.GetById(id).ShouldNotBeNull();
+        after.MaildirFilename.ShouldBe("moved.eml");
+        after.MaildirPath.ShouldBe("Archive/cur");
+        after.Folder.ShouldBe("Archive");
+    }
+
+    [Fact]
+    public void Repoint_and_hash_clear_roll_back_together()
+    {
+        // The pair, as the scanner issues it. Rolling back must leave BOTH
+        // sides untouched — a partial commit is the corruption this guards.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var syncState = new SyncStateRepository(db.Connections);
+        var id = repo.Upsert(Sample("pair@x"), "INBOX", "INBOX/cur", "orig.eml", DateTimeOffset.UtcNow);
+
+        const string survivorPath = "/mail/INBOX/cur/survivor.eml";
+        SeedSyncState(db, survivorPath, "pair@x", "hash-abc");
+
+        using (var conn = db.Connections.Open())
+        using (var tx = conn.BeginTransaction())
+        {
+            repo.UpdateMaildirLocation(conn, tx, id, "INBOX", "INBOX/cur", "survivor.eml");
+            syncState.ClearContentHash(conn, survivorPath, tx);
+            tx.Rollback();
+        }
+
+        repo.GetById(id).ShouldNotBeNull().MaildirFilename.ShouldBe("orig.eml");
+        HashFor(db, survivorPath).ShouldBe("hash-abc");
+    }
+
+    [Fact]
+    public void Repoint_and_hash_clear_commit_together()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var syncState = new SyncStateRepository(db.Connections);
+        var id = repo.Upsert(Sample("pair2@x"), "INBOX", "INBOX/cur", "orig.eml", DateTimeOffset.UtcNow);
+
+        const string survivorPath = "/mail/INBOX/cur/survivor2.eml";
+        SeedSyncState(db, survivorPath, "pair2@x", "hash-abc");
+
+        using (var conn = db.Connections.Open())
+        using (var tx = conn.BeginTransaction())
+        {
+            repo.UpdateMaildirLocation(conn, tx, id, "INBOX", "INBOX/cur", "survivor2.eml");
+            syncState.ClearContentHash(conn, survivorPath, tx);
+            tx.Commit();
+        }
+
+        repo.GetById(id).ShouldNotBeNull().MaildirFilename.ShouldBe("survivor2.eml");
+        // NULL hash is what defeats the mtime fast path and forces the
+        // re-parse that re-aligns content with the new attribution.
+        HashFor(db, survivorPath).ShouldBeNull();
+    }
+
+    private static void SeedSyncState(TempDatabase db, string maildirFullPath, string messageId, string contentHash)
+    {
+        var repo = new SyncStateRepository(db.Connections);
+        using var conn = db.Connections.Open();
+        using var tx = conn.BeginTransaction();
+        repo.Upsert(conn, tx, maildirFullPath, messageId, DateTimeOffset.UtcNow, contentHash, "INBOX");
+        tx.Commit();
+    }
+
+    private static string? HashFor(TempDatabase db, string maildirFullPath)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT content_hash FROM sync_state WHERE maildir_full_path = $p";
+        cmd.Parameters.AddWithValue("$p", maildirFullPath);
+        return cmd.ExecuteScalar() as string;
+    }
+
     private static long[] FtsRowidsForTerm(TempDatabase db, string term)
     {
         using var conn = db.Connections.Open();
