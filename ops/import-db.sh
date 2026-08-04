@@ -55,6 +55,17 @@ if [[ "$COUNT" -lt 1 ]]; then
   echo "error: snapshot has no messages (or isn't a readable Mailvec DB): $SNAP" >&2
   exit 1
 fi
+# Structural check BEFORE anything is moved. The COUNT above proves the file
+# is readable and Mailvec-shaped; it does NOT prove the pages are intact — a
+# truncated or bit-rotted snapshot answers simple queries from the pages it
+# still has and fails later, after the live DB is already gone.
+echo "  running integrity_check (may take a moment on a large archive)..."
+INTEGRITY="$(sqlite3 "$SNAP" 'PRAGMA integrity_check;' 2>&1 | head -5)"
+if [[ "$INTEGRITY" != "ok" ]]; then
+  echo "error: snapshot failed integrity_check — refusing to install it: $SNAP" >&2
+  echo "$INTEGRITY" | sed 's/^/  /' >&2
+  exit 1
+fi
 SCHEMA="$(sqlite3 "$SNAP" "SELECT value FROM metadata WHERE key='schema_version';")"
 MODEL="$(sqlite3 "$SNAP" "SELECT value FROM metadata WHERE key='embedding_model';")"
 DIMS="$(sqlite3 "$SNAP" "SELECT value FROM metadata WHERE key='embedding_dimensions';")"
@@ -132,7 +143,39 @@ resume() {
     fi
   done
 }
-trap resume EXIT
+# Tracks how far the swap got, so the trap knows whether the live path is
+# trustworthy. Set to the backup's path between `mv` and a verified install.
+INSTALL_INCOMPLETE=""
+
+# Restore the backup if we die between moving the live DB aside and verifying
+# the new one. Without this, `set -e` + the unconditional resume below restarts
+# the services against whatever is at $DB — and a failed `cp` leaves a
+# zero-byte file there, which SQLite accepts as a valid EMPTY database and
+# SchemaMigrator then silently populates with a fresh schema. The archive looks
+# healthy, the indexer starts ingesting into it, and the real data is only in
+# the .bak nobody knows to look for.
+restore_on_failure() {
+  local rc=$?
+  [[ -z "$INSTALL_INCOMPLETE" ]] && return 0
+  echo >&2
+  echo "ERROR: import failed (exit $rc) after the live archive was moved aside." >&2
+  echo "==> Restoring $INSTALL_INCOMPLETE -> $DB" >&2
+  rm -f "$DB" "$DB-wal" "$DB-shm"
+  if mv "$INSTALL_INCOMPLETE" "$DB"; then
+    echo "  restored. The archive is back to its pre-import state." >&2
+  else
+    echo "  RESTORE FAILED. Your previous archive is at: $INSTALL_INCOMPLETE" >&2
+    echo "  Move it back to $DB by hand BEFORE the services restart." >&2
+  fi
+}
+
+# Order matters: bash runs EXIT traps once, so restore must happen before the
+# services come back up. Chain them in one handler rather than relying on two.
+cleanup() {
+  restore_on_failure
+  resume
+}
+trap cleanup EXIT
 
 # --- Guard: Claude Desktop's stdio MCP children ----------------------------
 # launchd only manages the three agents below; Claude Desktop spawns its own
@@ -170,6 +213,9 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 if [[ -f "$DB" ]]; then
   echo "==> Backing up existing archive -> $DB.bak.$STAMP"
   mv "$DB" "$DB.bak.$STAMP"
+  # From here until the post-install verification passes, $DB is not
+  # trustworthy — the trap restores this file if anything below fails.
+  INSTALL_INCOMPLETE="$DB.bak.$STAMP"
   # Each .bak is a full-PII copy; tighten perms (mv preserves the original's,
   # typically 0644) and prune so they don't pile up unbounded.
   chmod 600 "$DB.bak.$STAMP" 2>/dev/null || true
@@ -198,6 +244,20 @@ cp "$SNAP" "$DB"
 # service self-heals this on next open too, but do it here so the full-PII file
 # is never briefly world-readable between import and first service start.
 chmod 600 "$DB" 2>/dev/null || true
+
+# Verify what actually landed, not what we asked for: a `cp` interrupted by a
+# full disk or a killed process exits non-zero but leaves a partial (or empty)
+# file behind. Re-checking the copy is what lets the trap above stand down.
+echo "==> Verifying installed archive"
+INSTALLED_COUNT="$(sqlite3 "$DB" 'SELECT COUNT(*) FROM messages;' 2>/dev/null || echo 0)"
+if [[ "$INSTALLED_COUNT" != "$COUNT" ]]; then
+  echo "error: installed archive has $INSTALLED_COUNT messages, expected $COUNT" >&2
+  exit 1
+fi
+echo "  messages=$INSTALLED_COUNT (matches snapshot)"
+# The swap is complete and verified; later failures are recoverable in place
+# and must NOT roll the archive back.
+INSTALL_INCOMPLETE=""
 
 # Rebuild the denormalized messages.attachment_text (the 6th messages_fts column)
 # from the persisted attachments rows, which still carry OCR-recovered text. This
