@@ -185,13 +185,15 @@ shape is path-differentiated on the same hostname, in this order:
 > alone here — retightening a working rule is its own change, but `^/tray/`
 > would be the correct form.)
 
-> **Rule 2 is a pending operator action.** These rules live in the Cloudflare
-> dashboard, not in this repo, so nothing in a commit can apply it — add it by
-> hand, in the same window as the 0.2.0 deploy. The origin already refuses
-> off-box `/health` on its own (`Mcp:RestrictHealthToLoopback`, default true,
-> which is the load-bearing barrier); this rule is the outer of the two, exactly
-> like `/tray/`. **Migrate the Uptime Kuma monitors to `/up` before either** —
-> as of 2026-08-03 all six still poll `/health`. See
+> **Rule 2 lives in the Cloudflare dashboard, not in this repo**, so nothing in
+> a commit can apply or confirm it — check the dashboard, not this file. The
+> origin already refuses off-box `/health` on its own
+> (`Mcp:RestrictHealthToLoopback`, default true, which is the load-bearing
+> barrier); this rule is the outer of the two, exactly like `/tray/`.
+>
+> Its prerequisite: **migrate any external monitor to `/up` first**, since the
+> rule blinds anything still polling `/health` — and a blind monitor looks
+> exactly like a healthy one. Check where yours point before shipping either. See
 > [monitoring-uptime-kuma.md](monitoring-uptime-kuma.md#migrating-existing-monitors-from-health-to-up).
 
 **`/up` is the forwarded monitoring endpoint; `/health` is not.** Uptime Kuma
@@ -238,18 +240,23 @@ Access app for `/up`** (a more-specific path app takes precedence over the root
 identity app, and does not inherit the parent's policies), so the monitoring
 credential can only ever hit the minimal endpoint.
 
-> ⚠️ **This is a target, not the current state — verified 2026-08-03.** There is
-> exactly **one** Access application on the hostname: whole-host, no path
-> scoping. **No path-scoped `/up` application exists**, and the root app's
-> service-auth policy is `Any Access Service Token`. So today the monitoring
-> token is owner-equivalent — it can reach the whole MCP surface. That is a
-> tracked finding with a gated remediation plan, not news; see
-> [security.md → What's accepted](security.md#whats-accepted) for the ordering
-> constraint (**narrowing the root policy must come last**, because the
-> any-token rule is what makes a zero-downtime credential migration possible).
-> Earlier revisions of this document asserted the path-scoped app existed. Treat
-> every claim here about live Cloudflare state as dated, and re-read the
-> dashboard rather than this file.
+> ⚠️ **This is a target. Nothing in this repo can tell you whether your
+> deployment has hit it** — Access applications live in Cloudflare's control
+> plane. An earlier revision of this document asserted the path-scoped app
+> existed when it did not, which is exactly why no revision should make that
+> claim again. Verify in the dashboard, not here.
+>
+> **Verify** (with the monitoring token, from outside the network): `/up`
+> returns the status JSON, and the MCP root returns **404 or a login page, never
+> a tool list**. A tool list means the token is admitted by the root application
+> and can read mail — [monitoring-uptime-kuma.md](monitoring-uptime-kuma.md)
+> carries the full check.
+>
+> **Sequencing, when building or rebuilding these credentials: narrow the root
+> policy last.** An any-token rule is what makes a zero-downtime migration
+> possible — mint a scoped token → repoint the monitors → create the path-scoped
+> app → *then* narrow the root. Tightening first locks out the monitors and your
+> agent clients at once.
 
 Two things that are easy to get wrong here:
 
@@ -302,7 +309,7 @@ edge path scoping.
 |---|---|
 | `MCP_ACCESS_TEAM_DOMAIN` | Settings → your team domain, as a full `https://` URL |
 | `MCP_ACCESS_AUDIENCE` | Access → Applications → *the Mailvec app* → **Additional settings → AUD tag** |
-| `MCP_ACCESS_MONITORING_AUDIENCE` | the AUD tag of the separate path-scoped `up` application, if you have one (as of 2026-08-03, one does not) |
+| `MCP_ACCESS_MONITORING_AUDIENCE` | the AUD tag of the separate path-scoped `up` application. Leave empty if you have no such app — but note origin validation then can't distinguish the monitor from the mailbox, which is the whole point of the split |
 
 > **The AUD tag is not on the application's Overview/Details tab.** In the
 > current Cloudflare One dashboard it lives under **Additional settings → AUD
