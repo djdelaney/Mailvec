@@ -65,6 +65,56 @@ public class AttachmentOcrServiceTests : IDisposable
     // partIndex normally 0 (the .eml written here has one attachment part);
     // pass a higher value to fabricate a stale DB row whose part doesn't
     // exist on disk — the Maildir read then throws ArgumentOutOfRange.
+    [Fact]
+    public async Task Strikes_do_not_carry_across_a_document_change_on_the_same_row()
+    {
+        // The failure counter used to be keyed by attachments.id alone, while
+        // every DATABASE write-back was already identity-guarded for the same
+        // reason: attachments.id is an INTEGER PRIMARY KEY without
+        // AUTOINCREMENT, so a row deleted from the tail of the rowid space
+        // hands its id to the next insert — possibly a different message's
+        // document. The replacement inherited the strikes and could be retired
+        // to 'failed' on its FIRST vision error, with nothing left to re-select
+        // it. Changing the parent's content_hash reproduces the same identity
+        // shift with far less setup: same row, different document.
+        long poison = StageNoTextPdf("poison@x", MinimalPdf(1));
+        var calls = 0;
+        var svc = Build(new FakeVision(true, _ =>
+            ++calls % 2 == 1 ? throw new TaskCanceledException("poison render hangs the model") : "GOOD TEXT"));
+
+        // Four counted failures — one short of MaxVisionAttempts (5).
+        for (int cycle = 0; cycle < 4; cycle++)
+        {
+            StageNoTextPdf($"fresh-{cycle}@x", MinimalPdf(1));
+            await svc.ProcessBatchAsync(10, default);
+        }
+        StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusNoText, "precondition: not yet retired");
+
+        // The document at that row changes — the .eml was rewritten, so the
+        // parent's content_hash moves. Same attachment id, different bytes.
+        ReviseContentHash(poison, "h-poison@x-v2");
+
+        StageNoTextPdf("fresh-final@x", MinimalPdf(1));
+        await svc.ProcessBatchAsync(10, default);
+
+        // Keyed by identity, this is strike 1 of 5 for a new document, so it
+        // stays pending. Keyed by row id it would have been strike 5 and
+        // retired to 'failed' — unsearchable, with nothing to re-select it.
+        StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusNoText,
+            "a replacement document must not inherit the previous occupant's strikes");
+    }
+
+    /// <summary>Move a message's content_hash — what a post-ingest .eml rewrite does.</summary>
+    private void ReviseContentHash(long messageId, string hash)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE messages SET content_hash = $h WHERE id = $id";
+        cmd.Parameters.AddWithValue("$h", hash);
+        cmd.Parameters.AddWithValue("$id", messageId);
+        cmd.ExecuteNonQuery();
+    }
+
     private long StageNoTextPdf(string id, byte[] pdfBytes, int partIndex = 0)
     {
         var b64 = Convert.ToBase64String(pdfBytes);

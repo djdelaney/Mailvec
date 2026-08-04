@@ -63,7 +63,33 @@ public sealed class AttachmentOcrService(
     // the next poll rather than burning a timeout per candidate).
     private const int MaxConsecutiveCycleFailures = 2;
 
-    private readonly Dictionary<long, int> _visionFailures = new();
+    // Keyed by DOCUMENT identity, not attachment id.
+    //
+    // attachments.id is an INTEGER PRIMARY KEY without AUTOINCREMENT, so a row
+    // deleted from the tail of the rowid space hands its id to the next insert
+    // — possibly one belonging to a different message. The database write-backs
+    // have always guarded on the full identity for exactly this reason; this
+    // in-memory counter did not, so a replacement document inherited the old
+    // one's strikes and could be retired to 'failed' on its first vision error.
+    // The key mirrors OcrIdentityMatch: same row, same message, same part, and
+    // the parent's content_hash unmoved.
+    private readonly Dictionary<OcrFailureKey, int> _visionFailures = new();
+
+    // Strikes only matter while a document is still pending, and a retirement
+    // or a success removes its entry — but a candidate that stops being
+    // selected (message deleted, re-extracted to a different status) leaves one
+    // behind. Bound the map so a long-running embedder can't accumulate them
+    // indefinitely; oldest-inserted entries go first, and losing a strike count
+    // costs at most one extra OCR attempt.
+    private const int MaxTrackedFailures = 4096;
+
+    /// <summary>
+    /// Value identity for a document under OCR — see <see cref="_visionFailures"/>.
+    /// </summary>
+    private readonly record struct OcrFailureKey(long AttachmentId, long MessageId, int PartIndex, string? ContentHash);
+
+    private static OcrFailureKey KeyOf(OcrCandidate c) =>
+        new(c.AttachmentId, c.MessageId, c.PartIndex, c.ContentHash);
 
     // Tiny blank JPEG for the zero-success health probe (see
     // ProbeVisionHealthAsync). Internal so tests can tell probe calls apart
@@ -111,12 +137,23 @@ public sealed class AttachmentOcrService(
         }
     }
 
-    // Returns true when the attachment has failed enough counted times to retire.
-    private bool RecordVisionFailure(long attachmentId)
+    // Returns true when this exact document has failed enough counted times to retire.
+    private bool RecordVisionFailure(OcrCandidate candidate)
     {
-        var n = _visionFailures.GetValueOrDefault(attachmentId) + 1;
-        if (n >= MaxVisionAttempts) { _visionFailures.Remove(attachmentId); return true; }
-        _visionFailures[attachmentId] = n;
+        var key = KeyOf(candidate);
+        var n = _visionFailures.GetValueOrDefault(key) + 1;
+        if (n >= MaxVisionAttempts) { _visionFailures.Remove(key); return true; }
+
+        if (_visionFailures.Count >= MaxTrackedFailures && !_visionFailures.ContainsKey(key))
+        {
+            // Dictionary enumeration order is insertion order in practice for
+            // an add-only map; either way, dropping an arbitrary entry costs at
+            // most one extra OCR attempt for that document.
+            var evict = _visionFailures.Keys.First();
+            _visionFailures.Remove(evict);
+        }
+
+        _visionFailures[key] = n;
         return false;
     }
 
@@ -147,13 +184,22 @@ public sealed class AttachmentOcrService(
         // OcrIdentityMatch), so an id alone can no longer address a document.
         foreach (var c in failed)
         {
-            if (RecordVisionFailure(c.AttachmentId))
+            if (RecordVisionFailure(c))
             {
-                logger.LogWarning(
-                    "{Pass}: attachment {AttachmentId} failed {Max}x in cycles where other documents OCR'd fine; " +
-                    "marking failed to unblock the queue.",
-                    pass, c.AttachmentId, MaxVisionAttempts);
-                messages.MarkAttachmentOcrFailed(c);
+                if (messages.MarkAttachmentOcrFailed(c) == OcrWriteOutcome.Stale)
+                {
+                    logger.LogInformation(
+                        "{Pass}: attachment {AttachmentId} reached its retirement threshold but the row moved; " +
+                        "nothing retired.",
+                        pass, c.AttachmentId);
+                }
+                else
+                {
+                    logger.LogWarning(
+                        "{Pass}: attachment {AttachmentId} failed {Max}x in cycles where other documents OCR'd fine; " +
+                        "marked failed to unblock the queue.",
+                        pass, c.AttachmentId, MaxVisionAttempts);
+                }
             }
             else
             {
@@ -292,8 +338,22 @@ public sealed class AttachmentOcrService(
                 continue;
             }
 
-            messages.SaveOcrText(c, sb.ToString());
-            _visionFailures.Remove(c.AttachmentId);
+            // Only a COMMITTED write is progress. A stale result means the row
+            // moved between selection and write-back (minutes of page renders
+            // and vision calls in between) — nothing was written, so counting
+            // it would inflate `done`, tell the worker OCR produced work (an
+            // immediate extra poll for nothing), and clear failure strikes that
+            // belong to a document we never actually transcribed.
+            if (messages.SaveOcrText(c, sb.ToString()) == OcrWriteOutcome.Stale)
+            {
+                logger.LogInformation(
+                    "OCR: attachment {AttachmentId} changed underneath the OCR pass; discarding the transcription. " +
+                    "The replacement is re-selected next cycle against its own snapshot.",
+                    c.AttachmentId);
+                continue;
+            }
+
+            _visionFailures.Remove(KeyOf(c));
             done++;
             logger.LogInformation(
                 "OCR'd attachment {AttachmentId} ({Pages} page(s), {Chars} chars); re-queued message {MessageId}.",
@@ -428,19 +488,34 @@ public sealed class AttachmentOcrService(
             // when the transcription is empty.
             visionSuccesses++;
             consecutiveFailures = 0;
-            _visionFailures.Remove(c.AttachmentId);
+            _visionFailures.Remove(KeyOf(c));
 
             // Empty transcription (a photo with no legible text) is the common
             // case here — mark terminal rather than persisting an empty 'ocr' row.
             if (string.IsNullOrWhiteSpace(text))
             {
-                messages.MarkAttachmentImageNoText(c);
-                logger.LogInformation(
-                    "Image OCR: attachment {AttachmentId} produced no text; marked no_text.", c.AttachmentId);
+                if (messages.MarkAttachmentImageNoText(c) == OcrWriteOutcome.Stale)
+                {
+                    logger.LogInformation(
+                        "Image OCR: attachment {AttachmentId} changed underneath the pass; no_text mark skipped.",
+                        c.AttachmentId);
+                }
+                else
+                {
+                    logger.LogInformation(
+                        "Image OCR: attachment {AttachmentId} produced no text; marked no_text.", c.AttachmentId);
+                }
                 continue;
             }
 
-            messages.SaveOcrText(c, text);
+            if (messages.SaveOcrText(c, text) == OcrWriteOutcome.Stale)
+            {
+                logger.LogInformation(
+                    "Image OCR: attachment {AttachmentId} changed underneath the OCR pass; discarding the transcription.",
+                    c.AttachmentId);
+                continue;
+            }
+
             done++;
             logger.LogInformation(
                 "OCR'd image attachment {AttachmentId} ({W}x{H}, {Chars} chars); re-queued message {MessageId}.",

@@ -38,13 +38,61 @@ public sealed class EmbeddingWorker(
     // (when the whole window fails) a passing one-string health probe — the
     // same evidence rule as the OCR pass, so a broken/wedged Ollama
     // (everything failing, probe included) never quarantines anything. Quarantined messages keep embedded_at = NULL
-    // (honest coverage numbers, retried on restart or content change) and
-    // stay keyword-searchable.
+    // (honest coverage numbers) and stay keyword-searchable. Quarantine is
+    // scoped to the exact content snapshot that failed, so editing or
+    // re-queueing the message releases it on the next poll (PruneQuarantine);
+    // otherwise it clears on restart.
     private const int ConsecutiveFailuresBeforeIsolation = 2;
     private const int QuarantineStrikes = 3;
     private int _consecutiveBatchFailures;
-    private readonly Dictionary<long, int> _embedStrikes = new();
-    private readonly HashSet<long> _quarantined = new();
+    // Both keyed by CONTENT SNAPSHOT, not by message id alone.
+    //
+    // A message id is an address, not a durable identity: a content change
+    // bumps content_hash and embed_epoch, and a purged id can be reused by an
+    // unrelated new message inside one embedder lifetime. Keyed by id alone,
+    // strikes carried across an edit and a quarantine outlived the content that
+    // earned it — the class comment above promised "retried on ... content
+    // change" while the implementation excluded the id until process restart.
+    // PruneQuarantine() reconciles against the live rows before each
+    // enumeration, so a re-queued message is picked up on the next poll.
+    private readonly Dictionary<EmbedSnapshot, int> _embedStrikes = new();
+    private readonly Dictionary<long, EmbedSnapshot> _quarantined = new();
+
+    /// <summary>The exact content state that failed — see <see cref="_quarantined"/>.</summary>
+    private readonly record struct EmbedSnapshot(long MessageId, string? ContentHash, long EmbedEpoch);
+
+    /// <summary>
+    /// Drop quarantine entries whose message no longer matches the snapshot
+    /// that was quarantined — it was edited, re-queued, purged, or its id
+    /// reused. Those become selectable again immediately rather than waiting
+    /// for a restart. Cheap: the quarantine set is small by construction (a
+    /// message only lands here after <see cref="QuarantineStrikes"/> counted
+    /// failures) and this is one indexed lookup per entry.
+    /// </summary>
+    private void PruneQuarantine()
+    {
+        if (_quarantined.Count == 0) return;
+
+        var live = messages.GetEmbedSnapshots(_quarantined.Keys.ToList());
+        var released = new List<long>();
+        foreach (var (id, quarantinedAt) in _quarantined)
+        {
+            if (!live.TryGetValue(id, out var now)
+                || now.ContentHash != quarantinedAt.ContentHash
+                || now.EmbedEpoch != quarantinedAt.EmbedEpoch)
+            {
+                released.Add(id);
+            }
+        }
+
+        foreach (var id in released) _quarantined.Remove(id);
+        if (released.Count > 0)
+        {
+            logger.LogInformation(
+                "Released {Count} message(s) from embedding quarantine — their content or embed epoch moved, " +
+                "so the failing snapshot no longer exists.", released.Count);
+        }
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -185,7 +233,8 @@ public sealed class EmbeddingWorker(
     {
         VerifyEmbeddingModelMatchesSchema();
 
-        var messageBatch = messages.EnumerateUnembedded(batchSize, _quarantined).ToList();
+        PruneQuarantine();
+        var messageBatch = messages.EnumerateUnembedded(batchSize, _quarantined.Keys.ToList()).ToList();
         if (messageBatch.Count == 0) return 0;
 
         logger.LogWarning(
@@ -194,7 +243,7 @@ public sealed class EmbeddingWorker(
 
         var embeddedAt = DateTimeOffset.UtcNow;
         var successes = 0;
-        var failed = new List<(long Id, Exception Ex)>();
+        var failed = new List<(EmbedSnapshot Snapshot, Exception Ex)>();
         foreach (var m in messageBatch)
         {
             ct.ThrowIfCancellationRequested();
@@ -215,7 +264,7 @@ public sealed class EmbeddingWorker(
                 // though: it stays embedded_at = NULL and re-embeds next poll.
                 successes++;
                 if (committed) _processedThisRun++;
-                _embedStrikes.Remove(m.Id);
+                _embedStrikes.Remove(new EmbedSnapshot(m.Id, m.ContentHash, m.EmbedEpoch));
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -223,7 +272,7 @@ public sealed class EmbeddingWorker(
             }
             catch (Exception ex)
             {
-                failed.Add((m.Id, ex));
+                failed.Add((new EmbedSnapshot(m.Id, m.ContentHash, m.EmbedEpoch), ex));
             }
         }
 
@@ -250,23 +299,24 @@ public sealed class EmbeddingWorker(
                 "counting strikes against them so the queue can drain.", failed.Count);
         }
 
-        foreach (var (id, ex) in failed)
+        foreach (var (snapshot, ex) in failed)
         {
-            var strikes = _embedStrikes.GetValueOrDefault(id) + 1;
+            var strikes = _embedStrikes.GetValueOrDefault(snapshot) + 1;
             if (strikes >= QuarantineStrikes)
             {
-                _embedStrikes.Remove(id);
-                _quarantined.Add(id);
+                _embedStrikes.Remove(snapshot);
+                _quarantined[snapshot.MessageId] = snapshot;
                 logger.LogError(ex,
                     "Message {Id} failed to embed {Strikes}x in cycles where other messages embedded fine; " +
-                    "quarantining it until the embedder restarts. It stays keyword-searchable (FTS) but has no vectors; " +
-                    "`mailvec status` counts it as unembedded.",
-                    id, strikes);
+                    "quarantining THIS content snapshot. It stays keyword-searchable (FTS) but has no vectors; " +
+                    "`mailvec status` counts it as unembedded. Editing/re-queueing the message releases it on the " +
+                    "next poll; otherwise it clears on restart.",
+                    snapshot.MessageId, strikes);
             }
             else
             {
-                _embedStrikes[id] = strikes;
-                logger.LogWarning(ex, "Message {Id} failed to embed in isolation ({Strikes}/{Max} strikes).", id, strikes, QuarantineStrikes);
+                _embedStrikes[snapshot] = strikes;
+                logger.LogWarning(ex, "Message {Id} failed to embed in isolation ({Strikes}/{Max} strikes).", snapshot.MessageId, strikes, QuarantineStrikes);
             }
         }
 
@@ -326,7 +376,8 @@ public sealed class EmbeddingWorker(
         // that lands mid-batch.
         VerifyEmbeddingModelMatchesSchema();
 
-        var messageBatch = messages.EnumerateUnembedded(batchSize, _quarantined).ToList();
+        PruneQuarantine();
+        var messageBatch = messages.EnumerateUnembedded(batchSize, _quarantined.Keys.ToList()).ToList();
         if (messageBatch.Count == 0) return 0;
 
         // Build a combined chunk list per message: body chunks (source='body')

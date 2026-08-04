@@ -155,7 +155,7 @@ public class AttachmentExtractorTests : IDisposable
     }
 
     [Fact]
-    public void Re_extract_reuses_existing_file_when_size_matches()
+    public void Re_extract_reuses_existing_file_when_content_matches()
     {
         var ext = BuildExtractor();
         var msg = StageEml("101.imapfetch:2,S", PdfMessage, messageId: 101);
@@ -168,6 +168,50 @@ public class AttachmentExtractorTests : IDisposable
         second.FilePath.ShouldBe(first.FilePath);
         // Bytes are identical (we didn't re-decode and rewrite).
         File.ReadAllBytes(first.FilePath).ShouldBe(File.ReadAllBytes(second.FilePath));
+    }
+
+    // ── Cache identity is CONTENT, not length ────────────────────────────────
+    //
+    // WasReused=true is reported to the caller as "this file IS the
+    // attachment". The check used to be length-only, so a different payload of
+    // equal length at the same target — an .eml rewritten post-ingest and
+    // re-indexed, or simply a same-size file already sitting there — was
+    // adopted and returned as the attachment. The bytes are already in hand by
+    // the time we get here, so comparing them costs nothing that decoding
+    // hasn't already spent.
+
+    [Fact]
+    public void A_same_size_but_different_file_at_the_target_is_not_reused()
+    {
+        var ext = BuildExtractor();
+        var msg = StageEml("120.imapfetch:2,S", PdfMessage, messageId: 120);
+
+        var first = ext.Extract(msg, partIndex: 0);
+        var real = File.ReadAllBytes(first.FilePath);
+
+        // Overwrite with junk of EXACTLY the same length.
+        var impostor = new byte[real.Length];
+        Array.Fill(impostor, (byte)'Z');
+        File.WriteAllBytes(first.FilePath, impostor);
+
+        var second = ext.Extract(msg, partIndex: 0);
+
+        second.WasReused.ShouldBeFalse("a same-length impostor is not the attachment");
+        File.ReadAllBytes(second.FilePath).ShouldBe(real, "the real attachment must be rewritten over it");
+    }
+
+    [Fact]
+    public void Reuse_still_holds_for_a_byte_identical_file()
+    {
+        // The other half: the cache must not become useless. An untouched
+        // previous download is still reused, no rewrite.
+        var ext = BuildExtractor();
+        var msg = StageEml("121.imapfetch:2,S", PdfMessage, messageId: 121);
+
+        ext.Extract(msg, partIndex: 0);
+        var second = ext.Extract(msg, partIndex: 0);
+
+        second.WasReused.ShouldBeTrue();
     }
 
     [Fact]

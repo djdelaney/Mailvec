@@ -486,6 +486,83 @@ public class MessageRepositoryOcrTests
     /// taken from its <em>current</em> state — the valid-snapshot case. Tests
     /// that need a stale snapshot capture one before mutating the row.
     /// </summary>
+    // ── Guarded writes report whether they committed ─────────────────────────
+    //
+    // Every OCR write-back is identity-guarded and silently writes nothing when
+    // the row moved — correct, because the replacement is re-selected next
+    // cycle. But these used to return void, so the OCR pass could not tell a
+    // skipped write from a committed one: it counted `done`, cleared the
+    // document's failure strikes, logged success, and reported progress to the
+    // worker, which then polled again immediately believing OCR had produced
+    // work. The metrics lied about state transitions that never happened.
+
+    [Fact]
+    public void SaveOcrText_reports_Committed_when_it_writes()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "ok@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+
+        repo.SaveOcrText(Candidate(db, repo, id), "recovered text").ShouldBe(OcrWriteOutcome.Committed);
+    }
+
+    [Fact]
+    public void SaveOcrText_reports_Committed_for_a_blank_transcription()
+    {
+        // Blank text still commits a real transition (status='ocr' is the
+        // terminal marker), it just skips the re-queue. Committed is correct.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "blank@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+
+        repo.SaveOcrText(Candidate(db, repo, id), "   ").ShouldBe(OcrWriteOutcome.Committed);
+    }
+
+    [Fact]
+    public void SaveOcrText_reports_Stale_when_the_guard_matches_nothing()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "moved@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+        var candidate = Candidate(db, repo, id);
+
+        // Same row, different document: the parent's content moved after
+        // selection, which is exactly what OcrIdentityMatch exists to catch.
+        var stale = candidate with { ContentHash = "some-other-hash" };
+
+        repo.SaveOcrText(stale, "text for a document that is no longer there")
+            .ShouldBe(OcrWriteOutcome.Stale);
+
+        // And nothing was written.
+        repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
+    [Fact]
+    public void MarkAttachmentOcrFailed_reports_Committed_and_Stale()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "retire@x", "corrupt.pdf", AttachmentTextExtractor.StatusNoText);
+        var candidate = Candidate(db, repo, id);
+
+        repo.MarkAttachmentOcrFailed(candidate with { ContentHash = "moved" }).ShouldBe(OcrWriteOutcome.Stale);
+        repo.MarkAttachmentOcrFailed(candidate).ShouldBe(OcrWriteOutcome.Committed);
+        // Now already 'failed', so the status predicate no longer matches.
+        repo.MarkAttachmentOcrFailed(candidate).ShouldBe(OcrWriteOutcome.Stale);
+    }
+
+    [Fact]
+    public void MarkAttachmentImageNoText_reports_Committed_and_Stale()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = Insert(repo, "img@x", "photo.jpg", AttachmentTextExtractor.StatusUnsupported);
+        var candidate = Candidate(db, repo, id);
+
+        repo.MarkAttachmentImageNoText(candidate with { ContentHash = "moved" }).ShouldBe(OcrWriteOutcome.Stale);
+        repo.MarkAttachmentImageNoText(candidate).ShouldBe(OcrWriteOutcome.Committed);
+    }
+
     private static OcrCandidate Candidate(TempDatabase db, MessageRepository repo, long messageId, int partIndex = 0)
     {
         var msg = repo.GetById(messageId)!;

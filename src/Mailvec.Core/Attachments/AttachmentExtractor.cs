@@ -49,9 +49,10 @@ public sealed class AttachmentExtractor(
     /// `{messageId}-{partIndex}-{sanitized-filename}` so collisions across
     /// messages are impossible and the originating email is greppable.
     ///
-    /// If the target file already exists with the same size we skip rewriting
-    /// (idempotent re-fetches are cheap), but `wasReused` is set so callers
-    /// can surface that fact.
+    /// If the target file already holds byte-for-byte the same content we skip
+    /// rewriting (idempotent re-fetches are cheap) and set `wasReused` so
+    /// callers can surface that fact. The comparison is over content, not
+    /// length — see <see cref="TryReuseExisting"/> for why length was wrong.
     ///
     /// Throws <see cref="FileNotFoundException"/> when the Maildir source is
     /// missing (likely a stale DB row — an indexer rescan should fix it) and
@@ -94,7 +95,7 @@ public sealed class AttachmentExtractor(
         var outputName = $"{message.Id}-{partIndex}-{att.FileName}";
         var targetPath = ResolveSafeOutputPath(_downloadDir, outputName);
 
-        bool wasReused = TryReuseExisting(targetPath, att.SizeBytes);
+        bool wasReused = TryReuseExisting(targetPath, att.Bytes);
         if (!wasReused)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
@@ -165,13 +166,43 @@ public sealed class AttachmentExtractor(
         return target;
     }
 
-    private static bool TryReuseExisting(string path, long expectedSize)
+    /// <summary>
+    /// True only when the file at <paramref name="path"/> is byte-for-byte the
+    /// attachment we just decoded.
+    /// </summary>
+    /// <remarks>
+    /// This used to compare length alone, on the reasoning that re-decoding
+    /// from the Maildir dominates the cost anyway — which is true, and is
+    /// exactly why the length shortcut bought nothing: the bytes are already in
+    /// hand by the time we get here. What it cost was correctness.
+    /// <c>WasReused=true</c> is reported to the caller as "this file IS the
+    /// attachment", and two different payloads of equal length under the same
+    /// message id + part index (an <c>.eml</c> rewritten post-ingest, then
+    /// re-indexed) returned the stale file. A same-size unrelated file already
+    /// sitting at the target was likewise adopted as the attachment.
+    /// Comparing content makes the flag mean what it says.
+    /// </remarks>
+    private static bool TryReuseExisting(string path, byte[] expected)
     {
-        // If the file is already there with the right size, treat it as cached.
-        // We don't hash because re-decoding from the Maildir is fast and would
-        // be the dominant cost anyway. Size is a good-enough fingerprint.
         var info = new FileInfo(path);
-        return info.Exists && info.Length == expectedSize;
+        if (!info.Exists || info.Length != expected.LongLength) return false;
+
+        try
+        {
+            // Length already matches, so this reads exactly the attachment's
+            // size — bounded by the same cap that bounded the decode.
+            return File.ReadAllBytes(path).AsSpan().SequenceEqual(expected);
+        }
+        catch (IOException)
+        {
+            // Unreadable (locked, vanished mid-check) — fall through and
+            // rewrite rather than claiming a cache hit we couldn't verify.
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
