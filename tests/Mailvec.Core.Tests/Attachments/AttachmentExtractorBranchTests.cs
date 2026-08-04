@@ -379,6 +379,53 @@ public class AttachmentExtractorBranchTests : IDisposable
     }
 
     [Fact]
+    public void A_symlink_at_the_predictable_part_path_cannot_capture_the_write()
+    {
+        // The target itself has always been symlink-checked (test above), but
+        // the write went to a SIBLING temp file at `<target>.part` — a
+        // perfectly guessable path — via File.WriteAllBytes, which follows
+        // symlinks. Anything able to create that one file redirected the
+        // attachment bytes to any path the user could write. The temp name is
+        // now random and created with FileMode.CreateNew (O_CREAT|O_EXCL), so
+        // it is neither guessable nor followable.
+        var ext = BuildExtractor();
+        var msg = StageEml("122.imapfetch:2,S",
+            BuildGenericOctetEml("safe.pdf", "JVBERi0xLjAKJSVFT0YK"),
+            messageId: 122);
+
+        var expectedTarget = Path.Combine(_downloadDir, "122-0-safe.pdf");
+        var victim = Path.Combine(_tempRoot, "part-victim.txt");
+        File.WriteAllText(victim, "the attacker's target");
+        Directory.CreateDirectory(_downloadDir);
+        File.CreateSymbolicLink(expectedTarget + ".part", victim);
+
+        var result = ext.Extract(msg, partIndex: 0);
+
+        // The attachment landed where it should...
+        result.FilePath.ShouldBe(expectedTarget);
+        File.Exists(expectedTarget).ShouldBeTrue();
+        // ...and the symlink's target was never written through.
+        File.ReadAllText(victim).ShouldBe("the attacker's target");
+    }
+
+    [Fact]
+    public void No_part_files_are_left_behind_after_a_successful_write()
+    {
+        // The temp file is randomly named now, so a leak would accumulate
+        // silently in the user's Downloads folder rather than being overwritten
+        // next time.
+        var ext = BuildExtractor();
+        var msg = StageEml("123.imapfetch:2,S",
+            BuildGenericOctetEml("safe.pdf", "JVBERi0xLjAKJSVFT0YK"),
+            messageId: 123);
+
+        ext.Extract(msg, partIndex: 0);
+
+        Directory.EnumerateFiles(_downloadDir, "*.part", SearchOption.AllDirectories)
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
     public void DownloadDir_property_returns_expanded_path()
     {
         var ext = BuildExtractor();

@@ -95,6 +95,46 @@ public class MaildirAttachmentReaderTests : IDisposable
         ex.Message.ShouldContain("out of range");
     }
 
+    // ── The symlink probe fails CLOSED ───────────────────────────────────────
+
+    [Fact]
+    public void A_regular_file_is_reported_as_not_a_link()
+    {
+        // The normal path must stay silent — this guard runs on every
+        // attachment read, so a probe that threw on ordinary files would break
+        // view_attachment and the OCR pass outright.
+        var file = Path.Combine(_maildirRoot, "plain.txt");
+        File.WriteAllText(file, "hi");
+
+        MaildirAttachmentReader.LinkTargetOf(file).ShouldBeNull();
+        MaildirAttachmentReader.LinkTargetOf(_maildirRoot).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_symlink_reports_its_target()
+    {
+        var victim = Path.Combine(_root, "outside.txt");
+        File.WriteAllText(victim, "secret");
+        var link = Path.Combine(_maildirRoot, "link.txt");
+        File.CreateSymbolicLink(link, victim);
+
+        MaildirAttachmentReader.LinkTargetOf(link).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void An_undeterminable_path_throws_rather_than_reporting_not_a_link()
+    {
+        // This used to `catch { return null; }` — i.e. "not a link" — which
+        // fails OPEN in a containment guard: an erroring path silently skipped
+        // symlink resolution, leaving only the lexical check, which by
+        // construction cannot catch a symlinked component escaping the root.
+        // "Couldn't tell" must not resolve to "safe".
+        var undeterminable = Path.Combine(_maildirRoot, "bad\0name");
+
+        Should.Throw<InvalidOperationException>(() => MaildirAttachmentReader.LinkTargetOf(undeterminable))
+            .Message.ShouldContain("Refusing the read");
+    }
+
     [Fact]
     public void Refuses_to_read_through_a_symlinked_directory_that_escapes_the_root()
     {
