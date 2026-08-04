@@ -710,6 +710,45 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// are head-of-line (ORDER BY id), so filtering after the LIMIT would
     /// starve everything behind them.
     /// </param>
+    /// <summary>
+    /// Current <c>(content_hash, embed_epoch)</c> for the given message ids —
+    /// the pair that identifies a message's CONTENT SNAPSHOT rather than just
+    /// its row. Ids with no live row are absent from the result.
+    /// </summary>
+    /// <remarks>
+    /// Exists for the embedder's quarantine reconciliation: a quarantined
+    /// message must be released the moment its content moves, and a message id
+    /// alone can't express that (an id is reusable, and an edit changes neither
+    /// id nor row identity). See <c>EmbeddingWorker.PruneQuarantine</c>.
+    /// </remarks>
+    public Dictionary<long, (string? ContentHash, long EmbedEpoch)> GetEmbedSnapshots(IReadOnlyCollection<long> ids)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        var result = new Dictionary<long, (string? ContentHash, long EmbedEpoch)>();
+        if (ids.Count == 0) return result;
+
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        var names = new List<string>(ids.Count);
+        var i = 0;
+        foreach (var id in ids)
+        {
+            var name = $"$id{i++}";
+            names.Add(name);
+            cmd.Parameters.AddWithValue(name, id);
+        }
+        cmd.CommandText =
+            $"SELECT id, content_hash, embed_epoch FROM messages WHERE id IN ({string.Join(", ", names)});";
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            result[reader.GetInt64(0)] =
+                (reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetInt64(2));
+        }
+        return result;
+    }
+
     public IEnumerable<UnembeddedMessage> EnumerateUnembedded(int batchSize = 50, IReadOnlyCollection<long>? excludeIds = null)
     {
         using var conn = connections.Open();
@@ -913,7 +952,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// re-decoded every cycle. (Decode *failures* go through
     /// <see cref="MarkAttachmentOcrFailed"/> instead.)
     /// </summary>
-    public void MarkAttachmentImageNoText(OcrCandidate candidate)
+    public OcrWriteOutcome MarkAttachmentImageNoText(OcrCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         using var conn = connections.Open();
@@ -928,7 +967,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         BindOcrIdentity(cmd, candidate);
-        cmd.ExecuteNonQuery();
+        return cmd.ExecuteNonQuery() == 0 ? OcrWriteOutcome.Stale : OcrWriteOutcome.Committed;
     }
 
     /// <summary>
@@ -988,8 +1027,16 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// search sees it, and re-queue the message for embedding by clearing
     /// embedded_at (the re-embed's ReplaceChunksForMessage replaces its chunks).
     /// One transaction. The messages UPDATE fires the FTS sync trigger.
+    ///
+    /// <para>Returns <see cref="OcrWriteOutcome.Stale"/> when the identity guard
+    /// matched nothing — the caller MUST NOT count that as work done. It used to
+    /// return void, so a skipped write was indistinguishable from a committed
+    /// one: the OCR pass incremented its `done` tally, cleared the attachment's
+    /// failure strikes, logged that OCR had completed, and reported progress to
+    /// the worker (which then polled again immediately, believing OCR had
+    /// produced work). The metrics lied and the extra cycle was pure waste.</para>
     /// </summary>
-    public void SaveOcrText(OcrCandidate candidate, string text)
+    public OcrWriteOutcome SaveOcrText(OcrCandidate candidate, string text)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         var messageId = candidate.MessageId;
@@ -1030,7 +1077,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             // rowid reuse is no longer the row's parent, so committing would
             // leave the new parent's FTS out of step with its own rows.
             tx.Rollback();
-            return;
+            return OcrWriteOutcome.Stale;
         }
 
         if (string.IsNullOrWhiteSpace(text))
@@ -1041,7 +1088,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             // attachment_text rebuild and the embedded_at clear: re-queueing
             // would burn a full re-embed of the message for zero new content.
             tx.Commit();
-            return;
+            return OcrWriteOutcome.Committed;
         }
 
         var attachmentText = ConcatAttachmentText(conn, tx, messageId);
@@ -1054,6 +1101,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
+        return OcrWriteOutcome.Committed;
     }
 
     /// <summary>
@@ -1197,7 +1245,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// Mark an attachment 'failed' so the OCR pass stops re-selecting a PDF that
     /// PDFium can't even open (a poison doc would otherwise be retried forever).
     /// </summary>
-    public void MarkAttachmentOcrFailed(OcrCandidate candidate)
+    public OcrWriteOutcome MarkAttachmentOcrFailed(OcrCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         using var conn = connections.Open();
@@ -1215,7 +1263,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         BindOcrIdentity(cmd, candidate);
-        cmd.ExecuteNonQuery();
+        return cmd.ExecuteNonQuery() == 0 ? OcrWriteOutcome.Stale : OcrWriteOutcome.Committed;
     }
 
     private static IReadOnlyList<AttachmentEmbeddingPayload> LoadAttachmentTexts(SqliteConnection conn, long messageId)
@@ -1497,6 +1545,31 @@ public sealed record AttachmentEmbeddingPayload(
 /// <see cref="MessageRepository.MarkAttachmentImageNoText"/> unchanged; an
 /// attachment id on its own does not identify a document.
 /// </remarks>
+/// <summary>
+/// Whether a guarded OCR write actually changed a row.
+/// </summary>
+/// <remarks>
+/// Every OCR write-back is identity-guarded (see <c>OcrIdentityMatch</c>) and
+/// silently writes nothing when the row moved underneath the candidate — which
+/// is correct, because the replacement is re-selected next cycle against its
+/// own snapshot. What was NOT correct was hiding that from the caller: these
+/// methods returned void, so a skipped write looked exactly like a committed
+/// one and the OCR pass counted it as done, cleared the failure strikes, and
+/// logged success. Metrics must count committed state transitions only.
+/// </remarks>
+public enum OcrWriteOutcome
+{
+    /// <summary>The guarded UPDATE changed the row and the transaction committed.</summary>
+    Committed,
+
+    /// <summary>
+    /// The identity guard matched nothing — the row was replaced, reprocessed,
+    /// or had its rowid reused since selection. Nothing was written. Treat as a
+    /// normal race: no progress, no success log, no strike bookkeeping.
+    /// </summary>
+    Stale,
+}
+
 public sealed record OcrCandidate(
     long AttachmentId,
     int PartIndex,

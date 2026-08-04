@@ -531,6 +531,98 @@ public class EmbeddingWorkerTests : IDisposable
         condition().ShouldBeTrue("condition was not met within the timeout");
     }
 
+    // ── Quarantine is scoped to the failing content snapshot ─────────────────
+
+    [Fact]
+    public async Task Quarantine_is_released_when_the_message_content_changes()
+    {
+        // Quarantine used to be a HashSet<long> of message ids with nothing
+        // ever removing an entry, so a quarantined message stayed excluded
+        // until the process restarted — while the class comment promised it was
+        // "retried on restart or content change". Editing a message is the
+        // user's obvious remedy for a document that won't embed, and it
+        // silently did nothing.
+        InsertMessage("poison@x", "bad", "POISONMARKER " + new string('p', 300));
+        var worker = BuildWorker(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().Result;
+            if (body.Contains("POISONMARKER", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("boom") };
+            return Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))]);
+        });
+
+        for (int cycle = 0; cycle < 12; cycle++)
+        {
+            InsertMessage($"warm-{cycle}@x", "ok", new string('g', 300));
+            try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
+            catch (InvalidOperationException) { }
+            catch (HttpRequestException) { }
+        }
+
+        var poisonId = GetMessageId("poison@x");
+        EmbeddedAt(poisonId).ShouldBeNull("precondition: the poison message must be quarantined");
+
+        // The content changes — new body (no marker), new hash, bumped epoch,
+        // exactly what every re-queue path does.
+        ReviseBody(poisonId, "clean replacement body " + new string('c', 300));
+
+        // SAME worker instance — no restart.
+        await worker.ProcessNextBatchAsync(batchSize: 16, ct: default);
+
+        EmbeddedAt(poisonId).ShouldNotBeNull(
+            "a quarantined message whose content moved must be re-selected without a restart");
+    }
+
+    [Fact]
+    public async Task Quarantine_still_holds_while_the_content_is_unchanged()
+    {
+        // The other half: releasing on ANY poll would defeat quarantine and
+        // put the poison message back at the head of the queue every cycle.
+        InsertMessage("stuck@x", "bad", "POISONMARKER " + new string('p', 300));
+        var worker = BuildWorker(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().Result;
+            if (body.Contains("POISONMARKER", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("boom") };
+            return Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))]);
+        });
+
+        for (int cycle = 0; cycle < 12; cycle++)
+        {
+            InsertMessage($"w-{cycle}@x", "ok", new string('g', 300));
+            try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
+            catch (InvalidOperationException) { }
+            catch (HttpRequestException) { }
+        }
+
+        // A clean cycle: fresh mail embeds without the poison re-entering and
+        // failing the batch.
+        InsertMessage("after@x", "ok", new string('a', 300));
+        var processed = await worker.ProcessNextBatchAsync(batchSize: 16, ct: default);
+
+        processed.ShouldBeGreaterThan(0);
+        EmbeddedAt(GetMessageId("after@x")).ShouldNotBeNull();
+        EmbeddedAt(GetMessageId("stuck@x")).ShouldBeNull();
+    }
+
+    /// <summary>Rewrite a message's body with a new content_hash and bumped embed_epoch — what every re-queue path does.</summary>
+    private void ReviseBody(long id, string body)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE messages
+            SET body_text = $body,
+                content_hash = 'revised-' || $id,
+                embedded_at = NULL,
+                embed_epoch = embed_epoch + 1
+            WHERE id = $id;
+            """;
+        cmd.Parameters.AddWithValue("$body", body);
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.ExecuteNonQuery();
+    }
+
     private EmbeddingWorker BuildWorker(
         Func<HttpRequestMessage, HttpResponseMessage> respond,
         EmbedderOptions? embedderOpts = null,
