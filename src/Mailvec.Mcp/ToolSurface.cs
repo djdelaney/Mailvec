@@ -5,14 +5,23 @@ namespace Mailvec.Mcp;
 /// <summary>
 /// Maps the locked MCP tool names (see CLAUDE.md "MCP API stability") to
 /// their implementing classes, and resolves which of them to register given
-/// <c>Mcp:DisabledTools</c>. Disabling is the server-side half of trimming
-/// the remote tool surface before the Cloudflare tunnel goes live —
-/// <c>view_attachment</c> and <c>get_attachment_page_image</c> feed
-/// attacker-supplied mail bytes to native parsers (PDFium/SkiaSharp) and
-/// return whole raw documents, which docs/security.md rules out for an
-/// internet-reachable endpoint. A tool disabled here is absent from
-/// tools/list AND tools/call (the SDK rejects calls to unregistered tools),
-/// uniformly across whatever OAuth front sits in front.
+/// <c>Mcp:DisabledTools</c>. A tool disabled here is absent from tools/list
+/// AND tools/call (the SDK rejects calls to unregistered tools), uniformly
+/// across whatever OAuth front sits in front.
+///
+/// <para>The tools this exists for are <c>view_attachment</c> and
+/// <c>get_attachment_page_image</c>: both feed attacker-supplied mail bytes to
+/// native parsers (PDFium/SkiaSharp). Neither returns a whole raw document —
+/// <c>get_attachment_page_image</c> returns one rendered JPEG page, and
+/// <c>view_attachment</c> returns an inline image or small decoded text and
+/// deliberately never ships arbitrary binary. The native parsing is the reason
+/// to be able to drop them, not the payload.</para>
+///
+/// <para><b>The live tunnel deployment does not drop them</b> — compose.yml
+/// stages both as commented-out entries and leaves them off as an accepted
+/// risk, since the embedder's OCR pass reaches the same parsers unattended
+/// anyway. See <c>McpOptions.DisabledTools</c> and docs/security.md "What's
+/// accepted" for the conditions that reverse that call.</para>
 /// </summary>
 internal static class ToolSurface
 {

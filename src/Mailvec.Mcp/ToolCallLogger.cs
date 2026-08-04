@@ -7,7 +7,8 @@ using Microsoft.Extensions.Options;
 namespace Mailvec.Mcp;
 
 /// <summary>
-/// Per-call logging for the four MCP tools. The "mcp-tool" timing line is
+/// Per-call logging, taken as a dependency by every registered MCP tool (see
+/// <see cref="ToolSurface.All"/> for the current set). The "mcp-tool" timing line is
 /// emitted unconditionally so latency anomalies are visible in normal
 /// operation; the "mcp-call" args line and "mcp-result" body summary are
 /// gated by Mcp:LogToolCalls and intended for usage-pattern capture. Errors

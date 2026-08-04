@@ -21,10 +21,20 @@ public sealed class McpOptions
     /// tools/list and rejected on tools/call. Names must match the locked
     /// tool-name contract exactly; an unknown name fails startup (a typo
     /// would otherwise silently leave the tool it meant to disable exposed).
-    /// Intended for internet-fronted deployments: docs/security.md requires
-    /// dropping view_attachment and get_attachment_page_image (native parsers
-    /// fed by mail bytes; whole raw documents) from any tunnel-exposed
-    /// surface. Empty (the default) keeps the full surface.
+    /// Empty (the default) keeps the full surface.
+    ///
+    /// <para>This is a <b>conditional</b> hardening control, not a requirement
+    /// of internet exposure. The live tunnel deployment runs with it empty:
+    /// compose.yml stages <c>view_attachment</c> and
+    /// <c>get_attachment_page_image</c> as commented-out entries and leaves them
+    /// off, because the embedder's OCR pass already feeds the same native
+    /// parsers (PDFium/SkiaSharp) unattended for every scanned attachment that
+    /// arrives by mail — so the trim would close the smaller, attended half of
+    /// an exposure that stays open either way. docs/security.md "What's
+    /// accepted" records that decision and the conditions that reverse it (a
+    /// published host port, a non-owner-equivalent caller clearing Access, the
+    /// tunnel no longer 404-ing the unauthenticated surfaces, or a mutating tool
+    /// landing). Uncomment those entries if any of them come true.</para>
     /// </summary>
     public string[] DisabledTools { get; set; } = [];
 

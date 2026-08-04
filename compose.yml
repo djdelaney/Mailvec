@@ -109,9 +109,19 @@ services:
       # /health is loopback-only (404 to anything else). It discloses the
       # archive path, corpus counts, the embedding model identity and the
       # internal Ollama LAN address; /up exists so nothing external needs any of
-      # that. Every real consumer is already loopback — the healthcheck below,
-      # `mailvec doctor` under `docker compose exec`, the tray on local installs
-      # — and Uptime Kuma polls /up, so this costs nothing here.
+      # that. The in-container consumers are all loopback and unaffected: the
+      # healthcheck below, `mailvec doctor` under `docker compose exec`, the
+      # tray on local installs.
+      #
+      # ⚠️ CHECK THE MONITORS BEFORE DEPLOYING THIS. An off-box Uptime Kuma
+      # monitor pointed at /health goes hard-down the moment this takes effect,
+      # and a blind monitor looks exactly like a healthy one until you need it.
+      # As of 2026-08-03 all six monitors were still on /health with the
+      # migration pending — verify where they actually point (don't trust this
+      # comment, it dates), migrate them to /up first, and only then deploy.
+      # Escape hatch if you're mid-migration: MCP_RESTRICT_HEALTH_TO_LOOPBACK=false
+      # in .env keeps /health answering off-box until the repoint is done.
+      # Procedure: docs/monitoring-uptime-kuma.md "Migrating existing monitors".
       #
       # Stated explicitly rather than left to the code default for the same
       # reason as Mcp__EnableTrayEndpoints above: an operator reading compose.yml
@@ -135,16 +145,23 @@ services:
       Mcp__EnableTrayEndpoints: "false"
       #
       # Drops the two tools that feed mail bytes to native parsers
-      # (PDFium/SkiaSharp) and return whole raw documents. Left OFF as a
-      # deliberate accepted risk: the embedder's OCR pass already feeds those
-      # same parsers unattended for every scanned attachment that arrives, and
-      # the Access gate admits one identity — so the trim would close the
-      # smaller half of an exposure that stays open either way.
+      # (PDFium/SkiaSharp) on demand. It's the native parsing that's the risk,
+      # not the payload: get_attachment_page_image returns one rendered JPEG
+      # page, and view_attachment returns an inline image or small decoded text
+      # — neither ships whole raw documents back through MCP.
+      #
+      # Left OFF as a deliberate accepted risk: the embedder's OCR pass already
+      # feeds those same parsers unattended for every scanned attachment that
+      # arrives by mail, and every caller the Access gate admits is already
+      # owner-equivalent — so the trim would close the smaller, attended half of
+      # an exposure that stays open either way.
       #
       # REINSTATE (uncomment) if any of that stops holding: a host port gets
-      # published below, a second identity joins the Access policy, the tunnel
-      # stops 404-ing /tray/*, or a mutating tool lands. Full rationale +
-      # conditions: docs/security.md "What's accepted".
+      # published below, a caller that ISN'T owner-equivalent clears Access
+      # (note the root policy is `Any Access Service Token`, so a token created
+      # anywhere in the account qualifies, with no edit here), the tunnel stops
+      # 404-ing /tray/*, or a mutating tool lands. Full rationale + conditions:
+      # docs/security.md "What's accepted".
       #
       # An unknown name here fails startup on purpose (a typo would silently
       # leave the tool exposed).
