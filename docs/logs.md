@@ -50,9 +50,22 @@ become `0700 root:root`; tailing from the host needs `sudo`.
 
 Note the console sink is also live in containers (`MAILVEC_LAUNCHD` is
 deliberately unset), so the same lines go to `docker logs`. That copy is
-governed by the Docker daemon's logging driver, not by anything here — compose
-sets no `logging:` block, so the json-file default applies and it is **not**
-size-capped.
+governed by the Docker daemon's logging driver, not by anything Serilog does —
+compose therefore sets a `logging:` block on **every** service (`json-file`,
+`max-size: 10m`, `max-file: 5`, via the `x-logging` anchor).
+
+Without it the json-file default applies and that copy is unbounded: it grows
+until it fills the host disk and retains indefinitely. Both matter because
+those lines carry mailbox PII — Maildir paths, Message-IDs, parser exception
+text derived from hostile mail, and with `Mcp:LogToolCalls` on, queries, sender
+addresses, subjects and filenames — and because malformed mail is retried, so
+one bad attachment can emit entries every cycle indefinitely.
+
+Shorter retention than the Serilog files (10MB x 14) is deliberate: the Docker
+copy duplicates an already-retained file, so it exists for `docker logs` during
+an incident rather than as the record. Verify what a deployment actually
+applies with `docker compose --profile tunnel config`, not by reading this
+line.
 
 ## Claude Desktop MCPB bundle
 
