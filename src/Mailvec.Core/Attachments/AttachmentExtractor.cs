@@ -98,13 +98,31 @@ public sealed class AttachmentExtractor(
         bool wasReused = TryReuseExisting(targetPath, att.Bytes);
         if (!wasReused)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-            // Write to a sibling temp file then rename so a concurrent reader
+            var dir = Path.GetDirectoryName(targetPath)!;
+            Directory.CreateDirectory(dir);
+
+            // Write to a sibling temp file then rename, so a concurrent reader
             // never sees a partial file at targetPath.
-            var tempPath = targetPath + ".part";
+            //
+            // The temp name is random AND created exclusively, because the old
+            // `targetPath + ".part"` was neither. ResolveSafeOutputPath refuses
+            // to write through a symlink at the TARGET, but nothing guarded the
+            // sibling — and File.WriteAllBytes follows a symlink, so anything
+            // able to pre-place `<target>.part` redirected the attachment bytes
+            // to any path that user could write. FileMode.CreateNew maps to
+            // open(O_CREAT|O_EXCL), which fails outright on an existing path
+            // (including a dangling symlink) rather than following it, so even
+            // a guessed name is refused rather than followed.
+            var tempPath = Path.Combine(dir, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.part");
             try
             {
-                File.WriteAllBytes(tempPath, att.Bytes);
+                using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    fs.Write(att.Bytes);
+                }
+                // rename(2) replaces the destination entry itself and does not
+                // follow a symlink there, so the swap stays safe even if the
+                // target check above raced.
                 File.Move(tempPath, targetPath, overwrite: true);
             }
             catch

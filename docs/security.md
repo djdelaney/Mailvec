@@ -36,7 +36,7 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | MCP HTTP (in-network) | `0.0.0.0:3333` inside the compose network (`Mcp__BindAddress`) | none — HostGuard only, **unless `Mcp:Access` is configured** ([below](#origin-authentication-mcpaccess)), which makes the origin validate the Access assertion itself | the cloudflared sidecar and any other container on the network. **No host port is published**; publishing one exposes this to the LAN — unauthenticated, unless origin validation is on |
 | MCP stdio | child process of the spawning agent | inherits agent's identity | dormant — retired as the Claude Desktop transport; still available for local dev |
 | `/up` (minimal: status/version + liveness booleans) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a **path-scoped** Access service token for the external monitor (see below — the scoping is a requirement, and one worth verifying rather than assuming) |
-| `/health` (detailed) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access | the owner. Also the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` |
+| `/health` (detailed) | **loopback only** (`Mcp:RestrictHealthToLoopback`, default true); 404 to anything else, and 404'd at the tunnel as well | n/a — not reachable off-box | only the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` under `docker compose exec` |
 | `/tray/*` | **not mapped in the container** (`Mcp:EnableTrayEndpoints=false`) *and* 404'd at the tunnel | served nowhere reachable | nobody — it's a local macOS-only surface |
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and** rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
 | SQLite file | bind mount on the VM | unix permissions (0600, container root) | root on the VM, and every container that mounts `./data` |
@@ -283,7 +283,9 @@ All seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`,
 - `Path.GetFileName` strips directory components from caller-supplied filenames
 - canonical-path containment refuses any target outside the configured download dir
 - a `ReparsePoint` check refuses to overwrite an existing symlink at the destination (TOCTOU mitigation)
-- write-then-rename via `.part` sibling so a concurrent reader never sees a partial file
+- write-then-rename so a concurrent reader never sees a partial file — to a **randomly named** temp file created with `FileMode.CreateNew` (`open(O_CREAT|O_EXCL)`, which fails on an existing path rather than following it). The old `<target>.part` was guessable *and* written with `File.WriteAllBytes`, which follows symlinks: the target was guarded, the sibling wasn't, so anything able to pre-place that one file redirected the attachment bytes anywhere the user could write. The final `rename(2)` replaces the destination entry itself and never follows a symlink there, so the swap stays safe even if the target check raced.
+
+`MaildirAttachmentReader`'s containment guard **fails closed**: its symlink probe used to swallow every exception and report "not a link", so an unreadable or erroring path silently skipped symlink resolution and fell back to the lexical check alone — which by construction cannot catch a symlinked component escaping the Maildir root. "Couldn't tell" now refuses the read.
 
 `AttachmentDownloadDir` is intentionally `~/Downloads/mailvec/` (visible to the user). Don't move it to a hidden directory or `~/Library/Caches/` — that hides forensic evidence if a tool ever does write something unexpected.
 

@@ -117,7 +117,7 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
         var realParent = RealPath(parent, linkHops);
         var combined = Path.Combine(realParent, Path.GetFileName(full));
 
-        var link = SafeLinkTarget(combined);
+        var link = LinkTargetOf(combined);
         if (link is not null)
         {
             var next = Path.IsPathRooted(link) ? link : Path.Combine(realParent, link);
@@ -126,8 +126,23 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
         return combined;
     }
 
-    /// <summary>The immediate symlink target of <paramref name="path"/>, or null if it isn't a link (or can't be read).</summary>
-    private static string? SafeLinkTarget(string path)
+    /// <summary>
+    /// The immediate symlink target of <paramref name="path"/>, or null when it
+    /// is definitively not a link.
+    /// </summary>
+    /// <remarks>
+    /// Throws when link status cannot be established, and that is the point.
+    /// This used to swallow every exception and return null — i.e. "not a
+    /// link" — which fails OPEN in a containment guard: an unreadable or
+    /// erroring path silently skipped symlink resolution, leaving only the
+    /// lexical check, which by construction cannot catch a symlinked component
+    /// pointing outside the Maildir root. "Couldn't tell" must not resolve to
+    /// "safe" here. A genuine non-link returns null without throwing (readlink
+    /// on a regular file is not an error path in .NET), so this does not fire
+    /// in normal operation; if it ever does, the read fails loudly instead of
+    /// quietly widening the guard.
+    /// </remarks>
+    internal static string? LinkTargetOf(string path)
     {
         try
         {
@@ -136,9 +151,11 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
             FileSystemInfo info = Directory.Exists(path) ? new DirectoryInfo(path) : new FileInfo(path);
             return info.LinkTarget;
         }
-        catch
+        catch (Exception ex) when (ex is not InvalidOperationException)
         {
-            return null;
+            throw new InvalidOperationException(
+                $"Cannot determine whether '{path}' is a symbolic link, so the Maildir containment guard " +
+                "cannot be evaluated. Refusing the read.", ex);
         }
     }
 
