@@ -237,7 +237,7 @@ Carried forward from the original design doc — none are committed work, all ga
   ISO strings, so every date-ordered query (query-less browse, `FolderStats`'s
   per-folder oldest/latest, date-range filters) wraps the column in
   `datetime()` for correct ordering — which makes `idx_messages_date_sent`
-  unusable and full-scans instead. Fix is a v9 migration adding
+  unusable and full-scans instead. Fix is a v10 migration adding
   `CREATE INDEX … ON messages(datetime(date_sent))` (or a normalized-UTC sort
   column). Parked because at ~80k messages the scan is tens of ms: benchmark
   against a live-DB copy (`ops/export-db.sh`, then time browse/`list_folders`
