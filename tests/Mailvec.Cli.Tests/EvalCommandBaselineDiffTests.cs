@@ -11,15 +11,33 @@ namespace Mailvec.Cli.Tests;
 /// </summary>
 public sealed class EvalCommandBaselineDiffTests
 {
+    /// <summary>
+    /// Renders the diff into a private writer and strips ANSI, so these
+    /// assertions depend on neither process-global console state nor whether
+    /// colour happens to be enabled.
+    /// </summary>
+    /// <remarks>
+    /// This used to swap Console.Out. That is process-global while xUnit runs
+    /// classes in parallel, so a concurrent test could restore the stream
+    /// mid-render and leave the capture missing its own prefix — which read as
+    /// the per-query rows being mis-ordered. It failed CI once, passed on
+    /// re-run, and never reproduced locally at any core count.
+    ///
+    /// <para>Stripping ANSI covers the second half: Colors.Enabled is a static
+    /// readonly computed from NO_COLOR / FORCE_COLOR / Console.IsOutputRedirected
+    /// once per process, so a runner with a TTY would put escapes between the
+    /// tokens these assertions look for ("0.500 → 1.000" is not a substring of
+    /// the coloured row).</para>
+    /// </remarks>
     private static string CaptureDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming = false)
     {
         var sw = new StringWriter();
-        var prior = Console.Out;
-        Console.SetOut(sw);
-        try { EvalCommand.PrintBaselineDiff(current, baseline, includeTiming); }
-        finally { Console.SetOut(prior); }
-        return sw.ToString();
+        EvalCommand.PrintBaselineDiff(current, baseline, includeTiming, sw);
+        return AnsiPattern.Replace(sw.ToString(), string.Empty);
     }
+
+    private static readonly System.Text.RegularExpressions.Regex AnsiPattern =
+        new("\u001b\\[[0-9;]*m", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static EvalQueryResult Q(string id, double ndcg, bool expectEmpty = false, double latencyMs = 10) => new(
         Id: id, Query: "q", RelevantCount: 1, RankedMessageIds: [], RanksOfExpected: [1],
