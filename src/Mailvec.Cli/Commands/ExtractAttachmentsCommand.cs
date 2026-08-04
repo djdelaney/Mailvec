@@ -202,6 +202,7 @@ internal static class ExtractAttachmentsCommand
         long messagesWithNewText = 0;
         long attachmentsExtracted = 0;
         long messagesSkippedStale = 0;
+        long messagesSkippedMissing = 0;
         var statusCounts = new Dictionary<string, long>(StringComparer.Ordinal);
 
         // Cursor pagination by messages.id (rowid-ordered). We don't OFFSET
@@ -224,12 +225,27 @@ internal static class ExtractAttachmentsCommand
                 var maildirFile = Path.Combine(maildirRoot, msg.MaildirPath.Replace('/', Path.DirectorySeparatorChar), msg.MaildirFilename);
                 if (!File.Exists(maildirFile))
                 {
-                    // Stamp every candidate attachment 'failed' so we don't
-                    // loop on this message forever. Most likely cause:
-                    // mbsync moved/renamed the file and the indexer hasn't
-                    // rescanned yet. The user can re-run after a rescan.
-                    err.WriteLine($"  msg {msg.Id}: source not found ({maildirFile}); marking attachments 'failed'.");
-                    StampMessageAttachmentsFailed(connections, msg.Id);
+                    // A missing source is STALE, not malformed — so it's
+                    // reported and skipped, never stamped.
+                    //
+                    // This used to stamp every NULL-status attachment on the
+                    // message 'failed' to stop the run revisiting it. That was
+                    // silent data loss on an ordinary mbsync rename: the path
+                    // in our snapshot vanishes, the bytes are alive and
+                    // unchanged at the new path, and because the content is
+                    // unchanged `MessageRepository.Upsert` never calls
+                    // ReplaceAttachments — so the 'failed' stamps survive the
+                    // rescan. The default candidate predicate is
+                    // `extraction_status IS NULL`, so nothing ever revisits
+                    // them: those attachments are unsearchable forever, with
+                    // no error and nothing left to re-trigger extraction.
+                    //
+                    // Re-attempting a genuinely-deleted message on every run
+                    // costs one File.Exists, which is the right trade against
+                    // that. The run summary reports the count so a bounded run
+                    // can't read as full coverage.
+                    err.WriteLine($"  msg {msg.Id}: source not found ({maildirFile}); skipping (left for a later run).");
+                    messagesSkippedMissing++;
                     continue;
                 }
 
@@ -269,6 +285,15 @@ internal static class ExtractAttachmentsCommand
                 $"Skipped {messagesSkippedStale:N0} message(s) that changed underneath the backfill (the indexer re-parsed them mid-run); " +
                 "re-run to pick them up.");
         }
+        if (messagesSkippedMissing > 0)
+        {
+            // Same reasoning as the stale count: these attachments are still
+            // unextracted, so the run did NOT cover them. Usually an mbsync
+            // rename the indexer hasn't reconciled yet — re-run after a scan.
+            @out.WriteLine(
+                $"Skipped {messagesSkippedMissing:N0} message(s) whose Maildir source was missing (most likely renamed and not yet " +
+                "rescanned); their attachments are untouched and will be picked up by a later run.");
+        }
         if (statusCounts.Count > 0)
         {
             @out.WriteLine("Status breakdown:");
@@ -306,10 +331,25 @@ internal static class ExtractAttachmentsCommand
         newTextCount = 0;
         attachmentsThisMessage = 0;
 
-        // Open and parse outside the transaction — MimeKit can be slow on
-        // large attachments and we don't want to hold a write lock across
-        // PdfPig parsing. Per-message transaction is opened later for the
-        // batch of UPDATEs.
+        // ---- Stage 1: parse. No database connection is open. ----
+        //
+        // Three stages, and the split is load-bearing rather than tidy.
+        // Microsoft.Data.Sqlite's BeginTransaction() issues BEGIN IMMEDIATE
+        // (its `deferred` parameter defaults to false), so the writer lock is
+        // taken at BEGIN and held until commit — see the ScanContext note in
+        // MaildirScanner. This method used to open its transaction and then
+        // call AttachmentTextExtractor.Extract inside the loop, which runs the
+        // MIME decode plus PdfPig / OpenXml parse. A single large or
+        // expansion-heavy document therefore held SQLite's one writer slot for
+        // seconds to minutes, blocking the indexer, the embedder, the OCR
+        // write-back, every maintenance command, and MCP startup migration.
+        // The old comment claimed this wasn't happening; only MimeMessage.Load
+        // was actually outside.
+        //
+        // So: parse (1) and extract (3) touch no connection at all, and the
+        // transaction (4) exists only to revalidate and apply already-computed
+        // results. Keep it that way — if you need a new value from the
+        // database mid-extraction, fetch it in stage 2, not inside the tx.
         MimeMessage mime;
         try
         {
@@ -332,51 +372,73 @@ internal static class ExtractAttachmentsCommand
             .Select((entity, index) => (PartIndex: index, Entity: entity))
             .ToDictionary(x => x.PartIndex, x => x.Entity);
 
+        // ---- Stage 2: read the candidate set. Read-only, no write lock. ----
+        // The snapshot check here is a cheap early-out so we don't spend a
+        // PDF parse on a message we already know moved; stage 4 re-checks it
+        // under the writer lock, which is the authoritative one.
+        List<AttachmentCandidate> candidates;
+        using (var readConn = connections.Open())
+        {
+            if (!MessageSnapshotUnchanged(readConn, null, msg)) return MessageOutcome.Stale;
+            candidates = LoadCandidatesForMessage(readConn, null, msg.Id, reextractKind);
+        }
+        if (candidates.Count == 0)
+        {
+            // Race or dup-call: another extract pass already stamped these.
+            return MessageOutcome.Processed;
+        }
+
+        // ---- Stage 3: extract. Still no connection open. ----
+        var extracted = new List<(AttachmentCandidate Att, string Status, string? Text)>(candidates.Count);
+        foreach (var att in candidates)
+        {
+            if (!entitiesByPart.TryGetValue(att.PartIndex, out var entity))
+            {
+                // The DB row claims a partIndex that doesn't exist in the
+                // current MIME parse. Could happen if the .eml was rewritten
+                // post-ingest. Stamp 'failed' so we don't retry forever.
+                extracted.Add((att, AttachmentTextExtractor.StatusFailed, null));
+            }
+            else
+            {
+                var result = extractor.Extract(entity, att.FileName, att.ContentType, att.SizeBytes);
+                extracted.Add((att, result.Status, result.Text));
+            }
+        }
+
+        // ---- Stage 4: revalidate and apply, atomically. ----
         using var conn = connections.Open();
         using var tx = conn.BeginTransaction();
 
-        // Now that we hold the write lock, re-check that the parse above still
-        // describes this row (see MessageSnapshotUnchanged). Everything below
-        // maps extraction results onto rows by part_index, so a message the
-        // indexer re-parsed underneath us would get the OLD file's text stamped
-        // onto its CURRENT attachments — searchable under content it doesn't
-        // contain, with the status stamp ensuring no later run revisits it.
-        // Leaving it untouched is always safe: an unstamped candidate is simply
-        // picked up by the next run, against a fresh parse.
+        // Re-check that the parse above still describes this row (see
+        // MessageSnapshotUnchanged). Everything below maps extraction results
+        // onto rows by part_index, so a message the indexer re-parsed
+        // underneath us would get the OLD file's text stamped onto its CURRENT
+        // attachments — searchable under content it doesn't contain, with the
+        // status stamp ensuring no later run revisits it. Leaving it untouched
+        // is always safe: an unstamped candidate is simply picked up by the
+        // next run, against a fresh parse.
         if (!MessageSnapshotUnchanged(conn, tx, msg))
         {
             tx.Rollback();
             return MessageOutcome.Stale;
         }
 
-        var candidates = LoadCandidatesForMessage(conn, tx, msg.Id, reextractKind);
-        if (candidates.Count == 0)
-        {
-            // Race or dup-call: another extract pass already stamped these.
-            tx.Commit();
-            return MessageOutcome.Processed;
-        }
+        // Re-read the candidate set inside the transaction and apply only to
+        // rows that are still the ones we extracted for. An unchanged message
+        // snapshot already implies ReplaceAttachments hasn't run (it fires only
+        // on insert or content change), so this is belt-and-braces — but it
+        // makes the guarantee local instead of resting on reasoning about
+        // every other writer, and it correctly drops rows a concurrent pass
+        // stamped while we were parsing.
+        var live = LoadCandidatesForMessage(conn, tx, msg.Id, reextractKind)
+            .ToDictionary(c => c.Id, c => c.PartIndex);
 
         var stamp = DateTimeOffset.UtcNow.ToString("O");
-        foreach (var att in candidates)
+        foreach (var (att, status, text) in extracted)
         {
-            string status;
-            string? text;
-
-            if (!entitiesByPart.TryGetValue(att.PartIndex, out var entity))
-            {
-                // The DB row claims a partIndex that doesn't exist in the
-                // current MIME parse. Could happen if the .eml was rewritten
-                // post-ingest. Stamp 'failed' so we don't retry forever.
-                status = AttachmentTextExtractor.StatusFailed;
-                text = null;
-            }
-            else
-            {
-                var result = extractor.Extract(entity, att.FileName, att.ContentType, att.SizeBytes);
-                status = result.Status;
-                text = result.Text;
-            }
+            if (!live.TryGetValue(att.Id, out var livePartIndex) || livePartIndex != att.PartIndex)
+                continue;
 
             UpdateAttachment(conn, tx, att.Id, text, stamp, status);
             attachmentsThisMessage++;
@@ -473,7 +535,7 @@ internal static class ExtractAttachmentsCommand
             && string.Equals(reader.GetString(2), snapshot.MaildirFilename, StringComparison.Ordinal);
     }
 
-    private static List<AttachmentCandidate> LoadCandidatesForMessage(SqliteConnection conn, SqliteTransaction tx, long messageId, string? reextractKind)
+    private static List<AttachmentCandidate> LoadCandidatesForMessage(SqliteConnection conn, SqliteTransaction? tx, long messageId, string? reextractKind)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
@@ -514,26 +576,6 @@ internal static class ExtractAttachmentsCommand
         cmd.Parameters.AddWithValue("$at", stamp);
         cmd.Parameters.AddWithValue("$status", status);
         cmd.Parameters.AddWithValue("$id", attachmentId);
-        cmd.ExecuteNonQuery();
-    }
-
-    /// <summary>
-    /// Stamp every NULL-status attachment on a message as 'failed', for the
-    /// case where the source .eml is missing. Lets the next run skip the
-    /// message instead of re-attempting against a still-missing file.
-    /// </summary>
-    private static void StampMessageAttachmentsFailed(ConnectionFactory connections, long messageId)
-    {
-        using var conn = connections.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE attachments
-            SET extraction_status = $status, extracted_at = $at
-            WHERE message_id = $mid AND extraction_status IS NULL;
-            """;
-        cmd.Parameters.AddWithValue("$status", AttachmentTextExtractor.StatusFailed);
-        cmd.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
-        cmd.Parameters.AddWithValue("$mid", messageId);
         cmd.ExecuteNonQuery();
     }
 
