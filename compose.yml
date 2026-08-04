@@ -6,11 +6,26 @@
 #                                                     ▼
 #   cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder ──► ${OLLAMA_BASE_URL}
 #
-# Setup on the Docker host:
+# Setup on the Docker host. Run the whole block in one shell — the leading
+# `umask 077` is what keeps the three credential-bearing files owner-only.
+# Under the usual 0022 umask these commands produce 0644 .env / 0644 password
+# / 0755 secrets, i.e. the Fastmail app password (direct mailbox access) and
+# the Cloudflare tunnel token (join or impersonate the tunnel) readable by
+# every local account on the host:
+#   0. umask 077
 #   1. cp .env.example .env                          # Ollama URL, tunnel token
 #   2. cp ops/mbsyncrc.container.example mbsyncrc    # fill in User / Patterns
-#   3. mkdir -p secrets
+#   3. install -d -m 700 secrets
 #      printf '%s' '<fastmail app password>' > secrets/fastmail_password
+#      # Verify. The umask covers all three (cp applies it to the new file
+#      # rather than copying .env.example's mode), but check anyway: the umask
+#      # only applies to the shell that set it, and these steps get run
+#      # piecemeal across sessions more often than not.
+#      chmod 600 .env mbsyncrc secrets/fastmail_password
+#      ls -l .env mbsyncrc secrets/fastmail_password   # expect -rw-------
+#      # If any of these were ever group/other-readable on a host with other
+#      # local accounts, rotate BOTH credentials — the files are the only
+#      # thing standing between a local reader and the mailbox.
 #   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot — see
 #      "Migrating the archive from the Mac" in docs/deploy-docker.md
 #      (or set MAILVEC_REQUIRE_SEEDED_DB=0 in .env for a from-scratch build).
@@ -27,6 +42,29 @@
 # Operator commands: docker compose exec mcp mailvec status|doctor|eval ...
 
 name: mailvec
+
+# Bound the Docker-side copy of every service's logs.
+#
+# Serilog already caps its own rolling files (10MB x 14 retained, see
+# SerilogSetup), but the console sink is deliberately live in containers, so
+# the SAME lines also land in the Docker daemon's logging backend — which no
+# Mailvec setting governs. Without this block the json-file default applies and
+# that copy is UNBOUNDED: it grows until it fills the host disk, and it retains
+# indefinitely. Both matter here because the lines carry mailbox PII (Maildir
+# paths, Message-IDs, parser exception text derived from hostile mail, and with
+# Mcp:LogToolCalls on, queries, senders, subjects and filenames), and because
+# malformed mail is retried, so a single bad attachment can generate entries
+# every cycle forever.
+#
+# 10m x 5 mirrors the Serilog shape at shorter retention on purpose: this copy
+# is a duplicate of an already-retained file, so it exists for `docker logs`
+# during an incident, not as the archive of record. Bounding it is also what
+# stops PII outliving the rolling files' own 14-file window.
+x-logging: &mailvec-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 x-mailvec: &mailvec-common
   # Two deploy modes (docs/deploy-docker.md "Prebuilt images"):
@@ -54,6 +92,7 @@ x-mailvec: &mailvec-common
   # owns it), but a SEEDED archive.sqlite copied in by a non-root host user
   # becomes unreadable — chown it to 0:0. See the seeding steps in
   # docs/deploy-docker.md.
+  logging: *mailvec-logging
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   # The cgroup pids controller counts TASKS, so every .NET thread counts, not
@@ -225,6 +264,7 @@ services:
     mem_limit: 2g
 
   mbsync:
+    logging: *mailvec-logging
     image: ${MAILVEC_MBSYNC_IMAGE:-mailvec-mbsync:local}
     build:
       context: .
@@ -261,6 +301,7 @@ services:
       - fastmail_password
 
   cloudflared:
+    logging: *mailvec-logging
     # LIVE in the homelab: this is the only ingress to mcp, fronted by a
     # Cloudflare Access self-hosted app (Managed OAuth). Bring the stack up
     # with `docker compose --profile tunnel up -d` — a plain `up -d` SKIPS
