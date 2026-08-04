@@ -216,11 +216,35 @@ Two consequences worth knowing rather than rediscovering:
   pages, and search degrades from ~0.3 s to ~2-3 s permanently, silently. See
   [search-performance.md](contributing/search-performance.md).
 
-**Not yet done**: non-root UIDs, read-only root filesystems, network
-segmentation, and a read-only database connection for mcp (which today needs
-write access because `SchemaMigrator.EnsureUpToDate` runs at startup). So a
-compromised process still runs as root inside its container and can still write
-`./data` — these controls narrow the exit routes, they don't remove them.
+**Also applied**: `read_only: true` + a `noexec,nosuid` `/tmp` tmpfs on the
+three .NET services, so a compromised parser cannot persist anything outside
+the explicit mounts — no binary dropped into `/app`, no modified config
+surviving a restart. And the **indexer runs on an `internal: true` network**:
+it reads the Maildir and writes SQLite, never calls Ollama, and still parses
+attacker-supplied attachments, so it is the one service that can be given no
+route out at all.
+
+**Not yet done**, and each for a stated reason rather than oversight:
+
+- **Non-root UIDs.** The blocker is validation, not code: Docker Desktop on
+  macOS virtualises bind-mount ownership (a uid-1000 process writes happily to
+  a mount the container reports as `0:0`), so the exact failure this would hit
+  on the Linux VM — root-owned `./data` unwritable by a non-root service — is
+  invisible on a developer machine. Needs a Linux host to verify, plus a
+  migration plan for the existing root-owned `./data` and `./logs`.
+- **Egress restriction for embedder and mcp.** Both must reach Ollama over the
+  LAN, so `internal: true` is not available to them; limiting them to that one
+  host needs firewall or network-policy rules on the Docker host, which Compose
+  cannot express. The indexer above is the part that *was* expressible.
+- **`read_only` on mbsync and cloudflared.** mbsync starts, loops and beats
+  under an immutable rootfs, but that observation never ran a real IMAP sync —
+  the path that writes `.mbsyncstate` — so it stays off until tested against
+  live credentials. cloudflared is untested and runs no Mailvec code.
+- **A read-only database connection for mcp**, which today needs write access
+  because `SchemaMigrator.EnsureUpToDate` runs at startup.
+
+So a compromised process still runs as root inside its container and can still
+write `./data` — these controls narrow the exit routes, they don't remove them.
 
 ## Executable supply chain
 
