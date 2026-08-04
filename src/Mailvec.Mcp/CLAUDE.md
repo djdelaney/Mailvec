@@ -29,6 +29,33 @@ control keyed off the snapshot silently reads its default and looks fine: this
 is exactly how origin auth first shipped inert, with all 17 of its negative
 tests passing because nothing was enforcing anything.
 
+## Access signing keys come from `/cdn-cgi/access/certs`, and are fetched at boot
+
+**Cloudflare Access publishes no OIDC discovery document at the team domain.**
+`JwtBearerOptions.MetadataAddress` is therefore unusable, and v0.2.0 shipped
+pointed at `/cdn-cgi/access/.well-known/openid-configuration`, which 404s on
+every team domain. `AccessCertsRetriever` fetches the bare JWKS instead, wrapped
+in a `ConfigurationManager` for its caching/refresh/backoff. **Don't "simplify"
+this back to `MetadataAddress` or `Authority`** — both assume discovery.
+
+The failure mode is why this is here rather than in a comment alone. A metadata
+failure is caught by `JsonWebTokenHandler`, logged as IDX10261 to
+`IdentityModelEventSource` — an `EventSource`, so **Serilog never sees it** — and
+validation proceeds with zero keys. The origin logs "validation ENABLED", passes
+its healthcheck (loopback is exempt), and 401s every real caller with IDX10500,
+having logged no retrieval attempt at all. Every negative test passed
+throughout: a server that authenticates nobody refuses bad tokens perfectly.
+
+Two consequences to preserve. `AccessAuth.VerifySigningKeysAsync` fetches at
+startup, logs the URL and the `kid`s, and **refuses to boot on no keys** — don't
+make it lazy or best-effort. And `AccessCertsRetriever` **throws** on an empty
+key set rather than returning a keyless configuration, so a bad refresh keeps
+the last good keys instead of silently degrading to authenticating nobody.
+
+`AccessAuthTests` injects keys via `StaticConfigurationManager` and so cannot
+see any of this; `AccessSigningKeyTests` is the file that covers retrieval.
+Reverting the URL fails four of its tests — that's the alarm.
+
 `mcpOpts` exists only for wiring that genuinely cannot wait for `Build()` —
 Kestrel's listen address, and the `HostGuard` allowlist baked into a middleware
 closure. `EnableTrayEndpoints`, `TrayExposureGuard`, and everything under

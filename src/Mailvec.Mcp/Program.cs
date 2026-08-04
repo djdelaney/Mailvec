@@ -258,11 +258,18 @@ static async Task RunHttp(string[] args)
         healthEndpoint.RequireAuthorization(AccessAuth.OwnerPolicy);
         upEndpoint.RequireAuthorization(AccessAuth.MonitoringPolicy);
 
-        app.Services.GetRequiredService<ILoggerFactory>()
-            .CreateLogger("Mailvec.Mcp.Startup")
-            .LogInformation(
-                "Cloudflare Access assertion validation ENABLED (issuer {Issuer}, loopback bypass {Loopback}).",
-                resolvedMcpOpts.Access.TeamDomain, resolvedMcpOpts.Access.AllowLoopback ? "on" : "off");
+        var accessLogger = app.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Mailvec.Mcp.Startup");
+        accessLogger.LogInformation(
+            "Cloudflare Access assertion validation ENABLED (issuer {Issuer}, loopback bypass {Loopback}).",
+            resolvedMcpOpts.Access.TeamDomain, resolvedMcpOpts.Access.AllowLoopback ? "on" : "off");
+
+        // Fetch the signing keys NOW rather than lazily on the first request.
+        // The line above says "ENABLED"; without this, that is all an operator
+        // gets before a server that authenticates nobody starts 401ing every
+        // real caller while its loopback healthcheck stays green. See
+        // AccessAuth.VerifySigningKeysAsync.
+        await AccessAuth.VerifySigningKeysAsync(app.Services, accessLogger).ConfigureAwait(false);
     }
     else if (!TrayExposureGuard.IsLoopbackBind(mcpOpts.BindAddress))
     {

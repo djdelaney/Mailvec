@@ -42,10 +42,11 @@ public sealed class AccessOptions
 
     /// <summary>
     /// The Zero Trust team domain, e.g. <c>https://myteam.cloudflareaccess.com</c>.
-    /// Serves as both the expected <c>iss</c> and the base for OIDC discovery
-    /// (<c>/cdn-cgi/access/.well-known/openid-configuration</c>), from which the
-    /// signing keys are fetched and refreshed. Must be absolute and HTTPS —
-    /// key material fetched over plaintext would defeat the whole exercise.
+    /// Serves as both the expected <c>iss</c> and the base for <see cref="CertsAddress"/>,
+    /// from which the signing keys are fetched and refreshed. Must be absolute
+    /// and HTTPS — key material fetched over plaintext would defeat the whole
+    /// exercise. Give it WITH the scheme: it is compared verbatim against the
+    /// <c>iss</c> claim, which Cloudflare mints as the full <c>https://</c> URL.
     /// </summary>
     public string TeamDomain { get; set; } = "";
 
@@ -84,9 +85,24 @@ public sealed class AccessOptions
     /// </summary>
     public bool AllowLoopback { get; set; } = true;
 
-    /// <summary>OIDC discovery document for <see cref="TeamDomain"/>.</summary>
-    public string MetadataAddress =>
-        $"{TeamDomain.TrimEnd('/')}/cdn-cgi/access/.well-known/openid-configuration";
+    /// <summary>
+    /// The JWKS Cloudflare Access signs its assertions with — a bare key set,
+    /// NOT an OIDC discovery document.
+    ///
+    /// <para><b>Cloudflare Access publishes no discovery document at the team
+    /// domain.</b> This used to derive
+    /// <c>/cdn-cgi/access/.well-known/openid-configuration</c> and hand it to
+    /// <c>JwtBearerOptions.MetadataAddress</c>, which 404s on every team domain
+    /// — verified against four independent ones. The 404 was invisible:
+    /// <c>JsonWebTokenHandler</c> catches a metadata-retrieval failure, logs
+    /// IDX10261 to <c>IdentityModelEventSource</c> (an EventSource, so Serilog
+    /// never sees it) and proceeds with zero keys, so every request 401'd with
+    /// IDX10500 while the origin logged no retrieval attempt at all and the
+    /// container stayed green. Fetch the key set directly instead — see
+    /// <c>AccessCertsRetriever</c>, and <c>AccessAuth.VerifySigningKeysAsync</c>
+    /// for the boot-time fetch that makes a future breakage loud.</para>
+    /// </summary>
+    public string CertsAddress => $"{TeamDomain.TrimEnd('/')}/cdn-cgi/access/certs";
 
     /// <summary>
     /// Every audience the server will accept a token for, in any position.

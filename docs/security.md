@@ -350,8 +350,11 @@ how likely they are to matter:
    whole mailbox to the LAN with no OAuth. With validation on, those callers
    carry no assertion and get a 401.
 
-**What is validated**: signature (against the team's JWKS, fetched and refreshed
-by the framework's `ConfigurationManager`), issuer, `exp`/`nbf` with a 60s skew,
+**What is validated**: signature (against the team's JWKS at
+`<team-domain>/cdn-cgi/access/certs`, fetched at startup and refreshed by
+`ConfigurationManager` — **not** via OIDC discovery, which Cloudflare Access
+does not publish at the team domain; see `AccessCertsRetriever`), issuer,
+`exp`/`nbf` with a 60s skew,
 and audience — coarse at the scheme (is this token for this deployment) then
 narrow per endpoint (for *this* endpoint). Unsigned `alg:none`, wrong-issuer,
 wrong-audience, expired, and malformed assertions all 401; a valid assertion for
@@ -375,9 +378,20 @@ install has no Cloudflare in front of it, no team domain and no assertion on any
 request — defaulting this on would break that shape at startup. Fail-closed here
 means *once configured, never silently degrade to allowing*: an `Enabled` with a
 missing team domain or audience **refuses to start** (naming the missing knob),
-a monitoring audience equal to the owner's refuses to start, and an unreachable
-JWKS endpoint yields 401s rather than falling back to open. A non-loopback bind
-with validation off logs a warning every boot rather than being quietly fine.
+a monitoring audience equal to the owner's refuses to start, and a JWKS endpoint
+that yields no keys **refuses to start** rather than falling back to open. A
+non-loopback bind with validation off logs a warning every boot rather than
+being quietly fine.
+
+**Why the key fetch is at startup and not lazy.** v0.2.0 pointed the handler at
+an OIDC discovery document Cloudflare does not serve. The 404 was swallowed by
+`JsonWebTokenHandler` into an EventSource no logger reads, so the origin logged
+"validation ENABLED", passed its healthcheck (loopback is exempt), and 401'd
+every real caller with `IDX10500` while logging no retrieval attempt at all.
+Every negative test passed throughout — a server that authenticates nobody
+refuses bad tokens perfectly. The boot-time fetch logs the resolved JWKS URL and
+the `kid`s it obtained, so the same class of breakage is a boot that never
+happened instead of a green container serving nothing.
 
 Enable procedure and the verification curls:
 [remote-access-cloudflare.md](remote-access-cloudflare.md).
