@@ -39,7 +39,7 @@ public sealed class GetAttachmentTextTool(
     internal const int DefaultMaxChars = 50_000;
     internal const int MaxMaxChars = 200_000;
 
-    [McpServerTool(Name = "get_attachment_text")]
+    [McpServerTool(Name = "get_attachment_text", ReadOnly = true, OpenWorld = false)]
     [Description(
         "Return the extracted plain text of a single attachment (PDF, DOCX, etc.) that Mailvec indexed at ingest time. " +
         "Identify the email with either `id` (the internal SQLite id) OR `messageId` (the RFC Message-ID), and the " +
@@ -51,7 +51,8 @@ public sealed class GetAttachmentTextTool(
         "(get_email's per-attachment `extractedTextChars` tells you the total up front). " +
         "Text extraction loses layout, so tables and multi-column content may be flattened; if the attachment is a " +
         "scanned / image-only PDF (no embedded text), encrypted, too large, or an unsupported type, this tool says so " +
-        "and suggests the fallback: get_attachment_page_image for PDF pages, view_attachment for images and small text files.")]
+        "and suggests the fallback: get_attachment_page_image for PDF pages, view_attachment for images and small text files.\n\n" +
+        ToolText.UntrustedContent)]
     public CallToolResult GetAttachmentText(
         [Description("0-based index from the Attachments list returned by get_email.")]
         int partIndex,

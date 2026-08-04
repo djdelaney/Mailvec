@@ -83,6 +83,42 @@ services:
       Mcp__AllowedHosts__0: ${MCP_PUBLIC_HOSTNAME:-}
       Mcp__AllowedHosts__1: mcp
       Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
+      # Origin validation of the Cloudflare Access assertion — the second layer
+      # under the tunnel. Unset (the default) leaves the origin trusting anything
+      # that can reach mcp:3333, exactly as this stack has always run, with a
+      # warning logged at boot. Set the three MCP_ACCESS_* values in .env to turn
+      # it on; the server refuses to start on a half configuration rather than
+      # looking protected while admitting every app in the account.
+      #
+      # Note this is what makes the /up split enforceable HERE rather than only
+      # in Cloudflare's control plane: a token minted for the path-scoped
+      # monitoring app fails the audience check on / and /health even if the
+      # Access policy is wrong. See docs/security.md and
+      # docs/remote-access-cloudflare.md "Origin validation".
+      Mcp__Access__Enabled: ${MCP_ACCESS_ENABLED:-false}
+      Mcp__Access__TeamDomain: ${MCP_ACCESS_TEAM_DOMAIN:-}
+      Mcp__Access__Audience: ${MCP_ACCESS_AUDIENCE:-}
+      Mcp__Access__MonitoringAudience: ${MCP_ACCESS_MONITORING_AUDIENCE:-}
+      # The compose healthcheck below curls 127.0.0.1:3333/health from inside
+      # this container and has no assertion to present, as does `mailvec doctor`
+      # under `docker compose exec`. Leave the loopback exemption on or the
+      # container marks itself permanently unhealthy the moment validation is
+      # enabled. cloudflared and every sibling arrive over the compose network
+      # with a real address, so they are never exempt.
+      Mcp__Access__AllowLoopback: ${MCP_ACCESS_ALLOW_LOOPBACK:-true}
+      # /health is loopback-only (404 to anything else). It discloses the
+      # archive path, corpus counts, the embedding model identity and the
+      # internal Ollama LAN address; /up exists so nothing external needs any of
+      # that. Every real consumer is already loopback — the healthcheck below,
+      # `mailvec doctor` under `docker compose exec`, the tray on local installs
+      # — and Uptime Kuma polls /up, so this costs nothing here.
+      #
+      # Stated explicitly rather than left to the code default for the same
+      # reason as Mcp__EnableTrayEndpoints above: an operator reading compose.yml
+      # should be able to see the deployment's posture without going and reading
+      # McpOptions. Set false only if something genuinely off-box needs the
+      # detailed body — and prefer pointing it at /up instead.
+      Mcp__RestrictHealthToLoopback: ${MCP_RESTRICT_HEALTH_TO_LOOPBACK:-true}
       # The mail-bearing /tray/* surface, off. Three independent things now say
       # so, and each covers a gap the others don't:
       #   1. this line — the deployment's own stated posture, visible to anyone
@@ -216,7 +252,20 @@ services:
     # Requires TUNNEL_TOKEN and MCP_PUBLIC_HOSTNAME in .env.
     # See docs/remote-access-cloudflare.md.
     profiles: ["tunnel"]
-    image: cloudflare/cloudflared:latest
+    # Pinned by DIGEST, not by tag. This container holds the tunnel credential
+    # and is the only thing that can reach the unauthenticated mcp origin, so
+    # "whatever :latest resolves to today" is the one image in this stack where
+    # an unreviewed change matters most — and a moving tag means every `compose
+    # pull` can silently swap it. The version tag is here for humans; the digest
+    # is what Docker actually resolves.
+    #
+    # Digest bumps arrive as Dependabot PRs (see .github/dependabot.yml) so the
+    # pin gets refreshed on a schedule rather than rotting into a stale build
+    # with known CVEs — which is the failure mode digest pinning invites if
+    # nothing is bumping it. To bump by hand, resolve the digest and confirm it
+    # matches the version tag you intend:
+    #   docker buildx imagetools inspect cloudflare/cloudflared:<version>
+    image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
     restart: unless-stopped
     # This container holds the tunnel credential and can reach the
     # unauthenticated mcp origin, which makes it the highest-value target in the

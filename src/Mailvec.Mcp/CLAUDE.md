@@ -6,14 +6,35 @@ Loaded when working under `src/Mailvec.Mcp/`. Same policy as the root file: only
 
 Once Phase 5 starts (Gemini CLI / Codex CLI / ChatGPT desktop pointing at the same server), tool names, parameter names, and response field names become a **contract** — renames break every client at once. Treat this list as locked unless you're deliberately bumping the version:
 
-- **Tool names**: `search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`. Set via `[McpServerTool(Name = "...")]` on each tool class — don't let the SDK infer from the C# method name. Registration goes through `ToolSurface.Resolve` (`Mcp:DisabledTools` removes named tools per deployment — the internet-fronted container drops the two native-parser tools per `docs/security.md`); a new tool class must be added to `ToolSurface.All` or a test fails, and an unknown name in the option fails startup rather than silently leaving a tool exposed.
+- **Tool names**: `search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`. Set via `[McpServerTool(Name = "...")]` on each tool class — don't let the SDK infer from the C# method name. Registration goes through `ToolSurface.Resolve` (`Mcp:DisabledTools` removes named tools per deployment); a new tool class must be added to `ToolSurface.All` or a test fails, and an unknown name in the option fails startup rather than silently leaving a tool exposed. **`Mcp:DisabledTools` is empty in the live container** — the `Mcp__DisabledTools__*` lines in `compose.yml` are staged but commented, a deliberate call whose conditions are written out in `docs/security.md` ("Untrusted PDFs and images…"). Read that acceptance before assuming either state; earlier revisions of this file asserted the tools were dropped, which the compose file never did.
+- **Tool annotations**: every tool carries `ReadOnly = true, OpenWorld = false`. Clients gate confirmation prompts on these, so a tool that gains a write path while keeping `ReadOnly = true` actively tells clients to stop asking. Pinned by `McpSurfaceTests.Every_tool_is_annotated_read_only_and_closed_world` — a failure there when adding a mutating tool is the alarm, not a stale assertion.
+- **Hostile-content framing is part of the surface, not commentary.** `ServerInstructions` and every mail-bearing tool description classify returned mail as untrusted sender-controlled data (`ToolText.UntrustedContent`). It's free text, so only a test notices an edit that drops it — `McpSurfaceTests` asserts the distinctive terms at the wire. Rationale and what it is *not* worth: `docs/security.md` "Hostile mail content". **Those tests prove the text reaches the client, not that a model obeys it** — the efficacy is unmeasured, and closing that is tracked in `docs/future-ideas.md` "Adversarial testing of the prompt-injection framing". Don't read a green suite as evidence the framing works.
 - **Parameter names** that travel back as references between tools: `partIndex` (returned by `get_email`, consumed by `view_attachment` / `get_attachment_text` / `get_attachment_page_image`); `id` and `messageId` everywhere; `mode` ∈ {`hybrid`, `keyword`, `semantic`}; `fromContains` / `fromExact` / `dateFrom` / `dateTo` / `folder` / `hasAttachments` / `attachmentType` filter set; `maxChars` / `offset` (get_attachment_text paging, sized from `get_email`'s per-attachment `extractedTextChars`).
-- **Response field names** that clients narrate to users: `matchedAttachment.{partIndex,fileName}`, `archiveStats.{totalMessages,oldestDate,latestDate}`, `appliedFilters.*`, `webmailUrl`, `webmailLink` (the pre-escaped `[subject](url)` Markdown link, built by `WebmailLinkBuilder.MarkdownLink` and rendered verbatim by clients — the tools construct it server-side precisely so the untrusted subject can't be assembled into a spoofed link by the model; the tool descriptions tell clients to render it, not to build their own).
+- **Response field names** that clients narrate to users: `matchedAttachment.{partIndex,fileName}`, `archiveStats.{totalMessages,oldestDate,latestDate}`, `appliedFilters.*`, `get_thread`'s `{count,totalCount,truncated}` + per-entry `bodyTruncated` (**`count` means "entries in `messages`" and always equals its length** — the full thread size is `totalCount`; don't "fix" `count` to mean the thread size, that silently contradicts the array clients iterate), `webmailUrl`, `webmailLink` (the pre-escaped `[subject](url)` Markdown link, built by `WebmailLinkBuilder.MarkdownLink` and rendered verbatim by clients — the tools construct it server-side precisely so the untrusted subject can't be assembled into a spoofed link by the model; the tool descriptions tell clients to render it, not to build their own).
 - **Server identity**: `serverInfo.name = "mailvec"` (lowercase, the protocol identifier — Phase 5 client configs key off it). Bump `serverInfo.version` whenever you ship a tool-surface change so a client log line of "I'm talking to mailvec 0.1.16" tells you which build you're seeing.
 
 **The contract above is enforced at the wire, in [`McpSurfaceTests`](../../tests/Mailvec.Mcp.Tests/McpSurfaceTests.cs)** — the only tests that go through JSON-RPC rather than calling a tool class directly. That distinction is the whole point: the direct tool tests pass C#-named arguments, so an IDE rename refactors production and tests in lockstep, leaves the suite green, and breaks every client. Verified by mutation — renaming the `fromContains` parameter, or changing only a response field's wire name via `[JsonPropertyName]`, leaves every other test in the repo passing and fails only there. When you add a tool or a parameter, extend `LockedInputSchemas`; the `required` set is asserted exactly, because promoting a parameter to required breaks every call that omits it. Don't "fix" a failure there by editing the table to match the code — that's the alarm, not the bug.
 
 Because this file only loads when you're working under `src/Mailvec.Mcp/`, `tests/Mailvec.Mcp.Tests/McpSurfaceTests.cs` is the backstop for anyone who edits the tests alone — a failure there is the contract breaking, not a stale table.
+
+## Security controls read RESOLVED options, never the builder-time snapshot
+
+`RunHttp` holds two `McpOptions`: the builder-time `mcpOpts` (a
+`Configuration.Get<McpOptions>()` taken before `Build()`) and `resolvedMcpOpts`
+(from `IOptions<McpOptions>` after it). **Every security decision must read the
+resolved one.** The builder-time snapshot misses anything the options pipeline
+applies later — which in tests is `WebApplicationFactory`'s config, and in
+production is the shape of override an operator reaches for under pressure. A
+control keyed off the snapshot silently reads its default and looks fine: this
+is exactly how origin auth first shipped inert, with all 17 of its negative
+tests passing because nothing was enforcing anything.
+
+`mcpOpts` exists only for wiring that genuinely cannot wait for `Build()` —
+Kestrel's listen address, and the `HostGuard` allowlist baked into a middleware
+closure. `EnableTrayEndpoints`, `TrayExposureGuard`, and everything under
+`Mcp:Access` read `resolvedMcpOpts`. `AccessAuth` goes further and reads
+`IOptions<McpOptions>` at *request* time, so even its registration carries no
+snapshot.
 
 ## MCP transport quirks
 

@@ -2,7 +2,9 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Mailvec.Mcp.Tests;
 
@@ -129,6 +131,65 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         // Don't pin status="degraded" only — leaves room for the test to remain
         // useful if a future fixture stubs Ollama for an "ok" path.
         doc.RootElement.TryGetProperty("status", out _).ShouldBeTrue();
+    }
+
+    // ---------- /health is loopback-only ----------
+    //
+    // /health discloses the archive's filesystem path, corpus counts, the
+    // embedding model identity and the internal Ollama LAN address. /up exists
+    // so that no external caller ever needs any of it, which only holds if
+    // /health isn't reachable from off-box. Every documented consumer is
+    // already loopback (compose healthcheck, `mailvec doctor`, the tray), so
+    // the restriction costs nothing — see McpOptions.RestrictHealthToLoopback.
+
+    [Fact]
+    public async Task Health_is_not_served_to_an_off_box_caller()
+    {
+        using var factory = new RemoteCallerFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health");
+
+        // 404, not 403: a refusal confirms the endpoint is there, and no caller
+        // benefits from learning that. Same shape the tunnel gives /tray/.
+        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Health_refusal_discloses_nothing_from_the_report()
+    {
+        // The disclosure is the whole point of the restriction, so pin that a
+        // refusal body can't carry it — a future "helpful" 404 payload naming
+        // the archive path would defeat the control while still being a 404.
+        using var factory = new RemoteCallerFactory();
+        using var client = factory.CreateClient();
+
+        var body = await (await client.GetAsync("/health")).Content.ReadAsStringAsync();
+
+        body.ShouldNotContain("baseUrl");
+        body.ShouldNotContain(".sqlite");
+        body.ShouldNotContain("messagesTotal");
+    }
+
+    [Fact]
+    public async Task Up_is_still_served_to_an_off_box_caller()
+    {
+        // The other half: /up is the endpoint that IS meant to be polled from
+        // outside, so restricting /health must not have caught it. Uptime Kuma
+        // polling through the tunnel depends on this.
+        using var factory = new RemoteCallerFactory();
+        using var client = factory.CreateClient();
+
+        (await client.GetAsync("/up")).StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
+    }
+
+    [Fact]
+    public async Task Health_restriction_can_be_turned_off()
+    {
+        using var factory = new RemoteCallerFactory(restrictHealth: false);
+        using var client = factory.CreateClient();
+
+        (await client.GetAsync("/health")).StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
     }
 
     [Fact]
@@ -515,6 +576,15 @@ public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
                 ["Fastmail:AccountId"] = "",
             });
         });
+
+        // Declare this factory to be the loopback caller it stands in for — the
+        // launchd/local install, where the tray, `mailvec doctor` and the
+        // compose healthcheck all reach /health over 127.0.0.1. TestServer
+        // leaves RemoteIpAddress null, and the /health loopback restriction
+        // fails closed on null, so without this every /health test here 404s.
+        // See RemoteIpStartupFilter.
+        builder.ConfigureTestServices(services =>
+            services.AddSingleton<IStartupFilter>(new RemoteIpStartupFilter(IPAddress.Loopback)));
     }
 
     public new void Dispose()
@@ -531,6 +601,52 @@ public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearPool(conn);
         }
+        try { Directory.Delete(_tempDir, recursive: true); }
+        catch (IOException) { /* best effort */ }
+    }
+}
+
+/// <summary>
+/// The same server seen by a caller that is NOT on loopback — what cloudflared
+/// and every sibling container look like, since they connect to
+/// <c>mcp:3333</c> over the compose network rather than to 127.0.0.1. This is
+/// the vantage point the <c>/health</c> restriction exists for; from
+/// <see cref="MailvecMcpFactory"/>'s loopback vantage point it is invisible.
+/// </summary>
+public sealed class RemoteCallerFactory : WebApplicationFactory<Program>
+{
+    private readonly string _tempDir;
+    private readonly bool _restrictHealth;
+
+    public RemoteCallerFactory(bool restrictHealth = true)
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), "mailvec-remote-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDir);
+        _restrictHealth = restrictHealth;
+    }
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Archive:DatabasePath"] = Path.Combine(_tempDir, "archive.sqlite"),
+                ["Ollama:BaseUrl"] = "http://127.0.0.1:1",
+                ["Ollama:RequestTimeoutSeconds"] = "5",
+                ["Fastmail:AccountId"] = "",
+                ["Mcp:RestrictHealthToLoopback"] = _restrictHealth ? "true" : "false",
+            }));
+
+        // A compose-network-looking address. The specific value doesn't matter;
+        // "not loopback" does.
+        builder.ConfigureTestServices(services =>
+            services.AddSingleton<IStartupFilter>(new RemoteIpStartupFilter(IPAddress.Parse("172.18.0.7"))));
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (!disposing) return;
         try { Directory.Delete(_tempDir, recursive: true); }
         catch (IOException) { /* best effort */ }
     }

@@ -56,7 +56,10 @@ public class GetAttachmentPageImageToolTests : IDisposable
         var ingest = Options.Create(new IngestOptions { MaildirRoot = _maildirRoot });
         var mcp = Options.Create(new McpOptions { AttachmentDownloadDir = _downloadDir });
         return new GetAttachmentPageImageTool(
-            new MessageRepository(db.Connections), new AttachmentExtractor(ingest, mcp), Helpers.NoopLogger());
+            new MessageRepository(db.Connections),
+            new AttachmentExtractor(ingest, mcp),
+            NullLogger<GetAttachmentPageImageTool>.Instance,
+            Helpers.NoopLogger());
     }
 
     // ---------- native-load smoke test ----------
@@ -118,6 +121,33 @@ public class GetAttachmentPageImageToolTests : IDisposable
 
         var ex = Should.Throw<McpException>(() => Build(db).GetAttachmentPageImage(partIndex: 0, page: 2, id: id));
         ex.Message.ShouldContain("out of range");
+    }
+
+    [Fact]
+    public void Corrupt_pdf_fails_with_a_stable_message_that_leaks_no_parser_detail()
+    {
+        // The bytes reaching PDFium are chosen by whoever sent the mail, and
+        // PDFium's exception text is derived from them. Echoing it back hands a
+        // remote caller a readout of how their input landed inside the native
+        // parser — an oracle for probing it — while telling a legitimate caller
+        // nothing they can act on, since the advice ("try get_attachment_text")
+        // is the same either way. The detail belongs in the log, not the
+        // response.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        // Right magic bytes, structurally garbage: gets past IsPdf and dies
+        // inside the renderer, which is the path under test.
+        var garbage = "%PDF-1.7\nnot actually a pdf\n"u8.ToArray();
+        long id = StagePdf(repo, garbage, id: "corrupt@x", file: "corrupt.eml");
+
+        var ex = Should.Throw<McpException>(() => Build(db).GetAttachmentPageImage(partIndex: 0, id: id));
+
+        ex.Message.ShouldContain("Could not render");
+        ex.Message.ShouldContain("encrypted or corrupt");
+        // Nothing from the native layer. These are the words PDFium/PDFtoImage
+        // exception text actually surfaces; none should reach a client.
+        foreach (var leak in new[] { "PDFium", "PdfiumViewer", "Exception", "at Mailvec.", "0x8" })
+            ex.Message.ShouldNotContain(leak, Case.Insensitive);
     }
 
     [Fact]
