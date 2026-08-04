@@ -155,6 +155,12 @@ services:
       # Access policy is wrong. See docs/security.md and
       # docs/remote-access-cloudflare.md "Origin validation".
       Mcp__Access__Enabled: ${MCP_ACCESS_ENABLED:-false}
+      # WITH the scheme — https://<team>.cloudflareaccess.com, no trailing path.
+      # Used verbatim as the expected `iss` AND as the base for the signing-key
+      # fetch at <team-domain>/cdn-cgi/access/certs, which now happens at
+      # startup: if the keys can't be retrieved the container refuses to boot
+      # rather than starting green and 401ing every request. Check `docker
+      # compose logs mcp` for the "signing keys loaded from ..." line.
       Mcp__Access__TeamDomain: ${MCP_ACCESS_TEAM_DOMAIN:-}
       Mcp__Access__Audience: ${MCP_ACCESS_AUDIENCE:-}
       Mcp__Access__MonitoringAudience: ${MCP_ACCESS_MONITORING_AUDIENCE:-}

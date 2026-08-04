@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Mailvec.Mcp;
@@ -68,14 +70,20 @@ internal static class AccessAuth
                     return;
                 }
 
-                // Discovery + JWKS. The framework's ConfigurationManager owns
-                // the caching and the bounded refresh (and the negative-result
-                // backoff that stops a dead endpoint becoming a request-rate
-                // hammer) — which is the actual reason to take the dependency
-                // rather than parse the JWKS by hand.
-                options.MetadataAddress = access.MetadataAddress;
-                // Key material over plaintext would defeat the exercise. Also
-                // enforced ahead of here by AccessOptions.Validate().
+                // JWKS. Built here rather than left to the framework's
+                // MetadataAddress path, which assumes an OIDC discovery document
+                // Cloudflare Access does not publish — see AccessCertsRetriever.
+                // ConfigurationManager still owns the caching, the bounded
+                // refresh, and the negative-result backoff that stops a dead
+                // endpoint becoming a request-rate hammer.
+                options.ConfigurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                    access.CertsAddress,
+                    new AccessCertsRetriever(access.TeamDomain.TrimEnd('/')),
+                    // Key material over plaintext would defeat the exercise. The
+                    // scheme is also enforced ahead of here by
+                    // AccessOptions.Validate(); this is the belt to that braces,
+                    // and the one that binds the actual fetch.
+                    new HttpDocumentRetriever { RequireHttps = true });
                 options.RequireHttpsMetadata = true;
                 // Keep claim names as they arrive ("aud", "email", "sub")
                 // instead of the legacy SOAP-ish URIs the inbound mapper
@@ -135,6 +143,72 @@ internal static class AccessAuth
         });
 
         services.AddSingleton<IAuthorizationHandler, AccessAudienceHandler>();
+    }
+
+    /// <summary>
+    /// Fetch the signing keys once at startup, log the URL and the key ids, and
+    /// refuse to start if no keys come back.
+    ///
+    /// <para><b>This exists because the alternative is a silent total outage.</b>
+    /// Key retrieval is otherwise lazy — first request — and a failure there is
+    /// swallowed by <c>JsonWebTokenHandler</c> into an EventSource no logger is
+    /// listening to, leaving a server that logs "validation ENABLED", passes its
+    /// healthcheck (loopback is exempt), and 401s every real caller. That is
+    /// exactly how the broken discovery URL shipped: every negative test passed,
+    /// because a server that authenticates nobody refuses bad tokens perfectly.
+    /// A boot that names the knob is worth a boot that can fail.</para>
+    ///
+    /// <para>Bounded, because a hang at startup is worse than a refusal: an
+    /// unreachable Cloudflare must not wedge the container short of its restart
+    /// policy. Same reasoning as <c>OllamaClient.PingAsync</c>'s linked CTS.</para>
+    /// </summary>
+    internal static async Task VerifySigningKeysAsync(
+        IServiceProvider services, ILogger logger, CancellationToken ct = default)
+    {
+        var access = services.GetRequiredService<IOptions<McpOptions>>().Value.Access;
+        var options = services.GetRequiredService<IOptionsMonitor<JwtBearerOptions>>()
+            .Get(JwtBearerDefaults.AuthenticationScheme);
+
+        if (options.ConfigurationManager is not BaseConfigurationManager manager)
+        {
+            throw new InvalidOperationException(
+                "Mcp:Access:Enabled is true but no signing-key source is configured. "
+                + "Every request would fail signature validation with IDX10500.");
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+
+        BaseConfiguration configuration;
+        try
+        {
+            configuration = await manager.GetBaseConfigurationAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Wrapped, not rethrown bare: the inner IDX208xx names a URL and a
+            // status code but not the setting that produced them.
+            throw new InvalidOperationException(
+                $"Could not retrieve the Cloudflare Access signing keys from '{access.CertsAddress}'. "
+                + "Mailvec would authenticate nobody, so it will not start. Check Mcp:Access:TeamDomain "
+                + "and that the origin can reach your Zero Trust team domain.", ex);
+        }
+
+        // Belt to the retriever's own emptiness check — that one guards the
+        // refresh path, this one guards a ConfigurationManager swapped in from
+        // elsewhere. Neither is redundant with the other.
+        if (configuration.SigningKeys.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Cloudflare Access returned no signing keys from '{access.CertsAddress}'. "
+                + "Every assertion would fail signature validation, so Mailvec will not start.");
+        }
+
+        logger.LogInformation(
+            "Cloudflare Access signing keys loaded from {CertsUrl}: {KeyCount} key(s), kid {KeyIds}.",
+            access.CertsAddress,
+            configuration.SigningKeys.Count,
+            string.Join(", ", configuration.SigningKeys.Select(k => k.KeyId)));
     }
 }
 
