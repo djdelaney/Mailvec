@@ -306,25 +306,40 @@ internal static class EvalCommand
 
     // Internal for tests: the diff output is the signal the whole
     // "re-baseline before ranking changes" discipline reads.
-    internal static void PrintBaselineDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming)
+    /// <summary>
+    /// Renders the baseline comparison. <paramref name="out"/> defaults to
+    /// <see cref="Console.Out"/>; tests pass their own writer.
+    /// </summary>
+    /// <remarks>
+    /// The writer is a parameter rather than something the caller swaps in via
+    /// Console.SetOut because that redirect is PROCESS-global while xUnit runs
+    /// test classes in parallel: a concurrent test writing to Console lands in
+    /// the capture buffer, and one that saves/restores Console.Out itself can
+    /// restore it mid-render, so part of the output goes to the real stdout.
+    /// That produced a genuine CI failure — a captured diff missing its own
+    /// prefix, which read as the per-query rows being mis-ordered — that passed
+    /// on re-run and never reproduced locally.
+    /// </remarks>
+    internal static void PrintBaselineDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming, TextWriter? @out = null)
     {
-        Console.WriteLine();
-        Console.WriteLine($"Baseline ({baseline.RanAt:u}, top-{baseline.TopK}):");
-        Console.WriteLine();
-        Console.WriteLine($"  {"Mode",-10}  {"ΔNDCG",8}  {"ΔMRR",8}  {"ΔRecall",8}");
-        Console.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
+        var w = @out ?? Console.Out;
+        w.WriteLine();
+        w.WriteLine($"Baseline ({baseline.RanAt:u}, top-{baseline.TopK}):");
+        w.WriteLine();
+        w.WriteLine($"  {"Mode",-10}  {"ΔNDCG",8}  {"ΔMRR",8}  {"ΔRecall",8}");
+        w.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
         foreach (var cur in current)
         {
             var prior = baseline.Runs.FirstOrDefault(r => r.Mode == cur.Mode);
             if (prior is null)
             {
-                Console.WriteLine($"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  {"(new)",8}  {"(new)",8}  {"(new)",8}");
+                w.WriteLine($"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  {"(new)",8}  {"(new)",8}  {"(new)",8}");
                 continue;
             }
             var dN = cur.MeanNdcg - prior.Aggregate.Ndcg;
             var dM = cur.MeanMrr - prior.Aggregate.Mrr;
             var dR = cur.MeanRecall - prior.Aggregate.Recall;
-            Console.WriteLine(
+            w.WriteLine(
                 $"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  " +
                 $"{Colors.DeltaSigned(dN, $"{Delta(dN),8}")}  " +
                 $"{Colors.DeltaSigned(dM, $"{Delta(dM),8}")}  " +
@@ -343,21 +358,21 @@ internal static class EvalCommand
             });
             if (anyComparable)
             {
-                Console.WriteLine();
-                Console.WriteLine($"  {"Mode",-10}  {"Δmean",8}  {"Δp50",8}  {"Δp95",8}  {Colors.Dim("(ms; − = faster)")}");
-                Console.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
+                w.WriteLine();
+                w.WriteLine($"  {"Mode",-10}  {"Δmean",8}  {"Δp50",8}  {"Δp95",8}  {Colors.Dim("(ms; − = faster)")}");
+                w.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
                 foreach (var cur in current)
                 {
                     var prior = baseline.Runs.FirstOrDefault(r => r.Mode == cur.Mode);
                     if (prior is null || prior.Aggregate.P95LatencyMs == 0)
                     {
-                        Console.WriteLine($"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  {"(no data)",8}  {"(no data)",8}  {"(no data)",8}");
+                        w.WriteLine($"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  {"(no data)",8}  {"(no data)",8}  {"(no data)",8}");
                         continue;
                     }
                     var dMean = cur.MeanLatencyMs - prior.Aggregate.MeanLatencyMs;
                     var dP50 = cur.P50LatencyMs - prior.Aggregate.P50LatencyMs;
                     var dP95 = cur.P95LatencyMs - prior.Aggregate.P95LatencyMs;
-                    Console.WriteLine(
+                    w.WriteLine(
                         $"  {Colors.ModeHeader($"{ModeName(cur.Mode),-10}")}  " +
                         $"{Colors.DeltaLatency(dMean, $"{DeltaMs(dMean),8}")}  " +
                         $"{Colors.DeltaLatency(dP50, $"{DeltaMs(dP50),8}")}  " +
@@ -366,13 +381,13 @@ internal static class EvalCommand
             }
             else
             {
-                Console.WriteLine();
-                Console.WriteLine(Colors.Dim("  (baseline has no latency data — re-run baseline with current build to enable Δlatency.)"));
+                w.WriteLine();
+                w.WriteLine(Colors.Dim("  (baseline has no latency data — re-run baseline with current build to enable Δlatency.)"));
             }
         }
 
         // Per-query NDCG flips, sorted by largest absolute change.
-        Console.WriteLine();
+        w.WriteLine();
         foreach (var cur in current)
         {
             var prior = baseline.Runs.FirstOrDefault(r => r.Mode == cur.Mode);
@@ -386,12 +401,12 @@ internal static class EvalCommand
                 .Take(10)
                 .ToList();
             if (rows.Count == 0) continue;
-            Console.WriteLine($"  {Colors.Bold(Colors.ModeHeader(ModeName(cur.Mode)))}: top per-query NDCG changes (|Δ| ≥ 0.05)");
+            w.WriteLine($"  {Colors.Bold(Colors.ModeHeader(ModeName(cur.Mode)))}: top per-query NDCG changes (|Δ| ≥ 0.05)");
             foreach (var (q, prev) in rows)
             {
                 var d = q.Ndcg - prev!.Ndcg;
                 var arrow = d > 0 ? Colors.Up() : Colors.Down();
-                Console.WriteLine(
+                w.WriteLine(
                     $"    {arrow} {Colors.QueryId($"{q.Id,-8}")}  " +
                     $"{Colors.Score(prev.Ndcg, $"{prev.Ndcg,5:F3}")} → {Colors.Score(q.Ndcg, $"{q.Ndcg,5:F3}")}  " +
                     $"({Colors.DeltaSigned(d, d.ToString("+0.000;-0.000", CultureInfo.InvariantCulture))})");
