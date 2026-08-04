@@ -140,6 +140,56 @@ public class AttachmentOcrServiceTests : IDisposable
     private string? TextOf(long messageId) => _messages.GetById(messageId)!.Attachments[0].ExtractedText;
 
     [Fact]
+    public async Task Unreadable_candidates_do_not_starve_a_valid_one_behind_them()
+    {
+        // Both candidate queries are `ORDER BY a.id LIMIT batchSize`, and a
+        // failed byte read skips the candidate WITHOUT changing its status —
+        // so an unreadable row keeps its place at the front of the id order and
+        // is re-selected every cycle. At the default batch of 4, four of them
+        // fill the entire result set and everything behind is starved forever,
+        // silently: no error, no status change, nothing to re-trigger.
+        //
+        // A MISSING file eventually self-heals (the indexer soft-deletes the
+        // message and the query filters deleted_at IS NULL). A file that EXISTS
+        // and won't read never leaves the set on its own, which is the case
+        // this pins. Deleting the .eml is simply the cheapest way to make the
+        // read throw; the fix is the backoff, which applies to both.
+        long[] blockers =
+        [
+            StageNoTextPdf("block1@x", MinimalPdf(1)),
+            StageNoTextPdf("block2@x", MinimalPdf(1)),
+            StageNoTextPdf("block3@x", MinimalPdf(1)),
+            StageNoTextPdf("block4@x", MinimalPdf(1)),
+        ];
+        // Staged last, so it sorts behind all four blockers by attachment id.
+        long valid = StageNoTextPdf("zvalid@x", MinimalPdf(1));
+
+        foreach (var id in new[] { "block1@x", "block2@x", "block3@x", "block4@x" })
+            File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", id + ".eml"));
+
+        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED"));
+
+        // Batch of 4 — exactly filled by the four unreadable rows on cycle 1.
+        var firstCycle = await svc.ProcessBatchAsync(4, default);
+        firstCycle.ShouldBe(0, "all four selected candidates are unreadable");
+        TextOf(valid).ShouldBeNull("the valid candidate is behind them in id order");
+
+        // Cycle 2: the blockers are backing off, so the valid row is reachable.
+        var secondCycle = await svc.ProcessBatchAsync(4, default);
+
+        secondCycle.ShouldBe(1);
+        TextOf(valid).ShouldBe("RECOVERED");
+        StatusOf(valid).ShouldBe(AttachmentTextExtractor.StatusOcr);
+
+        // And the unreadable rows are left alone — not retired to 'failed'.
+        // "Unreadable right now" says nothing about the document, and stamping
+        // a whole volume's worth of attachments during an I/O outage would be
+        // far worse than a slow queue.
+        foreach (var id in blockers)
+            StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
+    [Fact]
     public async Task Ocrs_a_scanned_pdf_and_writes_text_with_ocr_status()
     {
         long id = StageNoTextPdf("scan@x", MinimalPdf(1));

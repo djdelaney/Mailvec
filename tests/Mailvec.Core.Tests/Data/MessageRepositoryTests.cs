@@ -672,7 +672,7 @@ public class MessageRepositoryTests
         var repo = new SyncStateRepository(db.Connections);
         using var conn = db.Connections.Open();
         using var tx = conn.BeginTransaction();
-        repo.Upsert(conn, tx, maildirFullPath, messageId, DateTimeOffset.UtcNow, contentHash, "INBOX");
+        repo.Upsert(conn, tx, maildirFullPath, messageId, DateTimeOffset.UtcNow, contentHash, "INBOX", fileMtimeUtc: null, fileSize: null);
         tx.Commit();
     }
 

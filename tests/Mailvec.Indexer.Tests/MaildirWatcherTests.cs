@@ -254,6 +254,61 @@ public class MaildirWatcherTests : IDisposable
         watcher.Pulses.Completion.IsCompleted.ShouldBeTrue();
     }
 
+    [Fact]
+    public async Task An_error_raised_while_enabling_does_not_publish_a_dead_watcher()
+    {
+        // Events used to be enabled BEFORE the instance was published to _fsw.
+        // An Error in that window found _fsw still null, so
+        // HandleWatcherError's identity check ("don't tear down a replacement")
+        // returned without retiring anything — and then Start() published the
+        // already-dead watcher. Every later Start() saw non-null and no-op'd,
+        // so the timer-tick retry that exists to recover could never fire.
+        // Event-driven ingestion stayed silently dead until the process
+        // restarted, with only the periodic scan covering.
+        using var watcher = BuildWatcher(_root, debounceMs: 100);
+
+        watcher.EnableWatcher = w =>
+        {
+            w.EnableRaisingEvents = true;
+            // The error arrives at the instant events start flowing — the
+            // window this test exists for.
+            watcher.HandleWatcherError(w, new IOException("watch root vanished during enable"));
+        };
+
+        Should.NotThrow(() => watcher.Start());
+
+        // The retry must actually build a NEW watcher — proving the failed one
+        // was not left published.
+        FileSystemWatcher? second = null;
+        watcher.CreateWatcher = root => second = new FileSystemWatcher(root);
+        watcher.EnableWatcher = w => w.EnableRaisingEvents = true;
+        Should.NotThrow(() => watcher.Start());
+
+        second.ShouldNotBeNull("the dead watcher was published, so Start() no-op'd forever");
+        File.WriteAllText(Path.Combine(_root, "INBOX", "cur", "enable.host:2,S"), "Subject: hi\n\nbody");
+        (await WaitForPulseAsync(watcher, TimeSpan.FromSeconds(5))).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Start_after_Dispose_does_not_resurrect_a_watcher()
+    {
+        // Dispose took no lock and recorded no disposed state, so a timer-driven
+        // Start() racing shutdown could create a watcher after teardown had
+        // begun — leaking it, along with its inotify watches, for the remaining
+        // life of the process.
+        var watcher = BuildWatcher(_root, debounceMs: 100);
+        var created = 0;
+        watcher.CreateWatcher = root => { created++; return new FileSystemWatcher(root); };
+
+        watcher.Start();
+        created.ShouldBe(1);
+
+        watcher.Dispose();
+        Should.NotThrow(() => watcher.Start());
+
+        created.ShouldBe(1, "Start() after Dispose() must not build another watcher");
+    }
+
     private static MaildirWatcher BuildWatcher(string root, int debounceMs = 200)
     {
         var ingest = Options.Create(new IngestOptions { MaildirRoot = root });

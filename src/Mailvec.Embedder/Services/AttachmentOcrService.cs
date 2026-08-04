@@ -91,6 +91,75 @@ public sealed class AttachmentOcrService(
     private static OcrFailureKey KeyOf(OcrCandidate c) =>
         new(c.AttachmentId, c.MessageId, c.PartIndex, c.ContentHash);
 
+    // Documents whose BYTES could not be read, and the cycle number at which
+    // they become selectable again.
+    //
+    // Both candidate queries are `ORDER BY a.id LIMIT batchSize`, and a read
+    // failure skips the candidate WITHOUT changing its status — so an
+    // unreadable row stays at the front of the id order and is re-selected
+    // every cycle. With the default batch of 4, four such rows fill the entire
+    // result set and every valid candidate behind them is starved forever.
+    //
+    // A missing file self-heals (the indexer soft-deletes it and both queries
+    // filter `m.deleted_at IS NULL`), but a file that EXISTS and won't read —
+    // permissions, a bad sector, a half-mounted volume — never leaves the set
+    // on its own. Backing those off keeps the queue moving without giving up
+    // on them: unlike the vision path there is no retirement to 'failed' here,
+    // because "unreadable right now" is not evidence about the document, and
+    // stamping a whole volume's worth of attachments failed during an I/O
+    // outage would be far worse than a slow queue.
+    private readonly Dictionary<OcrFailureKey, long> _readBackoffUntilCycle = new();
+    private long _cycle;
+
+    // Pass invocations to skip a document after a failed read. Counted in
+    // invocations rather than polls because the PDF and image passes each
+    // advance the clock — so at the default 30 s poll this is ~2.5 minutes with
+    // one pass enabled and ~75 s with both. Either way: long enough to clear
+    // the batch, short enough that a genuinely transient blip costs almost
+    // nothing.
+    private const int ReadBackoffCycles = 5;
+
+    // Ceiling on the over-fetch below, so a pathological archive can't turn one
+    // poll into an unbounded scan.
+    private const int MaxOverFetch = 256;
+
+    /// <summary>
+    /// How many rows to ask for so that, after dropping the ones still backing
+    /// off, a full batch of actually-attemptable candidates remains.
+    /// </summary>
+    private int FetchSize(int batchSize) =>
+        Math.Min(MaxOverFetch, batchSize + _readBackoffUntilCycle.Count);
+
+    /// <summary>
+    /// Drops candidates that are still backing off from a read failure, then
+    /// truncates to the caller's batch size.
+    /// </summary>
+    private List<OcrCandidate> SelectAttemptable(IReadOnlyList<OcrCandidate> candidates, int batchSize)
+    {
+        var attemptable = new List<OcrCandidate>(Math.Min(batchSize, candidates.Count));
+        foreach (var c in candidates)
+        {
+            if (attemptable.Count == batchSize) break;
+            if (_readBackoffUntilCycle.TryGetValue(KeyOf(c), out var until) && until > _cycle) continue;
+            attemptable.Add(c);
+        }
+        return attemptable;
+    }
+
+    /// <summary>
+    /// Records a failed byte read so this document steps aside for a while.
+    /// </summary>
+    private void RecordReadFailure(OcrCandidate candidate)
+    {
+        var key = KeyOf(candidate);
+        if (_readBackoffUntilCycle.Count >= MaxTrackedFailures && !_readBackoffUntilCycle.ContainsKey(key))
+        {
+            var evict = _readBackoffUntilCycle.Keys.First();
+            _readBackoffUntilCycle.Remove(evict);
+        }
+        _readBackoffUntilCycle[key] = _cycle + ReadBackoffCycles;
+    }
+
     // Tiny blank JPEG for the zero-success health probe (see
     // ProbeVisionHealthAsync). Internal so tests can tell probe calls apart
     // from document calls by reference.
@@ -215,7 +284,12 @@ public sealed class AttachmentOcrService(
     /// </summary>
     public async Task<int> ProcessBatchAsync(int batchSize, CancellationToken ct)
     {
-        var candidates = messages.EnumerateAttachmentsNeedingOcr(Math.Max(1, batchSize));
+        batchSize = Math.Max(1, batchSize);
+        _cycle++;
+        // Over-fetch, then drop anything still backing off from a failed read,
+        // so unreadable rows at the front of the id order can't fill the batch
+        // and starve everything behind them. See _readBackoffUntilCycle.
+        var candidates = SelectAttemptable(messages.EnumerateAttachmentsNeedingOcr(FetchSize(batchSize)), batchSize);
         if (candidates.Count == 0) return 0;
 
         if (!await vision.IsModelAvailableAsync(ct).ConfigureAwait(false))
@@ -243,7 +317,12 @@ public sealed class AttachmentOcrService(
             catch (FileNotFoundException)
             {
                 // Stale DB row — the .eml moved/deleted. Leave 'no_text'; an
-                // indexer rescan reconciles. Not a permanent OCR failure.
+                // indexer rescan reconciles (it soft-deletes the message, and
+                // the candidate query filters deleted_at IS NULL). Not a
+                // permanent OCR failure. Back it off anyway: reconciliation is
+                // a whole scan away, and until then this row would otherwise
+                // hold its place at the front of every batch.
+                RecordReadFailure(c);
                 logger.LogInformation(
                     "OCR skip: Maildir file missing for attachment {AttachmentId} (message {MessageId}).",
                     c.AttachmentId, c.MessageId);
@@ -251,10 +330,13 @@ public sealed class AttachmentOcrService(
             }
             catch (IOException ex)
             {
-                // Possibly transient (permissions blip, volume hiccup). Skip
-                // this candidate and retry next cycle; the rest of the batch
-                // still runs, so a persistent case costs one read per cycle
-                // without blocking the queue.
+                // Possibly transient (permissions blip, volume hiccup), and
+                // possibly not — a bad sector reads the same way forever. Back
+                // off instead of retrying every cycle: the file EXISTS, so
+                // nothing else ever removes it from the candidate set, and at
+                // the default batch of 4 a handful of these would otherwise
+                // starve every valid candidate behind them indefinitely.
+                RecordReadFailure(c);
                 logger.LogWarning(ex,
                     "OCR skip: could not read Maildir file for attachment {AttachmentId}; will retry next cycle.",
                     c.AttachmentId);
@@ -377,7 +459,14 @@ public sealed class AttachmentOcrService(
     /// </summary>
     public async Task<int> ProcessImageBatchAsync(int batchSize, CancellationToken ct)
     {
-        var candidates = messages.EnumerateImagesNeedingOcr(Math.Max(1, batchSize), _opts.ImageOcrMinBytes);
+        batchSize = Math.Max(1, batchSize);
+        // Advance here too, not just in the PDF pass: the two passes are gated
+        // independently (Embedder:OcrEnabled / Embedder:ImageOcrEnabled), so a
+        // deployment running images-only would otherwise never move the clock
+        // and every read backoff would become permanent.
+        _cycle++;
+        var candidates = SelectAttemptable(
+            messages.EnumerateImagesNeedingOcr(FetchSize(batchSize), _opts.ImageOcrMinBytes), batchSize);
         if (candidates.Count == 0) return 0;
 
         if (!await vision.IsModelAvailableAsync(ct).ConfigureAwait(false))

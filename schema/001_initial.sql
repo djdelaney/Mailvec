@@ -171,7 +171,14 @@ CREATE TABLE sync_state (
     message_id        TEXT,
     last_seen_at      TEXT NOT NULL,
     content_hash      TEXT,
-    folder            TEXT
+    folder            TEXT,
+    -- The file identity observed at the last ingest, compared for EQUALITY by
+    -- the scanner's fast path. last_seen_at is when we looked, not what we
+    -- saw — comparing mtime against it lets a restored file (rsync -a, cp -p,
+    -- tar -x all preserve mtime) keep new bytes behind an old timestamp and be
+    -- skipped on every future scan. See migration 009.
+    file_mtime_utc    TEXT,
+    file_size         INTEGER
 );
 
 -- Serves both the folder-membership EXISTS probe in SearchFilterSql and the
@@ -188,6 +195,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '8'),
+    ('schema_version',       '9'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');

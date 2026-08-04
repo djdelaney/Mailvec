@@ -1,0 +1,31 @@
+-- v9: sync_state.file_mtime_utc / file_size — the observed file identity the
+-- scanner's fast path compares against.
+--
+-- The fast path used to skip re-parsing when
+--     File.GetLastWriteTimeUtc(file) <= sync_state.last_seen_at
+-- and last_seen_at is the time MAILVEC OBSERVED the file, not the metadata it
+-- observed. Any file whose content changes while its mtime stays at or below
+-- the previous scan's start time therefore satisfies the comparison forever:
+-- each scan re-stamps last_seen_at to a later value without hashing or
+-- parsing, so the skip is self-perpetuating and body text, attachment state,
+-- FTS rows and vectors stay pinned to content that is no longer on disk.
+--
+-- mbsync never produces that shape (it writes new files with current times,
+-- and flag changes are renames, which land at a fresh path and miss the
+-- path-keyed lookup entirely). Restores do: `rsync -a`, `cp -p`, `tar -x`,
+-- and backup tools all preserve mtime by design, which is exactly the
+-- situation where the archive most needs to notice that bytes moved.
+--
+-- Storing what was observed turns an inequality against a moving clock into
+-- equality against a recorded fact, at identical cost — the scanner already
+-- stats the file for its mtime, and size comes from the same stat.
+--
+-- Backfill is deliberately NOT done here: it would mean stat-ing every file in
+-- the Maildir at migration time, inside the migration transaction. The columns
+-- start NULL and MaildirScanner treats NULL as "no recorded identity", falling
+-- back to the legacy comparison for that one file while recording the identity
+-- it just observed. One full scan after upgrade and every live row is
+-- populated, with no mass re-parse of the corpus.
+ALTER TABLE sync_state ADD COLUMN file_mtime_utc TEXT;
+
+ALTER TABLE sync_state ADD COLUMN file_size INTEGER;

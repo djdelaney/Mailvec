@@ -43,9 +43,49 @@ public sealed class MaildirWatcher : IDisposable
     // Linux inotify exhaustion (IOException out of FSW creation).
     internal Func<string, FileSystemWatcher> CreateWatcher { get; set; } = root => new FileSystemWatcher(root);
 
+    // Second test seam, for the same reason as CreateWatcher: FileSystemWatcher
+    // gives no way to make enabling fail or to raise an Error at exactly that
+    // moment, and that instant is the one window where publication order used
+    // to matter. EnableRaisingEvents is not virtual, so a subclass cannot
+    // intercept it — hence a hook rather than a fake type.
+    internal Action<FileSystemWatcher> EnableWatcher { get; set; } = w => w.EnableRaisingEvents = true;
+
+    /// <summary>
+    /// Bring the watcher up, if it isn't already. Idempotent, and safe to call
+    /// concurrently with itself or with <see cref="Dispose"/>.
+    /// </summary>
+    /// <remarks>
+    /// The whole create → publish → enable sequence runs under
+    /// <c>_gate</c>. Previously the null check took the lock and then released
+    /// it before constructing, which left three races on the service's spine:
+    ///
+    /// <list type="bullet">
+    /// <item>two callers (timer tick + startup) could both pass the check and
+    /// each build a watcher — one won <c>_fsw</c>, the other leaked, still
+    /// raising events into the same channel and holding its inotify
+    /// watches;</item>
+    /// <item>events were enabled BEFORE the instance was published, so an
+    /// <c>Error</c> raised in that window found <c>_fsw</c> still null,
+    /// failed <c>HandleWatcherError</c>'s identity check, and returned without
+    /// retiring anything — then the dead watcher was published, and every
+    /// later <c>Start()</c> saw non-null and no-op'd. Event-driven ingestion
+    /// stayed silently dead until the process restarted;</item>
+    /// <item>a timer-driven restart could interleave with <c>Dispose</c> and
+    /// resurrect a watcher after shutdown had begun.</item>
+    /// </list>
+    ///
+    /// <para>Publishing before enabling is safe — every handler is attached
+    /// before either — and it is what makes the error path able to find the
+    /// instance it needs to retire.</para>
+    ///
+    /// <para>Holding the lock across <c>EnableRaisingEvents</c> means an event
+    /// can arrive on a threadpool thread while we still hold it.
+    /// <c>OnEvent</c> takes <c>_gate</c> too, so that thread simply waits out
+    /// the remaining microseconds of setup; it cannot deadlock, because
+    /// nothing under the gate blocks on event delivery.</para>
+    /// </remarks>
     public void Start()
     {
-        lock (_gate) { if (_fsw is not null) return; }
         if (!Directory.Exists(_root))
         {
             _logger.LogWarning("MaildirWatcher: {Path} does not exist; watcher disabled.", _root);
@@ -55,21 +95,34 @@ public sealed class MaildirWatcher : IDisposable
         FileSystemWatcher? fsw = null;
         try
         {
-            fsw = CreateWatcher(_root);
-            fsw.IncludeSubdirectories = true;
-            fsw.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName;
-            fsw.Created  += (_, e) => OnEvent(e.FullPath);
-            fsw.Deleted  += (_, e) => OnEvent(e.FullPath);
-            fsw.Renamed  += (_, e) => OnEvent(e.FullPath);
-            fsw.Changed  += (_, e) => OnEvent(e.FullPath);
-            fsw.Error    += (sender, e) => HandleWatcherError((FileSystemWatcher)sender!, e.GetException());
-            // Enable LAST, with every handler already attached, so an event
-            // landing in the setup window can't be silently dropped.
-            fsw.EnableRaisingEvents = true;
-            lock (_gate) { _fsw = fsw; }
+            lock (_gate)
+            {
+                if (_disposed || _fsw is not null) return;
+
+                fsw = CreateWatcher(_root);
+                fsw.IncludeSubdirectories = true;
+                fsw.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName;
+                fsw.Created  += (_, e) => OnEvent(e.FullPath);
+                fsw.Deleted  += (_, e) => OnEvent(e.FullPath);
+                fsw.Renamed  += (_, e) => OnEvent(e.FullPath);
+                fsw.Changed  += (_, e) => OnEvent(e.FullPath);
+                fsw.Error    += (sender, e) => HandleWatcherError((FileSystemWatcher)sender!, e.GetException());
+                // Publish BEFORE enabling, so an Error raised the instant
+                // events start flowing finds this instance in _fsw and can
+                // retire it. Handlers are already attached either way, so
+                // nothing is dropped.
+                _fsw = fsw;
+                EnableWatcher(fsw);
+            }
         }
         catch (Exception ex)
         {
+            // Enable failed after publication — clear it, or every later
+            // Start() sees a non-null dead watcher and no-ops forever.
+            lock (_gate)
+            {
+                if (ReferenceEquals(_fsw, fsw)) _fsw = null;
+            }
             // Watcher creation/enable can throw — most plausibly IOException
             // on Linux when inotify max_user_watches / max_user_instances is
             // exhausted (IncludeSubdirectories registers a watch per Maildir
@@ -120,6 +173,7 @@ public sealed class MaildirWatcher : IDisposable
     }
 
     private DateTimeOffset _lastEventAt;
+    private bool _disposed;
     private readonly Lock _gate = new();
     private Task? _debounceTask;
 
@@ -194,7 +248,16 @@ public sealed class MaildirWatcher : IDisposable
 
     public void Dispose()
     {
-        _fsw?.Dispose();
+        FileSystemWatcher? toDispose;
+        lock (_gate)
+        {
+            // _disposed latches under the same gate Start() checks, so a timer
+            // tick racing shutdown cannot bring a watcher back up behind us.
+            _disposed = true;
+            toDispose = _fsw;
+            _fsw = null;
+        }
+        toDispose?.Dispose();
         _pulses.Writer.TryComplete();
     }
 }

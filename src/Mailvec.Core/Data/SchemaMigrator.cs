@@ -38,7 +38,12 @@ public sealed class SchemaMigrator(
     // v8 adds sync_state.folder (+ index): folder membership for search, so a
     // message living in several folders (Gmail All Mail + labels) is findable
     // under each. No backfill — the scanner populates it on its next full scan.
-    public const int LatestSchemaVersion = 8;
+    // v9 adds sync_state.file_mtime_utc / file_size, the observed file identity
+    // the scanner's fast path compares for equality — replacing an inequality
+    // against scan time that let a content change with a preserved/backdated
+    // mtime be skipped on every future scan. No backfill; NULL means "no
+    // recorded identity" and the scanner records it on the next pass.
+    public const int LatestSchemaVersion = 9;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying
