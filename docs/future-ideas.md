@@ -64,6 +64,38 @@ Un-defer when either a mutating tool lands (raising what a successful injection
 gets you from "read your own mail" to "act on your behalf"), or Mailvec is
 routinely used alongside connectors that can send or post.
 
+## A remote story for `/tray/*`
+
+Referenced from [security.md](security.md#up-health-and-tray), which says
+re-enabling the tray surface on an internet-fronted deployment "means building
+that first". This is that entry.
+
+Today `/tray/*` is loopback-only by construction, and `TrayExposureGuard`
+**refuses to start** the server if it is enabled on anything but a loopback-only
+deployment — a deliberate hard failure, not a default, because the symptom of
+getting it wrong is full message bodies, the folder map, full-text search and
+the IMAP account served with no authentication, plus mutating POSTs. That guard
+is the invariant; nothing below weakens it.
+
+What a remote tray would actually need, and why none of it is free:
+
+- **Per-request authentication at the origin.** The surface has none of its own.
+  `Mcp:Access` now exists and could plausibly cover `/tray/*` with an audience
+  policy — that's the cheapest path and didn't exist when the guard was written.
+- **A credential the tray can hold.** A SwiftUI menu-bar app polling every 5s
+  needs a non-interactive credential; an Access service token in the macOS
+  keychain is the obvious candidate, which makes the tray a *second identity*
+  and invalidates the single-identity acceptances in security.md.
+- **CSRF protection on the mutating POSTs** (`/tray/control`, `/tray/attachment`),
+  which currently rely on being unreachable rather than on any token.
+- **Revisiting the guard's trigger**, which keys off a non-loopback bind — the
+  correct signal today precisely because HostGuard always admits loopback Host
+  names.
+
+**Not worth doing for its own sake.** The tray is a local-install convenience;
+the container deployment has no consumer for it. Un-defer only if someone
+actually wants a remote tray, and expect the identity work above to dominate.
+
 ## Packaged distribution (installer + notarized artifacts)
 
 Today the **only** way to get any part of Mailvec is to build from source: clone
