@@ -1,43 +1,41 @@
 # Uptime Kuma monitoring for Mailvec
 
 Runbook for configuring [Uptime Kuma](https://github.com/louislam/uptime-kuma)
-to watch the Mailvec homelab deployment. Self-contained — hand this to an agent
-or operator and they can build the monitors without further context.
+to watch a Mailvec deployment behind a Cloudflare tunnel. Self-contained — hand
+this to an agent or operator and they can build the monitors without further
+context.
 
-> ## ⚠️ Read this before trusting anything below about live state
+> ## ⚠️ This document never records what your deployment is currently doing
 >
-> **This document describes a target configuration, not an observed one.** Two
-> earlier revisions asserted live Cloudflare/Kuma state that turned out to be
-> wrong, and the second nearly took monitoring down during a release: it said
-> the monitors polled `/up` when all six were still on `/health`, and a change
-> that 404s `/health` was about to ship on the strength of that sentence.
+> **It describes a target configuration and how to check whether you've hit
+> it.** Kuma and Cloudflare config lives in their own control planes, not in
+> this repo, so any sentence here claiming to know your live state would be a
+> guess that ages badly.
 >
-> **So: verify, never assume.** Anything here about what Kuma or Cloudflare is
-> *currently* configured to do is a claim with a date on it, and the date is
-> what tells you whether to re-check. Read the live config first:
+> That isn't a stylistic preference. Two earlier revisions of this file asserted
+> live state that had drifted, and the second nearly took monitoring down during
+> a release: it said the monitors polled `/up` when they were all still on
+> `/health`, and a change that 404s `/health` was about to ship on the strength
+> of that sentence. A blind monitor looks exactly like a healthy one.
 >
-> ```bash
-> # Kuma's own monitor list — URL and accepted status codes for every monitor.
-> # (Kuma API, or read monitorList from its UI/DB — see your Kuma deployment.)
-> ```
+> **Four things must be true, and only your dashboards can confirm them:**
 >
-> When you change something here, prefer writing *how to check* over *what the
-> answer was.* A verification command ages correctly; a table of last year's
-> config does not.
+> | Thing | Target |
+> |---|---|
+> | Every Mailvec monitor's URL | `https://mailvec.<your-domain>/up` — never `/health` |
+> | Accepted Status Codes on every monitor | `200-299, 503` (see [the section below](#the-setting-that-will-bite-you-accepted-status-codes--200-299-503)) |
+> | Access application fronting `/up` | a **path-scoped** app for the exact path `up` |
+> | Root Access app service-auth policy | names a **specific** token — never `Any Access Service Token` |
 >
-> ### Live state as last verified — 2026-08-03
+> Read the live config before relying on any of it: Kuma's monitor list (its
+> API, UI, or `monitorList` in its DB) for the first two, the Zero Trust
+> dashboard for the last two, and [Verify](#verify) for the end-to-end check
+> that catches a wrong answer on any of them.
 >
-> | Thing | State | Matches this doc's target? |
-> |---|---|---|
-> | The six Mailvec monitors' URL | `https://mailvec.<domain>/health` | ❌ **No** — migration to `/up` pending |
-> | Accepted Status Codes on all six | `200-299` | ❌ **No** — must include `503` |
-> | Path-scoped Access application for `/up` | **does not exist** | ❌ **No** — prerequisite not yet built |
-> | Root Access app service-auth policy | `Any Access Service Token` | ❌ **No** — see [security.md](security.md#whats-accepted) |
->
-> **Consequence for anyone shipping `Mcp:RestrictHealthToLoopback`** (default
-> true from 0.2.0, which 404s `/health` off-box): **migrate the monitors to
-> `/up` first**, while `/health` still answers. See
-> [Migrating existing monitors](#migrating-existing-monitors-from-health-to-up).
+> **If you edit this file, write *how to check* rather than *what the answer
+> was.*** A verification command ages correctly; a table of last quarter's
+> config does not. Track your own deployment's state wherever you keep
+> operational notes — not here.
 
 ## What this monitors, and why external
 
@@ -181,6 +179,9 @@ curl to find out why.
 
 ## Migrating existing monitors from `/health` to `/up`
 
+Only relevant if your monitors predate `/up` (added in 0.1.37) or were built
+from an older template — check their URLs rather than assuming either way.
+
 Do this **before** deploying a build with `Mcp:RestrictHealthToLoopback=true`
 (the default from 0.2.0), which makes `/health` return 404 to anything off-box.
 Sequenced so that a mistake is a one-monitor rollback rather than an outage.
@@ -204,7 +205,7 @@ goes red.
 
 > ⚠️ This has always been wrong, on `/health` too — it is not a regression
 > introduced by the migration, and fixing it is not optional cleanup. With
-> `200-299` only, an Ollama outage turns **all six** monitors red regardless of
+> `200-299` only, an Ollama outage turns **every** Mailvec monitor red regardless of
 > what each one's JSONata asks, because Kuma marks any non-2xx down before
 > evaluating the query. The migration is simply the natural moment to fix it.
 

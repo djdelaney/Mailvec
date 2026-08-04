@@ -116,11 +116,10 @@ services:
       # ⚠️ CHECK THE MONITORS BEFORE DEPLOYING THIS. An off-box Uptime Kuma
       # monitor pointed at /health goes hard-down the moment this takes effect,
       # and a blind monitor looks exactly like a healthy one until you need it.
-      # As of 2026-08-03 all six monitors were still on /health with the
-      # migration pending — verify where they actually point (don't trust this
-      # comment, it dates), migrate them to /up first, and only then deploy.
-      # Escape hatch if you're mid-migration: MCP_RESTRICT_HEALTH_TO_LOOPBACK=false
-      # in .env keeps /health answering off-box until the repoint is done.
+      # Check where your monitors actually point before deploying this; no
+      # comment here can tell you. Escape hatch if you're mid-migration:
+      # MCP_RESTRICT_HEALTH_TO_LOOPBACK=false in .env keeps /health answering
+      # off-box until the repoint is done.
       # Procedure: docs/monitoring-uptime-kuma.md "Migrating existing monitors".
       #
       # Stated explicitly rather than left to the code default for the same
@@ -158,8 +157,8 @@ services:
       #
       # REINSTATE (uncomment) if any of that stops holding: a host port gets
       # published below, a caller that ISN'T owner-equivalent clears Access
-      # (note the root policy is `Any Access Service Token`, so a token created
-      # anywhere in the account qualifies, with no edit here), the tunnel stops
+      # (watch for the root policy reverting to `Any Access Service Token`, which
+      # admits every token in the account with no edit here), the tunnel stops
       # 404-ing /tray/*, or a mutating tool lands. Full rationale + conditions:
       # docs/security.md "What's accepted".
       #

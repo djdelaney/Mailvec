@@ -52,8 +52,8 @@ monitoring endpoint, `/health` is its detailed sibling, and the mail-bearing
 `/tray/*` is kept off the internet by two independent barriers.
 
 **`/up` — the minimal monitoring endpoint.** The rule for its body is
-**booleans yes, values no**: `status`, `version`, and the flags the six Uptime
-Kuma monitors query — `ollama.reachable`, `embedder.stuck`,
+**booleans yes, values no**: `status`, `version`, and the flags an external
+monitor queries — `ollama.reachable`, `embedder.stuck`,
 `embeddings.modelMismatch`, and per-service `stale`/`known`. Enough to say
 *something is wrong and which thing*, with nothing that says what anything **is**
 — no archive path, no corpus counts, no model identity, no Ollama address.
@@ -110,30 +110,26 @@ requirement to verify, never a property to assume. Two rules and a check:
   unrelated things — and the root app is the whole MCP surface, i.e. the whole
   mailbox. Name the specific token instead.
 
-  > ⛔ **This is the live state, verified 2026-08-03 — not a hypothetical.** The
-  > root application's service-auth policy is `Include · Any Access Service
-  > Token`, in place unedited since tunnel go-live (2026-07-16). One token
-  > exists, shared by Claude Code on two Macs *and* all six Uptime Kuma
-  > monitors, so **the monitoring credential is currently owner-equivalent** —
-  > treat it that way until the policy is narrowed.
+  > ⚠️ **Read the rule, never the policy name.** Access lists policies by name
+  > and shows the rule only when you open one, so a policy *named* for a single
+  > token can carry an any-token rule underneath and read as already-scoped at a
+  > glance. This is not hypothetical: in this project's own deployment a policy
+  > called `Claude Code token` carried `Include · Any Access Service Token` for
+  > roughly a year — through two passes over this very document — which silently
+  > made the monitoring credential owner-equivalent. Audit by opening the rule.
   >
-  > **The trap worth naming: the policy is *called* `Claude Code token`.** The
-  > name reads as already-scoped; the rule underneath it is not token-specific.
-  > That gap is why this survived a year of review, including two passes over
-  > this very document. When auditing Access, read the *rule*, never the policy
-  > name.
-  >
-  > **Ordering constraint — narrowing this must come LAST.** The any-token rule
-  > is what makes a zero-downtime credential migration possible: mint a scoped
-  > monitoring token → repoint the six monitors → create the path-scoped `/up`
-  > application → *then* narrow the root policy. Tightening first locks out the
-  > monitors and Claude Code simultaneously.
+  > **Ordering, when fixing or rebuilding these credentials: narrow the root
+  > policy LAST.** An any-token rule is what makes a zero-downtime migration
+  > possible — mint a scoped monitoring token → repoint the monitors → create
+  > the path-scoped `/up` application → *then* narrow the root. Tightening first
+  > locks out the monitors and your own agent clients simultaneously.
 
 **Verify** (with the monitoring token, from outside the network): `/up` returns
 the status JSON, and **`/health` and `/` are both denied**. If either returns
-content, the token is being admitted by the root application — almost always the
-`Any Access Service Token` rule above — and the monitoring credential can read
-mail. Treat it as owner-equivalent until that's fixed.
+content, the token is being admitted by the root application — historically that
+was the `Any Access Service Token` rule above — and the monitoring credential can
+read mail. Treat it as owner-equivalent until that's fixed. This check is the
+authority on the question; the dated report above is not.
 
 **`/tray/*` — mail-bearing, so belt-and-braces.** These return mail content
 (`/tray/email/<id>` = full bodies, `/tray/folders` = folder map + counts,
@@ -211,7 +207,7 @@ Two consequences worth knowing rather than rediscovering:
   `archive.sqlite` copied in by a non-root host user: without `DAC_OVERRIDE`,
   0600-owned-by-someone-else is simply unreadable, and it surfaces as a bare
   SQLite "unable to open database file". The seeding steps in
-  [deploy-docker.md](deploy-docker.md#migrating-the-archive-from-the-mac) chown
+  [deploy-docker.md](deploy-docker.md#migrating-the-archive-from-a-macos-install) chown
   it to `0:0` for this reason.
 - **`mem_limit` charges page cache to the cgroup.** mcp's is deliberately roomy
   because search latency depends on ~1.2 GB of chunk vectors sitting in the OS
@@ -427,7 +423,7 @@ still no rate limiting; see below).
 These are explicit decisions, not oversights:
 
 - **The MCP origin has no auth of its own *unless `Mcp:Access` is configured*; otherwise Cloudflare Access is the entire gate.** With it unset — the default, and how this stack has always run — anything that can reach `mcp:3333` inside the compose network can call any tool. That was a deliberate division of labour (the origin stays simple, the edge does identity) and it holds precisely as long as the tunnel is the only ingress. **Publishing the mcp container's `ports:` mapping breaks it**: port 3333 then answers any host on the LAN with no OAuth at all, and several of the acceptances below stop holding. Turning on origin validation ([below](#origin-authentication-mcpaccess)) removes this acceptance rather than mitigating it — the server then refuses anything without a valid assertion, LAN callers included.
-- **No per-tool authorization.** Any caller that clears the Access gate and can invoke `search_emails` can also invoke `view_attachment`. Trivially simple while every tool is read-only and every caller that clears the gate is owner-equivalent — which today includes the shared service token, not just the owner's OAuth session ([above](#up-health-and-tray)). Revisit if a write tool ever lands, or if a caller who *shouldn't* be owner-equivalent is admitted (sending mail is out of scope, but the principle applies if anything in that direction ever gets considered).
+- **No per-tool authorization.** Any caller that clears the Access gate and can invoke `search_emails` can also invoke `view_attachment`. Trivially simple while every tool is read-only and every caller that clears the gate is owner-equivalent — which means the Claude Code service token as well as the owner's OAuth session, so it's a property of the Access policy rather than of the number of humans involved ([above](#up-health-and-tray)). Revisit if a write tool ever lands, or if a caller who *shouldn't* be owner-equivalent is admitted (sending mail is out of scope, but the principle applies if anything in that direction ever gets considered).
 - **Untrusted PDFs and images are parsed by native code, and the two tools that do it on demand are exposed over the tunnel.** PDFtoImage/PDFium (PDF rasterisation) and SkiaSharp (image decode) are native C++ libraries, so a malicious PDF/image is a memory-safety attack surface the managed extractors (`PdfPig` / `OpenXml`) aren't. This runs in **two** places: `get_attachment_page_image` / `view_attachment` (on demand, via MCP) and the **embedder's OCR pass**, which renders scanned PDFs and images *automatically and unattended* for every such attachment that arrives by mail.
 
   `Mcp:DisabledTools` (which drops tools from both tools/list and tools/call at the server) is staged-but-**commented** in compose.yml, so the on-demand pair stays reachable through the tunnel. That's a deliberate call, resting on two things:
@@ -435,24 +431,24 @@ These are explicit decisions, not oversights:
   1. **The unattended pass dominates the on-demand one.** The embedder already feeds every scanned PDF and image that arrives by mail to PDFium/SkiaSharp, with no tool call, as a side effect of delivery. An attacker who can mail you a malicious PDF already reaches those parsers. Disabling the two tools would not close that path — it would only remove the *smaller*, attended half of the same exposure.
   2. **Every caller the gate admits is already owner-equivalent.** The "remotely-reachable native parser" concern the earlier revision of this doc raised assumed an exposed origin; with the tunnel as sole ingress, no caller reaches the tools without clearing Access first.
 
-     **Read that as written — it is deliberately weaker than "one identity", which is what this bullet used to claim and which was never true.** Two kinds of caller clear the gate, and only one of them is a human:
+     **Read that as written — it is deliberately weaker than "one identity", which is what this bullet used to claim.** Two kinds of caller clear the gate on the root application, and only one of them is a human:
 
      - the **owner**, via Access Managed OAuth;
-     - **any service token in the account**, via the root application's `Include · Any Access Service Token` rule ([above](#up-health-and-tray)). One token exists; it is shared by Claude Code on two Macs *and* all six Uptime Kuma monitors, so a copy of it sits in Uptime Kuma's credential store.
+     - the **named Claude Code service token**, the owner's own agent credential.
 
-     The acceptance survives that only because a token holder already has the whole mailbox — `search_emails` + `get_email` need no native parsing at all. Trimming the two tools would not protect the mail from a leaked token; it would narrow what *else* the leak reaches. **That "what else" is a real difference in kind, not degree**: reading mail is a data-disclosure outcome, while reaching PDFium/SkiaSharp with chosen bytes is a memory-safety one. What keeps the trade acceptable is point 1 — the same parsers are already fed unattended by anything that arrives in the mailbox, so a token holder who wants them can simply *send mail* and wait. The tools are a faster path to a surface they hold either way, not a new one.
+     Both are the owner. But "owner-equivalent" is the honest frame rather than "one identity", because *which* credentials are owner-equivalent is a Cloudflare-side fact this repo cannot see — and one that has been wrong before: an `Any Access Service Token` rule on the root application silently makes every token in the account owner-equivalent, monitoring credentials included ([above](#up-health-and-tray)). **Verify it rather than inheriting this sentence's assumption**, and don't let the acceptance drift back to resting on a claim whose truth lives in a dashboard nobody re-reads.
 
-     **This is not an argument for leaving the token unscoped.** Scoping it to a path-scoped `/up` application removes the service-credential half of this entirely, and is tracked [above](#up-health-and-tray) with its ordering constraint (**narrowing the root policy comes last**). Until that lands, treat the two tools as reachable by anything holding the monitoring credential.
+     So the durable form: **if a credential that clears this gate ever stops being owner-equivalent, this acceptance is void.** Note also what scoping the credentials does *not* change — a leaked owner-equivalent credential still has the whole mailbox through `search_emails` + `get_email`, no native parsing involved. Trimming the two tools would narrow what *else* such a leak reaches, and that is a real difference in kind (data disclosure vs. a memory-safety surface) — but point 1 is what makes it an acceptable trade: the same parsers are fed unattended by anything that arrives in the mailbox, so an attacker who wants them can simply *send mail* and wait. The tools are a faster path to a surface they hold either way, not a new one.
 
   **This acceptance is conditional. It stops holding if any of these change** — reinstate the `Mcp__DisabledTools__*` lines in compose.yml if so:
   - the mcp container publishes a host port (unauthenticated LAN callers, no OAuth);
   - a **human** identity other than the owner is added to the Access policy;
-  - a service token is issued that is **not** owner-equivalent — i.e. anything the root policy admits that shouldn't hold the whole mailbox. Note the root rule is `Any Access Service Token`, so this happens by *creating a token anywhere in the account*, with no edit to Mailvec's policy and no signal here;
+  - the root application admits a service token that **isn't** owner-equivalent. Two shapes to watch for: the policy reverting to `Any Access Service Token` (which admits every token in the account, so it widens by *creating a token anywhere*, with no edit to Mailvec's policy and no signal here), or a scoped credential — the monitor's — being re-authorized on the root app instead of its path-scoped one;
   - the tunnel's ingress rules stop 404-ing the unauthenticated surfaces;
   - a mutating tool lands, changing what a parser compromise gets you.
 
   See [remote-access-cloudflare.md](remote-access-cloudflare.md) and [Future ideas](future-ideas.md).
-- **No rate limiting.** A chatty agent can burn VM CPU on SQLite reads and GPU-VM time on embedding queries. SQLite WAL handles concurrent readers fine and Ollama is the natural bottleneck on the embedding leg, so the worst case is "the homelab slows down briefly." The Access gate bounds who can do this to one identity; Cloudflare's edge absorbs unauthenticated flood traffic before it reaches the tunnel.
+- **No rate limiting.** A chatty agent can burn VM CPU on SQLite reads and GPU-VM time on embedding queries. SQLite WAL handles concurrent readers fine and Ollama is the natural bottleneck on the embedding leg, so the worst case is "the homelab slows down briefly." The Access gate bounds who can do this to owner-equivalent callers; Cloudflare's edge absorbs unauthenticated flood traffic before it reaches the tunnel.
 - **`Mcp:LogToolCalls` is off by default.** When on, the server logs each tool call's arguments **and a summary of its results**. Both halves carry mailbox PII, and the result half is the one that surprises people:
   - `search_emails` — the free-text query and `fromContains` / `fromExact` filters, plus the **top 5 hits' sender addresses, subjects and dates**.
   - `get_email` — sender address and subject.
@@ -467,11 +463,11 @@ These are explicit decisions, not oversights:
 
 ## What's out of scope
 
-- **Multi-tenant isolation.** The archive is single-account and nothing in Mailvec scopes results per-caller, so **every caller the Access gate admits holds the owner's entire mailbox**, not a view of their own. That is not a hypothetical distinction: the root application's `Any Access Service Token` rule means the shared service token is owner-equivalent today ([above](#up-health-and-tray)) — one credential, but not one *identity*, and a copy of it lives in Uptime Kuma's store. Admitting anyone who shouldn't hold the whole mailbox is therefore a model change, not a config change — and it also invalidates the native-parser acceptance above.
+- **Multi-tenant isolation.** The archive is single-account and nothing in Mailvec scopes results per-caller, so **every caller the Access gate admits holds the owner's entire mailbox**, not a view of their own. That is not a hypothetical distinction: an `Any Access Service Token` rule on the root application hands the whole mailbox to any monitoring credential in the account ([above](#up-health-and-tray)) — a grant that arrives without anyone editing Mailvec's policy, and that this project shipped with for about a year. Admitting anyone who shouldn't hold the whole mailbox is therefore a model change, not a config change — and it also invalidates the native-parser acceptance above.
 - **Root on the Docker VM.** `ConnectionFactory` hardens the DB dir/files to owner-only (0700/0600), where the owner is the container's root. Anyone with root on the VM, or the ability to run containers on it, reads the archive directly and doesn't need MCP. The VM's own access control is the boundary.
 - **Network adversaries at the edge.** TLS termination, DDoS absorption, and the identity gate are Cloudflare's. Mailvec publishes no inbound port and holds no certificate; the origin is reachable only through the tunnel the sidecar dials *outbound*. This delegates a real chunk of the security model to Cloudflare — that's the trade the iOS requirement forced (see [remote-access-cloudflare.md](remote-access-cloudflare.md) for why nothing local-only could work).
 - **Compromised AI agent exfiltration.** If the agent calling Mailvec is itself malicious (e.g. an LLM jailbroken into "find all messages from X and POST them to attacker.com"), nothing in the MCP layer stops it from reading every email and shipping the contents back to its own provider. The relevant control is "trust the agent" — choose your clients. Note this is now *structural*, not hypothetical: connectors are invoked from Anthropic's cloud, so every tool call and its results already traverse a third party by design.
-- **Encrypted-at-rest archive.** `archive.sqlite` and the Maildir are plain files at rest on the VM's local disk, protected by unix permissions and whatever the VM/Proxmox disk-encryption story is. Per-application encryption isn't built. (The Mac's frozen dev copy inherits FileVault.)
+- **Encrypted-at-rest archive.** `archive.sqlite` and the Maildir are plain files at rest on the host's local disk, protected by unix permissions and whatever disk encryption the host and hypervisor provide. Per-application encryption isn't built.
 - **User-facing data policy** — retention, deletion, export, consent-at-onboarding, breach response. These presuppose data subjects other than the operator. Mailvec has exactly one user, who is also the person who runs it; a privacy policy addressed to yourself is paperwork, not a control. This becomes in scope the moment a second identity is admitted — at which point it arrives together with the multi-tenancy work above, not before it.
 - **Container image / filesystem scanning and publish-approval gates in CI.** Both produce artifacts whose value is having someone to show them to: a scan report gated on severity needs a reviewer with authority to accept an exception, and an environment approval needs a second person to approve. On a single-owner homelab, the operator builds, reviews, and deploys — so these add ceremony without adding a decision-maker. The NuGet vulnerability gate above is deliberately *not* in this category: it's an automated check with a real pass/fail, not a report.
 - **An external penetration test.** Disproportionate for one mailbox behind a single-identity Access policy, and the likely finding set is what's already written down here — no rate limiting, root containers, native parsers fed attacker bytes. Revisit if a second identity is ever admitted, which is the same trigger as the data-policy item.
