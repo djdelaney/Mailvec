@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -163,31 +164,112 @@ public sealed class ConnectionFactory
     /// Resolves the configured path against well-known locations so a relative
     /// path like "./runtimes/osx-arm64/native/vec0.dylib" works whether the
     /// process is run via `dotnet run`, from a test runner, or as a published exe.
-    /// Returns null if the dylib cannot be found, in which case extension
+    /// Returns null if the library cannot be found, in which case extension
     /// loading is skipped (callers that need vec0 will fail at query time).
     /// </summary>
+    /// <remarks>
+    /// The configured path is tried first and always wins, so an operator who
+    /// names a specific file gets that file or an error — never a substitute.
+    /// Only when it resolves to nothing does this fall back to the conventional
+    /// location for the CURRENT RID.
+    ///
+    /// <para>That fallback exists because the default is macOS-shaped
+    /// (<c>./runtimes/osx-arm64/native/vec0.dylib</c>) while
+    /// <c>ops/fetch-sqlite-vec.sh</c> supports linux-x64 and linux-arm64 too,
+    /// and the resolution above only varied the DIRECTORY — never the RID or
+    /// the file extension. So on Linux the default could not resolve at any
+    /// depth, and every code path that opens a connection failed. The Docker
+    /// image hides this by setting Archive__SqliteVecExtensionPath explicitly;
+    /// outside it, the repo's claim to support Linux RIDs was not exercised
+    /// anywhere. Running the suite in a Linux container is what surfaced it:
+    /// 336 failures, one cause.</para>
+    ///
+    /// <para>The fallback is deliberately narrow — same
+    /// <c>runtimes/&lt;rid&gt;/native/</c> convention the fetch script writes
+    /// and Directory.Build.props copies, nothing else. It cannot silently pick
+    /// up an unrelated library.</para>
+    /// </remarks>
     private static string? ResolveVecExtension(string configured)
     {
         if (string.IsNullOrWhiteSpace(configured)) return null;
 
         var expanded = configured.StartsWith('~') ? PathExpansion.Expand(configured) : configured;
 
-        if (Path.IsPathRooted(expanded) && File.Exists(expanded)) return expanded;
+        if (Path.IsPathRooted(expanded))
+        {
+            // An absolute path is a specific instruction: honour it or fail.
+            // Falling back from one would turn a typo into a different library.
+            return File.Exists(expanded) ? expanded : null;
+        }
 
-        // Relative path: try AppContext.BaseDirectory (next to the running .dll),
-        // then walk upwards to a checked-in repo copy.
+        var resolved = ResolveRelative(expanded);
+        if (resolved is not null) return resolved;
+
+        // Configured path found nothing. Try this RID's conventional location
+        // before giving up.
+        foreach (var relative in NativeCandidatesForCurrentRid())
+        {
+            resolved = ResolveRelative(relative);
+            if (resolved is not null) return resolved;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Try a relative path against the binary directory, then each ancestor —
+    /// so it works from a published exe, `dotnet run`, or a test runner whose
+    /// bin directory sits several levels under the repo root.
+    /// </summary>
+    private static string? ResolveRelative(string relative)
+    {
         var candidates = new List<string>
         {
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, expanded)),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, relative)),
         };
 
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            candidates.Add(Path.Combine(dir.FullName, expanded.TrimStart('.', Path.DirectorySeparatorChar, '/')));
+            candidates.Add(Path.Combine(dir.FullName, relative.TrimStart('.', Path.DirectorySeparatorChar, '/')));
             dir = dir.Parent;
         }
 
         return candidates.FirstOrDefault(File.Exists);
+    }
+
+    /// <summary>
+    /// Conventional <c>runtimes/&lt;rid&gt;/native/</c> locations for the
+    /// platform this process is running on, in the same layout
+    /// <c>ops/fetch-sqlite-vec.sh</c> writes.
+    /// </summary>
+    private static IEnumerable<string> NativeCandidatesForCurrentRid()
+    {
+        var arch = RuntimeInformation.ProcessArchitecture;
+        if (OperatingSystem.IsMacOS())
+        {
+            // Intel Macs are unsupported (fetch-sqlite-vec.sh refuses them), so
+            // there is only one macOS RID to offer.
+            if (arch == Architecture.Arm64)
+                yield return Path.Combine("runtimes", "osx-arm64", "native", "vec0.dylib");
+            yield break;
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            var rid = arch switch
+            {
+                Architecture.X64 => "linux-x64",
+                Architecture.Arm64 => "linux-arm64",
+                _ => null,
+            };
+            if (rid is not null)
+                yield return Path.Combine("runtimes", rid, "native", "vec0.so");
+
+            // The Dockerfile flattens the native next to each binary rather
+            // than keeping the runtimes/ tree, so one arch-agnostic configured
+            // path works for every service on either arch.
+            yield return "vec0.so";
+        }
     }
 }
