@@ -17,7 +17,7 @@ Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server wo
 ## What you get
 
 - **A local searchable archive** of your IMAP account on disk — keyword (FTS5/BM25), semantic (sqlite-vec, mxbai-embed-large), and hybrid (RRF fusion) search.
-- **An MCP server** Claude Desktop, Claude Code, and other local agents can call to search your mail, fetch threads, and read attachments — the raw file, its extracted text, or a rendered page image.
+- **An MCP server** Claude Desktop, Claude Code, and other local agents can call to search your mail, fetch threads, and read attachments — an inline image, a small text file's contents, the extracted text of a document, or a rendered PDF page. Arbitrary binaries (PDF, DOCX, zip) are deliberately not shipped back through MCP; to get the actual file on disk, use the tray's Save button or `mailvec extract-attachments` ([docs/attachments.md](docs/attachments.md)).
 - **A menu-bar app** for live status, inline search, and one-click ops tasks. Optional — the whole pipeline works headless.
 
 ## Architecture

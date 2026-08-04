@@ -6,12 +6,12 @@
 // (any IMAP host we don't have a URL scheme for), `url(...)` returns nil
 // and callers hide the "Open in …" affordance entirely.
 //
-// Today only Fastmail has a known URL scheme. Mailvec is primarily a
-// Fastmail tool but the project scope says "Fastmail (or any IMAP)", so
-// the rest of the app has to gracefully degrade for non-Fastmail users.
-// Adding a new provider means: extend the `WebmailProvider` enum, teach
-// `detect` to recognise the IMAP host(s), and add a URL builder branch
-// in `WebmailLink.url`.
+// Fastmail and Gmail have known URL schemes; everything else degrades to
+// `.unknown`. Mailvec is primarily a Fastmail tool but the project scope
+// says "Fastmail (or any IMAP)", so the rest of the app has to degrade
+// gracefully for users on neither. Adding a new provider means: extend the
+// `WebmailProvider` enum, teach `detect` to recognise the IMAP host(s), and
+// add a URL builder branch in `WebmailLink.url`.
 import AppKit
 import Foundation
 

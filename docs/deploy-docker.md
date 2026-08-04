@@ -8,9 +8,10 @@ seeded from a Mac snapshot; mbsync, OCR-on-Linux, and eval parity are all
 verified, and every Claude client now talks to the tunnel rather than the Mac.
 Nothing depends on the Mac being online.
 
-This documents the container strategy, the deployment strategy, and the
-remaining work (see [What's left](#whats-left) — the rollout is done; backups
-and the Mac decommission are not).
+This documents the container strategy, the deployment strategy, and what the
+rollout verified. The rollout is complete — the Mac was decommissioned
+2026-07-16 and backups ride the homelab's existing snapshot schedule. The tray's
+remote story is the only thing still open; see [What's left](#whats-left).
 
 ```
 fastmail ◄─IMAP── mbsync ──► ./mail ──► indexer ─┐
@@ -37,8 +38,9 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   for every service on either arch.
 - **Native deps are NuGet-supplied on Linux.** PDFtoImage brings PDFium +
   SkiaSharp via `SkiaSharp.NativeAssets.Linux.NoDependencies` (no fontconfig
-  needed — see the comment in Directory.Packages.props). Verified present in
-  the published output; a real OCR render on the VM is still on the checklist.
+  needed — see the comment in Directory.Packages.props). Present in the
+  published output, and exercised by a real OCR render on the VM at rollout
+  (item 3 below) — disk presence alone never proved the natives would load.
 - **Config via env vars only.** Env vars are the highest-precedence config
   source, so the image bakes container-shaped defaults (`/data/archive.sqlite`,
   `/mail`, `Mcp__BindAddress=0.0.0.0`, `MAILVEC_LOG_DIR=/logs`) and compose
@@ -409,8 +411,14 @@ each item was a distinct risk:
    auth front is a Cloudflare Access self-hosted app with Managed OAuth — **not**
    the MCP Server Portal the plan had assumed
    ([remote-access-cloudflare.md](remote-access-cloudflare.md) records why).
-   **Endpoint posture:** `/health` is forwarded through the tunnel for Uptime
-   Kuma (single-layer Access, monitoring); `/tray/*` is disabled at the origin
+   **Endpoint posture at go-live:** `/health` was forwarded through the tunnel
+   for Uptime Kuma (single-layer Access, monitoring). **That is a record of
+   2026-07-16, not current guidance** — `/up` is the endpoint monitors should
+   poll, and from 0.2.0 the origin serves `/health` to loopback callers only
+   (`Mcp:RestrictHealthToLoopback`). Where the six monitors actually point is
+   live state: check it, don't infer it from here
+   ([monitoring-uptime-kuma.md](monitoring-uptime-kuma.md) carries the dated
+   observation and the migration procedure). `/tray/*` is disabled at the origin
    (`Mcp:EnableTrayEndpoints=false`, baked into the image) *and* 404'd at the
    tunnel, because it returns mail content and has no container consumer. See
    [security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray).

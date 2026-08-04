@@ -12,8 +12,14 @@ namespace Mailvec.Mcp.Tools;
 /// <summary>
 /// MCP wrapper around the Core search services. Returns both the internal
 /// SQLite id and the RFC Message-ID for each hit so callers can choose which
-/// to use for follow-up lookups (deep-linking back to Fastmail's web UI would
-/// need a JMAP Email/get mapping; not implemented yet).
+/// to use for follow-up lookups.
+///
+/// <para>Hits also carry <c>webmailUrl</c> / <c>webmailLink</c> when
+/// <c>Fastmail:AccountId</c> is configured, built by
+/// <see cref="Core.Search.WebmailLinkBuilder"/>. Those are <c>msgid:</c> search
+/// links, not true per-message deep links — landing on the search pane with the
+/// message highlighted costs one extra click but needs no JMAP token. A real
+/// deep link would require a JMAP Email/get mapping; still not worth it.</para>
 /// </summary>
 [McpServerToolType]
 public sealed class SearchEmailsTool(

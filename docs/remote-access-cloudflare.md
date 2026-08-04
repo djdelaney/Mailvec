@@ -329,8 +329,17 @@ also refuses to start.
 cleared Access, plus the monitoring token):
 
 ```bash
-# Owner, through the tunnel: normal MCP + health.
-curl -i https://mailvec.<domain>/health          # 200 or 503, with a body
+# Owner, through the tunnel: normal MCP, and /up as the health signal.
+curl -i https://mailvec.<domain>/up              # 200 or 503, boolean body
+
+# /health is NOT the owner's check — the origin serves it to loopback callers
+# only (Mcp:RestrictHealthToLoopback, default true from 0.2.0), so clearing
+# Access as the owner still gets a 404. That's the endpoint filter, not a
+# misconfigured assertion; don't go hunting for one.
+curl -i https://mailvec.<domain>/health          # 404
+
+# The detailed body, from where it's actually served:
+docker compose exec mcp curl -fsS http://127.0.0.1:3333/health   # full report
 
 # Monitoring token: /up yes, mailbox no. THIS is the check worth having —
 # it now fails at the origin even if the Access policy is wrong.
@@ -339,6 +348,13 @@ curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
 curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
   https://mailvec.<domain>/health                # 403 — audience not permitted here
 ```
+
+`/health` has two independent barriers for the monitoring token, and the 403
+above is the *outer* one: authorization middleware runs before the endpoint
+filter, so origin auth refuses the assertion before the loopback check is
+reached. Were `Mcp:Access` off, the same request would 404 from the filter
+instead. Either way the body never leaves the box — but a 403 here is what
+tells you origin validation is actually live.
 
 ```bash
 # From the VM, bypassing the tunnel: no assertion, no access.
