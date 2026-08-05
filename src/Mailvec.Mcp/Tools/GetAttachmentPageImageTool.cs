@@ -3,6 +3,8 @@ using System.Runtime.Versioning;
 using System.Text;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Options;
+using Microsoft.Extensions.Options;
 using Mailvec.Pdf;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
@@ -28,9 +30,11 @@ namespace Mailvec.Mcp.Tools;
 public sealed class GetAttachmentPageImageTool(
     MessageRepository messages,
     AttachmentExtractor extractor,
+    IOptions<McpOptions> mcpOptions,
     ILogger<GetAttachmentPageImageTool> logger,
     ToolCallLogger callLog)
 {
+    private readonly McpOptions _mcp = mcpOptions.Value;
     private const string ToolName = "get_attachment_page_image";
 
     [McpServerTool(Name = "get_attachment_page_image", ReadOnly = true, OpenWorld = false)]
@@ -79,7 +83,7 @@ public sealed class GetAttachmentPageImageTool(
         InlineAttachment att;
         try
         {
-            att = extractor.ExtractInMemory(msg, partIndex);
+            att = extractor.ExtractInMemory(msg, partIndex, _mcp.AttachmentInlineMaxBytes);
         }
         catch (ArgumentOutOfRangeException ex)
         {
@@ -88,6 +92,14 @@ public sealed class GetAttachmentPageImageTool(
         catch (FileNotFoundException ex)
         {
             throw new McpException(ex.Message);
+        }
+        catch (AttachmentTooLargeException ex)
+        {
+            // No page-level escape hatch to offer: rendering any page needs the
+            // whole PDF in hand. Extracted text is the remaining route.
+            throw new McpException(
+                $"{ex.Message} Call get_attachment_text to read its extracted text instead. " +
+                "The user can save the file itself via the tray's Save button or `mailvec extract-attachments`.");
         }
 
         if (!IsPdf(att.ContentType, att.FileName))

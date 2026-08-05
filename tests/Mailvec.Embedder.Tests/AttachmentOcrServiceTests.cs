@@ -279,6 +279,53 @@ public class AttachmentOcrServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Unreadable_images_do_not_starve_a_valid_one_behind_them()
+    {
+        // The image pass HONOURED the shared read backoff through
+        // SelectAttemptable but recorded nothing into it, so every unreadable
+        // image was re-selected every cycle — the same starvation
+        // Unreadable_candidates_do_not_starve_a_valid_one_behind_them pins for
+        // the PDF pass, in a pass whose own comment claimed "same tiering as
+        // ProcessBatchAsync". Nothing caught it because the two passes were
+        // only ever tested apart, and the PDF pass's backoffs made the SHARED
+        // dictionary look populated from the image pass's side.
+        //
+        // Deleting the .eml is the cheapest way to make the read throw; the
+        // starvation is worse for a file that exists and won't read, since
+        // nothing ever removes that one from the candidate set.
+        long[] blockers =
+        [
+            StageUnsupportedImage("block1@x", MakePng(300, 300)),
+            StageUnsupportedImage("block2@x", MakePng(300, 300)),
+            StageUnsupportedImage("block3@x", MakePng(300, 300)),
+            StageUnsupportedImage("block4@x", MakePng(300, 300)),
+        ];
+        // Staged last, so it sorts behind all four blockers by attachment id.
+        long valid = StageUnsupportedImage("zvalid@x", MakePng(300, 300));
+
+        foreach (var id in new[] { "block1@x", "block2@x", "block3@x", "block4@x" })
+            File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", id + ".eml"));
+
+        var svc = Build(new FakeVision(available: true, ocr: _ => "IMAGE TEXT"), ImageGate);
+
+        var firstCycle = await svc.ProcessImageBatchAsync(4, default);
+        firstCycle.ShouldBe(0, "all four selected candidates are unreadable");
+        TextOf(valid).ShouldBeNull("the valid candidate is behind them in id order");
+
+        var secondCycle = await svc.ProcessImageBatchAsync(4, default);
+
+        secondCycle.ShouldBe(1);
+        TextOf(valid).ShouldBe("IMAGE TEXT");
+        StatusOf(valid).ShouldBe(AttachmentTextExtractor.StatusOcr);
+
+        // Backed off, not retired: "unreadable right now" is not evidence about
+        // the image, and an I/O outage must not stamp a volume's worth of
+        // attachments terminally.
+        foreach (var id in blockers)
+            StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported);
+    }
+
+    [Fact]
     public async Task Image_model_unavailable_leaves_it_unsupported()
     {
         long id = StageUnsupportedImage("img@x", MakePng(300, 300));

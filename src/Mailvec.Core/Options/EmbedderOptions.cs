@@ -56,6 +56,20 @@ public sealed class EmbedderOptions
     // conservative floor — raise it to OCR fewer, lower it to OCR more.
     public long ImageOcrMinBytes { get; set; } = 50 * 1024;
 
+    /// <summary>
+    /// Ceiling on the decoded size of an attachment the OCR passes will pull
+    /// out of the Maildir. Over it, the document is marked 'failed' and not
+    /// retried — the size won't change.
+    /// </summary>
+    /// <remarks>
+    /// Nothing upstream guarantees this on its own: the PDF pass selects on
+    /// extraction_status='no_text', and the image pass on 'unsupported', both
+    /// of which say what the INDEXER concluded, not how big the bytes are. 25 MB
+    /// matches Indexer:AttachmentMaxBytes so the OCR pass doesn't decode what
+    /// the extractor already declined for size.
+    /// </remarks>
+    public long OcrMaxAttachmentBytes { get; set; } = 25 * 1024 * 1024;
+
     // Stage 2 (post-decode): skip images whose *smaller* pixel dimension is below
     // this — icons and avatars that slipped past the byte gate. 200px is below
     // any legible page of text but above every icon.

@@ -41,7 +41,7 @@ public class ViewAttachmentToolTests : IDisposable
             AttachmentDownloadDir = _downloadDir,
         });
         var extractor = new AttachmentExtractor(ingest, mcp);
-        return new ViewAttachmentTool(new MessageRepository(db.Connections), extractor, Helpers.NoopLogger());
+        return new ViewAttachmentTool(new MessageRepository(db.Connections), extractor, mcp, Helpers.NoopLogger());
     }
 
     private const string PdfMessage = """
@@ -74,6 +74,70 @@ public class ViewAttachmentToolTests : IDisposable
             new ParsedAttachment(0, "quote.pdf", "application/pdf", 30L)
         ]);
         return repo.Upsert(parsed, "INBOX", "INBOX/cur", fileName, DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public void A_summary_only_type_is_answered_without_opening_the_maildir_file()
+    {
+        // A PDF/DOCX/zip response is metadata plus a summary — the bytes were
+        // decoded in full and discarded, which was the largest allocation in
+        // this tool and the one with nothing to show for it. Making the file
+        // unreadable (not absent — absence is its own answer, pinned below)
+        // proves the read no longer happens: the summary still comes back.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = StagePdfMessage(repo);
+        var path = Path.Combine(_maildirRoot, "INBOX", "cur", "1.eml");
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            using var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+
+            var result = Build(db).ViewAttachment(partIndex: 0, id: id);
+
+            var text = result.Content.OfType<TextContentBlock>().Single().Text;
+            text.ShouldContain("quote.pdf");
+            text.ShouldContain("get_attachment_text");
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
+    public void A_summary_only_type_still_reports_a_vanished_source()
+    {
+        // The short-circuit skips the read, and must not also skip the read's
+        // answer to "is it still there?" — a confident summary for a message
+        // whose .eml is gone describes an attachment that no longer exists.
+        // The FileNotFoundException path is also where the disclosure control
+        // lives, so losing it here would quietly retire that too.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = StagePdfMessage(repo);
+        File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", "1.eml"));
+
+        var ex = Should.Throw<McpException>(() => Build(db).ViewAttachment(partIndex: 0, id: id));
+        ex.Message.ShouldContain("no longer available");
+        ex.Message.ShouldNotContain(_maildirRoot);
+    }
+
+    [Fact]
+    public void An_octet_stream_typed_image_is_still_recognised_and_inlined()
+    {
+        // Mail clients routinely send photos as application/octet-stream and
+        // let the filename carry the type. The pre-read check therefore has to
+        // resolve the type exactly as the file-reading path does — reading the
+        // raw content_type column would classify this as un-inlineable binary
+        // and silently stop showing images that work today.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        StageImageMessage(repo, "oct.eml", "oct@x", "photo.bmp", "application/octet-stream", MinimalBmp2X2());
+
+        var result = Build(db).ViewAttachment(partIndex: 0, messageId: "oct@x");
+
+        result.Content.OfType<ImageContentBlock>().ShouldNotBeEmpty();
     }
 
     [Fact]

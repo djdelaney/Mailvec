@@ -58,6 +58,7 @@ public class GetAttachmentPageImageToolTests : IDisposable
         return new GetAttachmentPageImageTool(
             new MessageRepository(db.Connections),
             new AttachmentExtractor(ingest, mcp),
+            mcp,
             NullLogger<GetAttachmentPageImageTool>.Instance,
             Helpers.NoopLogger());
     }

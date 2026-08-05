@@ -2,6 +2,9 @@ using System.ComponentModel;
 using System.Runtime.Versioning;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Models;
+using Mailvec.Core.Options;
+using Microsoft.Extensions.Options;
 using Mailvec.Pdf;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
@@ -37,8 +40,10 @@ namespace Mailvec.Mcp.Tools;
 public sealed class ViewAttachmentTool(
     MessageRepository messages,
     AttachmentExtractor extractor,
+    IOptions<McpOptions> mcpOptions,
     ToolCallLogger callLog)
 {
+    private readonly McpOptions _mcp = mcpOptions.Value;
     private const string ToolName = "view_attachment";
 
     // Formats Claude vision accepts natively; anything else must be transcoded
@@ -98,10 +103,54 @@ public sealed class ViewAttachmentTool(
         if (!msg.HasAttachments)
             throw new McpException($"Message {msg.Id} has no attachments.");
 
+        // Decide from the stored row whether anything COULD be inlined, and
+        // only open the Maildir when the answer might be yes. A PDF, DOCX or
+        // zip gets a summary built from metadata alone — the bytes were decoded
+        // in full and then thrown away, which is both the largest allocation
+        // here and the one with nothing to show for it.
+        //
+        // Guarded by positive evidence only: if no row matches partIndex we
+        // fall through to the read exactly as before, so this can never turn
+        // into a new rejection path (an inline image predating
+        // `backfill-inline-images` has no row but does have bytes at that
+        // part). attachments.size_bytes is the DECODED length —
+        // MessageParser.DecodedContentLength streams the part to measure it —
+        // so it can be compared against a decoded-size ceiling directly.
+        if (SummaryOnly(msg, partIndex) is { } metadataOnly)
+        {
+            // Skipping the read must not skip its answer to "is the source
+            // still there?". Without this, a message whose .eml had vanished
+            // got a confident summary describing an attachment that is no
+            // longer on disk — and the containment guard, which also lives in
+            // the resolve, stopped running for this path. One stat().
+            try
+            {
+                extractor.EnsureSourceExists(msg);
+            }
+            catch (FileNotFoundException ex)
+            {
+                throw new McpException(ex.Message);
+            }
+
+            callLog.LogResult(ToolName, new
+            {
+                fileName = metadataOnly.FileName,
+                contentType = metadataOnly.ContentType,
+                sizeBytes = metadataOnly.SizeBytes,
+                maildirRead = false,
+            }, startTs);
+            return new CallToolResult
+            {
+                Content = [new TextContentBlock { Text = BuildSummary(metadataOnly, isImage: false,
+                    imageInlined: false, imageTranscoded: false, textInlined: false,
+                    inlineTruncated: false, inlineTotalChars: 0) }],
+            };
+        }
+
         InlineAttachment att;
         try
         {
-            att = extractor.ExtractInMemory(msg, partIndex);
+            att = extractor.ExtractInMemory(msg, partIndex, _mcp.AttachmentInlineMaxBytes);
         }
         catch (ArgumentOutOfRangeException ex)
         {
@@ -110,6 +159,16 @@ public sealed class ViewAttachmentTool(
         catch (FileNotFoundException ex)
         {
             throw new McpException(ex.Message);
+        }
+        catch (AttachmentTooLargeException ex)
+        {
+            // Not an error the model should retry: the size is a property of
+            // the attachment. Say so and route to the tools that read a large
+            // document without materializing it.
+            throw new McpException(
+                $"{ex.Message} For a PDF, call get_attachment_page_image to view a page as an image; " +
+                "for any document, call get_attachment_text to read its extracted text. " +
+                "The user can save the file itself via the tray's Save button or `mailvec extract-attachments`.");
         }
 
         var isImage = IsImageContentType(att.ContentType);
@@ -194,6 +253,34 @@ public sealed class ViewAttachmentTool(
         }, startTs);
 
         return new CallToolResult { Content = content };
+    }
+
+    /// <summary>
+    /// The metadata-only answer for a part that provably can't be inlined, or
+    /// null to go and read the file.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately conservative in both directions. It resolves name and type
+    /// through <see cref="AttachmentExtractor"/>'s own resolvers rather than
+    /// reading the raw columns, because an octet-stream-typed JPEG must still
+    /// be recognised as an image; and it returns null on anything it can't
+    /// decide — no matching row, unknown size, image, or text-like — so the only
+    /// requests it answers are the ones where the read had no possible effect
+    /// on the response.
+    /// </remarks>
+    private InlineAttachment? SummaryOnly(Message msg, int partIndex)
+    {
+        var row = msg.Attachments.FirstOrDefault(a => a.PartIndex == partIndex);
+        if (row is null) return null;
+
+        var fileName = AttachmentExtractor.ResolveFileName(row.FileName, row.ContentType, partIndex);
+        var contentType = AttachmentExtractor.ResolveContentType(row.ContentType, fileName);
+
+        if (IsImageContentType(contentType)) return null;
+        if (AttachmentExtractor.IsTextLikeContentType(contentType)) return null;
+        if (row.SizeBytes is not { } size) return null;
+
+        return new InlineAttachment(fileName, contentType, size, Bytes: [], InlineText: null);
     }
 
     [SupportedOSPlatform("macos")]
