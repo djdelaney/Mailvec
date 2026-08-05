@@ -247,9 +247,16 @@ public sealed class EmbeddingWorker(
         foreach (var m in messageBatch)
         {
             ct.ThrowIfCancellationRequested();
-            var msgChunks = BuildChunksForMessage(m);
             try
             {
+                // Inside the try, not above it. Chunking a string rarely throws,
+                // but the whole point of isolation mode is that ONE message's
+                // failure is attributed to that message and quarantined; a throw
+                // from here escaped the loop, aborted the pass, and left nothing
+                // saying which message did it — the exact blind spot isolation
+                // exists to remove. (Not a substitute for bounding input: see
+                // docs/future-ideas.md on a per-message chunk budget.)
+                var msgChunks = BuildChunksForMessage(m);
                 var texts = msgChunks.Select(c => c.Text).ToList();
                 var vecs = texts.Count == 0
                     ? Array.Empty<float[]>()
