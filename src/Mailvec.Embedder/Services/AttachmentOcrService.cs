@@ -94,22 +94,42 @@ public sealed class AttachmentOcrService(
     // Documents whose BYTES could not be read, and the cycle number at which
     // they become selectable again.
     //
-    // Both candidate queries are `ORDER BY a.id LIMIT batchSize`, and a read
-    // failure skips the candidate WITHOUT changing its status — so an
-    // unreadable row stays at the front of the id order and is re-selected
-    // every cycle. With the default batch of 4, four such rows fill the entire
-    // result set and every valid candidate behind them is starved forever.
+    // A read failure skips the candidate WITHOUT changing its status, so an
+    // unreadable row never leaves the candidate set on its own. A missing file
+    // does self-heal (the indexer soft-deletes it and both queries filter
+    // `m.deleted_at IS NULL`), but a file that EXISTS and won't read —
+    // permissions, a bad sector, a half-mounted volume — does not. Backing
+    // those off avoids burning every cycle's IO budget re-reading them: unlike
+    // the vision path there is no retirement to 'failed' here, because
+    // "unreadable right now" is not evidence about the document, and stamping a
+    // whole volume's worth of attachments failed during an I/O outage would be
+    // far worse than a slow queue.
     //
-    // A missing file self-heals (the indexer soft-deletes it and both queries
-    // filter `m.deleted_at IS NULL`), but a file that EXISTS and won't read —
-    // permissions, a bad sector, a half-mounted volume — never leaves the set
-    // on its own. Backing those off keeps the queue moving without giving up
-    // on them: unlike the vision path there is no retirement to 'failed' here,
-    // because "unreadable right now" is not evidence about the document, and
-    // stamping a whole volume's worth of attachments failed during an I/O
-    // outage would be far worse than a slow queue.
+    // The backoff is an EFFICIENCY measure and must not be mistaken for the
+    // liveness one — that is _pdfCursor / _imageCursor below. On its own the
+    // backoff only steps past a blocked prefix until it expires: with batch
+    // size N and backoff K, the pass works through N x K blockers in exactly K
+    // cycles, by which point the first blocker is selectable again and refills
+    // the batch. At the defaults that is 20 blockers (4 x 5) cycling forever in
+    // front of candidate 21 — the same starvation the backoff was added to fix,
+    // just at a higher threshold. Reachable by a permissions problem on one
+    // folder or a partially mounted archive.
     private readonly Dictionary<OcrFailureKey, long> _readBackoffUntilCycle = new();
     private long _cycle;
+
+    // Resume points into the id-ordered candidate set, one per pass — the
+    // liveness guarantee. Each cycle takes the page strictly after the cursor
+    // and leaves the cursor at the end of that page, so selection sweeps the id
+    // space instead of restarting at the lowest id; an empty page means the
+    // sweep reached the end and wraps to 0. Every candidate is therefore reached
+    // within one sweep no matter how many unreadable rows precede it.
+    //
+    // In memory rather than persisted: the cursor only has to be monotonic
+    // WITHIN a run, and a restart resuming from 0 costs at most one extra sweep.
+    // Two cursors, not one, because the passes have independent candidate sets
+    // and are independently enabled.
+    private long _pdfCursor;
+    private long _imageCursor;
 
     // Pass invocations to skip a document after a failed read. Counted in
     // invocations rather than polls because the PDF and image passes each
@@ -131,18 +151,44 @@ public sealed class AttachmentOcrService(
         Math.Min(MaxOverFetch, batchSize + _readBackoffUntilCycle.Count);
 
     /// <summary>
-    /// Drops candidates that are still backing off from a read failure, then
-    /// truncates to the caller's batch size.
+    /// Take the next batch of attemptable candidates after <paramref name="cursor"/>,
+    /// wrapping to the start of the id space when the sweep runs off the end,
+    /// and leave the cursor on the last row actually examined.
     /// </summary>
-    private List<OcrCandidate> SelectAttemptable(IReadOnlyList<OcrCandidate> candidates, int batchSize)
+    /// <remarks>
+    /// "Examined" is the precise word and the easy thing to get wrong. The
+    /// cursor must advance past rows we attempted AND rows we skipped for
+    /// backoff — a skipped row has had its turn this sweep — but NOT past rows
+    /// the over-fetch returned and we never looked at, which would silently
+    /// drop perfectly good candidates from the sweep entirely. So it lands on
+    /// the last row the scan below touched before it filled the batch, not on
+    /// the last row the query returned.
+    ///
+    /// One wrap per call at most. A second empty page means there are genuinely
+    /// no candidates, and looping would spin.
+    /// </remarks>
+    private List<OcrCandidate> NextPage(
+        Func<int, long, IReadOnlyList<OcrCandidate>> fetch, int batchSize, ref long cursor)
     {
-        var attemptable = new List<OcrCandidate>(Math.Min(batchSize, candidates.Count));
-        foreach (var c in candidates)
+        var page = fetch(FetchSize(batchSize), cursor);
+        if (page.Count == 0 && cursor != 0)
+        {
+            cursor = 0;
+            page = fetch(FetchSize(batchSize), 0);
+        }
+        if (page.Count == 0) return [];
+
+        var attemptable = new List<OcrCandidate>(Math.Min(batchSize, page.Count));
+        var examined = 0;
+        foreach (var c in page)
         {
             if (attemptable.Count == batchSize) break;
+            examined++;
             if (_readBackoffUntilCycle.TryGetValue(KeyOf(c), out var until) && until > _cycle) continue;
             attemptable.Add(c);
         }
+
+        cursor = page[examined - 1].AttachmentId;
         return attemptable;
     }
 
@@ -289,7 +335,8 @@ public sealed class AttachmentOcrService(
         // Over-fetch, then drop anything still backing off from a failed read,
         // so unreadable rows at the front of the id order can't fill the batch
         // and starve everything behind them. See _readBackoffUntilCycle.
-        var candidates = SelectAttemptable(messages.EnumerateAttachmentsNeedingOcr(FetchSize(batchSize)), batchSize);
+        var candidates = NextPage(
+            (limit, after) => messages.EnumerateAttachmentsNeedingOcr(limit, after), batchSize, ref _pdfCursor);
         if (candidates.Count == 0) return 0;
 
         if (!await vision.IsModelAvailableAsync(ct).ConfigureAwait(false))
@@ -465,8 +512,9 @@ public sealed class AttachmentOcrService(
         // deployment running images-only would otherwise never move the clock
         // and every read backoff would become permanent.
         _cycle++;
-        var candidates = SelectAttemptable(
-            messages.EnumerateImagesNeedingOcr(FetchSize(batchSize), _opts.ImageOcrMinBytes), batchSize);
+        var candidates = NextPage(
+            (limit, after) => messages.EnumerateImagesNeedingOcr(limit, _opts.ImageOcrMinBytes, after),
+            batchSize, ref _imageCursor);
         if (candidates.Count == 0) return 0;
 
         if (!await vision.IsModelAvailableAsync(ct).ConfigureAwait(false))

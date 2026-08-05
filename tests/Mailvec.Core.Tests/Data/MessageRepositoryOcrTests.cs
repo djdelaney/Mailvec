@@ -42,7 +42,7 @@ public class MessageRepositoryOcrTests
         Insert(repo, "done@x", "ok.pdf", AttachmentTextExtractor.StatusDone);          // already extracted
         Insert(repo, "img@x", "photo.png", AttachmentTextExtractor.StatusNoText, contentType: "image/png"); // not a PDF
 
-        var pending = repo.EnumerateAttachmentsNeedingOcr(50);
+        var pending = repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0);
 
         pending.Count.ShouldBe(1);
         pending[0].MessageIdHeader.ShouldBe("scan@x");
@@ -59,7 +59,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
         Insert(repo, "ct@x", "attachment", AttachmentTextExtractor.StatusNoText, contentType: "application/pdf");
 
-        var pending = repo.EnumerateAttachmentsNeedingOcr(50);
+        var pending = repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0);
 
         pending.Count.ShouldBe(1);
         pending[0].MessageIdHeader.ShouldBe("ct@x");
@@ -73,7 +73,7 @@ public class MessageRepositoryOcrTests
         long id = Insert(repo, "del@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
         repo.MarkDeleted([id], DateTimeOffset.UtcNow);
 
-        repo.EnumerateAttachmentsNeedingOcr(50).ShouldBeEmpty();
+        repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldBeEmpty();
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class MessageRepositoryOcrTests
         repo.MarkAttachmentOcrFailed(Candidate(db, repo, id));
 
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusFailed);
-        repo.EnumerateAttachmentsNeedingOcr(50).ShouldBeEmpty();
+        repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldBeEmpty();
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public class MessageRepositoryOcrTests
         Insert(repo, "done@x", "ok.png", AttachmentTextExtractor.StatusDone, contentType: "image/png", size: 60000);            // wrong status
         Insert(repo, "pdf@x", "scan.pdf", AttachmentTextExtractor.StatusNoText, contentType: "application/pdf", size: 60000);   // not an image
 
-        var pending = repo.EnumerateImagesNeedingOcr(50, minBytes: 50 * 1024);
+        var pending = repo.EnumerateImagesNeedingOcr(50, minBytes: 50 * 1024, afterId: 0);
 
         pending.Count.ShouldBe(1);
         pending[0].MessageIdHeader.ShouldBe("big@x");
@@ -248,7 +248,7 @@ public class MessageRepositoryOcrTests
         // GIF stays excluded even when mislabeled.
         Insert(repo, "octet-gif@x", "anim.gif", AttachmentTextExtractor.StatusUnsupported, contentType: "application/octet-stream", size: 200000);
 
-        var pending = repo.EnumerateImagesNeedingOcr(50, minBytes: 50 * 1024);
+        var pending = repo.EnumerateImagesNeedingOcr(50, minBytes: 50 * 1024, afterId: 0);
 
         pending.Select(p => p.MessageIdHeader).ShouldBe(["octet-png@x", "octet-jpeg@x"], ignoreOrder: true);
     }
@@ -261,7 +261,7 @@ public class MessageRepositoryOcrTests
         long id = Insert(repo, "del@x", "photo.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);
         repo.MarkDeleted([id], DateTimeOffset.UtcNow);
 
-        repo.EnumerateImagesNeedingOcr(50, 50 * 1024).ShouldBeEmpty();
+        repo.EnumerateImagesNeedingOcr(50, 50 * 1024, afterId: 0).ShouldBeEmpty();
     }
 
     [Fact]
@@ -274,7 +274,7 @@ public class MessageRepositoryOcrTests
         repo.MarkAttachmentImageNoText(Candidate(db, repo, id));
 
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusNoText);
-        repo.EnumerateImagesNeedingOcr(50, 50 * 1024).ShouldBeEmpty();
+        repo.EnumerateImagesNeedingOcr(50, 50 * 1024, afterId: 0).ShouldBeEmpty();
     }
 
     [Fact]
@@ -384,7 +384,7 @@ public class MessageRepositoryOcrTests
 
         // A owns the table's only attachment row, so it holds the max rowid.
         long a = Insert(repo, "a@x", "a-scan.pdf", AttachmentTextExtractor.StatusNoText);
-        var selected = repo.EnumerateAttachmentsNeedingOcr(50).ShouldHaveSingleItem();
+        var selected = repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldHaveSingleItem();
 
         // A's body changes and drops the attachment: ReplaceAttachments deletes
         // the row, freeing the tail of the rowid space...
@@ -414,7 +414,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
 
         long a = Insert(repo, "a@x", "a-scan.pdf", AttachmentTextExtractor.StatusNoText);
-        var selected = repo.EnumerateAttachmentsNeedingOcr(50).ShouldHaveSingleItem();
+        var selected = repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldHaveSingleItem();
         ReplaceContent(repo, "a@x", "h-a@x-v2", []);
         long b = Insert(repo, "b@x", "b-scan.pdf", AttachmentTextExtractor.StatusNoText);
         repo.GetById(b)!.Attachments[0].Id.ShouldBe(selected.AttachmentId);
@@ -425,7 +425,7 @@ public class MessageRepositoryOcrTests
         repo.MarkAttachmentOcrFailed(selected);
 
         repo.GetById(b)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusNoText);
-        repo.EnumerateAttachmentsNeedingOcr(50).ShouldHaveSingleItem().MessageId.ShouldBe(b);
+        repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldHaveSingleItem().MessageId.ShouldBe(b);
     }
 
     [Fact]
@@ -435,7 +435,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
 
         long a = Insert(repo, "a@x", "a.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);
-        var selected = repo.EnumerateImagesNeedingOcr(50, 50 * 1024).ShouldHaveSingleItem();
+        var selected = repo.EnumerateImagesNeedingOcr(50, 50 * 1024, afterId: 0).ShouldHaveSingleItem();
         ReplaceContent(repo, "a@x", "h-a@x-v2", []);
         long b = Insert(repo, "b@x", "b.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);
         repo.GetById(b)!.Attachments[0].Id.ShouldBe(selected.AttachmentId);
@@ -444,7 +444,7 @@ public class MessageRepositoryOcrTests
         repo.MarkAttachmentImageNoText(selected);
 
         repo.GetById(b)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusUnsupported);
-        repo.EnumerateImagesNeedingOcr(50, 50 * 1024).ShouldHaveSingleItem().MessageId.ShouldBe(b);
+        repo.EnumerateImagesNeedingOcr(50, 50 * 1024, afterId: 0).ShouldHaveSingleItem().MessageId.ShouldBe(b);
     }
 
     [Fact]
@@ -455,7 +455,7 @@ public class MessageRepositoryOcrTests
 
         // The candidate the OCR pass selected: part 0 of this message.
         long id = Insert(repo, "swap@x", "old-scan.pdf", AttachmentTextExtractor.StatusNoText);
-        var selected = repo.EnumerateAttachmentsNeedingOcr(50).ShouldHaveSingleItem();
+        var selected = repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldHaveSingleItem();
 
         // The .eml is rewritten upstream and now carries a DIFFERENT scanned
         // PDF at the same part index. ReplaceAttachments deletes and reinserts
@@ -475,7 +475,7 @@ public class MessageRepositoryOcrTests
         FtsMatchCount(db, "zqtelemetry").ShouldBe(0);
 
         // ...and it really does get OCR'd again, against a fresh snapshot.
-        var reselected = repo.EnumerateAttachmentsNeedingOcr(50).ShouldHaveSingleItem();
+        var reselected = repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldHaveSingleItem();
         repo.SaveOcrText(reselected, "ZQTELEMETRY invoice total");
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusOcr);
         FtsMatchCount(db, "zqtelemetry").ShouldBe(1);
