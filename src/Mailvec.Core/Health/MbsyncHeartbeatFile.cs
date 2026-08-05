@@ -23,12 +23,25 @@ namespace Mailvec.Core.Health;
 /// this assumption breaks.</para>
 ///
 /// <para><b>Format</b>: two lines — an ISO-8601 UTC timestamp, then the
-/// sidecar's interval in seconds. The interval travels with the beat for the
+/// sidecar's BEAT cadence in seconds. The cadence travels with the beat for the
 /// same reason it does for the metadata-backed services: the reader shouldn't
-/// need to know the writer's config (<c>MBSYNC_INTERVAL_SECONDS</c> is set on
-/// the sidecar, which the MCP container can't see). File mtime is deliberately
-/// not the signal — it's a bind mount across a container boundary, and content
-/// we control is more predictable than mtime semantics we don't.</para>
+/// need to know the writer's config (the sidecar's env is invisible to the MCP
+/// container). File mtime is deliberately not the signal — it's a bind mount
+/// across a container boundary, and content we control is more predictable than
+/// mtime semantics we don't.</para>
+///
+/// <para><b>That second line is the beat cadence, NOT the sync interval.</b> It
+/// used to carry <c>MBSYNC_INTERVAL_SECONDS</c>, back when the sidecar beat only
+/// after each <c>mbsync -a</c> returned — which meant any sync longer than
+/// <see cref="ServiceHeartbeat.StaleAfterMissedBeats"/> x the sync interval
+/// reported a <i>busy</i> sidecar as dead, the exact false positive
+/// <see cref="HeartbeatService"/> exists to prevent for the .NET services. The
+/// 600s default hid it (a 30-minute window swallowed a 12-minute backlog pull);
+/// shortening the sync interval would have surfaced it as a false red during
+/// precisely the long pulls an operator wants to watch. The sidecar now beats on
+/// its own timer and declares that timer here. Don't re-point this line at the
+/// sync cadence — the two are unrelated, and coupling them reintroduces the
+/// bug.</para>
 ///
 /// <para>On the macOS launchd install, mbsync writes no such file (its beat
 /// path is <c>MbsyncErrorTail</c> over the agent's logs). Absence reports as
