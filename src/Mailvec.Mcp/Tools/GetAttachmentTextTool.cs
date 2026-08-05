@@ -144,8 +144,20 @@ public sealed class GetAttachmentTextTool(
     /// valid UTF-16 (a split pair would serialize as U+FFFD). Internal so
     /// view_attachment's inline-text truncation shares the same slicer.
     /// </summary>
+    /// <remarks>
+    /// A zero window returns empty rather than falling through to the surrogate
+    /// nudge, which would evaluate <c>text[end - 1]</c> at <c>end == 0</c> and
+    /// throw. get_attachment_text's own callers can't reach that (it rejects
+    /// maxChars &lt; 1 and returns early once offset passes the end), but
+    /// get_thread spends a shared budget down to exactly zero and then asks for
+    /// the remainder — so the degenerate ask is legitimate and belongs here, in
+    /// the one slicer every caller shares, rather than guarded per caller.
+    /// Test: GetThreadToolTests.Bodies_after_the_budget_is_exhausted_come_back_empty.
+    /// </remarks>
     internal static (int Start, string Slice) SliceWindow(string text, int offset, int window)
     {
+        if (window <= 0) return (offset, string.Empty);
+
         var start = offset;
         if (start > 0 && char.IsLowSurrogate(text[start]))
             start--;

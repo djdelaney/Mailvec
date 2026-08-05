@@ -103,6 +103,13 @@ public sealed class GetThreadTool(
                     // SliceWindow, not a raw substring: a body can end mid
                     // surrogate pair and a split pair serialises as U+FFFD.
                     // Same slicer get_attachment_text pages with.
+                    //
+                    // Once the budget is spent this asks for a zero window every
+                    // time, which is why SliceWindow handles that case: the
+                    // entry comes back with an empty body and BodyTruncated
+                    // true, which is the honest answer ("requested, nothing
+                    // left") and distinct from the null that means "bodies
+                    // weren't requested at all".
                     body = GetAttachmentTextTool.SliceWindow(full, 0, bodyBudget).Slice;
                     bodyBudget = 0;
                     bodyTruncated = true;
