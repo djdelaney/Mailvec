@@ -173,6 +173,84 @@ public class GetThreadToolTests
     }
 
     [Fact]
+    public void Bodies_after_the_budget_is_exhausted_come_back_empty()
+    {
+        // The test above stops at the message that spends the budget, which is
+        // exactly one message short of the interesting transition: the NEXT
+        // non-empty body asks SliceWindow for a zero window, and the slicer's
+        // surrogate nudge evaluated text[end - 1] at end == 0 and threw
+        // IndexOutOfRangeException — failing the whole get_thread call for any
+        // thread long enough to spend 200,000 chars and keep going, which a
+        // deep quoted reply chain does. Line coverage hid it: the else branch
+        // here was already exercised, just never twice.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var start = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        // Four 100-char bodies against 250: #3 takes the last 50, #4 gets none.
+        for (var i = 0; i < 4; i++)
+        {
+            repo.Upsert(Helpers.Sample($"e{i}@x", threadId: "exhausted", body: new string((char)('a' + i), 100),
+                    dateSent: start.AddMinutes(i)),
+                "INBOX", "INBOX/cur", $"e{i}", DateTimeOffset.UtcNow);
+        }
+
+        var resp = Build(db, mcp: new McpOptions { ThreadMaxBodyChars = 250 })
+            .GetThread(messageId: "e0@x", includeBodies: true);
+
+        resp.Count.ShouldBe(4);
+        resp.Truncated.ShouldBeTrue();
+        resp.Messages[2].BodyText!.Length.ShouldBe(50);
+        // Empty, not null: null is what "includeBodies was false" means, and a
+        // client that can't tell those apart can't tell an empty message from
+        // one whose body it never asked for.
+        resp.Messages[3].BodyText.ShouldBe(string.Empty);
+        resp.Messages[3].BodyTruncated.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_zero_body_budget_returns_empty_bodies_rather_than_failing()
+    {
+        // Same crash from the other direction, and without needing a long
+        // thread: an operator who sets ThreadMaxBodyChars to 0 to turn body
+        // inlining off hit it on the FIRST non-empty message.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        repo.Upsert(Helpers.Sample("zero@x", threadId: "zero", body: "hello"),
+            "INBOX", "INBOX/cur", "zero", DateTimeOffset.UtcNow);
+
+        var resp = Build(db, mcp: new McpOptions { ThreadMaxBodyChars = 0 })
+            .GetThread(messageId: "zero@x", includeBodies: true);
+
+        resp.Messages[0].BodyText.ShouldBe(string.Empty);
+        resp.Messages[0].BodyTruncated.ShouldBeTrue();
+        resp.Truncated.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void An_empty_body_under_an_exhausted_budget_is_not_flagged_truncated()
+    {
+        // The zero-window path must not swallow the distinction between "there
+        // was nothing to return" and "there was something and no room for it".
+        // An empty body costs nothing, so it fits any budget including a spent
+        // one, and a truncation flag on it would be a lie that teaches the
+        // model to distrust the flag where it matters.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var start = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        repo.Upsert(Helpers.Sample("f0@x", threadId: "empties", body: new string('a', 100), dateSent: start),
+            "INBOX", "INBOX/cur", "f0", DateTimeOffset.UtcNow);
+        repo.Upsert(Helpers.Sample("f1@x", threadId: "empties", body: "", dateSent: start.AddMinutes(1)),
+            "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow);
+
+        var resp = Build(db, mcp: new McpOptions { ThreadMaxBodyChars = 100 })
+            .GetThread(messageId: "f0@x", includeBodies: true);
+
+        resp.Messages[1].BodyText.ShouldBe(string.Empty);
+        resp.Messages[1].BodyTruncated.ShouldBeFalse();
+        resp.Truncated.ShouldBeFalse();
+    }
+
+    [Fact]
     public void Body_budget_is_not_spent_when_bodies_were_not_requested()
     {
         // The budget only governs BodyText. Without includeBodies there are no
