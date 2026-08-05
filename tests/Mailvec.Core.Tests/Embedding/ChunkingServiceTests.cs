@@ -108,4 +108,49 @@ public class ChunkingServiceTests
         var single = chunks.Single();
         single.EstimatedTokenCount.ShouldBe(100);
     }
+
+    [Theory]
+    [InlineData(200, 200)]   // overlap == size: HardSplit's step clamps to 1 char
+    [InlineData(200, 300)]   // overlap > size
+    [InlineData(200, 199)]   // the near-miss a strict `overlap < size` rule would admit
+    [InlineData(200, 101)]   // just past half
+    [InlineData(32, 32)]     // ChunkSizeTokens lowered for an experiment, overlap left at its default
+    public void Refuses_an_overlap_above_half_the_chunk_size(int chunkTokens, int overlapTokens)
+    {
+        // HardSplit slides by (size - overlap), so the chunk count for unbroken
+        // text grows as size/(size - overlap): 4,201 chunks from 5,000 chars at
+        // 200/200, and still ~200x at 199/200 — which is why the rule is "at
+        // most half" and not merely "less than". Each chunk is a real embedding
+        // request, so this lands on Ollama and the chunks table too.
+        //
+        // The 32/32 case is the realistic one and the reason this refuses at
+        // construction rather than clamping quietly: the documented experiment
+        // knob is ChunkSizeTokens (see docs/contributing/embedding-experiments.md),
+        // ChunkOverlapTokens defaults to 32, and nothing about lowering the
+        // former hints that you must lower the latter.
+        var ex = Should.Throw<InvalidOperationException>(() => MakeService(chunkTokens, overlapTokens));
+
+        // Both values named, because the fix is to change one of them and the
+        // operator can't tell which without seeing the pair.
+        ex.Message.ShouldContain(overlapTokens.ToString());
+        ex.Message.ShouldContain(chunkTokens.ToString());
+        ex.Message.ShouldContain("ChunkOverlapTokens");
+        ex.Message.ShouldContain("ChunkSizeTokens");
+    }
+
+    [Theory]
+    [InlineData(200, 100)]   // exactly half — allowed, and the worst permitted case
+    [InlineData(200, 32)]    // the shipped default ratio
+    [InlineData(200, 0)]     // overlap off entirely
+    [InlineData(1, 0)]       // degenerate but coherent: no room for any overlap
+    public void Accepts_an_overlap_of_at_most_half_the_chunk_size(int chunkTokens, int overlapTokens)
+    {
+        var svc = MakeService(chunkTokens, overlapTokens);
+
+        // At the boundary the step is half the window, so an unbroken block
+        // yields ~2 chunks per window rather than one per character.
+        var chunks = svc.Chunk(new string('x', chunkTokens * 4 * 5));
+        chunks.Count.ShouldBeLessThanOrEqualTo(11);
+        chunks.ShouldAllBe(c => c.Text.Length <= chunkTokens * 4);
+    }
 }
