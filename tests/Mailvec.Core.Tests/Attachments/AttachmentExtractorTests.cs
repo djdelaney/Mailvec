@@ -130,7 +130,7 @@ public class AttachmentExtractorTests : IDisposable
         var ext = BuildExtractor();
         var msg = StageEml("110.imapfetch:2,S", PdfMessage, messageId: 110);
 
-        var att = ext.ExtractInMemory(msg, partIndex: 0);
+        var att = ext.ExtractInMemory(msg, partIndex: 0, maxBytes: null);
 
         att.FileName.ShouldBe("quote.pdf");
         att.ContentType.ShouldBe("application/pdf");
@@ -147,7 +147,7 @@ public class AttachmentExtractorTests : IDisposable
         var ext = BuildExtractor();
         var msg = StageEml("111.imapfetch:2,S", CsvMessage, messageId: 111);
 
-        var att = ext.ExtractInMemory(msg, partIndex: 0);
+        var att = ext.ExtractInMemory(msg, partIndex: 0, maxBytes: null);
 
         att.ContentType.ShouldBe("text/csv");
         att.InlineText.ShouldNotBeNull().ShouldContain("region,units");

@@ -312,7 +312,7 @@ public sealed class AttachmentOcrService(
             byte[] pdf;
             try
             {
-                pdf = reader.ReadBytes(c.ToMessage(), c.PartIndex);
+                pdf = reader.ReadBytes(c.ToMessage(), c.PartIndex, _opts.OcrMaxAttachmentBytes);
             }
             catch (FileNotFoundException)
             {
@@ -489,10 +489,15 @@ public sealed class AttachmentOcrService(
             byte[] bytes;
             try
             {
-                bytes = reader.ReadBytes(c.ToMessage(), c.PartIndex);
+                bytes = reader.ReadBytes(c.ToMessage(), c.PartIndex, _opts.OcrMaxAttachmentBytes);
             }
             catch (FileNotFoundException)
             {
+                // Backed off for the same reason as the PDF pass: a stale row
+                // self-heals only when an indexer rescan soft-deletes the
+                // message, which is a whole scan away, and until then this row
+                // holds its place at the front of every batch.
+                RecordReadFailure(c);
                 logger.LogInformation(
                     "Image OCR skip: Maildir file missing for attachment {AttachmentId} (message {MessageId}).",
                     c.AttachmentId, c.MessageId);
@@ -501,7 +506,19 @@ public sealed class AttachmentOcrService(
             catch (IOException ex)
             {
                 // Same tiering as ProcessBatchAsync: possibly transient → skip
-                // and retry next cycle without blocking the rest of the batch.
+                // and retry after a backoff, without blocking the rest of the
+                // batch. The backoff is not optional here. This pass already
+                // HONOURS _readBackoffUntilCycle through SelectAttemptable, but
+                // for a while it recorded nothing into it, so an unreadable
+                // image was re-selected every cycle: the candidate query is
+                // `ORDER BY a.id LIMIT`, the row's status never changes on a
+                // failed read, and FetchSize only over-fetches by the number of
+                // RECORDED backoffs — so at the default batch of 4, four
+                // low-id unreadable images filled every batch and starved every
+                // valid image behind them permanently and silently. A file that
+                // EXISTS and won't read never leaves the candidate set on its
+                // own. Test: Unreadable_images_do_not_starve_a_valid_one_behind_them.
+                RecordReadFailure(c);
                 logger.LogWarning(ex,
                     "Image OCR skip: could not read Maildir file for attachment {AttachmentId}; will retry next cycle.",
                     c.AttachmentId);

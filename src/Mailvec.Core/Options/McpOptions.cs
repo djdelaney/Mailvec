@@ -151,4 +151,25 @@ public sealed class McpOptions
     /// trip without invoking a filesystem MCP. 0 disables the extra text block.
     /// </summary>
     public int AttachmentInlineTextMaxBytes { get; set; } = 256 * 1024;
+
+    /// <summary>
+    /// Ceiling on the decoded size of an attachment the MCP tools will pull out
+    /// of the Maildir (view_attachment, get_attachment_page_image). Over it,
+    /// the tool says so and points at another route rather than decoding.
+    /// </summary>
+    /// <remarks>
+    /// This bounds an agent-triggered read on a long-lived server, which is a
+    /// different thing from a user clicking Save: the caller here can't see the
+    /// size before asking, so the ceiling is the only thing standing between a
+    /// mistaken partIndex and several full-size copies of a large attachment in
+    /// the MCP process. The cost isn't only RSS — the container runs on ~1.2 GB
+    /// of chunk vectors living in page cache under a 3 GB cgroup limit, so a
+    /// large transient allocation evicts the vectors and search degrades from
+    /// ~0.3 s to ~2-3 s and stays there (see compose.yml's mem_limit note).
+    ///
+    /// 25 MB matches Indexer:AttachmentMaxBytes, so an attachment whose text
+    /// Mailvec declined to extract for size is also one it won't inline —
+    /// two limits that disagree would be a confusing pair to explain to a user.
+    /// </remarks>
+    public long AttachmentInlineMaxBytes { get; set; } = 25 * 1024 * 1024;
 }

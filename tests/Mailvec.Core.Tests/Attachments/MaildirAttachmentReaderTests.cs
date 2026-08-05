@@ -64,14 +64,54 @@ public class MaildirAttachmentReaderTests : IDisposable
     [Fact]
     public void ReadBytes_returns_the_decoded_attachment_payload()
     {
-        var bytes = Reader().ReadBytes(Stage("1.eml"), partIndex: 0);
+        var bytes = Reader().ReadBytes(Stage("1.eml"), partIndex: 0, maxBytes: null);
         Encoding.UTF8.GetString(bytes).Trim().ShouldBe("HELLO-BYTES");
+    }
+
+    [Fact]
+    public void A_part_over_the_ceiling_is_refused_rather_than_decoded()
+    {
+        // "HELLO-BYTES" plus its trailing newline is 12 bytes.
+        var ex = Should.Throw<AttachmentTooLargeException>(
+            () => Reader().ReadBytes(Stage("cap.eml"), partIndex: 0, maxBytes: 4));
+
+        ex.LimitBytes.ShouldBe(4);
+        // Names the attachment so the caller can say WHICH one was refused...
+        ex.Message.ShouldContain("note.txt");
+        // ...but not the archive layout: the MCP tools surface this text to a
+        // remote client, same as the FileNotFoundException below.
+        ex.Message.ShouldNotContain(_maildirRoot);
+    }
+
+    [Fact]
+    public void A_part_exactly_at_the_ceiling_is_allowed()
+    {
+        // The boundary is inclusive — a cap is the largest allowed size, not
+        // the smallest refused one, and an off-by-one here would refuse a
+        // document that fits.
+        var bytes = Reader().ReadBytes(Stage("exact.eml"), partIndex: 0, maxBytes: 12);
+        Encoding.UTF8.GetString(bytes).Trim().ShouldBe("HELLO-BYTES");
+    }
+
+    [Fact]
+    public void EnsureSourceExists_throws_the_same_answer_as_a_read_without_decoding()
+    {
+        // view_attachment skips the read for types it can summarise from
+        // metadata; this is how it keeps the "source has vanished" answer.
+        var msg = Stage("gone.eml");
+        Reader().EnsureSourceExists(msg);   // present: no throw
+
+        File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", "gone.eml"));
+
+        var ex = Should.Throw<FileNotFoundException>(() => Reader().EnsureSourceExists(msg));
+        ex.Message.ShouldContain("no longer available");
+        ex.Message.ShouldNotContain(_maildirRoot);
     }
 
     [Fact]
     public void Read_exposes_entity_metadata_alongside_bytes()
     {
-        var data = Reader().Read(Stage("2.eml"), partIndex: 0);
+        var data = Reader().Read(Stage("2.eml"), partIndex: 0, maxBytes: null);
         data.Bytes.Length.ShouldBeGreaterThan(0);
         ((MimeKit.MimePart)data.Entity).FileName.ShouldBe("note.txt");
     }
@@ -84,7 +124,7 @@ public class MaildirAttachmentReaderTests : IDisposable
             Id = 9, MessageId = "ghost@x", MaildirPath = "INBOX/cur",
             MaildirFilename = "nope.eml", Folder = "INBOX", HasAttachments = true,
         };
-        var ex = Should.Throw<FileNotFoundException>(() => Reader().ReadBytes(ghost, 0));
+        var ex = Should.Throw<FileNotFoundException>(() => Reader().ReadBytes(ghost, 0, maxBytes: null));
 
         // The message is sanitized because both MCP attachment tools surface it
         // verbatim to the remote client; the path rides on FileName instead, for
@@ -101,7 +141,7 @@ public class MaildirAttachmentReaderTests : IDisposable
     [Fact]
     public void Throws_out_of_range_for_an_invalid_part_index()
     {
-        var ex = Should.Throw<ArgumentOutOfRangeException>(() => Reader().ReadBytes(Stage("3.eml"), 5));
+        var ex = Should.Throw<ArgumentOutOfRangeException>(() => Reader().ReadBytes(Stage("3.eml"), 5, maxBytes: null));
         ex.Message.ShouldContain("out of range");
     }
 
@@ -162,7 +202,7 @@ public class MaildirAttachmentReaderTests : IDisposable
             MaildirFilename = "outside.eml", Folder = "INBOX", HasAttachments = true,
         };
 
-        var ex = Should.Throw<InvalidOperationException>(() => Reader().ReadBytes(msg, 0));
+        var ex = Should.Throw<InvalidOperationException>(() => Reader().ReadBytes(msg, 0, maxBytes: null));
         ex.Message.ShouldContain("outside Maildir root");
     }
 
@@ -215,7 +255,7 @@ public class MaildirAttachmentReaderTests : IDisposable
     public void Attachment_keeps_part_index_zero_when_an_inline_image_is_present()
     {
         // Existing rows must not shift: the real attachment stays at index 0.
-        var data = Reader().Read(StageInline("inline0.eml"), partIndex: 0);
+        var data = Reader().Read(StageInline("inline0.eml"), partIndex: 0, maxBytes: null);
         ((MimePart)data.Entity).FileName.ShouldBe("note.txt");
         Encoding.UTF8.GetString(data.Bytes).Trim().ShouldBe("ATTACH-BYTES");
     }
@@ -225,7 +265,7 @@ public class MaildirAttachmentReaderTests : IDisposable
     {
         // part_index 1 (what the backfill assigns the inline image) round-trips to
         // the inline PNG's decoded bytes ("IMGDATA").
-        var data = Reader().Read(StageInline("inline1.eml"), partIndex: 1);
+        var data = Reader().Read(StageInline("inline1.eml"), partIndex: 1, maxBytes: null);
         ((MimePart)data.Entity).ContentType.MediaType.ShouldBe("image");
         Encoding.UTF8.GetString(data.Bytes).ShouldBe("IMGDATA");
     }
