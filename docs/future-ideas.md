@@ -293,10 +293,14 @@ now, and joining them reintroduces the bug this removed.
    and this section together so the shipped configuration no longer preserves the
    superseded overlap rationale. The monitoring runbook is on that list because
    the heartbeat fix already moved mbsync's staleness window from 30 minutes to
-   3: a dead sidecar is now detected roughly ten times faster, which changes when
-   Kuma pages and what an operator should expect to see during a long backlog
-   pull. Verify what the monitors actually poll before writing anything down —
-   that runbook has been wrong about live state before.
+   3, so a dead sidecar shows up roughly ten times faster.
+   **That does not change when Kuma pages**, and an earlier draft of this line
+   wrongly said it did: liveness never flips `/health`'s 503 — degraded is
+   Ollama-unreachable, embedding-model-mismatch, or embedder-stuck only, and
+   liveness rides along in `Services` for clients to render. What changes is the
+   payload an operator reads, and any monitor keyed on its content rather than
+   on HTTP status. Verify what the monitors actually poll before writing
+   anything down — that runbook has been wrong about live state before.
 
    Keep platform behaviour explicit while you are in there: the Linux loop waits
    then sleeps, so its cadence is `sync duration + interval`; macOS launchd
