@@ -80,13 +80,66 @@ public static class ServiceHeartbeat
     public static string CycleKey(string service) => $"heartbeat.{service}.cycle_at";
 
     /// <summary>
-    /// Stamp the liveness beat. Called only by <see cref="HeartbeatService"/>.
+    /// Identity of the process currently beating for this service.
     /// </summary>
-    public static void Beat(MetadataRepository metadata, string service, TimeSpan? interval = null, DateTimeOffset? now = null)
+    /// <remarks>
+    /// Exists to make a duplicate worker VISIBLE. Nothing serializes two
+    /// indexers against one database and Maildir — the coalescing channel in
+    /// <c>MessageIngestService</c> is process-local — and two overlapping scans
+    /// can soft-delete live messages, because each stamps every seen file's
+    /// <c>sync_state.last_seen_at</c> to its own start time and then reconciles
+    /// deletions against it. Compose won't start two of a service and this
+    /// machine runs none, so the reachable case is a macOS launchd install plus
+    /// a <c>dotnet run</c> alongside it.
+    ///
+    /// Detection, not exclusion, and deliberately so. Both processes write this
+    /// same key, so reading back an id that isn't yours proves another one is
+    /// beating — one metadata row, no lock-file semantics to get right across
+    /// bind mounts and crashes. **Do not escalate this to refuse-to-start**: a
+    /// container restarting under <c>restart: unless-stopped</c> comes back
+    /// while the previous instance's beat is still fresh and would refuse to
+    /// boot, turning a diagnostic into the kind of wedge it was added to warn
+    /// about.
+    /// </remarks>
+    public static string InstanceKey(string service) => $"heartbeat.{service}.instance";
+
+    /// <summary>
+    /// When a duplicate instance was last confirmed, so READERS can see it too.
+    /// </summary>
+    /// <remarks>
+    /// Detection is structurally local to the beating process — it is the only
+    /// one that knows its own id, and a reader looking at
+    /// <see cref="InstanceKey"/> sees a single value that tells it nothing. So
+    /// the detector records the finding here and readers judge it by freshness,
+    /// exactly like the beat itself. That also makes it self-clearing: stop the
+    /// duplicate and the marker ages out within the same window, with no reset
+    /// step for an operator to forget.
+    /// </remarks>
+    public static string DuplicateSeenKey(string service) => $"heartbeat.{service}.duplicate_seen_at";
+
+    /// <summary>
+    /// Stamp the liveness beat. Called only by <see cref="HeartbeatService"/>.
+    /// Returns the instance id found in the database immediately BEFORE this
+    /// beat claimed it, so the caller can tell whether another process is
+    /// beating for the same service; null when the slot was unclaimed.
+    /// </summary>
+    public static string? Beat(
+        MetadataRepository metadata,
+        string service,
+        TimeSpan? interval = null,
+        DateTimeOffset? now = null,
+        string? instanceId = null)
     {
         var seconds = (int)(interval ?? BeatInterval).TotalSeconds;
+        string? previousInstance = null;
+        if (instanceId is not null)
+        {
+            previousInstance = metadata.Get(InstanceKey(service));
+            metadata.Set(InstanceKey(service), instanceId);
+        }
         metadata.Set(AtKey(service), Iso(now));
         metadata.Set(IntervalKey(service), seconds.ToString(CultureInfo.InvariantCulture));
+        return previousInstance;
     }
 
     /// <summary>
@@ -119,9 +172,10 @@ public static class ServiceHeartbeat
     {
         var at = ParseTimestamp(metadata.Get(AtKey(service)));
         var cycle = ParseTimestamp(metadata.Get(CycleKey(service)));
+        var duplicateSeen = ParseTimestamp(metadata.Get(DuplicateSeenKey(service)));
         _ = int.TryParse(metadata.Get(IntervalKey(service)), NumberStyles.Integer, CultureInfo.InvariantCulture, out var interval);
 
-        return Classify(service, at, cycle, interval > 0 ? interval : null, now);
+        return Classify(service, at, cycle, interval > 0 ? interval : null, now, duplicateSeen);
     }
 
     /// <summary>
@@ -133,14 +187,19 @@ public static class ServiceHeartbeat
         DateTimeOffset? lastBeatAt,
         DateTimeOffset? lastCycleAt,
         int? intervalSeconds,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        DateTimeOffset? duplicateSeenAt = null)
     {
         if (lastBeatAt is null || intervalSeconds is null)
             return new ServiceLiveness(service, null, lastCycleAt, intervalSeconds, Stale: false, Known: false);
 
         var nowUtc = now ?? DateTimeOffset.UtcNow;
-        var stale = nowUtc - lastBeatAt.Value > TimeSpan.FromSeconds(intervalSeconds.Value * StaleAfterMissedBeats);
-        return new ServiceLiveness(service, lastBeatAt, lastCycleAt, intervalSeconds, stale, Known: true);
+        var window = TimeSpan.FromSeconds(intervalSeconds.Value * StaleAfterMissedBeats);
+        var stale = nowUtc - lastBeatAt.Value > window;
+        // Same window as staleness, so the marker ages out on its own once the
+        // duplicate stops beating.
+        var duplicate = duplicateSeenAt is { } seen && nowUtc - seen <= window;
+        return new ServiceLiveness(service, lastBeatAt, lastCycleAt, intervalSeconds, stale, Known: true, duplicate);
     }
 
     private static string Iso(DateTimeOffset? now)
@@ -173,7 +232,14 @@ public sealed record ServiceLiveness(
     DateTimeOffset? LastCycleAt,
     int? ExpectedIntervalSeconds,
     bool Stale,
-    bool Known);
+    bool Known,
+    /// <summary>
+    /// Another process was recently confirmed to be beating for this service.
+    /// Two indexers against one Maildir can soft-delete live messages, so this
+    /// is a misconfiguration to fix, not a state to tolerate. Defaults false —
+    /// only the metadata-backed services detect it.
+    /// </summary>
+    bool DuplicateInstanceSeen = false);
 
 /// <summary>
 /// Emits the liveness beat for one service on its own timer, independent of
@@ -225,11 +291,59 @@ public sealed class HeartbeatService(
         }
     }
 
-    private void WriteBeat()
+    /// <summary>
+    /// This process's claim on <see cref="ServiceHeartbeat.InstanceKey"/>.
+    /// Per-process and not persisted: it only has to be unique among the
+    /// processes beating concurrently.
+    /// </summary>
+    private readonly string _instanceId = Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// The last foreign instance id we complained about, so a duplicate that
+    /// keeps beating produces one log line per offending process rather than
+    /// one per beat, forever. <see cref="HealthService"/> is what surfaces the
+    /// ongoing state; the log is the timestamped "it started here".
+    /// </summary>
+    private string? _reportedForeignInstance;
+
+    /// <summary>
+    /// Foreign id seen on the previous beat. Two consecutive sightings of the
+    /// same id is what distinguishes a live duplicate from the harmless
+    /// leftover a restart finds.
+    /// </summary>
+    private string? _lastForeignInstance;
+
+    internal void WriteBeat()
     {
         try
         {
-            ServiceHeartbeat.Beat(metadata, service);
+            var previous = ServiceHeartbeat.Beat(metadata, service, instanceId: _instanceId);
+
+            // A foreign id means another process wrote this key between our
+            // beats. Normal restarts leave the PREVIOUS run's id here and we
+            // simply claim it, so a single sighting is not enough — we only
+            // report an id that keeps coming back, i.e. one still being written.
+            if (previous is not null && previous != _instanceId)
+            {
+                if (previous == _reportedForeignInstance) return;
+                if (_lastForeignInstance == previous)
+                {
+                    _reportedForeignInstance = previous;
+                    metadata.Set(ServiceHeartbeat.DuplicateSeenKey(service), DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                    logger.LogError(
+                        "Another {Service} process appears to be running against this database (instance {Foreign}, " +
+                        "ours is {Ours}). Two indexers scanning one Maildir can soft-delete live messages: their scans " +
+                        "are only serialized within a process. Stop one of them — check for launchd agents " +
+                        "(`launchctl list | grep mailvec`) alongside a `dotnet run`, or a second container.",
+                        service, previous, _instanceId);
+                }
+                _lastForeignInstance = previous;
+            }
+            else
+            {
+                _lastForeignInstance = null;
+                _reportedForeignInstance = null;
+            }
         }
         catch (Exception ex)
         {
