@@ -287,7 +287,14 @@ services:
       - ./mail:/mail:ro
       - ./logs/indexer:/logs
     # PdfPig and OpenXML DOM-load whole documents, and Indexer:AttachmentMaxBytes
-    # (25 MB) bounds the *input*, not how far the parse expands it.
+    # (25 MB) bounds the *input*, not how far the parse expands it. For the
+    # OpenXML half that gap is now closed in-process by
+    # AttachmentTextExtractor.OfficeOpenSettings (MaxCharactersInPart) — this
+    # limit alone was never sufficient there, because extraction runs before any
+    # row is written, so an OOM-kill commits nothing and `restart: unless-stopped`
+    # re-parses the same attachment forever: a permanent indexing stall rather
+    # than a contained crash. PdfPig has no equivalent knob and still leans on
+    # this ceiling.
     mem_limit: 2g
 
   embedder:

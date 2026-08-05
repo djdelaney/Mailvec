@@ -66,6 +66,46 @@ public class AttachmentTextExtractor(
 
     private const int MaxExtractedTextChars = 2_000_000;
 
+    /// <summary>
+    /// Ceiling on the characters in any single Open XML part we load. Applied to
+    /// DOCX, XLSX and PPTX through <see cref="OfficeOpenSettings"/>.
+    /// </summary>
+    /// <remarks>
+    /// Office formats are ZIP containers, so <c>Indexer:AttachmentMaxBytes</c>
+    /// bounds the COMPRESSED input and says nothing about how far the XML
+    /// expands. Measured: a 0.95 MB DOCX whose <c>document.xml</c> is 278 MB of
+    /// repeated paragraphs allocated 2,451 MB and took 9.1 s — already past the
+    /// indexer's 2 GB container limit at 1/26th of the 25 MB input ceiling. The
+    /// same document with this setting throws in 0.4 s having allocated 66 MB.
+    ///
+    /// <see cref="MaxExtractedTextChars"/> is NOT protection against this, which
+    /// is the trap: the break it drives fires (the run above stopped at exactly
+    /// 2,000,000 chars) but only after the whole part DOM is materialized, so
+    /// the code reads as bounded while allocating without limit.
+    ///
+    /// The consequence being avoided is a wedge, not just a crash. Extraction
+    /// runs inside the scan, before any row is written, so an OOM-kill commits
+    /// nothing; <c>restart: unless-stopped</c> brings the indexer back and it
+    /// parses the same attachment again. The container memory limit bounds the
+    /// blast radius and converts it into a permanent stall of ALL indexing,
+    /// triggered by anyone who can send the user mail.
+    ///
+    /// 32M is ~16x <see cref="MaxExtractedTextChars"/>, which covers heavy
+    /// WordprocessingML markup around the most text we would keep anyway, and
+    /// costs ~300 MB at the ceiling (the run above works out at ~9 bytes
+    /// allocated per XML character). Raising it trades headroom for documents
+    /// we would truncate regardless; lowering it starts failing real documents.
+    /// **Never set it to 0** — that is the SDK's "unlimited", i.e. the bug.
+    /// </remarks>
+    private const int MaxCharactersInOfficePart = 32_000_000;
+
+    /// <summary>
+    /// One settings instance for all three Open XML formats, so the DOCX, XLSX
+    /// and PPTX paths cannot drift apart on the limit above. Internal so a test
+    /// can pin it non-zero.
+    /// </summary>
+    internal static readonly OpenSettings OfficeOpenSettings = new() { MaxCharactersInPart = MaxCharactersInOfficePart };
+
     // .NET ships only UTF-*, ASCII, and Latin1 wired up by default — legacy
     // codepages like windows-1252 need CodePagesEncodingProvider registered
     // first (the type is in the shared framework on net10.0, no package needed),
@@ -212,7 +252,7 @@ public class AttachmentTextExtractor(
         try
         {
             using var ms = new MemoryStream(bytes, writable: false);
-            using var doc = WordprocessingDocument.Open(ms, isEditable: false);
+            using var doc = WordprocessingDocument.Open(ms, isEditable: false, OfficeOpenSettings);
             var body = doc.MainDocumentPart?.Document?.Body;
             if (body is null) return new ExtractionResult(null, StatusNoText);
 
@@ -256,7 +296,7 @@ public class AttachmentTextExtractor(
         try
         {
             using var ms = new MemoryStream(bytes, writable: false);
-            using var doc = SpreadsheetDocument.Open(ms, isEditable: false);
+            using var doc = SpreadsheetDocument.Open(ms, isEditable: false, OfficeOpenSettings);
             var workbookPart = doc.WorkbookPart;
             if (workbookPart is null) return new ExtractionResult(null, StatusNoText);
 
@@ -308,7 +348,7 @@ public class AttachmentTextExtractor(
         try
         {
             using var ms = new MemoryStream(bytes, writable: false);
-            using var doc = PresentationDocument.Open(ms, isEditable: false);
+            using var doc = PresentationDocument.Open(ms, isEditable: false, OfficeOpenSettings);
             var presentationPart = doc.PresentationPart;
             var slideIdList = presentationPart?.Presentation?.SlideIdList;
             if (slideIdList is null) return new ExtractionResult(null, StatusNoText);
