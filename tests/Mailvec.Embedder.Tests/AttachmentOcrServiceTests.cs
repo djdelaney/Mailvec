@@ -417,37 +417,156 @@ public class AttachmentOcrServiceTests : IDisposable
         StatusOf(b).ShouldBe(AttachmentTextExtractor.StatusNoText);
     }
 
+    /// <summary>
+    /// A vision client that fails one identifiable document and succeeds on
+    /// everything else, including the health probe.
+    /// </summary>
+    /// <remarks>
+    /// Keyed on the rendered page's width rather than call order, because
+    /// selection order is no longer something a test may assume: the passes
+    /// sweep the id space from a cursor, so which documents a given cycle picks
+    /// up depends on where the previous cycle stopped. A fake that fails "the
+    /// first call of each cycle" silently tests the scheduler instead of the
+    /// behaviour it is named for.
+    /// </remarks>
+    /// <param name="failAboveWidth">
+    /// Between the two page sizes the test stages. PdfRenderer rasterises at
+    /// 150 DPI (downscale-only), so a 200pt MediaBox lands at ~417px and a
+    /// 400pt one at ~833px; 600 sits between them, and the 48px health probe is
+    /// far below both.
+    /// </param>
+    private static FakeVision FailsWidePages(int failAboveWidth = 600) =>
+        new(available: true, ocr: jpeg =>
+        {
+            using var bmp = SKBitmap.Decode(jpeg);
+            return bmp is not null && bmp.Width > failAboveWidth
+                ? throw new TaskCanceledException("poison render hangs the model")
+                : "GOOD TEXT";
+        });
+
     [Fact]
     public async Task Poison_document_retires_after_repeated_failures_alongside_successes()
     {
-        // The poison doc (lowest attachment id, so always selected first)
-        // fails every cycle while other documents OCR fine — proof the model
+        // A doc that fails every attempt while others OCR fine — proof the model
         // is healthy, so its failures count and it retires after
-        // MaxVisionAttempts cycles. Meanwhile the failure must not block the
-        // documents behind it in the queue.
-        long poison = StageNoTextPdf("poison@x", MinimalPdf(1));
-        var calls = 0;
-        // Candidates are ordered by attachment id: the poison doc's call is
-        // always the first of each cycle (odd call numbers).
-        var svc = Build(new FakeVision(true, _ =>
-            ++calls % 2 == 1 ? throw new TaskCanceledException("poison render hangs the model") : "GOOD TEXT"));
+        // MaxVisionAttempts, stopping the per-attempt timeout cost. The healthy
+        // doc staged behind it must not be held up waiting for that.
+        //
+        // Attempts are now once per SWEEP rather than once per cycle, which is
+        // the deliberate consequence of the fairness cursor: nothing is selected
+        // twice until everything has been selected once. Retirement is therefore
+        // slower on a big backlog — acceptable, because the reason to retire
+        // quickly was head-of-line blocking, and the cursor removes that.
+        long poison = StageNoTextPdf("poison@x", MinimalPdf(1, size: 400));
+        long healthy = StageNoTextPdf("healthy@x", MinimalPdf(1, size: 200));
+        var svc = Build(FailsWidePages());
 
-        var healthy = new List<long>();
-        for (int cycle = 0; cycle < 5; cycle++) // MaxVisionAttempts
+        // Cycle 1 takes both; afterwards the healthy doc is 'ocr' and leaves the
+        // candidate set, so each later cycle runs off the end and wraps back to
+        // the poison doc — one attempt per sweep, five sweeps to retirement.
+        for (int cycle = 0; cycle < 5; cycle++)
         {
-            healthy.Add(StageNoTextPdf($"fresh-{cycle}@x", MinimalPdf(1)));
             await svc.ProcessBatchAsync(10, default);
         }
 
-        // Head-of-line liveness: every healthy doc behind the poison one got
-        // OCR'd in its own cycle.
-        foreach (var id in healthy)
-        {
-            StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusOcr);
-            TextOf(id).ShouldBe("GOOD TEXT");
-        }
-        // And the poison doc is retired so it stops costing a timeout per cycle.
+        StatusOf(healthy).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        TextOf(healthy).ShouldBe("GOOD TEXT");
         StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
+    public async Task A_blocked_prefix_longer_than_the_backoff_window_still_lets_later_pdfs_through()
+    {
+        // The read backoff alone does NOT establish eventual progress. With
+        // batch size N and backoff K cycles, the pass clears N x K blockers in
+        // exactly K cycles — by which point the first blocker is selectable
+        // again and refills the batch, and candidate N x K + 1 is never reached.
+        // At the defaults that threshold is 20, so 25 blockers wedge the queue
+        // permanently: the earlier fix raised the starvation threshold rather
+        // than removing it. The cursor is what removes it.
+        //
+        // 25 unreadable files that EXIST would be a permissions problem on one
+        // folder or a partially mounted archive; deleting them is just the
+        // cheapest way to make the read throw.
+        var blockers = new List<long>();
+        for (var i = 0; i < 25; i++)
+            blockers.Add(StageNoTextPdf($"blk{i:D2}@x", MinimalPdf(1)));
+        long valid = StageNoTextPdf("zvalid@x", MinimalPdf(1));   // staged last: highest id
+
+        for (var i = 0; i < 25; i++)
+            File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", $"blk{i:D2}@x.eml"));
+
+        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED"));
+
+        var done = 0;
+        for (var cycle = 0; cycle < 15; cycle++)
+            done += await svc.ProcessBatchAsync(4, default);   // the default batch size
+
+        done.ShouldBe(1);
+        TextOf(valid).ShouldBe("RECOVERED");
+        StatusOf(valid).ShouldBe(AttachmentTextExtractor.StatusOcr);
+
+        // Blockers are left pending, not retired: "unreadable right now" says
+        // nothing about the document.
+        foreach (var id in blockers)
+            StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
+    [Fact]
+    public async Task A_blocked_prefix_longer_than_the_backoff_window_still_lets_later_images_through()
+    {
+        // Same guarantee on the image pass, which has its own cursor because the
+        // two passes have independent candidate sets and are independently
+        // enabled (Embedder:OcrEnabled / Embedder:ImageOcrEnabled).
+        var blockers = new List<long>();
+        for (var i = 0; i < 25; i++)
+            blockers.Add(StageUnsupportedImage($"iblk{i:D2}@x", MakePng(300, 300)));
+        long valid = StageUnsupportedImage("zvalidimg@x", MakePng(300, 300));
+
+        for (var i = 0; i < 25; i++)
+            File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", $"iblk{i:D2}@x.eml"));
+
+        var svc = Build(new FakeVision(available: true, ocr: _ => "IMAGE TEXT"), ImageGate);
+
+        var done = 0;
+        for (var cycle = 0; cycle < 15; cycle++)
+            done += await svc.ProcessImageBatchAsync(4, default);
+
+        done.ShouldBe(1);
+        TextOf(valid).ShouldBe("IMAGE TEXT");
+        foreach (var id in blockers)
+            StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported);
+    }
+
+    [Fact]
+    public async Task Both_passes_sweeping_together_still_reach_a_late_candidate()
+    {
+        // With both passes enabled the shared _cycle advances twice per poll, so
+        // every read backoff expires in half the polls — which under the old
+        // scheme dropped the starvation threshold from 20 blockers to about 10.
+        // The cursors are per-pass and unaffected by the shared clock, so this
+        // has to hold with both running.
+        for (var i = 0; i < 12; i++) StageNoTextPdf($"pblk{i:D2}@x", MinimalPdf(1));
+        for (var i = 0; i < 12; i++) StageUnsupportedImage($"iblk{i:D2}@x", MakePng(300, 300));
+        long validPdf = StageNoTextPdf("zvalidpdf@x", MinimalPdf(1));
+        long validImg = StageUnsupportedImage("zvalidimg@x", MakePng(300, 300));
+
+        for (var i = 0; i < 12; i++)
+        {
+            File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", $"pblk{i:D2}@x.eml"));
+            File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", $"iblk{i:D2}@x.eml"));
+        }
+
+        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED"), ImageGate);
+
+        for (var cycle = 0; cycle < 15; cycle++)
+        {
+            await svc.ProcessBatchAsync(4, default);
+            await svc.ProcessImageBatchAsync(4, default);
+        }
+
+        StatusOf(validPdf).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        StatusOf(validImg).ShouldBe(AttachmentTextExtractor.StatusOcr);
     }
 
     [Fact]
@@ -559,7 +678,7 @@ public class AttachmentOcrServiceTests : IDisposable
     }
 
     /// <summary>Minimal valid PDF with <paramref name="pages"/> blank pages (xref offsets computed).</summary>
-    private static byte[] MinimalPdf(int pages)
+    private static byte[] MinimalPdf(int pages, int size = 200)
     {
         var objects = new List<string>
         {
@@ -567,7 +686,7 @@ public class AttachmentOcrServiceTests : IDisposable
             $"<</Type /Pages /Kids [{string.Join(" ", Enumerable.Range(0, pages).Select(i => $"{3 + i} 0 R"))}] /Count {pages}>>",
         };
         for (int i = 0; i < pages; i++)
-            objects.Add("<</Type /Page /Parent 2 0 R /MediaBox [0 0 200 200]>>");
+            objects.Add($"<</Type /Page /Parent 2 0 R /MediaBox [0 0 {size} {size}]>>");
 
         var sb = new StringBuilder();
         sb.Append("%PDF-1.4\n");

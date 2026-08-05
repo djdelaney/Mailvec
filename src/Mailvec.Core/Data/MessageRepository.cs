@@ -840,7 +840,25 @@ public sealed class MessageRepository(ConnectionFactory connections)
     private const string PdfOcrMatch =
         "(lower(a.content_type) = 'application/pdf' OR lower(a.filename) LIKE '%.pdf')";
 
-    public IReadOnlyList<OcrCandidate> EnumerateAttachmentsNeedingOcr(int batchSize)
+    /// <summary>
+    /// The next page of OCR candidates, in id order, starting strictly after
+    /// <paramref name="afterId"/>.
+    /// </summary>
+    /// <remarks>
+    /// The cursor is what makes OCR selection FAIR, and fairness here is a
+    /// liveness property, not a nicety. These queries are `ORDER BY a.id LIMIT`,
+    /// and a candidate whose bytes won't read keeps its status — so selecting
+    /// from the lowest id every cycle re-picks the same head of the queue
+    /// forever. The service's read-backoff alone does not fix that: it only
+    /// steps past a blocked prefix until the backoff expires, so with batch size
+    /// N and a backoff of K cycles, N x K persistent unreadable rows (20 at the
+    /// defaults) cycle in front of everything behind them indefinitely. A cursor
+    /// that only moves forward reaches every candidate within one sweep of the
+    /// id space regardless of how many are unreadable.
+    ///
+    /// Callers own the cursor and wrap it to 0 when a page comes back empty.
+    /// </remarks>
+    public IReadOnlyList<OcrCandidate> EnumerateAttachmentsNeedingOcr(int batchSize, long afterId)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
@@ -851,10 +869,12 @@ public sealed class MessageRepository(ConnectionFactory connections)
             WHERE a.extraction_status = $noText
               AND {PdfOcrMatch}
               AND m.deleted_at IS NULL
+              AND a.id > $afterId
             ORDER BY a.id
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$afterId", afterId);
         cmd.Parameters.AddWithValue("$limit", batchSize);
 
         var list = new List<OcrCandidate>();
@@ -905,7 +925,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
         )
         """;
 
-    public IReadOnlyList<OcrCandidate> EnumerateImagesNeedingOcr(int batchSize, long minBytes)
+    /// <inheritdoc cref="EnumerateAttachmentsNeedingOcr" select="remarks"/>
+    public IReadOnlyList<OcrCandidate> EnumerateImagesNeedingOcr(int batchSize, long minBytes, long afterId)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
@@ -917,11 +938,13 @@ public sealed class MessageRepository(ConnectionFactory connections)
               AND {ImageOcrMatch}
               AND a.size_bytes >= $minBytes
               AND m.deleted_at IS NULL
+              AND a.id > $afterId
             ORDER BY a.id
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         cmd.Parameters.AddWithValue("$minBytes", minBytes);
+        cmd.Parameters.AddWithValue("$afterId", afterId);
         cmd.Parameters.AddWithValue("$limit", batchSize);
 
         var list = new List<OcrCandidate>();

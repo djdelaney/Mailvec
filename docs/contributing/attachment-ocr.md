@@ -104,6 +104,42 @@ never need to coexist in RAM**, which removes the "verify both fit" constraint
 entirely. `Ollama:VisionKeepAlive` exposes this if it ever needs tuning; never
 set it to `-1` (pin-forever).
 
+## Candidate selection: a cursor, not just a backoff
+
+Both candidate queries are `ORDER BY a.id LIMIT`, and a failed byte read skips
+the candidate **without changing its status** — so an unreadable row never
+leaves the candidate set on its own (a *missing* file eventually does, once the
+indexer soft-deletes the message; a file that exists and won't read does not).
+Selection therefore needs a fairness guarantee, and it took two goes to get one:
+
+- **`_readBackoffUntilCycle` is an efficiency measure**, not the guarantee. It
+  stops a known-bad row from burning IO every cycle, and on its own it only
+  steps past a blocked prefix until the backoff expires. With batch size `N` and
+  backoff `K`, the pass clears `N × K` blockers in exactly `K` cycles, by which
+  point the first blocker is selectable again and refills the batch. At the
+  defaults that is **20** blockers cycling forever in front of candidate 21 —
+  starvation at a higher threshold, not the absence of it. Both passes sharing
+  `_cycle` halves the threshold again when both are enabled.
+- **`_pdfCursor` / `_imageCursor` are the guarantee.** Each cycle takes the page
+  strictly after the cursor and leaves it on the last row *examined*, so
+  selection sweeps the id space instead of restarting at the lowest id; an empty
+  page means the sweep ran off the end and wraps to 0. Every candidate is
+  reached within one sweep regardless of how many unreadable rows precede it.
+
+Two consequences worth knowing before changing this:
+
+- **"Examined" excludes rows the over-fetch returned but the scan never reached.**
+  Advancing the cursor to the last row the *query* returned would silently drop
+  good candidates from the sweep. It must land on the last row the selection loop
+  actually looked at.
+- **A poison document now retires after `MaxVisionAttempts` sweeps, not cycles**,
+  since nothing is selected twice until everything has been selected once. That
+  is slower on a large backlog and is fine: the reason to retire quickly was
+  head-of-line blocking, which the cursor removes. Tests asserting retirement
+  must not assume a document is re-selected every cycle — and more generally,
+  **no test here may assume selection order**; `AttachmentOcrServiceTests`'
+  poison fake keys on the rendered page width for exactly that reason.
+
 ## Risks & notes
 
 - **Throughput.** ~22 s/page → backfill of 309 PDFs (~500–600 pages) ≈ 3–4 h
