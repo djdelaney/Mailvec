@@ -80,6 +80,15 @@ change needed) → run the embedder with `Embedder__ChunkSizeTokens=512` → eva
 Change one variable per run — model and chunk size in the same experiment
 can't be attributed.
 
+**Sweeping this knob DOWN also means moving `Embedder__ChunkOverlapTokens`**,
+which defaults to 32 and is validated against the chunk size: the embedder
+refuses to start when overlap exceeds half of `ChunkSizeTokens`, so anything at
+or below 64 needs the overlap lowered to match. The refusal is deliberate — the
+chunker slides its window by `size - overlap`, so a too-large overlap emits
+near-duplicate chunks (one per character once overlap reaches the chunk size),
+each its own embedding request. An eval run measured on that is measuring the
+misconfiguration, not the chunk size.
+
 ## Caveats (each of these bit for real — don't skip)
 
 - **VACUUM after the re-embed, before timing anything.** `switch-model`'s

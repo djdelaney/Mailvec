@@ -20,12 +20,61 @@ public sealed record TextChunk(
 /// Prefers paragraph/sentence breaks; falls back to character-level cuts for
 /// long unbroken text. Short messages return a single chunk.
 /// </summary>
-public sealed class ChunkingService(IOptions<EmbedderOptions> options)
+public sealed class ChunkingService
 {
     private const int CharsPerToken = 4;
 
-    private readonly int _maxChars = Math.Max(1, options.Value.ChunkSizeTokens) * CharsPerToken;
-    private readonly int _overlapChars = Math.Max(0, options.Value.ChunkOverlapTokens) * CharsPerToken;
+    private readonly int _maxChars;
+    private readonly int _overlapChars;
+
+    /// <summary>
+    /// Refuses an overlap above half the chunk size, because past that point the
+    /// chunker stops making forward progress in any bounded way.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="HardSplit"/> slides its window by <c>size - overlap</c>, so the
+    /// chunk count for a block of unbroken text grows as
+    /// <c>size / (size - overlap)</c> — unbounded as overlap approaches size, and
+    /// at overlap &gt;= size the step clamps to 1 and it emits one near-duplicate
+    /// max-size chunk PER CHARACTER (5,000 chars of unbroken text produced 4,201
+    /// chunks at 200/200). Each one is a real embedding request, so the cost
+    /// lands on Ollama and the chunks table, not just memory.
+    ///
+    /// Half is the line rather than a strict <c>overlap &lt; size</c>, because
+    /// strict inequality bounds nothing: 199/200 still inflates the chunk count
+    /// 200x. Half caps the inflation at 2x.
+    ///
+    /// Throwing rather than clamping, and here rather than deep in the loop:
+    /// the realistic way in is NOT someone raising the overlap, it's someone
+    /// LOWERING ChunkSizeTokens — the knob docs/contributing/embedding-experiments.md
+    /// tells you to sweep — while ChunkOverlapTokens sits at its default 32.
+    /// Anything at or below 64 crosses this line silently. That operator is
+    /// about to spend hours on a re-embed and then read the eval numbers as a
+    /// property of the chunk size, so a refusal at startup naming both values is
+    /// worth far more than a clamp they never see.
+    /// </remarks>
+    public ChunkingService(IOptions<EmbedderOptions> options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var sizeTokens = Math.Max(1, options.Value.ChunkSizeTokens);
+        var overlapTokens = Math.Max(0, options.Value.ChunkOverlapTokens);
+        var maxOverlapTokens = sizeTokens / 2;
+
+        if (overlapTokens > maxOverlapTokens)
+        {
+            throw new InvalidOperationException(
+                $"Embedder:ChunkOverlapTokens ({overlapTokens}) must be at most half of " +
+                $"Embedder:ChunkSizeTokens ({sizeTokens}) — {maxOverlapTokens} or less. " +
+                "A larger overlap collapses the chunker's slide step, emitting near-duplicate " +
+                "chunks (one per character once overlap reaches the chunk size) and one embedding " +
+                "request each. If you lowered ChunkSizeTokens for an embedding experiment, lower " +
+                "ChunkOverlapTokens to match.");
+        }
+
+        _maxChars = sizeTokens * CharsPerToken;
+        _overlapChars = overlapTokens * CharsPerToken;
+    }
 
     public IReadOnlyList<TextChunk> Chunk(string? body)
     {
@@ -99,6 +148,10 @@ public sealed class ChunkingService(IOptions<EmbedderOptions> options)
     private IEnumerable<string> HardSplit(string s)
     {
         // Slide a window with overlap across an unbroken block (e.g. a long URL or wall of text).
+        // The Max(1, …) is unreachable now that the constructor caps overlap at
+        // half the chunk size — and it is not a substitute for that cap: a step
+        // clamped to 1 is precisely the one-chunk-per-character blow-up, so
+        // reaching this clamp would already be the bug, not a save from it.
         var step = Math.Max(1, _maxChars - _overlapChars);
         for (int i = 0; i < s.Length; i += step)
         {
