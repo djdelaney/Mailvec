@@ -667,6 +667,92 @@ public class MessageRepositoryTests
         HashFor(db, survivorPath).ShouldBeNull();
     }
 
+    [Fact]
+    public void FolderStats_counts_rows_whose_membership_backfill_has_not_reached_them()
+    {
+        // The v8 migration leaves the sync_state.folder backfill to the
+        // scanner's next full scan, so a real archive spends that scan in a
+        // MIXED state. FolderStats used to probe `EXISTS(sync_state WHERE
+        // folder IS NOT NULL)` and switch the whole query on it, so the very
+        // first backfilled row flipped every later call to a membership-only
+        // count — silently dropping every message the scan hadn't reached yet,
+        // for the rest of that scan and indefinitely if it never finished.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        // Backfilled: sync_state carries the folder.
+        repo.Upsert(Sample("done@x"), "INBOX", "INBOX/cur", "done", now);
+        SeedSyncState(db, "/Mail/INBOX/cur/done", "done@x", "hash-done@x");
+
+        // Not yet reached: a live message with no sync_state row at all. Its
+        // attributed messages.folder is the only signal it is in INBOX.
+        repo.Upsert(Sample("pending@x"), "INBOX", "INBOX/cur", "pending", now);
+
+        var inbox = repo.FolderStats().Single(s => s.Folder == "INBOX");
+        inbox.MessageCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public void FolderStats_counts_agree_with_what_a_folder_filtered_search_returns()
+    {
+        // A folder's count is a promise about what filtering on that folder
+        // returns, so the two must apply the same disjunction. This pins them
+        // together in the mixed state, which is exactly where they diverged.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(Sample("done@x"), "INBOX", "INBOX/cur", "done", now);
+        SeedSyncState(db, "/Mail/INBOX/cur/done", "done@x", "hash-done@x");
+        repo.Upsert(Sample("pending@x"), "INBOX", "INBOX/cur", "pending", now);
+
+        var stats = repo.FolderStats().Single(s => s.Folder == "INBOX");
+        var hits = new Mailvec.Core.Search.KeywordSearchService(db.Connections)
+            .Search("ramen", 10, new Mailvec.Core.Search.SearchFilters(Folder: "INBOX"));
+
+        stats.MessageCount.ShouldBe(hits.Count);
+    }
+
+    [Fact]
+    public void FolderStats_counts_a_message_once_per_folder_and_reports_its_date_range()
+    {
+        // The union must not double-count the attributed copy, which appears in
+        // BOTH legs once its sync_state row is backfilled — the steady state,
+        // and the case where a naive UNION ALL would silently inflate every
+        // count. Also pins that the date columns survive the CTE rewrite.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        repo.Upsert(Sample("one@x"), "INBOX", "INBOX/cur", "one", now);
+        SeedSyncState(db, "/Mail/INBOX/cur/one", "one@x", "hash-one@x");
+        // A second live copy of the SAME message in the same folder — counts once.
+        SeedSyncState(db, "/Mail/INBOX/cur/one-again", "one@x", "hash-one@x");
+
+        var inbox = repo.FolderStats().Single(s => s.Folder == "INBOX");
+        inbox.MessageCount.ShouldBe(1);
+        inbox.OldestDate.ShouldBe(Sample().DateSent);
+        inbox.LatestDate.ShouldBe(Sample().DateSent);
+    }
+
+    [Fact]
+    public void FolderStats_excludes_soft_deleted_messages_from_both_membership_legs()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long backfilled = repo.Upsert(Sample("gone@x"), "INBOX", "INBOX/cur", "gone", now);
+        SeedSyncState(db, "/Mail/INBOX/cur/gone", "gone@x", "hash-gone@x");
+        long attributedOnly = repo.Upsert(Sample("gone2@x"), "INBOX", "INBOX/cur", "gone2", now);
+        repo.Upsert(Sample("live@x"), "INBOX", "INBOX/cur", "live", now);
+
+        repo.MarkDeleted([backfilled, attributedOnly], now);
+
+        repo.FolderStats().Single(s => s.Folder == "INBOX").MessageCount.ShouldBe(1);
+    }
+
     private static void SeedSyncState(TempDatabase db, string maildirFullPath, string messageId, string contentHash)
     {
         var repo = new SyncStateRepository(db.Connections);
