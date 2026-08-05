@@ -575,21 +575,46 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// Counts come from folder membership (sync_state, v8) so a message living
     /// in several folders (Gmail All Mail + labels) counts in each — matching
     /// what a folder-filtered search would return. A message counts once per
-    /// folder even when a folder holds two copies of it. Falls back to the
-    /// legacy attributed-folder grouping while sync_state.folder is still
-    /// unpopulated (the window between the v8 migration and the scanner's
-    /// next full scan).
+    /// folder even when a folder holds two copies of it.
     /// </summary>
+    /// <remarks>
+    /// The membership CTE is deliberately the same disjunction
+    /// <see cref="Search.SearchFilterSql"/> applies for its folder filter —
+    /// attributed <c>messages.folder</c> UNION populated <c>sync_state.folder</c>
+    /// — because the two have to agree: a folder's count is a promise about what
+    /// filtering on that folder will return.
+    ///
+    /// It replaces a probe (<c>EXISTS(SELECT 1 FROM sync_state WHERE folder IS
+    /// NOT NULL)</c>) that switched the whole query between membership-only and
+    /// a legacy attributed-folder grouping. All-or-nothing was the bug: the
+    /// v8 migration deliberately leaves the backfill to the scanner's next full
+    /// scan, so the FIRST row to gain a folder flipped every subsequent call to
+    /// the membership query while most rows still had NULL — silently dropping
+    /// them from the counts for the rest of that scan, and for as long as the
+    /// scan kept failing to finish (an unreadable directory).
+    ///
+    /// The UNION needs no such mode, because in steady state it is a no-op: a
+    /// message's attributed folder is always also one of its sync_state
+    /// folders, since the attributed copy has a live row and the scanner writes
+    /// that row's folder on every upsert — the mtime fast path included. So the
+    /// first leg contributes exactly the not-yet-backfilled rows and nothing
+    /// else, and there is no post-migration state to unwind.
+    ///
+    /// MATERIALIZED pins, rather than buys, the plan the correlated date
+    /// subqueries want: measured on the 81k-message dev corpus it makes no
+    /// difference (0.325 s either way — SQLite already materializes it), so it
+    /// is there to stop a future planner from re-evaluating the union once per
+    /// folder group, not because it is load-bearing today.
+    ///
+    /// Cost of the rewrite, same corpus: 0.33 s vs 0.18 s warm for the query it
+    /// replaced. list_folders is called once before a folder-filtered search,
+    /// not per search, so 150 ms buys the correctness. If that ever stops being
+    /// true the fix is a covering index on messages(folder, message_id) — not
+    /// the mode switch back.
+    /// </remarks>
     public IReadOnlyList<FolderStats> FolderStats()
     {
         using var conn = connections.Open();
-
-        bool hasMembership;
-        using (var probe = conn.CreateCommand())
-        {
-            probe.CommandText = "SELECT EXISTS(SELECT 1 FROM sync_state WHERE folder IS NOT NULL)";
-            hasMembership = Convert.ToInt64(probe.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 1;
-        }
 
         using var cmd = conn.CreateCommand();
         // oldest/latest via ORDER BY datetime() LIMIT 1 rather than MIN/MAX on
@@ -597,40 +622,37 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // lexical MIN/MAX can pick the wrong extreme. The subquery returns the
         // original offset-bearing string so the caller still parses a correct
         // DateTimeOffset.
-        cmd.CommandText = hasMembership
-            ? """
-              SELECT
-                  ss.folder,
-                  COUNT(DISTINCT ss.message_id) AS msg_count,
-                  (SELECT o.date_sent FROM messages o
-                     JOIN sync_state so ON so.message_id = o.message_id AND so.folder = ss.folder
-                     WHERE o.deleted_at IS NULL AND o.date_sent IS NOT NULL
-                     ORDER BY datetime(o.date_sent) ASC LIMIT 1) AS oldest_date,
-                  (SELECT n.date_sent FROM messages n
-                     JOIN sync_state sn ON sn.message_id = n.message_id AND sn.folder = ss.folder
-                     WHERE n.deleted_at IS NULL AND n.date_sent IS NOT NULL
-                     ORDER BY datetime(n.date_sent) DESC LIMIT 1) AS latest_date
-              FROM sync_state ss
-              JOIN messages m ON m.message_id = ss.message_id AND m.deleted_at IS NULL
-              WHERE ss.folder IS NOT NULL
-              GROUP BY ss.folder
-              ORDER BY ss.folder;
-              """
-            : """
-              SELECT
-                  m.folder,
-                  COUNT(*) AS msg_count,
-                  (SELECT o.date_sent FROM messages o
-                     WHERE o.folder = m.folder AND o.deleted_at IS NULL AND o.date_sent IS NOT NULL
-                     ORDER BY datetime(o.date_sent) ASC LIMIT 1) AS oldest_date,
-                  (SELECT n.date_sent FROM messages n
-                     WHERE n.folder = m.folder AND n.deleted_at IS NULL AND n.date_sent IS NOT NULL
-                     ORDER BY datetime(n.date_sent) DESC LIMIT 1) AS latest_date
-              FROM messages m
-              WHERE m.deleted_at IS NULL
-              GROUP BY m.folder
-              ORDER BY m.folder;
-              """;
+        //
+        // Both legs filter deleted_at, so the subqueries inherit it through the
+        // join to membership and don't repeat it.
+        cmd.CommandText = """
+            WITH membership(folder, message_id) AS MATERIALIZED (
+                SELECT m.folder, m.message_id
+                  FROM messages m
+                 WHERE m.deleted_at IS NULL AND m.folder IS NOT NULL
+                UNION
+                SELECT ss.folder, ss.message_id
+                  FROM sync_state ss
+                  JOIN messages m ON m.message_id = ss.message_id AND m.deleted_at IS NULL
+                 WHERE ss.folder IS NOT NULL
+            )
+            SELECT
+                mb.folder,
+                -- UNION already collapsed duplicate (folder, message_id) pairs,
+                -- so a folder holding two copies of one message counts it once.
+                COUNT(*) AS msg_count,
+                (SELECT o.date_sent FROM messages o
+                   JOIN membership mo ON mo.message_id = o.message_id AND mo.folder = mb.folder
+                  WHERE o.date_sent IS NOT NULL
+                  ORDER BY datetime(o.date_sent) ASC LIMIT 1) AS oldest_date,
+                (SELECT n.date_sent FROM messages n
+                   JOIN membership mn ON mn.message_id = n.message_id AND mn.folder = mb.folder
+                  WHERE n.date_sent IS NOT NULL
+                  ORDER BY datetime(n.date_sent) DESC LIMIT 1) AS latest_date
+            FROM membership mb
+            GROUP BY mb.folder
+            ORDER BY mb.folder;
+            """;
 
         var results = new List<FolderStats>();
         using var reader = cmd.ExecuteReader();
