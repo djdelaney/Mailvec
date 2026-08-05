@@ -51,9 +51,23 @@ FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec4
 RUN apk add --no-cache isync ca-certificates
 RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 #!/bin/sh
-# Interval loop replacing the launchd StartInterval job. 600s default matches
-# the plist (tighter schedules hit mbsync's .mbsyncstate flock and fail with
-# "channel is locked" when a backlog pull overruns the interval).
+# Interval loop replacing the launchd StartInterval job.
+#
+# THIS LOOP CANNOT OVERLAP ITS OWN RUNS, and the interval is a delay AFTER
+# completion rather than an independent timer: it starts `mbsync -a`, waits for
+# that exact child, and only then sleeps. A backlog pull that takes 12 minutes
+# does not queue anything behind it; the next run starts one interval after it
+# finishes. An earlier version of this comment claimed the opposite — that a
+# tighter schedule would collide with an in-flight run and fail with "channel
+# is locked" — which is inherited from the launchd plist's StartInterval and
+# does not describe this loop. (The plist records a real, dated observation of
+# lock failures at 300s; it is left alone here because launchd's own
+# skip-while-running behaviour means those had some other cause, and replacing
+# a measurement with an inference is how a runbook goes quietly wrong.)
+#
+# So 600s is a load choice against the IMAP provider, not a safety floor. A
+# shorter interval is a supportable change — see docs/future-ideas.md's
+# one-minute polling rollout for the canary that would justify it.
 #
 # This runs as PID 1, which gets no default SIGTERM handler — without the
 # trap, every `docker stop` burned the full grace period and SIGKILLed the
@@ -68,6 +82,13 @@ set -u
 : "${MBSYNC_MAILDIR:=/mail/Fastmail}"
 mkdir -p "${MBSYNC_MAILDIR}"
 
+# Cadence of the liveness beat below. A constant, not an env var, and
+# deliberately NOT MBSYNC_INTERVAL_SECONDS: it mirrors
+# ServiceHeartbeat.BeatInterval (60s) so every service in the stack is judged
+# stale on the same scale, and there is nothing deployment-specific to tune.
+# Wiring it to the sync interval is the bug this fixed — see below.
+MBSYNC_BEAT_SECONDS=60
+
 # Liveness beat, read by the MCP server's HealthService via
 # MbsyncHeartbeatFile (Mailvec.Core). This sidecar is the one service that
 # can't write the metadata table the others beat into — it's POSIX sh with no
@@ -79,24 +100,46 @@ mkdir -p "${MBSYNC_MAILDIR}"
 # dotfile in the tree risks being parsed as a folder. Outside the root the
 # scanner never sees it.
 #
-# Format: ISO-8601 UTC, then the interval — the reader shouldn't have to know
-# this container's env to judge staleness. Written after every attempt,
-# including a failed sync: a loop retrying against a dead IMAP server is
-# alive, and that failure belongs in the log below, not in a fake death.
+# Format: ISO-8601 UTC, then the BEAT cadence — the reader shouldn't have to
+# know this container's env to judge staleness, and it judges at
+# StaleAfterMissedBeats (3) x whatever this line says. That line used to carry
+# MBSYNC_INTERVAL_SECONDS, which made the reader's window a multiple of the
+# SYNC cadence rather than the beat's; the two are unrelated now that the beat
+# has its own timer, and conflating them is what let the 600s default hide the
+# bug described below.
 HEARTBEAT="$(dirname "${MBSYNC_MAILDIR}")/.mailvec-mbsync-heartbeat"
 beat() {
-    printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_INTERVAL_SECONDS}" \
+    printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_BEAT_SECONDS}" \
         > "${HEARTBEAT}.tmp" 2>/dev/null \
         && mv -f "${HEARTBEAT}.tmp" "${HEARTBEAT}" 2>/dev/null \
         || true
 }
 
 child=
-trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child"; fi; exit 0' TERM INT
+beater=
+trap 'if [ -n "$beater" ]; then kill "$beater" 2>/dev/null; fi; if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child"; fi; exit 0' TERM INT
+
+# The beat runs on its own timer for the life of the container, NOT after each
+# sync. This is the same rule the .NET services follow (HeartbeatService is a
+# separate BackgroundService with its own PeriodicTimer, precisely so a long
+# Ollama batch can't fake a dead worker), and mbsync needs it for the same
+# reason: beating only on completion means any sync longer than
+# StaleAfterMissedBeats x the declared cadence reports a BUSY sidecar as dead.
+# At the old 600s that window was 30 minutes and a 12-minute backlog pull fit
+# inside it, so the flaw was invisible — it would have surfaced the moment the
+# interval was shortened, as a false red on /health, the tray and `mailvec
+# doctor` during exactly the backlog pulls an operator most wants to watch.
+#
+# One beater for the whole run, rather than one per cycle: a per-cycle beater
+# has to be killed each time, which orphans its in-flight `sleep` onto PID 1
+# and leaks a zombie per sync. Beat once first so a fresh container isn't
+# "unknown" for a full cadence.
+beat
+( while :; do sleep "${MBSYNC_BEAT_SECONDS}"; beat; done ) & beater=$!
+
 while :; do
     mbsync -a & child=$!
     wait "$child" || echo "mbsync: sync failed (exit $?)" >&2
-    beat
     sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
     wait "$child"
 done
