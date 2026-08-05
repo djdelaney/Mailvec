@@ -129,6 +129,97 @@ public class ServiceHeartbeatRoundTripTests
         throw new TimeoutException($"Condition not met within {timeout.TotalSeconds}s");
     }
 
+    // ── Duplicate-instance detection ─────────────────────────────────────────
+    //
+    // Nothing serializes two indexers against one database and Maildir — the
+    // coalescing channel in MessageIngestService is process-local — and two
+    // overlapping scans can soft-delete live messages, because each stamps every
+    // seen file's sync_state.last_seen_at to its own start time and reconciles
+    // deletions against it. These tests cover making that VISIBLE, which is the
+    // deliberate scope: detection, not exclusion.
+
+    private static HeartbeatService Detector(TempDatabase db) =>
+        new(new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance),
+            new MetadataRepository(db.Connections),
+            ServiceHeartbeat.Indexer,
+            NullLogger<HeartbeatService>.Instance);
+
+    [Fact]
+    public void Beat_returns_the_instance_id_it_displaced()
+    {
+        using var db = new TempDatabase();
+        var metadata = new MetadataRepository(db.Connections);
+
+        ServiceHeartbeat.Beat(metadata, ServiceHeartbeat.Indexer, instanceId: "first")
+            .ShouldBeNull("nothing had claimed the slot");
+        ServiceHeartbeat.Beat(metadata, ServiceHeartbeat.Indexer, instanceId: "second")
+            .ShouldBe("first");
+    }
+
+    [Fact]
+    public void A_restarts_leftover_instance_id_is_not_reported_as_a_duplicate()
+    {
+        // The previous run's id sits in the slot after any ordinary restart, so
+        // a single foreign sighting proves nothing. Reporting on one would fire
+        // on every container restart and train the operator to ignore it — the
+        // same false-positive trap the Known/Stale split exists to avoid.
+        using var db = new TempDatabase();
+        var metadata = new MetadataRepository(db.Connections);
+        ServiceHeartbeat.Beat(metadata, ServiceHeartbeat.Indexer, instanceId: "the-previous-run");
+
+        var svc = Detector(db);
+        svc.WriteBeat();   // claims the slot, displacing the leftover
+        svc.WriteBeat();   // sees its own id back — nobody else is beating
+
+        ServiceHeartbeat.Read(metadata, ServiceHeartbeat.Indexer).DuplicateInstanceSeen.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void An_instance_that_keeps_reclaiming_the_slot_is_reported_as_a_duplicate()
+    {
+        // A live second process overwrites the key between our beats, so the
+        // same foreign id comes back repeatedly. Two consecutive sightings is
+        // what separates that from the restart leftover above.
+        using var db = new TempDatabase();
+        var metadata = new MetadataRepository(db.Connections);
+        var svc = Detector(db);
+
+        for (var i = 0; i < 3; i++)
+        {
+            ServiceHeartbeat.Beat(metadata, ServiceHeartbeat.Indexer, instanceId: "the-other-indexer");
+            svc.WriteBeat();
+        }
+
+        ServiceHeartbeat.Read(metadata, ServiceHeartbeat.Indexer).DuplicateInstanceSeen.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_duplicate_report_ages_out_once_the_other_process_stops()
+    {
+        // Self-clearing on the same window as staleness, so stopping the
+        // duplicate is the whole remedy — no reset step to forget, and no
+        // permanently-red indicator left behind.
+        using var db = new TempDatabase();
+        var metadata = new MetadataRepository(db.Connections);
+        var svc = Detector(db);
+
+        for (var i = 0; i < 3; i++)
+        {
+            ServiceHeartbeat.Beat(metadata, ServiceHeartbeat.Indexer, instanceId: "the-other-indexer");
+            svc.WriteBeat();
+        }
+        ServiceHeartbeat.Read(metadata, ServiceHeartbeat.Indexer).DuplicateInstanceSeen.ShouldBeTrue();
+
+        var afterWindow = DateTimeOffset.UtcNow
+            + ServiceHeartbeat.BeatInterval * ServiceHeartbeat.StaleAfterMissedBeats
+            + TimeSpan.FromSeconds(1);
+        // Re-beat at the future instant so only the duplicate marker is old.
+        ServiceHeartbeat.Beat(metadata, ServiceHeartbeat.Indexer, now: afterWindow);
+
+        ServiceHeartbeat.Read(metadata, ServiceHeartbeat.Indexer, afterWindow)
+            .DuplicateInstanceSeen.ShouldBeFalse();
+    }
+
     [Fact]
     public void RecordCycle_is_independent_of_the_liveness_beat()
     {
