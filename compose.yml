@@ -300,6 +300,21 @@ services:
   embedder:
     <<: *mailvec-common
     command: ["dotnet", "/app/embedder/Mailvec.Embedder.dll"]
+    environment:
+      <<: *mailvec-env
+      # OCR knobs, parameterised because the right values depend on whether
+      # Ollama is on a GPU. The defaults below reproduce the in-binary
+      # defaults exactly, so leaving all four unset in .env changes nothing.
+      #
+      # These are the ONLY service that needs them: OCR runs in the embedder
+      # (the indexer never calls Ollama, and the MCP server doesn't OCR).
+      #
+      # Container env is fixed at creation, so `docker compose restart
+      # embedder` silently keeps the old values — use `up -d embedder`.
+      Embedder__OcrEnabled: ${MAILVEC_OCR_ENABLED:-true}
+      Embedder__ImageOcrEnabled: ${MAILVEC_IMAGE_OCR_ENABLED:-true}
+      Ollama__VisionRequestTimeoutSeconds: ${MAILVEC_VISION_TIMEOUT_SECONDS:-120}
+      Ollama__VisionMaxTokens: ${MAILVEC_VISION_MAX_TOKENS:-2048}
     volumes:
       - ./data:/data
       - ./mail:/mail:ro    # OCR pass reads .eml bytes out of the maildir
