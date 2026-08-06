@@ -1029,6 +1029,139 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// Recovered counts are attachments already transcribed (status='ocr'), split
     /// image vs. not. All exclude soft-deleted messages.
     /// </summary>
+    /// <summary>
+    /// Attachments whose current state is a PREVIOUS OCR ENGINE'S VERDICT, and
+    /// the status each must be reset to for the OCR passes to pick it up again.
+    /// </summary>
+    /// <remarks>
+    /// Swapping vision providers re-OCRs nothing on its own: the PDF pass selects
+    /// <c>extraction_status='no_text'</c> and the image pass <c>'unsupported'</c>,
+    /// so anything the old engine already decided — 'ocr' (it produced text),
+    /// or an image at 'no_text' (it decided there was none) — is matched by
+    /// neither query and stays exactly as that engine left it, forever. Including
+    /// its mistakes: a hallucinated transcription remains indexed and searchable
+    /// with nothing left to re-trigger.
+    ///
+    /// Rows at <c>'done'</c> are never candidates — that text came from the
+    /// indexer's native extraction (a real PDF text layer, a DOCX part), not from
+    /// OCR, and re-OCRing it would replace better text with worse.
+    /// <c>'failed'</c> is opt-in because it also covers non-OCR extraction
+    /// failures.
+    /// </remarks>
+    public IReadOnlyList<OcrResetCandidate> EnumerateOcrResetCandidates(bool includeFailed, int limit)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        // Target status mirrors each pass's own candidate predicate, so a reset
+        // row lands exactly where that pass will find it. A file matching
+        // neither predicate is excluded outright rather than reset to a status
+        // nothing selects (which would silently strip its text and orphan it).
+        cmd.CommandText = $"""
+            SELECT a.id, a.message_id, a.extraction_status,
+                   CASE WHEN {PdfOcrMatch} THEN $noText ELSE $unsupported END AS target
+            FROM attachments a
+            JOIN messages m ON m.id = a.message_id
+            WHERE m.deleted_at IS NULL
+              AND ({PdfOcrMatch} OR {ImageOcrMatch})
+              AND (
+                    a.extraction_status = $ocr
+                 OR ({ImageOcrMatch} AND a.extraction_status = $noText)
+                 OR ($includeFailed AND a.extraction_status = $failed)
+              )
+            ORDER BY a.id
+            LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
+        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
+        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
+        cmd.Parameters.AddWithValue("$includeFailed", includeFailed ? 1 : 0);
+        cmd.Parameters.AddWithValue("$limit", limit <= 0 ? int.MaxValue : limit);
+
+        var list = new List<OcrResetCandidate>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new OcrResetCandidate(
+                reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3)));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Reset one message's OCR-decided attachments so the OCR passes reprocess
+    /// them, and re-queue the message for embedding. Returns the number of
+    /// attachment rows actually cleared.
+    /// </summary>
+    /// <remarks>
+    /// Three writes that MUST share one transaction, for reasons documented as
+    /// invariants elsewhere in this file:
+    ///
+    /// 1. Clearing <c>extracted_text</c> without rebuilding
+    ///    <c>messages.attachment_text</c> leaves the FTS column holding text no
+    ///    attachment contains — the denormalization drift the attachment_text
+    ///    invariant exists to prevent.
+    /// 2. Clearing <c>embedded_at</c> without bumping <c>embed_epoch</c> in the
+    ///    SAME transaction lets an in-flight embed stamp straight over the
+    ///    re-queue, leaving vectors built from the OLD OCR text beside the new
+    ///    FTS state, permanently, with no hash delta to re-trigger.
+    /// 3. Committing the status change without the text clear would leave the
+    ///    old engine's text searchable while the pass re-OCRs — and if the run
+    ///    is interrupted there, it stays that way.
+    ///
+    /// The status change itself is what makes this self-healing: the row is
+    /// selectable again, so an interrupted or failed reprocess just gets picked
+    /// up on the next OCR cycle.
+    /// </remarks>
+    public int ResetOcrForMessage(long messageId, IReadOnlyCollection<OcrResetCandidate> attachments)
+    {
+        ArgumentNullException.ThrowIfNull(attachments);
+        if (attachments.Count == 0) return 0;
+
+        using var conn = connections.Open();
+        using var tx = conn.BeginTransaction();
+
+        var cleared = 0;
+        foreach (var a in attachments)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            // Guarded on the status we selected under: between enumeration and
+            // this write the OCR pass may have re-decided the row, and clearing
+            // a status we never inspected would discard work we didn't mean to.
+            cmd.CommandText = """
+                UPDATE attachments
+                SET extracted_text = NULL, extracted_at = NULL, extraction_status = $target
+                WHERE id = $id AND message_id = $mid AND extraction_status = $from;
+                """;
+            cmd.Parameters.AddWithValue("$target", a.TargetStatus);
+            cmd.Parameters.AddWithValue("$id", a.AttachmentId);
+            cmd.Parameters.AddWithValue("$mid", messageId);
+            cmd.Parameters.AddWithValue("$from", a.CurrentStatus);
+            cleared += cmd.ExecuteNonQuery();
+        }
+
+        if (cleared == 0)
+        {
+            tx.Rollback();
+            return 0;
+        }
+
+        var attachmentText = ConcatAttachmentText(conn, tx, messageId);
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText =
+                "UPDATE messages SET attachment_text = $at, embedded_at = NULL, embed_epoch = embed_epoch + 1 WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$at", (object?)attachmentText ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$id", messageId);
+            cmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+        return cleared;
+    }
+
     public OcrStageCounts OcrCounts(long imageMinBytes)
     {
         using var conn = connections.Open();
@@ -1547,6 +1680,14 @@ public sealed class MessageRepository(ConnectionFactory connections)
 /// are the pipeline totals; the per-source fields let the UI show the split
 /// (scanned PDFs vs image attachments).
 /// </summary>
+/// <summary>
+/// An attachment holding a previous OCR engine's verdict, plus the status it
+/// must return to for the OCR passes to select it again. See
+/// <see cref="MessageRepository.EnumerateOcrResetCandidates"/>.
+/// </summary>
+public sealed record OcrResetCandidate(
+    long AttachmentId, long MessageId, string CurrentStatus, string TargetStatus);
+
 public sealed record OcrStageCounts(long PdfPending, long ImagePending, long PdfRecovered, long ImageRecovered)
 {
     public long Pending => PdfPending + ImagePending;

@@ -61,17 +61,16 @@ builder.Services
     });
 builder.Services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
 
-// Vision client for scanned-PDF OCR — its own HttpClient with a longer timeout
-// (OCR runs much longer than an embed). No resilience handler: a transient
-// failure just leaves the PDF for the next OCR pass.
-builder.Services
-    .AddHttpClient<OllamaVisionClient>((sp, client) =>
-    {
-        var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-        client.BaseAddress = new Uri(opts.BaseUrl);
-        client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.VisionRequestTimeoutSeconds));
-    });
-builder.Services.AddTransient<IVisionClient>(sp => sp.GetRequiredService<OllamaVisionClient>());
+// Vision client for scanned-PDF + image OCR — its own HttpClient with a longer
+// timeout (OCR runs much longer than an embed). No resilience handler: a
+// transient failure just leaves the document for the next OCR pass, and the
+// hosted provider does its own Retry-After handling internally. Provider is
+// Vision:Provider (ollama default, mistral for the hosted API).
+// requiresCredentials: this is the process that actually OCRs, so incomplete
+// provider config is fatal here — a service that starts cleanly and quietly
+// never OCRs anything is the worst outcome. MCP and CLI only probe, so they
+// degrade to "unavailable" instead (see AddMailvecVision).
+builder.Services.AddMailvecVision(builder.Configuration, requiresCredentials: true);
 // AttachmentOcrService is native-renderer-backed and platform-gated; register it
 // only where supported. On any other platform it stays unregistered and the
 // EmbeddingWorker's optional OCR dependency falls back to null (OCR skipped).

@@ -252,6 +252,75 @@ public sealed class AttachmentOcrService(
         }
     }
 
+    /// <summary>What the batch loop should do with a classified vision failure.</summary>
+    private enum VisionFailureAction
+    {
+        /// <summary>Fall through to the historical path: strike-eligible, may retire.</summary>
+        CountAsTransient,
+
+        /// <summary>This document is done for; already marked. Move to the next candidate.</summary>
+        SkipDocument,
+
+        /// <summary>Stop the batch. Nothing counted, everything stays selectable.</summary>
+        AbortBatch,
+    }
+
+    /// <summary>
+    /// Route a vision failure by its declared cause.
+    ///
+    /// The historical design inferred cause from context — "did anything else
+    /// succeed this cycle?" — which is sound for a local model whose only
+    /// failure modes are a bad document or a dead runner. A hosted provider
+    /// breaks that inference, and one case breaks it destructively:
+    /// <see cref="VisionFailureKind.Backpressure"/>. A 429 arrives while other
+    /// documents in the same cycle succeed, so the pass concludes the model is
+    /// healthy, counts a strike, and after five throttled cycles stamps a
+    /// perfectly good scan 'failed' — permanently, since nothing re-selects a
+    /// failed row. Backpressure therefore aborts the batch and counts nothing;
+    /// the pass runs again next poll, which IS the backoff.
+    ///
+    /// An unclassified exception falls through to the transient path, so a
+    /// provider that forgets to classify something degrades to "retry it"
+    /// rather than "destroy it".
+    /// </summary>
+    private VisionFailureAction ClassifyVisionFailure(Exception ex, OcrCandidate c, string pass)
+    {
+        if (ex is not VisionException vision) return VisionFailureAction.CountAsTransient;
+
+        switch (vision.Kind)
+        {
+            case VisionFailureKind.Backpressure:
+                logger.LogWarning(
+                    "{Pass}: provider asked us to slow down (attachment {AttachmentId}); aborting this cycle's batch. " +
+                    "Nothing retired — backpressure says nothing about the document.",
+                    pass, c.AttachmentId);
+                return VisionFailureAction.AbortBatch;
+
+            case VisionFailureKind.AuthOrConfig:
+                // Every call will fail identically until a human intervenes.
+                // Retiring documents here would empty the queue for a reason
+                // that has nothing to do with any of them.
+                logger.LogError(ex,
+                    "{Pass}: vision provider rejected our credentials or endpoint; aborting OCR until reconfigured. " +
+                    "Nothing retired. Check Vision:Provider and its credentials.",
+                    pass);
+                return VisionFailureAction.AbortBatch;
+
+            case VisionFailureKind.DocumentFatal:
+                // Deterministic for this payload — retire it now rather than
+                // burning MaxVisionAttempts cycles rediscovering that. Same
+                // treatment a PDF PDFium cannot open already gets.
+                logger.LogWarning(ex,
+                    "{Pass}: provider refused attachment {AttachmentId} as unprocessable; marking failed.",
+                    pass, c.AttachmentId);
+                messages.MarkAttachmentOcrFailed(c);
+                return VisionFailureAction.SkipDocument;
+
+            default:
+                return VisionFailureAction.CountAsTransient;
+        }
+    }
+
     // Returns true when this exact document has failed enough counted times to retire.
     private bool RecordVisionFailure(OcrCandidate candidate)
     {
@@ -445,6 +514,10 @@ public sealed class AttachmentOcrService(
             }
             catch (Exception ex)
             {
+                var outcome = ClassifyVisionFailure(ex, c, "OCR");
+                if (outcome == VisionFailureAction.AbortBatch) break;
+                if (outcome == VisionFailureAction.SkipDocument) continue;
+
                 // Transient until proven otherwise: Ollama down, or an HTTP
                 // timeout (which surfaces as TaskCanceledException — an
                 // OperationCanceledException — while ct is NOT cancelled).
@@ -625,6 +698,14 @@ public sealed class AttachmentOcrService(
                 // end of cycle whether these count toward retirement (only
                 // when another call succeeded this cycle, proving the model
                 // can run) or get written off as an Ollama outage.
+                //
+                // Classified first, for the same reasons as the PDF pass — and
+                // this pass is the one a hosted provider hits hardest, since the
+                // image backlog is an order of magnitude larger than the PDF one.
+                var outcome = ClassifyVisionFailure(ex, c, "Image OCR");
+                if (outcome == VisionFailureAction.AbortBatch) break;
+                if (outcome == VisionFailureAction.SkipDocument) continue;
+
                 failedThisCycle.Add(c);
                 if (++consecutiveFailures >= MaxConsecutiveCycleFailures)
                 {

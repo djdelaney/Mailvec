@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Mailvec.Core.Ollama;
+using Mailvec.Core.Vision;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -41,7 +42,23 @@ public class OllamaVisionClientTests
         {
             Content = new StringContent("model 'qwen2.5vl:7b' not found"),
         });
-        await Should.ThrowAsync<HttpRequestException>(() => client.OcrAsync([1]));
+        // 404 from a local Ollama means the model isn't pulled — a configuration
+        // problem, not a verdict on the document. It must classify as
+        // AuthOrConfig so the OCR pass aborts the batch rather than accruing
+        // strikes and eventually retiring good scans to 'failed'.
+        var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
+        ex.Kind.ShouldBe(VisionFailureKind.AuthOrConfig);
+    }
+
+    [Fact]
+    public async Task OcrAsync_classifies_a_server_error_as_transient()
+    {
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent("runner crashed"),
+        });
+        var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
+        ex.Kind.ShouldBe(VisionFailureKind.Transient);
     }
 
     [Fact]
