@@ -66,7 +66,7 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         // yes, values no", and a new top-level block should have to be argued
         // for here rather than arriving with a feature.
         doc.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n)
-            .ShouldBe(["embedder", "embeddings", "ollama", "services", "status", "version"]);
+            .ShouldBe(["embedder", "embeddings", "mail", "ollama", "services", "status", "version"]);
 
         // Belt and braces on the specific disclosures that motivated the split
         // — a renamed field would slip past a property-name check.
@@ -78,6 +78,7 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         body.ShouldNotContain("chunkCount");     // corpus size
         body.ShouldNotContain("lastFailureKind"); // embedder error detail
         body.ShouldNotContain("lastBeatAt");     // per-service timestamps
+        body.ShouldNotContain("lastSyncAt");     // when the user's mail arrives
     }
 
     /// <summary>
@@ -103,6 +104,14 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         root.GetProperty("embeddings").GetProperty("modelMismatch").ValueKind
             .ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
 
+        // mail.syncStale — the sidecar beats whether or not its syncs work, so
+        // this is the only signal that distinguishes a healthy sidecar from one
+        // failing every pull. Nothing else in the pipeline can tell.
+        root.GetProperty("mail").GetProperty("syncStale").ValueKind
+            .ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+        root.GetProperty("mail").GetProperty("known").ValueKind
+            .ShouldBeOneOf(JsonValueKind.True, JsonValueKind.False);
+
         // services[service='indexer'|'embedder'|'mbsync'].stale
         var services = root.GetProperty("services").EnumerateArray().ToList();
         services.Select(s => s.GetProperty("service").GetString())
@@ -114,7 +123,8 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         }
 
         // The single-monitor fallback query in the same doc is
-        // "status = 'ok' and $count(services[stale = true]) = 0".
+        // "status = 'ok' and $count(services[stale = true]) = 0
+        //  and mail.syncStale = false".
         root.GetProperty("status").GetString().ShouldNotBeNullOrEmpty();
     }
 

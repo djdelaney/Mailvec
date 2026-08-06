@@ -157,6 +157,86 @@ public class DoctorHealthChecksTests
         c.Detail.ShouldNotContain("unreachable at");
     }
 
+    // ---------- mbsync sync outcome ----------
+    //
+    // The check that catches a sidecar which is alive and beating but whose
+    // every sync fails. Nothing else in the pipeline can: "Last indexed" only
+    // advances when new mail genuinely arrives, so on a quiet mailbox it reads
+    // identically whether sync works or has been broken for a week.
+    //
+    // Called directly rather than through Run(), because AddHealthChecks gates
+    // it on InContainer() — which is a property of the machine running the
+    // tests, not something a fixture should depend on.
+
+    private static readonly DateTimeOffset Now = new(2026, 8, 6, 12, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void Failing_syncs_fail_the_check_and_say_it_is_not_a_dead_container()
+    {
+        // The whole point of the wording: an operator seeing this must not go
+        // looking for a stopped container. The container is fine.
+        var mail = new MailHealth(Now.AddHours(-6), 600, SyncStale: true, Known: true);
+
+        var c = DoctorCommand.MbsyncSyncCheck(mail, inContainer: true, now: Now).ShouldNotBeNull();
+
+        c.Status.ShouldBe("fail");
+        c.Detail.ShouldContain("NOT a dead container");
+        c.Detail.ShouldContain("app password");
+        c.Detail.ShouldContain("docker compose logs mbsync");
+    }
+
+    [Fact]
+    public void A_recent_successful_sync_is_ok()
+    {
+        var mail = new MailHealth(Now.AddMinutes(-3), 600, SyncStale: false, Known: true);
+
+        var c = DoctorCommand.MbsyncSyncCheck(mail, inContainer: true, now: Now).ShouldNotBeNull();
+
+        c.Status.ShouldBe("ok");
+        c.Detail.ShouldContain("3m");
+    }
+
+    [Fact]
+    public void No_sync_on_record_warns_rather_than_fails()
+    {
+        // Also the reading for the first minutes of a fresh deploy, and doctor
+        // is run by hand rather than paging anyone — so this must not be a
+        // fail that cries wolf on every new stack.
+        var mail = new MailHealth(null, null, SyncStale: false, Known: false);
+
+        var c = DoctorCommand.MbsyncSyncCheck(mail, inContainer: true, now: Now).ShouldNotBeNull();
+
+        c.Status.ShouldBe("warn");
+        c.Detail.ShouldContain("fresh deploy");
+    }
+
+    [Fact]
+    public void Emits_nothing_outside_a_container()
+    {
+        // Only the Alpine sidecar writes the marker. On a launchd install the
+        // file never exists, so a row here would be a permanent meaningless
+        // unknown — mbsync is covered there by the stderr-log check instead.
+        DoctorCommand.MbsyncSyncCheck(
+            new MailHealth(null, null, SyncStale: false, Known: false),
+            inContainer: false, now: Now).ShouldBeNull();
+
+        DoctorCommand.MbsyncSyncCheck(
+            new MailHealth(Now.AddHours(-6), 600, SyncStale: true, Known: true),
+            inContainer: false, now: Now).ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_quoted_threshold_matches_the_one_the_verdict_used()
+    {
+        // Doctor explains the verdict by quoting a window; if it re-derived
+        // that number instead of asking MbsyncSyncFile, the two could drift and
+        // the message would contradict the status beside it. 600s x 4 = 40m.
+        var mail = new MailHealth(Now.AddHours(-6), 600, SyncStale: true, Known: true);
+
+        DoctorCommand.MbsyncSyncCheck(mail, inContainer: true, now: Now)!
+            .Detail.ShouldContain("threshold 40m");
+    }
+
     // ---------- builders ----------
 
     private static IReadOnlyList<DoctorCommand.DoctorCheck> Run(HealthReport report, bool skipNet = false)
@@ -181,6 +261,7 @@ public class DoctorHealthChecksTests
             Ollama: ollama ?? Oll(),
             Embedder: new EmbedderHealth(null, null, 0, null, Stuck: false),
             Ocr: new OcrHealth(Enabled: false, VisionModel: "qwen2.5vl:7b", ModelAvailable: null, Pending: 0, Recovered: 0, ImagePending: 0, ImageRecovered: 0),
+            Mail: new MailHealth(LastSyncAt: null, ExpectedIntervalSeconds: null, SyncStale: false, Known: false),
             Services: []);
 
     private static DatabaseHealth Db(long total = 100, long deleted = 0, DateTimeOffset? lastIndexed = null)

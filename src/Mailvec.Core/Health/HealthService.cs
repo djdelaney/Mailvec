@@ -30,7 +30,10 @@ public sealed class HealthService(
     // Same optional-dep rationale as above. Null => mbsync liveness reports
     // "unknown", which is also the honest answer on a launchd install where
     // no sidecar writes the beat file.
-    MbsyncHeartbeatFile? mbsyncHeartbeat = null)
+    MbsyncHeartbeatFile? mbsyncHeartbeat = null,
+    // Ditto for mbsync's last-successful-sync marker. Separate dep because it
+    // is a separate fact written by a separate writer — see MbsyncSyncFile.
+    MbsyncSyncFile? mbsyncSync = null)
 {
     // The version /health reports. Core's own assembly, not the entry
     // assembly: every Mailvec assembly is stamped from the one repo-wide
@@ -130,6 +133,8 @@ public sealed class HealthService(
 
         var services = BuildServiceLiveness();
 
+        var mail = mbsyncSync?.Read() ?? MbsyncSyncFile.Classify(null, null);
+
         // OCR is deliberately NOT part of the degraded decision. Scanned PDFs are
         // a minority of the corpus and search works fine without them, so a
         // missing vision model or an OCR backlog is informational — surfaced in
@@ -143,6 +148,12 @@ public sealed class HealthService(
         // unhealthy because a *sibling* container died, which is both wrong and
         // actively confusing when triaging. Liveness rides along in Services for
         // a client to render; it never flips the 503.
+        //
+        // Mail.SyncStale is excluded for exactly that second reason: a sidecar
+        // whose syncs keep failing is a real pipeline outage, but it is the
+        // MBSYNC container's outage, and MCP can still serve search over every
+        // message already indexed. Monitor it with its own query — the Uptime
+        // Kuma runbook's consolidated expression has a clause for it.
         var status = (ollamaReachable, modelMismatch, embedder.Stuck) switch
         {
             (false, _, _) => "degraded",
@@ -175,6 +186,7 @@ public sealed class HealthService(
                 EmbeddingModelAvailable: embeddingModelAvailable),
             Embedder: embedder,
             Ocr: ocr,
+            Mail: mail,
             Services: services);
     }
 
@@ -301,15 +313,16 @@ public sealed class HealthService(
 /// here answers "is something wrong", and nothing here says what the thing IS.
 /// Deliberately absent: the archive's filesystem path, corpus and chunk counts,
 /// embedding model identity and dimensions, embedder failure timestamps and
-/// kinds, OCR counts, per-service beat timestamps, and the Ollama base URL —
-/// that last being an internal LAN address, on a host with no authentication of
-/// its own. A leaked monitoring credential learns that the embedder is stuck,
-/// not how much mail there is or where any of it lives.</para>
+/// kinds, OCR counts, per-service beat timestamps, the last successful sync
+/// time, and the Ollama base URL — that last being an internal LAN address, on
+/// a host with no authentication of its own. A leaked monitoring credential
+/// learns that the embedder is stuck, not how much mail there is, when it
+/// arrives, or where any of it lives.</para>
 ///
-/// <para><b>The field names are a wire contract with Uptime Kuma.</b> Six
+/// <para><b>The field names are a wire contract with Uptime Kuma.</b> Seven
 /// monitors evaluate JSONata against this body — <c>ollama.reachable</c>,
-/// <c>embedder.stuck</c>, <c>embeddings.modelMismatch</c>, and
-/// <c>services[service='indexer'|'embedder'|'mbsync'].stale</c>. The paths are
+/// <c>embedder.stuck</c>, <c>embeddings.modelMismatch</c>, <c>mail.syncStale</c>,
+/// and <c>services[service='indexer'|'embedder'|'mbsync'].stale</c>. The paths are
 /// deliberately identical to <see cref="HealthReport"/>'s so a query written
 /// against either endpoint works on both. Renaming or nesting anything here
 /// silently breaks a monitor: JSONata resolves the missing path to nothing, and
@@ -323,6 +336,7 @@ public sealed record UpReport(
     UpEmbeddings Embeddings,
     UpOllama Ollama,
     UpEmbedder Embedder,
+    UpMail Mail,
     IReadOnlyList<UpServiceLiveness> Services);
 
 /// <summary>Whether the schema's embedding model disagrees with config — not which model.</summary>
@@ -333,6 +347,20 @@ public sealed record UpOllama(bool Reachable);
 
 /// <summary>Whether the embedder is failing to drain — not since when, or with what error.</summary>
 public sealed record UpEmbedder(bool Stuck);
+
+/// <summary>
+/// Whether IMAP sync has stopped succeeding — not when it last did.
+/// </summary>
+/// <remarks>
+/// The timestamp is withheld deliberately, and it is the one field on this
+/// endpoint whose omission is about the USER rather than the deployment:
+/// last-successful-sync times, sampled every minute by a monitor, are a log of
+/// when the mailbox is active. The boolean answers the monitoring question
+/// completely. <c>Known</c> rides along for the same reason it does on
+/// <see cref="UpServiceLiveness"/> — "no marker yet" and "sync is broken" are
+/// different answers, and a monitor author needs to tell them apart.
+/// </remarks>
+public sealed record UpMail(bool Known, bool SyncStale);
 
 /// <summary>
 /// Per-service liveness, minus the beat timestamps and cadence that
@@ -351,7 +379,29 @@ public sealed record HealthReport(
     OllamaHealth Ollama,
     EmbedderHealth Embedder,
     OcrHealth Ocr,
+    MailHealth Mail,
     IReadOnlyList<ServiceLiveness> Services);
+
+/// <summary>
+/// Outcome of the mbsync sidecar's last sync attempt — the third signal
+/// alongside its liveness beat, written to a separate file by a separate
+/// writer. See <see cref="MbsyncSyncFile"/> for why the beat can't carry it
+/// and why a beating-but-always-failing sidecar is otherwise invisible.
+///
+/// <para>Informational, exactly like <c>Services</c>: it never contributes to
+/// <see cref="HealthReport.Status"/>. A broken sync is the mbsync container's
+/// outage, and /health is the mcp container's own compose healthcheck — see
+/// the comment at the Status switch.</para>
+///
+/// <para><c>Known=false</c> means no marker on record: a fresh deployment, or
+/// a macOS launchd install where no sidecar writes one. Reported as unknown
+/// rather than stale; render it grey, not red.</para>
+/// </summary>
+public sealed record MailHealth(
+    DateTimeOffset? LastSyncAt,
+    int? ExpectedIntervalSeconds,
+    bool SyncStale,
+    bool Known);
 
 /// <summary>
 /// Snapshot of the OCR stage (the embedder's vision pass over both scanned PDFs

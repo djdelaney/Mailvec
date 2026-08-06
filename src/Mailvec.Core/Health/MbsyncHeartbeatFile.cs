@@ -12,7 +12,9 @@ namespace Mailvec.Core.Health;
 /// no .NET, no SQLite client, and adding either to get one timestamp across
 /// would be absurd. It already shares the Maildir bind mount with every other
 /// service, so a file there is the cheapest channel that exists. Written by
-/// <c>mbsync-loop</c> after each cycle, read here.</para>
+/// <c>mbsync-loop</c> on its own 60s timer — not after each cycle — and read
+/// here. Sync OUTCOME is a separate fact with a separate writer and a separate
+/// file; see <see cref="MbsyncSyncFile"/>.</para>
 ///
 /// <para><b>Location matters.</b> The beat sits at the Maildir <i>parent</i>
 /// (<c>/mail/.mailvec-mbsync-heartbeat</c>, next to <c>/mail/Fastmail</c>) and
@@ -70,12 +72,23 @@ public sealed class MbsyncHeartbeatFile(IOptions<IngestOptions> ingest)
     }
 
     /// <summary>
-    /// mbsync reports one timestamp, used as both liveness and cycle: the
-    /// sidecar's loop writes the beat after every sync attempt, so "the loop
-    /// is turning" and "the process is alive" are the same fact here. It beats
-    /// on a failed sync too — a loop retrying against a dead IMAP server is
-    /// alive, and that failure surfaces in <c>docker logs</c>, not as a fake
-    /// death.
+    /// mbsync reports liveness only — <c>LastCycleAt</c> is null.
+    ///
+    /// <para>It used to pass this same timestamp for both axes, which was
+    /// honest while the sidecar beat after each sync: "the loop is turning"
+    /// and "the process is alive" were then one fact. 6192314 moved the beat
+    /// onto its own timer and did not revisit this, leaving the progress axis
+    /// re-reporting the beat time — a tautology that /health rendered as a
+    /// real signal. Null is the honest answer (see <see cref="ServiceLiveness"/>:
+    /// "null when the service reports liveness but not cycles"), and nothing is
+    /// lost, because the value it carried was already just <c>LastBeatAt</c>.</para>
+    ///
+    /// <para>The fact the alias was standing in for — did the sync actually
+    /// work — is a genuinely separate signal with a separate writer: see
+    /// <see cref="MbsyncSyncFile"/>. Don't re-alias this to it. The beat is
+    /// deliberately written on a failed sync too, because a loop retrying
+    /// against a dead IMAP server is alive, and folding outcome into liveness
+    /// is what makes a busy or sick worker look dead.</para>
     /// </summary>
     public ServiceLiveness Read(DateTimeOffset? now = null)
     {
@@ -98,7 +111,7 @@ public sealed class MbsyncHeartbeatFile(IOptions<IngestOptions> ingest)
                 ? i
                 : (int?)null;
 
-            return ServiceHeartbeat.Classify(Service, at, at, interval, now);
+            return ServiceHeartbeat.Classify(Service, at, lastCycleAt: null, interval, now);
         }
         catch (IOException)
         {
