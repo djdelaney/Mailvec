@@ -198,15 +198,20 @@ static async Task RunHttp(string[] args)
     {
         var report = await health.CheckAsync(ct).ConfigureAwait(false);
         // Booleans yes, values no — see UpReport. The JSONata paths here are
-        // deliberately identical to /health's, because six Uptime Kuma monitors
-        // read them; changing a name silently breaks a monitor rather than
-        // failing anything. docs/monitoring-uptime-kuma.md has the table.
+        // deliberately identical to /health's, because seven Uptime Kuma
+        // monitors read them; changing a name silently breaks a monitor rather
+        // than failing anything. docs/monitoring-uptime-kuma.md has the table.
+        //
+        // mail.syncStale in particular carries NO timestamp: the boolean answers
+        // the monitoring question, while last-successful-sync times polled every
+        // minute would build a log of when the user's mailbox is active.
         var minimal = new UpReport(
             report.Status,
             report.Version,
             new UpEmbeddings(report.Embeddings.ModelMismatch),
             new UpOllama(report.Ollama.Reachable),
             new UpEmbedder(report.Embedder.Stuck),
+            new UpMail(report.Mail.Known, report.Mail.SyncStale),
             [.. report.Services.Select(s => new UpServiceLiveness(s.Service, s.Known, s.Stale))]);
         return report.Status == "ok"
             ? Results.Ok(minimal)
@@ -339,6 +344,10 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     // write the metadata table the other workers beat into. See
     // ServiceHeartbeat for why the three services report differently.
     services.AddSingleton<MbsyncHeartbeatFile>();
+    // The sidecar's sync-OUTCOME marker, written by a different writer to a
+    // different file. Separate because the beat is deliberately blind to
+    // whether the sync worked — see MbsyncSyncFile.
+    services.AddSingleton<MbsyncSyncFile>();
     services.AddSingleton<HealthService>();
     services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
     // Tray-facing services (consumed by the REST /tray/* endpoints).

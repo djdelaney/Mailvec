@@ -238,7 +238,7 @@ internal static class DoctorCommand
         // socket errors), so the launchctl-reported exit code above is
         // not enough on its own. Tail the stderr log and surface anything
         // recent here — same source the tray's mbsync tile reads from.
-        checks.Add(InspectMbsyncStderr());
+        checks.Add(InspectMbsyncStderr(InContainer()));
 
         // ---------------------------------------------------------------
         // OCR (vision) model — when the embedder is set to OCR scanned PDFs,
@@ -393,6 +393,13 @@ internal static class DoctorCommand
             checks.Add(DoctorCheck.Warn("Last indexed", "no messages indexed yet.", "pipeline"));
         }
 
+        // Note the check above cannot stand in for the one below: "Last
+        // indexed" only advances when new mail actually arrives, so on a quiet
+        // mailbox it reads identically whether sync is working or has been
+        // broken for a week. That ambiguity is the whole reason mbsync writes
+        // a separate success marker.
+        if (MbsyncSyncCheck(report.Mail, InContainer()) is { } sync) checks.Add(sync);
+
         if (skipNet)
         {
             checks.Add(DoctorCheck.Warn("Ollama", "skipped (--no-net)", "pipeline"));
@@ -541,6 +548,13 @@ internal static class DoctorCommand
             // is what surfaces live service state. Empty (not a synthesised
             // "unknown" row per service) so a reader can't mistake this offline
             // report for a liveness verdict.
+            // Unlike the two blocks above, this one IS available offline — the
+            // sync marker is a two-line file on the Maildir mount, no network
+            // and no heartbeat metadata involved. Read it for real; a hardcoded
+            // "unknown" here would silently disable the mbsync sync check on
+            // exactly the --skip-net runs where an operator is already
+            // suspicious that something is wrong.
+            Mail: sp.GetRequiredService<MbsyncSyncFile>().Read(),
             Services: []);
     }
 
@@ -599,8 +613,31 @@ internal static class DoctorCommand
     /// tray reads from so the doctor checklist and the tray's mbsync tile
     /// can't disagree about what's wrong.
     /// </summary>
-    private static DoctorCheck InspectMbsyncStderr()
+    private static DoctorCheck InspectMbsyncStderr(bool inContainer)
     {
+        // In a container this log cannot exist: the sidecar is Alpine + a sh
+        // loop with no Serilog and no ~/Library/Logs, and its stderr goes to
+        // `docker logs`. CheckRecent returns null for a missing file exactly as
+        // it does for a clean one, so this used to report "no recent errors" —
+        // a confident green for a signal it had never been able to read, sat
+        // right beside the mbsync sync check that CAN see the failure.
+        if (inContainer)
+        {
+            return DoctorCheck.Ok("mbsync stderr",
+                "n/a in a container — the sidecar writes stderr to `docker compose logs mbsync`. Sync outcome is covered by the `mbsync sync` check.",
+                "services");
+        }
+
+        var logPath = PathExpansion.Expand(Mailvec.Core.Tray.MbsyncErrorTail.DefaultLogPath);
+        if (!File.Exists(logPath))
+        {
+            // Same distinction as above, off-container: no log is not the same
+            // finding as a clean log.
+            return DoctorCheck.Ok("mbsync stderr",
+                $"no log at {Mailvec.Core.Tray.MbsyncErrorTail.DefaultLogPath} — mbsync has not run under launchd here",
+                "services");
+        }
+
         var err = new Mailvec.Core.Tray.MbsyncErrorTail().CheckRecent();
         if (err is null)
         {
@@ -839,6 +876,53 @@ internal static class DoctorCommand
             // real one gets missed.
             ? DoctorCheck.Ok("Supervisor", "compose (no launchd in a container)", "services")
             : DoctorCheck.Warn("launchd", $"skipped — only macOS is supported as a host today (running on {platform}).", "services");
+
+    /// <summary>
+    /// Whether mbsync's syncs are still SUCCEEDING — a different question from
+    /// whether the sidecar is alive, and the only check that catches a
+    /// beating-but-failing one.
+    /// </summary>
+    /// <remarks>
+    /// The sidecar's liveness beat is written on its own timer regardless of
+    /// whether <c>mbsync -a</c> worked, deliberately: a loop retrying against a
+    /// dead IMAP server is alive. So an expired Fastmail app password, an
+    /// mbsyncrc <c>Patterns</c> typo or lost DNS leaves every container green,
+    /// every heartbeat fresh, and no mail arriving — with nothing else in the
+    /// pipeline able to tell, because the indexer's timestamps only move when
+    /// new mail is genuinely ingested. See <see cref="MbsyncSyncFile"/>.
+    ///
+    /// Returns null outside a container: only the Alpine sidecar writes the
+    /// marker, so on a launchd install the file never exists and a row here
+    /// would be a permanent unknown that means nothing. mbsync is covered
+    /// there by <see cref="InspectMbsyncStderr"/>, which reads the launchd
+    /// stderr log that doesn't exist in the container — the two are
+    /// complementary, not redundant.
+    /// </remarks>
+    internal static DoctorCheck? MbsyncSyncCheck(MailHealth mail, bool inContainer, DateTimeOffset? now = null)
+    {
+        if (!inContainer) return null;
+
+        if (!mail.Known || mail.LastSyncAt is not { } last)
+        {
+            // Deliberately a warn, not a fail: this is also the reading for the
+            // first minutes of a fresh deploy, and doctor is a diagnostic run
+            // by hand rather than a pager.
+            return DoctorCheck.Warn("mbsync sync",
+                "no successful sync on record. Expected for the first minutes after a fresh deploy — but if the stack has been up longer than one sync interval, no sync has EVER succeeded. Check `docker compose logs mbsync`: app password, mbsyncrc Patterns, or DNS.",
+                "services");
+        }
+
+        var age = (now ?? DateTimeOffset.UtcNow) - last.ToUniversalTime();
+        if (!mail.SyncStale)
+        {
+            return DoctorCheck.Ok("mbsync sync", $"last successful sync {HumanizeAge(age)} ago", "services");
+        }
+
+        var window = MbsyncSyncFile.StaleWindow(mail.ExpectedIntervalSeconds ?? 0);
+        return DoctorCheck.Fail("mbsync sync",
+            $"no successful sync for {HumanizeAge(age)} (threshold {HumanizeAge(window)}). The sidecar is still beating, so this is NOT a dead container — its syncs are failing. Check `docker compose logs mbsync`: an expired Fastmail app password, an mbsyncrc Patterns typo, or DNS.",
+            "services");
+    }
 
     /// <summary>
     /// The external-tool verdict for mbsync. Absent-from-PATH means different

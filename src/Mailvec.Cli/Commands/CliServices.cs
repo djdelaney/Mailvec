@@ -80,6 +80,7 @@ internal static class CliServices
         // is also why MbsyncHeartbeatFile is registered here and not only in
         // the MCP graph (CLAUDE.md: the two wirings must stay in lockstep).
         services.AddSingleton<MbsyncHeartbeatFile>();
+        services.AddSingleton<MbsyncSyncFile>();
         services.AddSingleton<HealthService>();
 
         services.AddHttpClient<OllamaClient>((sp, client) =>

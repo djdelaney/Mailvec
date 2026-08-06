@@ -335,6 +335,142 @@ public class MbsyncHeartbeatFileTests : IDisposable
         liveness.Stale.ShouldBeFalse();
     }
 
+    [Fact]
+    public void Reports_no_cycle_because_the_beat_no_longer_tracks_one()
+    {
+        // The beat runs on its own timer, so it says nothing about whether a
+        // sync ran. This used to pass the beat timestamp as LastCycleAt too,
+        // which was honest only while the sidecar beat after each sync —
+        // 6192314 decoupled them and left the alias behind, turning the
+        // progress axis into a restatement of LastBeatAt that /health rendered
+        // as a real signal. Sync outcome lives in MbsyncSyncFile now.
+        var hb = Build();
+        File.WriteAllText(hb.Path!, $"{DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ssZ}\n60\n");
+
+        var liveness = hb.Read();
+
+        liveness.LastBeatAt.ShouldNotBeNull();
+        liveness.LastCycleAt.ShouldBeNull();
+    }
+
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
+        try { if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true); }
+        catch (IOException) { }
+    }
+}
+
+/// <summary>
+/// mbsync's sync-OUTCOME marker — the third signal, written only on a
+/// successful <c>mbsync -a</c>. These pin the contract the Dockerfile's
+/// <c>sync_ok()</c> has to satisfy, and the staleness window that decides when
+/// a beating-but-failing sidecar gets reported.
+/// </summary>
+public class MbsyncSyncFileTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "mailvec-sync-" + Guid.NewGuid().ToString("N"));
+
+    private MbsyncSyncFile Build()
+    {
+        var maildir = Path.Combine(_root, "Fastmail");
+        Directory.CreateDirectory(maildir);
+        return new MbsyncSyncFile(
+            Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = maildir }));
+    }
+
+    [Fact]
+    public void Marker_lives_beside_the_maildir_root_never_inside_it()
+    {
+        // Same load-bearing rule as the beat: MaildirScanner walks the root and
+        // Maildir++ names folders with a leading dot, so a dotfile in the tree
+        // risks being parsed as a folder.
+        var sync = Build();
+
+        sync.Path.ShouldNotBeNull();
+        Path.GetDirectoryName(sync.Path).ShouldBe(_root);
+        sync.Path!.ShouldNotContain(Path.Combine(_root, "Fastmail"));
+    }
+
+    [Fact]
+    public void Missing_marker_is_unknown_not_stale()
+    {
+        // Fresh deployment, and every macOS launchd install — no sidecar writes
+        // this file at all. A permanent false red is what teaches an operator
+        // to ignore the indicator.
+        var sync = Build();
+
+        var mail = sync.Read();
+
+        mail.Known.ShouldBeFalse();
+        mail.SyncStale.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Reads_the_two_line_marker_the_sidecar_writes()
+    {
+        var sync = Build();
+        // Exactly the shape of the Dockerfile's `sync_ok()`: ISO-8601 UTC, then
+        // the SYNC interval (not the beat cadence — this file's staleness is a
+        // multiple of how often a sync is attempted).
+        File.WriteAllText(sync.Path!, $"{DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ssZ}\n600\n");
+
+        var mail = sync.Read();
+
+        mail.Known.ShouldBeTrue();
+        mail.SyncStale.ShouldBeFalse();
+        mail.ExpectedIntervalSeconds.ShouldBe(600);
+    }
+
+    [Fact]
+    public void A_marker_that_stops_advancing_goes_stale()
+    {
+        // The failure this whole signal exists for: the sidecar beats fine
+        // (expired app password, Patterns typo, DNS gone) while every sync
+        // fails, so nothing else in the pipeline can tell.
+        var sync = Build();
+        var old = DateTimeOffset.UtcNow.AddHours(-3);
+        File.WriteAllText(sync.Path!, $"{old:yyyy-MM-ddTHH:mm:ssZ}\n600\n");
+
+        sync.Read().SyncStale.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Garbage_content_degrades_to_unknown_rather_than_throwing()
+    {
+        // /health is the mcp container's compose healthcheck — an exception
+        // reading a truncated marker would restart-loop it.
+        var sync = Build();
+        File.WriteAllText(sync.Path!, "not-a-timestamp\nnot-a-number\n");
+
+        var mail = sync.Read();
+
+        mail.Known.ShouldBeFalse();
+        mail.SyncStale.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_long_backlog_pull_plus_a_failed_cycle_does_not_trip_the_window()
+    {
+        // What the window has to absorb is the time BETWEEN successes, not one
+        // interval. A 12-minute pull + the 600s interval is 22 minutes before
+        // anything has gone wrong; one failed cycle on top pushes past 30. This
+        // is why the multiplier is 4 and not StaleAfterMissedBeats.
+        MbsyncSyncFile.Classify(DateTimeOffset.UtcNow.AddMinutes(-32), 600).SyncStale.ShouldBeFalse();
+        MbsyncSyncFile.Classify(DateTimeOffset.UtcNow.AddMinutes(-45), 600).SyncStale.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_short_sync_interval_does_not_collapse_the_window()
+    {
+        // docs/future-ideas.md plans a one-minute sync cadence. A bare multiple
+        // would give a 4-minute window there, so any pull slower than that
+        // would report a working sidecar as broken — the same class of bug as
+        // wiring the beat cadence to the sync interval.
+        MbsyncSyncFile.Classify(DateTimeOffset.UtcNow.AddMinutes(-20), 60).SyncStale.ShouldBeFalse();
+        MbsyncSyncFile.Classify(DateTimeOffset.UtcNow.AddMinutes(-40), 60).SyncStale.ShouldBeTrue();
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

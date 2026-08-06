@@ -115,6 +115,32 @@ beat() {
         || true
 }
 
+# Last-SUCCESSFUL-sync marker, read by MbsyncSyncFile. A third signal, and
+# deliberately a second file rather than more lines in the beat: `beat()` runs
+# inside the backgrounded subshell below, which forked before any of this
+# loop's assignments and so cannot see them.
+#
+# The beat above is written on its own timer whether or not `mbsync -a`
+# succeeded — correct, because a loop retrying against a dead IMAP server is
+# alive, and calling it dead sends an operator hunting a stopped container that
+# is running fine. The cost is a blind spot this closes: a sidecar whose every
+# sync fails (expired app password, a Patterns typo, DNS gone) beats happily
+# forever while no mail arrives, and nothing downstream can tell — the
+# indexer's own timestamps only move when new mail is actually ingested, so
+# "quiet mailbox" and "sync broken" look identical there.
+#
+# Same location rule as the beat: the PARENT of MBSYNC_MAILDIR, never inside
+# it. Written ONLY on exit 0. Line 2 is the SYNC interval — and unlike the beat
+# file, that is the right cadence to declare here, because how stale this may
+# get genuinely is a multiple of how often a sync is attempted.
+SYNCFILE="$(dirname "${MBSYNC_MAILDIR}")/.mailvec-mbsync-sync"
+sync_ok() {
+    printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_INTERVAL_SECONDS}" \
+        > "${SYNCFILE}.tmp" 2>/dev/null \
+        && mv -f "${SYNCFILE}.tmp" "${SYNCFILE}" 2>/dev/null \
+        || true
+}
+
 child=
 beater=
 trap 'if [ -n "$beater" ]; then kill "$beater" 2>/dev/null; fi; if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child"; fi; exit 0' TERM INT
@@ -139,7 +165,17 @@ beat
 
 while :; do
     mbsync -a & child=$!
-    wait "$child" || echo "mbsync: sync failed (exit $?)" >&2
+    # Capture the status explicitly rather than reading $? inside a branch.
+    # It happens to survive both `|| cmd` and an if/else today, but it is one
+    # inserted command away from silently reporting the wrong exit code, and a
+    # wrong code here is the difference between marking a sync successful and
+    # not.
+    wait "$child"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+        sync_ok
+    else
+        echo "mbsync: sync failed (exit $rc)" >&2
+    fi
     sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
     wait "$child"
 done

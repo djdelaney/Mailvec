@@ -44,7 +44,8 @@ a Cloudflare Tunnel + Access. The `mcp` container serves an `/up` endpoint
 that reports the whole pipeline's state as JSON, including per-service
 **liveness** for the three background workers (there is no `launchctl` in a
 container, so liveness travels through this endpoint rather than process
-inspection).
+inspection) and whether IMAP sync is still **succeeding**, which liveness
+alone can't tell you.
 
 **Point Kuma at the public Cloudflare hostname, not an internal address.** An
 internal probe can't see the failures that actually make Mailvec unreachable to
@@ -118,6 +119,7 @@ A healthy response:
   "embeddings": { "modelMismatch": false },
   "ollama": { "reachable": true },
   "embedder": { "stuck": false },
+  "mail": { "known": true, "syncStale": false },
   "services": [
     { "service": "indexer",  "known": true, "stale": false },
     { "service": "embedder", "known": true, "stale": false },
@@ -128,10 +130,16 @@ A healthy response:
 
 Note what is deliberately **not** here versus `/health`: `ollama.baseUrl`,
 `embeddings.coveragePct` / model name / dimensions, `embedder.consecutiveFailures`
-and failure timestamps, `services[].expectedIntervalSeconds` and beat times, and
-the whole `database` block. If a monitor ever needs one of those, that's a
-conversation about the trust boundary, not a field to add — see
-`docs/security.md`.
+and failure timestamps, `services[].expectedIntervalSeconds` and beat times,
+`mail.lastSyncAt`, and the whole `database` block. If a monitor ever needs one
+of those, that's a conversation about the trust boundary, not a field to add —
+see `docs/security.md`.
+
+`mail.lastSyncAt` is worth calling out because it is the one omission that's
+about the **user** rather than the deployment: a monitor polling every 60s and
+retaining history builds a log of when this person's mail arrives, i.e. when
+they're awake and active. The boolean answers the monitoring question
+completely, so there's no trade being made.
 
 Fields the monitors use:
 
@@ -143,6 +151,28 @@ Fields the monitors use:
 | `embedder.stuck` | embedder can't drain its embedding backlog | `false` |
 | `embeddings.modelMismatch` | DB's embedding model disagrees with config (vector-space corruption) | `false` |
 | `ollama.reachable` | the embedding model server answers | `true` |
+| `mail.syncStale` | mbsync is alive but its syncs keep failing — no successful pull in 4x the sync interval (min 30 min) | `false` |
+| `mail.known` | whether any successful sync is on record (`false` = fresh deploy, or a local install with no sidecar) | `true` in steady state |
+
+**`mail.syncStale` vs `services[service='mbsync'].stale` — these answer
+different questions and you want both.** The mbsync beat is written on its own
+timer whether or not `mbsync -a` succeeded, deliberately: a loop retrying
+against a dead IMAP server *is* alive, and calling it dead sends you hunting a
+stopped container that's running fine. The cost is a blind spot that
+`mail.syncStale` exists to close — a sidecar whose every sync fails (expired
+Fastmail app password, a `Patterns` typo, DNS gone) beats happily forever while
+no mail arrives. Nothing else in the pipeline can tell: the indexer's own
+timestamps only advance when new mail is actually ingested, so "quiet mailbox"
+and "sync broken" look identical there. `stale` means the sidecar is gone;
+`syncStale` means it's there and failing.
+
+The same verdict is available without Kuma: `mailvec doctor` inside the stack
+emits an `mbsync sync` row under **services**, reading the marker directly off
+the Maildir mount (no network, so it works under `--skip-net` too).
+
+```bash
+docker compose exec mcp mailvec doctor
+```
 
 **`stale` vs `known`:** a freshly-started worker reads `known:false, stale:false`
 for up to one beat interval, then flips to `known:true`. `stale:true` only ever
@@ -167,15 +197,32 @@ All at URL `https://mailvec.<domain>/up`, with the header block above, and
 | `mailvec-embedder-stuck` | `embedder.stuck` | `false` |
 | `mailvec-model-mismatch` | `embeddings.modelMismatch` | `false` |
 | `mailvec-ollama` | `ollama.reachable` | `true` |
+| `mailvec-mail-sync` | `mail.syncStale` | `false` |
 
 If you prefer a single monitor over granularity, use this instead (returns a
-boolean; covers degraded status **and** any stale worker):
+boolean; covers degraded status, any stale worker, **and** a sidecar whose
+syncs keep failing):
 
 ```
-status = 'ok' and $count(services[stale = true]) = 0
+status = 'ok' and $count(services[stale = true]) = 0 and mail.syncStale = false
 ```
 Expected value `true`. Downside: the alert just says "Mailvec unhealthy" — you
 curl to find out why.
+
+**Consolidating alerts without going blind.** These two shapes aren't
+exclusive, and the combination is usually what you want: create all the
+granular monitors with **notifications off**, so the dashboard still names
+which thing broke, plus one monitor on the compound expression above with
+notifications **on**. That's one notification per incident instead of eight,
+and you keep the diagnosis. Uptime Kuma has no parent/child alert suppression —
+its Monitor Group type is organizational only, and children alert
+independently — so per-monitor notification checkboxes are the lever.
+
+Worth knowing before you rely on it: when `/up` is unreachable at all (tunnel
+down, DNS, cloudflared crashed), Kuma marks a monitor down *before* evaluating
+any JSONata, so every monitor pointed at this endpoint fires regardless of what
+it asks. Consolidating fixes the notification count for that case; it isn't a
+query-logic problem.
 
 ## Migrating existing monitors from `/health` to `/up`
 
@@ -228,7 +275,7 @@ incident history will show them going down in lockstep.
 Accepting `503` makes each monitor's JSONata the sole decider, so they stay
 independent and each reports only its own failure.
 
-**Add a seventh monitor at the same time**, on overall status:
+**Add an eighth monitor at the same time**, on overall status:
 
 | Monitor name | JSON Query (JSONata) | Expected value |
 |---|---|---|
@@ -247,10 +294,17 @@ produce a 503 are exactly the three the dedicated monitors cover:
 
 But that correspondence is a coincidence of the current code, not an invariant.
 Broaden the degraded set in `HealthService` and the new condition becomes
-**invisible** — 503 accepted, no query covering it, six green monitors and a
+**invisible** — 503 accepted, no query covering it, seven green monitors and a
 degraded server. `mailvec-status` closes that permanently: it goes red on any
-degraded status, covered or not. (Note `services[].stale` is deliberately *not*
-part of `status`, which is why the three stale monitors still earn their place.)
+degraded status, covered or not.
+
+Note `services[].stale` and `mail.syncStale` are deliberately *not* part of
+`status`, which is why those monitors still earn their place. That exclusion is
+load-bearing and documented at the `Status` switch in `HealthService`: `/health`
+is the **mcp** container's own compose healthcheck, so folding a sibling
+container's failure into `Status` would mark MCP unhealthy — and restart-loop
+it — because the *indexer* or *mbsync* died. Wrong, and actively misleading
+when triaging.
 
 ## Tuning
 
@@ -270,8 +324,10 @@ part of `status`, which is why the three stale monitors still earn their place.)
 The granular split lets you assign different urgencies. Suggested:
 
 - **Page hard:** `mailvec-indexer`, `mailvec-embedder`, `mailvec-mbsync`,
-  `mailvec-embedder-stuck`, `mailvec-model-mismatch` — these are real pipeline
-  failures.
+  `mailvec-embedder-stuck`, `mailvec-model-mismatch`, `mailvec-mail-sync` —
+  these are real pipeline failures. `mailvec-mail-sync` in particular is the
+  only one that catches a credential problem (an expired Fastmail app
+  password), which fails closed and silently and never self-heals.
 - **Notify softer:** `mailvec-ollama` — the Ollama GPU VM rebooting is routine,
   and keyword search still works while it's down. The bundled 503 conflates
   this with the serious cases; splitting it out is the main reason to prefer
@@ -291,6 +347,16 @@ To cover that case, either add a Kuma **Docker Container** monitor (via the
 Docker socket) watching the four containers are running, or add a monitor on
 e.g. `services[service='indexer'].known` expecting `true` **with 2–3 retries**
 (the retries ride out the normal startup window where `known` is briefly false).
+
+`mail.known` has the identical shape and the same accepted gap: a deployment
+whose sync has **never** succeeded (wrong app password from day one, a
+`Patterns` typo that matches nothing) reads `known:false, syncStale:false`
+rather than broken. `syncStale` only ever means "it worked before and has
+stopped." Same remedy if you want it covered — monitor `mail.known` expecting
+`true`, with retries generous enough to ride out a first deploy. Both gaps
+exist because reporting absence-of-signal as failure puts every fresh install
+and every local dev machine permanently red, which is what teaches an operator
+to ignore the indicator.
 
 ## Complementary native signal: Cloudflare tunnel health
 
