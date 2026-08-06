@@ -76,6 +76,21 @@ x-mailvec: &mailvec-common
   # don't run `--build` while MAILVEC_IMAGE points at the GHCR ref: that
   # retags the remote name with a local build.
   image: ${MAILVEC_IMAGE:-mailvec:local}
+  # Run tini as PID 1. NOT cosmetic, and not about zombie reaping here — it is
+  # what makes a fatal startup error VISIBLE.
+  #
+  # The kernel does not apply default signal actions to PID 1. .NET aborts the
+  # process on an unhandled exception, so with the runtime as PID 1 that SIGABRT
+  # is swallowed: the container prints the stack trace and then sits at 100% CPU
+  # forever. Docker never sees an exit, `restart: unless-stopped` never fires,
+  # and `docker ps` reports the service Up — a dead worker that looks healthy.
+  # Verified on this image: a bad Ollama__EmbeddingDimensions (or any misbound
+  # config) hangs indefinitely without this, and exits 134 with it.
+  #
+  # Fatal startup config errors are the common way in — a missing
+  # Vision__Mistral__ApiKey, a typo'd option — so this is exactly the case that
+  # must fail loudly rather than pretend to run.
+  init: true
   build:
     context: .
     target: runtime
