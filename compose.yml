@@ -315,6 +315,23 @@ services:
       Embedder__ImageOcrEnabled: ${MAILVEC_IMAGE_OCR_ENABLED:-true}
       Ollama__VisionRequestTimeoutSeconds: ${MAILVEC_VISION_TIMEOUT_SECONDS:-120}
       Ollama__VisionMaxTokens: ${MAILVEC_VISION_MAX_TOKENS:-2048}
+      #
+      # Vision provider. Default `ollama` (the LAN GPU box) — unset means the
+      # local model, exactly as before. Set MAILVEC_VISION_PROVIDER=mistral to
+      # OCR through the hosted mistral-ocr API instead; that sends rendered
+      # pages of mail OFF-NETWORK, unattended, so read docs/security.md before
+      # switching.
+      #
+      # This container is the ONLY one that needs the API key: OCR runs here.
+      # The MCP server and CLI only probe the provider for /health and doctor,
+      # and are deliberately left without credentials — they degrade to
+      # reporting OCR unavailable rather than refusing to start, which keeps an
+      # OCR misconfiguration from crashlooping the search surface.
+      Vision__Provider: ${MAILVEC_VISION_PROVIDER:-ollama}
+      Vision__Mistral__Endpoint: ${MAILVEC_MISTRAL_ENDPOINT:-}
+      Vision__Mistral__Model: ${MAILVEC_MISTRAL_MODEL:-}
+      Vision__Mistral__Route: ${MAILVEC_MISTRAL_ROUTE:-providers/mistral/azure/ocr}
+      Vision__Mistral__ApiKey: ${MAILVEC_MISTRAL_API_KEY:-}
     volumes:
       - ./data:/data
       - ./mail:/mail:ro    # OCR pass reads .eml bytes out of the maildir

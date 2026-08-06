@@ -38,7 +38,8 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | `/up` (minimal: status/version + liveness booleans) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a **path-scoped** Access service token for the external monitor (see below — the scoping is a requirement, and one worth verifying rather than assuming) |
 | `/health` (detailed) | **loopback only** (`Mcp:RestrictHealthToLoopback`, default true); 404 to anything else, and 404'd at the tunnel as well | n/a — not reachable off-box | only the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` under `docker compose exec` |
 | `/tray/*` | **not mapped in the container** (`Mcp:EnableTrayEndpoints=false`) *and* 404'd at the tunnel | served nowhere reachable | nobody — it's a local macOS-only surface |
-| Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and** rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
+| Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and**, when `Vision:Provider=ollama`, rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
+| **mistral-ocr (outbound, off-network)** | **the public internet** — `Vision:Mistral:Endpoint` (an Azure AI Foundry resource or api.mistral.ai) | API key, embedder container only | **only when `Vision:Provider=mistral`** (default is `ollama`, which sends nothing off-LAN). Rendered pages of scanned PDFs and image attachments leave the network. See [below](#hosted-ocr-vision-provider-mistral) |
 | SQLite file | bind mount on the VM | unix permissions (0600, container root) | root on the VM, and every container that mounts `./data` |
 | Maildir | bind mount on the VM | unix permissions; mounted **read-only** into every service except mbsync | same |
 
@@ -284,6 +285,49 @@ someone to show them to; on a single-owner homelab where the operator builds and
 deploys the image themselves, they generate review work with no reviewer. The
 NuGet gate above is the exception because it's a real automated check with a
 real failure mode, not a report.
+
+## Hosted OCR (`Vision:Provider=mistral`)
+
+**Default is `ollama`.** Everything below applies only when the provider is
+switched, and switching it is a threat-model decision, not a tuning knob.
+
+The OCR pass exists to make scanned documents searchable, and scanned documents
+are disproportionately the sensitive ones: bank statements, tax forms, medical
+letters, signed contracts, anything photographed rather than typed. The local
+provider was chosen for exactly that reason — the bytes never leave the LAN.
+
+With `mistral`, each rendered page (JPEG, long edge ≤1536px) is POSTed as a
+base64 data URI to the configured endpoint. What that changes:
+
+- **It is unattended.** Unlike `view_attachment` or `get_attachment_page_image`,
+  which run because a user asked, the OCR pass feeds documents to the provider
+  on its own schedule with no tool call and no user in the loop. Every eligible
+  scanned attachment in the archive is sent, eventually, without anyone
+  choosing it. That is the property to weigh; it is the same one that makes the
+  pass useful.
+- **Retention is the provider's, not ours.** Nothing in this repo governs how
+  long the endpoint keeps a submitted page. Check the deployment's own data
+  policy — a self-hosted Azure AI Foundry deployment in your own tenant is a
+  materially different answer from the public API.
+- **The blast radius of the key is OCR calls**, and the key is scoped to the
+  **embedder container only** (`compose.yml`). MCP and the CLI probe the
+  provider for `/health` and `mailvec doctor` and are deliberately left without
+  credentials — they degrade to reporting OCR unavailable. That keeps the key
+  off the internet-fronted container and stops an OCR misconfiguration from
+  crashlooping the search surface.
+- **Keep the key in the gitignored `.env`**, never in
+  `~/Library/Application Support/Mailvec/appsettings.Local.json` — that file is
+  world-readable (0644) by design, holding ordinary user settings.
+- **Egress.** The embedder needs outbound 443 to the endpoint. It previously
+  only ever dialled a LAN address, so verify the host firewall actually permits
+  this rather than assuming it.
+- No document is uploaded to blob storage or exposed at a fetchable URL; the
+  request carries the bytes inline and the response is per-page markdown.
+
+Turning it off is `Vision:Provider=ollama` (or `Embedder:OcrEnabled=false` /
+`Embedder:ImageOcrEnabled=false` to stop OCR entirely). Note that neither
+un-sends anything already transmitted, and neither removes text already stored —
+use `mailvec reocr` for that.
 
 ## The other shape: a loopback-only local install
 

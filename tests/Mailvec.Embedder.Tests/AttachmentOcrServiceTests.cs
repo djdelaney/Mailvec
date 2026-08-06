@@ -670,6 +670,150 @@ public class AttachmentOcrServiceTests : IDisposable
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported);
     }
 
+    [Fact]
+    public async Task Backpressure_never_retires_a_document_however_long_it_lasts()
+    {
+        // THE regression this taxonomy exists for. A hosted provider rate-limits
+        // one document while others in the same cycle succeed; the pass therefore
+        // sees same-cycle success evidence, concludes the model is healthy, and
+        // — before VisionFailureKind — counted the 429 as a poison-document
+        // strike. Five throttled cycles later a perfectly good scan is stamped
+        // 'failed', permanently, because no candidate query ever re-selects a
+        // failed row. A traffic spike silently destroyed documents.
+        long throttled = StageNoTextPdf("throttled@x", MinimalPdf(1));
+
+        var svc = Build(new FakeVision(true, img =>
+        {
+            // The health probe answering normally is the "model is healthy"
+            // evidence that used to license counting the 429 as a strike — it
+            // is exactly how a hosted outage differs from a poison document,
+            // and exactly why rate limiting slipped through as the latter.
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new VisionException(VisionFailureKind.Backpressure, "429 Too Many Requests");
+        }));
+
+        for (var cycle = 0; cycle < 20; cycle++) // 4x MaxVisionAttempts
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+
+        // Still selectable, still no_text — the queue drains once the throttling
+        // stops, and nothing was lost.
+        StatusOf(throttled).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        TextOf(throttled).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Backpressure_stops_the_batch_rather_than_hammering_the_next_candidate()
+    {
+        // Backpressure means "slow down", so the right response is to stop this
+        // cycle — not to walk the rest of the batch into the same wall. The pass
+        // re-runs every poll, which IS the backoff.
+        StageNoTextPdf("a@x", MinimalPdf(1));
+        StageNoTextPdf("b@x", MinimalPdf(1));
+        StageNoTextPdf("c@x", MinimalPdf(1));
+
+        var docCalls = 0;
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            docCalls++;
+            throw new VisionException(VisionFailureKind.Backpressure, "429");
+        }));
+
+        await svc.ProcessBatchAsync(10, default);
+
+        docCalls.ShouldBe(1); // aborted on the first 429, not once per candidate
+    }
+
+    [Fact]
+    public async Task Auth_failure_aborts_without_retiring_anything()
+    {
+        // A bad key or endpoint fails every call identically until a human fixes
+        // it. Retiring documents would empty the queue for a reason that has
+        // nothing to do with any of them — and 'failed' is not re-selectable.
+        long id = StageNoTextPdf("authfail@x", MinimalPdf(1));
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new VisionException(VisionFailureKind.AuthOrConfig, "401 Unauthorized");
+        }));
+
+        for (var cycle = 0; cycle < 20; cycle++)
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText); // untouched, still selectable
+    }
+
+    [Fact]
+    public async Task Document_fatal_retires_immediately_without_burning_five_cycles()
+    {
+        // The provider looked at THIS payload and refused it (413/415/422).
+        // Deterministic, so there is nothing to learn from four more attempts.
+        long fatal = StageNoTextPdf("toobig@x", MinimalPdf(1));
+        long behind = StageNoTextPdf("behind@x", MinimalPdf(1));
+
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            return StatusOf(fatal) == AttachmentTextExtractor.StatusFailed
+                ? "RECOVERED"
+                : throw new VisionException(VisionFailureKind.DocumentFatal, "413 Payload Too Large");
+        }));
+
+        // ONE cycle, not MaxVisionAttempts.
+        await svc.ProcessBatchAsync(10, default);
+
+        StatusOf(fatal).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        // And it didn't take the rest of the batch down with it.
+        StatusOf(behind).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
+    public async Task Unclassified_failures_still_take_the_transient_path()
+    {
+        // A provider that forgets to classify something must degrade to
+        // "retry it", never to "destroy it" — so a plain exception keeps the
+        // historical strike-then-retire behaviour rather than short-circuiting.
+        long id = StageNoTextPdf("plain@x", MinimalPdf(1));
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new InvalidOperationException("something unclassified");
+        }));
+
+        for (var cycle = 0; cycle < 4; cycle++) // one short of MaxVisionAttempts
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText); // not yet retired
+
+        await svc.ProcessBatchAsync(10, default); // the fifth
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
+    public async Task Image_pass_honours_backpressure_too()
+    {
+        // The image backlog is an order of magnitude larger than the PDF one,
+        // so this is the pass a hosted provider throttles hardest.
+        long id = StageUnsupportedImage("throttled-img@x", MakePng(300, 300));
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new VisionException(VisionFailureKind.Backpressure, "429");
+        }), ImageGate);
+
+        for (var cycle = 0; cycle < 20; cycle++)
+        {
+            await svc.ProcessImageBatchAsync(10, default);
+        }
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported); // still selectable
+    }
+
     private sealed class FakeVision(bool available, Func<byte[], string> ocr) : IVisionClient
     {
         public Task<string> OcrAsync(byte[] image, CancellationToken ct = default) => Task.FromResult(ocr(image));

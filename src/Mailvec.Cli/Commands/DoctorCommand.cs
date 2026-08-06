@@ -249,12 +249,21 @@ internal static class DoctorCommand
         {
             try
             {
+                // The remedy differs entirely by provider: a local model needs
+                // pulling, a hosted one needs a working endpoint and key. Telling
+                // an operator on the hosted provider to run `ollama pull` sends
+                // them somewhere there is nothing to fix.
+                var visionOpts = sp.GetRequiredService<IOptions<VisionOptions>>().Value;
+                var provider = VisionRegistration.Describe(visionOpts, ollama);
                 var available = await sp.GetRequiredService<IVisionClient>().IsModelAvailableAsync(ct).ConfigureAwait(false);
+                var remedy = visionOpts.IsMistral
+                    ? "Check Vision:Mistral:Endpoint / :Model / :ApiKey"
+                    : $"Run `ollama pull {ollama.VisionModel}`";
                 checks.Add(available
-                    ? DoctorCheck.Ok("OCR model", $"{ollama.VisionModel} available", "pipeline")
+                    ? DoctorCheck.Ok("OCR model", $"{provider} available", "pipeline")
                     : DoctorCheck.Warn("OCR model",
-                        $"{ollama.VisionModel} not pulled — scanned PDFs won't be OCR'd. " +
-                        $"Run `ollama pull {ollama.VisionModel}` or set Embedder:OcrEnabled=false.",
+                        $"{provider} unavailable — scanned PDFs won't be OCR'd. " +
+                        $"{remedy}, or set Embedder:OcrEnabled=false.",
                         "pipeline"));
             }
             catch (Exception ex)

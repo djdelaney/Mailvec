@@ -7,6 +7,7 @@ using Mailvec.Core.Health;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
+using Mailvec.Core.Vision;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -91,14 +92,10 @@ internal static class CliServices
         });
         services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
 
-        // Vision client so `mailvec doctor` can check the OCR model is pulled.
-        services.AddHttpClient<OllamaVisionClient>((sp, client) =>
-        {
-            var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-            client.BaseAddress = new Uri(opts.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.VisionRequestTimeoutSeconds));
-        });
-        services.AddTransient<Mailvec.Core.Vision.IVisionClient>(sp => sp.GetRequiredService<OllamaVisionClient>());
+        // Vision client so `mailvec doctor` can check OCR is actually reachable —
+        // for Ollama that the model is pulled, for the hosted provider that the
+        // endpoint and credentials work.
+        services.AddMailvecVision(config);
 
         var sp = services.BuildServiceProvider();
 

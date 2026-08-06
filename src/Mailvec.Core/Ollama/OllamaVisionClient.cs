@@ -81,8 +81,19 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
             // OllamaClient. This one is embedder-only so it reaches logs rather
             // than a client, but the OCR request body is a rendered page of the
             // user's mail, so an echoing error is exactly the case to avoid.
-            var ex = new HttpRequestException(
-                $"Ollama /api/generate failed {(int)response.StatusCode}.", inner: null, statusCode: response.StatusCode);
+            //
+            // Classified so the OCR pass branches on cause rather than guessing.
+            // A local Ollama has a narrow taxonomy: 404 means the model isn't
+            // pulled (config, not the document), 413 means this image is too
+            // big for it (the document), everything else is transient. There is
+            // no Backpressure — nothing rate-limits a local model.
+            var kind = (int)response.StatusCode switch
+            {
+                404 => VisionFailureKind.AuthOrConfig,
+                413 => VisionFailureKind.DocumentFatal,
+                _ => VisionFailureKind.Transient,
+            };
+            var ex = new VisionException(kind, $"Ollama /api/generate failed {(int)response.StatusCode}.");
             ex.Data["body"] = body;
             throw ex;
         }

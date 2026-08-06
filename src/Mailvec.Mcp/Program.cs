@@ -8,6 +8,7 @@ using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
 using Mailvec.Core.Tray;
+using Mailvec.Core.Vision;
 using Mailvec.Mcp;
 using Mailvec.Mcp.Tray;
 using Microsoft.Extensions.Configuration;
@@ -369,15 +370,9 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     });
     services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
 
-    // Vision client so HealthService can probe whether the OCR model is pulled
+    // Vision client so HealthService can probe whether OCR is reachable
     // (surfaced as a tray warn, never a /health 503). Mirrors CliServices.
-    services.AddHttpClient<OllamaVisionClient>((sp, client) =>
-    {
-        var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-        client.BaseAddress = new Uri(opts.BaseUrl);
-        client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.VisionRequestTimeoutSeconds));
-    });
-    services.AddTransient<Mailvec.Core.Vision.IVisionClient>(sp => sp.GetRequiredService<OllamaVisionClient>());
+    services.AddMailvecVision(config);
 }
 
 // Surfaced to clients in the `initialize` response as `serverInfo`. The `name`
