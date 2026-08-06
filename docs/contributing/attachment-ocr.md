@@ -160,6 +160,40 @@ Two consequences worth knowing before changing this:
   content shifts ranking.
 - **Ollama floor** gains a vision-model requirement; document in `ops/UPGRADING.md`.
 
+## Comparing engines
+
+`IVisionClient` is the provider seam, so swapping the OCR engine is a small
+code change and a large evidence problem. The evidence lives in
+[`tools/Mailvec.OcrBench`](../../tools/Mailvec.OcrBench/README.md) — a
+read-only harness that samples real documents out of the archive, runs N engines
+over byte-identical input, and scores them.
+
+Two things it establishes that are easy to get wrong by hand:
+
+- **Ground truth without labelling.** The ~1955 PDFs the indexer extracted
+  natively carry a real text layer, so PdfPig's per-page output is a reference
+  the corpus supplies for free. It measures ceiling accuracy on clean
+  typography, *not* robustness on real scans — the scans set has no reference at
+  all and is scored by inter-engine agreement plus hand inspection.
+- **CER alone will mislead you.** Multi-column pages and markdown tables reorder
+  content legitimately, which edit distance punishes as error. Read CER beside
+  token F1 and the length ratio; the harness reports all three for that reason.
+
+One run through it is recorded in
+[`ocr-bakeoff-2026-08-06.md`](ocr-bakeoff-2026-08-06.md) (`qwen2.5vl:7b` vs
+`mistral-ocr` on Azure AI Foundry) — dated, because both models move. Its most
+transferable finding: mistral scored the same whether it rasterised the PDF
+itself or consumed `PdfRenderer`'s JPEGs, so the per-page pipeline shape is not
+what limits quality, and swapping engines stays an `IVisionClient` change.
+
+Transcription quality is not the deciding number. Re-embed each engine's text
+into a parallel DB ([`embedding-experiments.md`](embedding-experiments.md)) and
+run `mailvec eval` — a transcription win that doesn't move retrieval is not a
+reason to change the pipeline. And note that a hosted engine gives up the
+offline property in the spike result above, which is why the local model was
+chosen in the first place: these documents hold SSNs and financials, and the
+OCR pass feeds them **unattended**.
+
 ## Phased plan
 
 1. ✅ `Mailvec.Pdf` shared project (moved `PdfRenderer`); Mcp + Embedder reference it.
