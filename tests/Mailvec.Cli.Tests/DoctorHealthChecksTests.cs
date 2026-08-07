@@ -149,12 +149,53 @@ public class DoctorHealthChecksTests
     }
 
     [Fact]
-    public void Ollama_up_with_model_pulled_but_embed_failing_points_at_broken_build()
+    public void Ollama_up_with_model_pulled_but_embed_failing_and_no_recent_work_warns()
     {
+        // No evidence the model can serve: the embedder has committed nothing.
+        // Here the alarming reading is the correct one.
         var c = Find(Run(Report(ollama: Oll(reachable: false, modelAvailable: true))), "Ollama");
         c.Status.ShouldBe("warn");
-        c.Detail.ShouldContain("can't load");
+        c.Detail.ShouldContain("may not be able to load");
+        c.Detail.ShouldContain("committed nothing recently");
         c.Detail.ShouldNotContain("unreachable at");
+    }
+
+    [Fact]
+    public void A_failed_probe_while_the_embedder_is_working_reads_as_contention_not_breakage()
+    {
+        // The probe is bounded at 5s and must stay there (the tray polls /health
+        // every 5s), so on a CPU-only host behind a busy embedder it times out
+        // even though each embed returns in milliseconds. Observed for real: a
+        // 0.1s embed by hand while doctor reported "the model can't load", which
+        // sent the operator hunting a non-existent fault.
+        //
+        // A recent committed batch is proof the model loads and serves, so this
+        // must not be a warning — an indicator that goes amber during every
+        // large re-embed is one nobody reads.
+        var busy = new EmbedderHealth(
+            LastSuccessAt: DateTimeOffset.UtcNow.AddMinutes(-1),
+            LastFailureAt: null, ConsecutiveFailures: 0, LastFailureKind: null, Stuck: false);
+
+        var c = Find(Run(Report(ollama: Oll(reachable: false, modelAvailable: true), embedder: busy)), "Ollama");
+
+        c.Status.ShouldBe("ok");
+        c.Detail.ShouldContain("queueing under load");
+        c.Detail.ShouldNotContain("can't load");
+    }
+
+    [Fact]
+    public void A_stale_embedder_success_does_not_excuse_a_failed_probe()
+    {
+        // The evidence has to be RECENT. An hour-old success says nothing about
+        // whether Ollama works now, so this must fall back to the warning.
+        var stale = new EmbedderHealth(
+            LastSuccessAt: DateTimeOffset.UtcNow.AddHours(-1),
+            LastFailureAt: null, ConsecutiveFailures: 0, LastFailureKind: null, Stuck: false);
+
+        var c = Find(Run(Report(ollama: Oll(reachable: false, modelAvailable: true), embedder: stale)), "Ollama");
+
+        c.Status.ShouldBe("warn");
+        c.Detail.ShouldContain("may not be able to load");
     }
 
     // ---------- mbsync sync outcome ----------
@@ -252,14 +293,15 @@ public class DoctorHealthChecksTests
     private static HealthReport Report(
         EmbeddingHealth? embeddings = null,
         DatabaseHealth? database = null,
-        OllamaHealth? ollama = null)
+        OllamaHealth? ollama = null,
+        EmbedderHealth? embedder = null)
         => new(
             Status: "ok",
             Version: "0.0.0",
             Database: database ?? Db(),
             Embeddings: embeddings ?? Emb(),
             Ollama: ollama ?? Oll(),
-            Embedder: new EmbedderHealth(null, null, 0, null, Stuck: false),
+            Embedder: embedder ?? new EmbedderHealth(null, null, 0, null, Stuck: false),
             Ocr: new OcrHealth(Enabled: false, VisionModel: "qwen2.5vl:7b", ModelAvailable: null, Pending: 0, Recovered: 0, ImagePending: 0, ImageRecovered: 0),
             Mail: new MailHealth(LastSyncAt: null, ExpectedIntervalSeconds: null, SyncStale: false, Known: false),
             Services: []);
