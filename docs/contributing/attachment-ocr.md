@@ -63,6 +63,16 @@ pass re-OCRs it.
   - *Alternative considered:* reuse `status='done'` → zero downstream changes,
     but loses the native-vs-OCR distinction. Recommend `ocr` for transparency.
 - No new tables/columns. `extracted_at` records when OCR ran.
+  - *Superseded (v10).* That held while there was exactly one engine. Once
+    `Vision:Provider` could select between a local Ollama model and hosted
+    mistral-ocr, "which engine produced this text" became unanswerable — and
+    since switching providers re-OCRs nothing, every document the previous
+    engine finished keeps its output permanently with no way to select it.
+    **`attachments.ocr_model`** now records it, written by all three OCR
+    verdicts inside their existing identity-guarded UPDATEs. See
+    `schema/migrations/010_attachment_ocr_model.sql` for why NULL is never
+    backfilled by inference, and `mailvec backfill-ocr-model` for the
+    operator-asserted alternative.
 
 ## New components
 
@@ -185,6 +195,12 @@ One run through it is recorded in
 transferable finding: mistral scored the same whether it rasterised the PDF
 itself or consumed `PdfRenderer`'s JPEGs, so the per-page pipeline shape is not
 what limits quality, and swapping engines stays an `IVisionClient` change.
+
+**After a switch, `ocr_model` is what makes the old engine's work selectable.**
+Rows written before v10 carry NULL ("provenance unknown"); rows written since
+carry `provider:model`. So `WHERE ocr_model IS NULL` and
+`WHERE ocr_model LIKE 'ollama:%'` are both usable slices for a targeted re-OCR,
+which is the capability that made switching engines a one-way door before.
 
 Transcription quality is not the deciding number. Re-embed each engine's text
 into a parallel DB ([`embedding-experiments.md`](embedding-experiments.md)) and

@@ -43,7 +43,7 @@ public sealed class SchemaMigrator(
     // against scan time that let a content change with a preserved/backdated
     // mtime be skipped on every future scan. No backfill; NULL means "no
     // recorded identity" and the scanner records it on the next pass.
-    public const int LatestSchemaVersion = 9;
+    public const int LatestSchemaVersion = 10;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying
@@ -90,8 +90,10 @@ public sealed class SchemaMigrator(
             logger.LogInformation(
                 "Applying initial schema (stamping version {Version}, embedding model {Model} @{Dim}d)",
                 LatestSchemaVersion, opts.EmbeddingModel, opts.EmbeddingDimensions);
+            var initialSql = LoadEmbeddedSql("001_initial.sql");
+            AssertBaselineStampsLatest(initialSql);
             ExecuteScript(conn, SubstituteEmbeddingConfig(
-                LoadEmbeddedSql("001_initial.sql"), opts.EmbeddingModel, opts.EmbeddingDimensions),
+                initialSql, opts.EmbeddingModel, opts.EmbeddingDimensions),
                 guardAtLeast: 1); // skip if another starter already initialized the schema
             return;
         }
@@ -253,6 +255,39 @@ public sealed class SchemaMigrator(
         sql = ReplaceExactlyOnce(sql, "'mxbai-embed-large'", $"'{model}'");
         sql = ReplaceExactlyOnce(sql, "('embedding_dimensions', '1024')", $"('embedding_dimensions', '{dims}')");
         return sql;
+    }
+
+    /// <summary>
+    /// 001_initial.sql carries its own <c>schema_version</c> literal, and the
+    /// fresh-database path applies it verbatim — the log line above says
+    /// "stamping version {LatestSchemaVersion}" but the value that actually
+    /// lands comes from the SQL. If the two drift, a fresh database is created
+    /// WITH the newest columns but stamped at an older version, and the very
+    /// next startup replays the migrations that add them.
+    ///
+    /// <para>That surfaces as <c>SQLite Error 1: 'duplicate column name: …'</c>
+    /// from inside a migration — an error that names the column and says
+    /// nothing about the stamp that caused it, on the one code path (fresh
+    /// install) least likely to be exercised before shipping. Adding a
+    /// migration means bumping BOTH <see cref="LatestSchemaVersion"/> and the
+    /// literal in 001; this makes forgetting either one a named failure at the
+    /// point of the mistake.</para>
+    /// </summary>
+    private static void AssertBaselineStampsLatest(string initialSql)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(
+            initialSql, @"\('schema_version',\s*'(\d+)'\)");
+        if (!m.Success)
+            throw new InvalidOperationException(
+                "001_initial.sql has no ('schema_version', 'N') row — SchemaMigrator cannot verify "
+                + "that a fresh database is stamped at the version its columns actually represent.");
+        var stamped = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        if (stamped != LatestSchemaVersion)
+            throw new InvalidOperationException(
+                $"001_initial.sql stamps schema_version {stamped} but SchemaMigrator.LatestSchemaVersion is "
+                + $"{LatestSchemaVersion}. A fresh database would be created with the v{LatestSchemaVersion} "
+                + $"columns and then replay migrations {stamped + 1}..{LatestSchemaVersion} over them. "
+                + "Bump the literal in 001_initial.sql to match.");
     }
 
     private static string ReplaceExactlyOnce(string sql, string token, string replacement)

@@ -123,6 +123,10 @@ internal sealed class UnconfiguredVisionClient : IVisionClient
         "That is expected for the MCP server and CLI when the API key is scoped to the embedder; " +
         "OCR itself runs in the embedder.";
 
+    // Never reached: every OCR entry point on this client throws before it
+    // could write anything. Present so the type satisfies the interface.
+    public string ModelId => "unconfigured";
+
     public Task<string> OcrAsync(byte[] image, CancellationToken ct = default) =>
         throw new VisionException(VisionFailureKind.AuthOrConfig, Message);
 

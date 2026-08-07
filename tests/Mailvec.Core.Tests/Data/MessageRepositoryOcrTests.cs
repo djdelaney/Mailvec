@@ -11,6 +11,9 @@ namespace Mailvec.Core.Tests.Data;
 /// </summary>
 public class MessageRepositoryOcrTests
 {
+    /// <summary>Engine id these tests write; provenance itself is covered separately.</summary>
+    private const string TestEngine = "ollama:test-vision";
+
     private static long Insert(MessageRepository repo, string id, string fileName, string? status,
         string folder = "INBOX", string contentType = "application/pdf", long size = 100)
     {
@@ -86,7 +89,7 @@ public class MessageRepositoryOcrTests
         // Pretend it was already embedded (body only) so we can see the re-queue.
         SetEmbeddedAt(db, id);
 
-        repo.SaveOcrText(Candidate(db, repo, id), "RECOVERED INVOICE TEXT 1234");
+        repo.SaveOcrText(Candidate(db, repo, id), "RECOVERED INVOICE TEXT 1234", TestEngine);
 
         var att = repo.GetById(id)!.Attachments[0];
         att.ExtractedText.ShouldBe("RECOVERED INVOICE TEXT 1234");
@@ -105,7 +108,7 @@ public class MessageRepositoryOcrTests
         long id = Insert(repo, "blank@x", "blank.pdf", AttachmentTextExtractor.StatusNoText);
         SetEmbeddedAt(db, id);
 
-        repo.SaveOcrText(Candidate(db, repo, id), "   ");
+        repo.SaveOcrText(Candidate(db, repo, id), "   ", TestEngine);
 
         var att = repo.GetById(id)!.Attachments[0];
         att.ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusOcr);   // terminal, not re-selected
@@ -122,7 +125,7 @@ public class MessageRepositoryOcrTests
         // Before OCR: the word isn't in any indexable column.
         FtsMatchCount(db, "quarterly").ShouldBe(0);
 
-        repo.SaveOcrText(Candidate(db, repo, id), "Quarterly revenue was 12345 dollars");
+        repo.SaveOcrText(Candidate(db, repo, id), "Quarterly revenue was 12345 dollars", TestEngine);
 
         // attachment_text rebuilt + FTS (via the update trigger) now matches.
         AttachmentTextCol(db, id)!.ShouldContain("Quarterly revenue");
@@ -139,7 +142,7 @@ public class MessageRepositoryOcrTests
         // Indexer sees a scanned PDF as no_text; the embedder's OCR pass then
         // recovers the text and rebuilds attachment_text so keyword search works.
         long id = Insert(repo, "scan@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
-        repo.SaveOcrText(Candidate(db, repo, id), "Quarterly revenue was 12345 dollars");
+        repo.SaveOcrText(Candidate(db, repo, id), "Quarterly revenue was 12345 dollars", TestEngine);
         FtsMatchCount(db, "quarterly").ShouldBe(1);
 
         // A periodic rescan re-parses the .eml: a scanned PDF still extracts as
@@ -162,7 +165,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
 
         long id = Insert(repo, "doc@x", "old.pdf", AttachmentTextExtractor.StatusNoText);
-        repo.SaveOcrText(Candidate(db, repo, id), "obsolete recovered text");
+        repo.SaveOcrText(Candidate(db, repo, id), "obsolete recovered text", TestEngine);
         AttachmentTextCol(db, id)!.ShouldContain("obsolete");
 
         // The .eml genuinely changed (new content_hash) and the fresh parse
@@ -189,7 +192,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
         long id = Insert(repo, "bad@x", "corrupt.pdf", AttachmentTextExtractor.StatusNoText);
 
-        repo.MarkAttachmentOcrFailed(Candidate(db, repo, id));
+        repo.MarkAttachmentOcrFailed(Candidate(db, repo, id), TestEngine);
 
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusFailed);
         repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldBeEmpty();
@@ -206,7 +209,7 @@ public class MessageRepositoryOcrTests
         long id = Insert(repo, "done@x", "ok.pdf", AttachmentTextExtractor.StatusDone);
         SetEmbeddedAt(db, id);
 
-        repo.SaveOcrText(Candidate(db, repo, id), "SHOULD NOT BE WRITTEN");
+        repo.SaveOcrText(Candidate(db, repo, id), "SHOULD NOT BE WRITTEN", TestEngine);
 
         var after = repo.GetById(id)!.Attachments[0];
         after.ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusDone);
@@ -271,7 +274,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
         long id = Insert(repo, "img@x", "photo.png", AttachmentTextExtractor.StatusUnsupported, contentType: "image/png", size: 60000);
 
-        repo.MarkAttachmentImageNoText(Candidate(db, repo, id));
+        repo.MarkAttachmentImageNoText(Candidate(db, repo, id), TestEngine);
 
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusNoText);
         repo.EnumerateImagesNeedingOcr(50, 50 * 1024, afterId: 0).ShouldBeEmpty();
@@ -395,7 +398,7 @@ public class MessageRepositoryOcrTests
 
         // The OCR pass finishes minutes later, still holding A's snapshot. B's
         // row is a pending candidate too, so a status-only guard lets it in.
-        repo.SaveOcrText(selected, "ZQTELEMETRY invoice total");
+        repo.SaveOcrText(selected, "ZQTELEMETRY invoice total", TestEngine);
 
         var bAtt = repo.GetById(b)!.Attachments[0];
         bAtt.ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusNoText);   // still OCR-able
@@ -422,7 +425,7 @@ public class MessageRepositoryOcrTests
         // PDFium couldn't open A's (now-gone) scan — retiring the reused id
         // would strand B's perfectly readable scan as permanently unsearchable,
         // with nothing to ever re-select it.
-        repo.MarkAttachmentOcrFailed(selected);
+        repo.MarkAttachmentOcrFailed(selected, TestEngine);
 
         repo.GetById(b)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusNoText);
         repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldHaveSingleItem().MessageId.ShouldBe(b);
@@ -441,7 +444,7 @@ public class MessageRepositoryOcrTests
         repo.GetById(b)!.Attachments[0].Id.ShouldBe(selected.AttachmentId);
 
         // A's image was gated out as a banner strip; B's is a real photo.
-        repo.MarkAttachmentImageNoText(selected);
+        repo.MarkAttachmentImageNoText(selected, TestEngine);
 
         repo.GetById(b)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusUnsupported);
         repo.EnumerateImagesNeedingOcr(50, 50 * 1024, afterId: 0).ShouldHaveSingleItem().MessageId.ShouldBe(b);
@@ -466,7 +469,7 @@ public class MessageRepositoryOcrTests
             [new ParsedAttachment(0, "new-scan.pdf", "application/pdf", 100, null, AttachmentTextExtractor.StatusNoText)]);
         repo.GetById(id)!.Attachments[0].Id.ShouldBe(selected.AttachmentId);
 
-        repo.SaveOcrText(selected, "ZQTELEMETRY invoice total");
+        repo.SaveOcrText(selected, "ZQTELEMETRY invoice total", TestEngine);
 
         var att = repo.GetById(id)!.Attachments[0];
         att.FileName.ShouldBe("new-scan.pdf");
@@ -476,7 +479,7 @@ public class MessageRepositoryOcrTests
 
         // ...and it really does get OCR'd again, against a fresh snapshot.
         var reselected = repo.EnumerateAttachmentsNeedingOcr(50, afterId: 0).ShouldHaveSingleItem();
-        repo.SaveOcrText(reselected, "ZQTELEMETRY invoice total");
+        repo.SaveOcrText(reselected, "ZQTELEMETRY invoice total", TestEngine);
         repo.GetById(id)!.Attachments[0].ExtractionStatus.ShouldBe(AttachmentTextExtractor.StatusOcr);
         FtsMatchCount(db, "zqtelemetry").ShouldBe(1);
     }
@@ -503,7 +506,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
         long id = Insert(repo, "ok@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
 
-        repo.SaveOcrText(Candidate(db, repo, id), "recovered text").ShouldBe(OcrWriteOutcome.Committed);
+        repo.SaveOcrText(Candidate(db, repo, id), "recovered text", TestEngine).ShouldBe(OcrWriteOutcome.Committed);
     }
 
     [Fact]
@@ -515,7 +518,7 @@ public class MessageRepositoryOcrTests
         var repo = new MessageRepository(db.Connections);
         long id = Insert(repo, "blank@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
 
-        repo.SaveOcrText(Candidate(db, repo, id), "   ").ShouldBe(OcrWriteOutcome.Committed);
+        repo.SaveOcrText(Candidate(db, repo, id), "   ", TestEngine).ShouldBe(OcrWriteOutcome.Committed);
     }
 
     [Fact]
@@ -530,7 +533,7 @@ public class MessageRepositoryOcrTests
         // selection, which is exactly what OcrIdentityMatch exists to catch.
         var stale = candidate with { ContentHash = "some-other-hash" };
 
-        repo.SaveOcrText(stale, "text for a document that is no longer there")
+        repo.SaveOcrText(stale, "text for a document that is no longer there", TestEngine)
             .ShouldBe(OcrWriteOutcome.Stale);
 
         // And nothing was written.
@@ -545,10 +548,10 @@ public class MessageRepositoryOcrTests
         long id = Insert(repo, "retire@x", "corrupt.pdf", AttachmentTextExtractor.StatusNoText);
         var candidate = Candidate(db, repo, id);
 
-        repo.MarkAttachmentOcrFailed(candidate with { ContentHash = "moved" }).ShouldBe(OcrWriteOutcome.Stale);
-        repo.MarkAttachmentOcrFailed(candidate).ShouldBe(OcrWriteOutcome.Committed);
+        repo.MarkAttachmentOcrFailed(candidate with { ContentHash = "moved" }, TestEngine).ShouldBe(OcrWriteOutcome.Stale);
+        repo.MarkAttachmentOcrFailed(candidate, TestEngine).ShouldBe(OcrWriteOutcome.Committed);
         // Now already 'failed', so the status predicate no longer matches.
-        repo.MarkAttachmentOcrFailed(candidate).ShouldBe(OcrWriteOutcome.Stale);
+        repo.MarkAttachmentOcrFailed(candidate, TestEngine).ShouldBe(OcrWriteOutcome.Stale);
     }
 
     [Fact]
@@ -559,8 +562,66 @@ public class MessageRepositoryOcrTests
         long id = Insert(repo, "img@x", "photo.jpg", AttachmentTextExtractor.StatusUnsupported);
         var candidate = Candidate(db, repo, id);
 
-        repo.MarkAttachmentImageNoText(candidate with { ContentHash = "moved" }).ShouldBe(OcrWriteOutcome.Stale);
-        repo.MarkAttachmentImageNoText(candidate).ShouldBe(OcrWriteOutcome.Committed);
+        repo.MarkAttachmentImageNoText(candidate with { ContentHash = "moved" }, TestEngine).ShouldBe(OcrWriteOutcome.Stale);
+        repo.MarkAttachmentImageNoText(candidate, TestEngine).ShouldBe(OcrWriteOutcome.Committed);
+    }
+
+    [Fact]
+    public void Every_OCR_verdict_records_the_engine_that_produced_it()
+    {
+        // All three verdicts, not just the transcription. "This engine found no
+        // text" and "this engine gave up" are engine-specific judgements, and a
+        // provider switch needs to be able to revisit them too.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var transcribed = Insert(repo, "t@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+        repo.SaveOcrText(Candidate(db, repo, transcribed), "TEXT", "ollama:engine-a");
+        ModelOf(db, transcribed).ShouldBe("ollama:engine-a");
+
+        var blank = Insert(repo, "b@x", "photo.jpg", AttachmentTextExtractor.StatusUnsupported);
+        repo.MarkAttachmentImageNoText(Candidate(db, repo, blank), "ollama:engine-a");
+        ModelOf(db, blank).ShouldBe("ollama:engine-a");
+
+        var retired = Insert(repo, "r@x", "bad.pdf", AttachmentTextExtractor.StatusNoText);
+        repo.MarkAttachmentOcrFailed(Candidate(db, repo, retired), "mistral:engine-b");
+        ModelOf(db, retired).ShouldBe("mistral:engine-b");
+    }
+
+    [Fact]
+    public void A_stale_write_stamps_no_model_because_it_stamps_nothing()
+    {
+        // The stamp rides inside the identity-guarded UPDATE. If the guard
+        // matches nothing the whole row is untouched — a separate follow-up
+        // write could have landed the engine id on a document the text never
+        // reached, which is the exact hazard OcrIdentityMatch exists for.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var id = Insert(repo, "stale@x", "scan.pdf", AttachmentTextExtractor.StatusNoText);
+        var candidate = Candidate(db, repo, id);
+
+        // Move the row out from under the snapshot.
+        using (var conn = db.Connections.Open())
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE attachments SET part_index = 7 WHERE message_id = $id;";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.ExecuteNonQuery();
+        }
+
+        repo.SaveOcrText(candidate, "TEXT", "ollama:engine-a").ShouldBe(OcrWriteOutcome.Stale);
+        ModelOf(db, id).ShouldBeNull();
+    }
+
+    /// <summary>Insert() returns the MESSAGE id, so look the attachment up by owner.</summary>
+    private static string? ModelOf(TempDatabase db, long messageId, int partIndex = 0)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT ocr_model FROM attachments WHERE message_id = $id AND part_index = $p;";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        cmd.Parameters.AddWithValue("$p", partIndex);
+        return cmd.ExecuteScalar() as string;
     }
 
     private static OcrCandidate Candidate(TempDatabase db, MessageRepository repo, long messageId, int partIndex = 0)

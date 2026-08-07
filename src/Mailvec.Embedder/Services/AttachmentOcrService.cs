@@ -397,15 +397,15 @@ public sealed class AttachmentOcrService(
     /// </summary>
     private VisionFailureAction ClassifyVisionFailure(Exception ex, OcrCandidate c, string pass)
     {
-        if (ex is not VisionException vision)
+        if (ex is not VisionException visionEx)
         {
             _lastFailureKind = VisionFailureKind.Transient;
             return VisionFailureAction.CountAsTransient;
         }
 
-        _lastFailureKind = vision.Kind;
+        _lastFailureKind = visionEx.Kind;
 
-        switch (vision.Kind)
+        switch (visionEx.Kind)
         {
             case VisionFailureKind.Backpressure:
                 logger.LogWarning(
@@ -431,7 +431,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "{Pass}: provider refused attachment {AttachmentId} as unprocessable; marking failed.",
                     pass, c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c);
+                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
                 Increment(OcrHealthKeys.RetiredTotal, 1);
                 return VisionFailureAction.SkipDocument;
 
@@ -489,7 +489,7 @@ public sealed class AttachmentOcrService(
         {
             if (RecordVisionFailure(c))
             {
-                if (messages.MarkAttachmentOcrFailed(c) == OcrWriteOutcome.Stale)
+                if (messages.MarkAttachmentOcrFailed(c, vision.ModelId) == OcrWriteOutcome.Stale)
                 {
                     logger.LogInformation(
                         "{Pass}: attachment {AttachmentId} reached its retirement threshold but the row moved; " +
@@ -599,7 +599,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c);
+                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
                 continue;
             }
 
@@ -613,7 +613,7 @@ public sealed class AttachmentOcrService(
                 // PDFium can't open it -> permanently unreadable. Mark failed so
                 // we don't re-select a poison PDF every cycle.
                 logger.LogWarning(ex, "OCR: cannot open PDF for attachment {AttachmentId}; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c);
+                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
                 continue;
             }
 
@@ -690,7 +690,7 @@ public sealed class AttachmentOcrService(
                     c.AttachmentId, sb.ToString().Trim().Length, _opts.OcrMinTextChars);
             }
 
-            if (messages.SaveOcrText(c, pdfText) == OcrWriteOutcome.Stale)
+            if (messages.SaveOcrText(c, pdfText, vision.ModelId) == OcrWriteOutcome.Stale)
             {
                 logger.LogInformation(
                     "OCR: attachment {AttachmentId} changed underneath the OCR pass; discarding the transcription. " +
@@ -817,7 +817,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "Image OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c);
+                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
                 continue;
             }
 
@@ -828,7 +828,7 @@ public sealed class AttachmentOcrService(
             {
                 logger.LogInformation(
                     "Image OCR: attachment {AttachmentId} did not decode as an image; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c);
+                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
                 continue;
             }
 
@@ -843,7 +843,7 @@ public sealed class AttachmentOcrService(
                 logger.LogInformation(
                     "Image OCR gate: attachment {AttachmentId} {W}x{H} (short {Short}px, aspect {Aspect:F1}) — skipping as non-content.",
                     c.AttachmentId, normalized.Width, normalized.Height, shortEdge, aspect);
-                messages.MarkAttachmentImageNoText(c);
+                messages.MarkAttachmentImageNoText(c, vision.ModelId);
                 continue;
             }
 
@@ -899,7 +899,7 @@ public sealed class AttachmentOcrService(
             // A result under the floor counts as empty: see BelowTextFloor.
             if (BelowTextFloor(text))
             {
-                if (messages.MarkAttachmentImageNoText(c) == OcrWriteOutcome.Stale)
+                if (messages.MarkAttachmentImageNoText(c, vision.ModelId) == OcrWriteOutcome.Stale)
                 {
                     logger.LogInformation(
                         "Image OCR: attachment {AttachmentId} changed underneath the pass; no_text mark skipped.",
@@ -918,7 +918,7 @@ public sealed class AttachmentOcrService(
                 continue;
             }
 
-            if (messages.SaveOcrText(c, text) == OcrWriteOutcome.Stale)
+            if (messages.SaveOcrText(c, text, vision.ModelId) == OcrWriteOutcome.Stale)
             {
                 logger.LogInformation(
                     "Image OCR: attachment {AttachmentId} changed underneath the OCR pass; discarding the transcription.",
