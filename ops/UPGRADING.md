@@ -65,7 +65,7 @@ Practical consequences when planning the deploy:
 A TFM bump (e.g. `net10.0` → `net11.0`) has fanout:
 
 1. Install the matching SDK on the build host — `ops/build-mcpb.sh` runs `dotnet publish -c Release -r osx-arm64 --self-contained true` and ships the runtime inside the bundle.
-2. Re-run `ops/install-stdio-launcher.sh` so the stdio launcher at `~/.local/bin/mailvec-mcp-stdio` (which exports `DOTNET_ROOT`) resolves to a runtime that exists. (It republishes AND re-signs; `ops/publish-mcp-stdio.sh` alone also works now that it signs, but doesn't rewrite the launcher.)
+2. Re-run `ops/install-stdio-launcher.sh` so the stdio launcher at `~/.local/bin/mailvec-mcp-stdio` (which exports `DOTNET_ROOT`) resolves to a runtime that exists. It republishes, re-signs, and rewrites the launcher — all three matter here, since the launcher is what bakes in the `DOTNET_ROOT` that a TFM bump invalidates.
 3. Rebuild + reinstall the MCPB with `--bump` so end-users' Claude Desktop instances pick up the new self-contained runtime.
 
 Bundle size grows roughly with each runtime major.

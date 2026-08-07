@@ -24,9 +24,6 @@ trap 'echo "redeploy.sh: failed at line $LINENO" >&2' ERR
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$REPO_ROOT/ops/frozen-corpus-guard.sh"
-# Redeploy kickstarts the agents, so on a frozen-corpus machine it restarts
-# ingest just as surely as a fresh install. See ops/frozen-corpus-guard.sh.
-require_unfrozen "ops/redeploy.sh would republish and restart the launchd agents"
 PREFIX="$HOME/.local/share/mailvec"
 LOG_DIR="$HOME/Library/Logs/Mailvec"
 ALL_SERVICES=(indexer embedder mcp cli)
@@ -48,6 +45,12 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     usage
     exit 0
 fi
+
+# AFTER --help, deliberately. Redeploy kickstarts the agents, so on a
+# frozen-corpus machine it restarts ingest as surely as a fresh install — but
+# a guard that also swallows `--help` teaches the reader the script is broken
+# rather than that the machine is protected. See ops/frozen-corpus-guard.sh.
+require_unfrozen "ops/redeploy.sh would republish and restart the launchd agents"
 
 if [[ "$(uname)" != "Darwin" ]]; then
     echo "redeploy.sh: macOS only (launchd)" >&2

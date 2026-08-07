@@ -34,8 +34,15 @@
 #   MAILVEC_DB   path to archive.sqlite (default: the standard Application Support path)
 set -euo pipefail
 
+# --help before the arity check: this is the one script that overwrites your
+# archive, and it used to answer `--help` with "snapshot not found: --help".
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  sed -n '2,34p' "$0"
+  exit 0
+fi
+
 if [[ $# -ne 1 ]]; then
-  sed -n '2,24p' "$0"
+  sed -n '2,34p' "$0"
   exit 2
 fi
 SNAP="$1"
