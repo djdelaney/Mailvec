@@ -210,23 +210,34 @@ public sealed class MistralOcrClient(
     private async Task ThrowClassifiedAsync(HttpResponseMessage response, CancellationToken ct)
     {
         var status = (int)response.StatusCode;
+        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
         var kind = response.StatusCode switch
         {
             HttpStatusCode.TooManyRequests => VisionFailureKind.Backpressure,
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound
                 => VisionFailureKind.AuthOrConfig,
+            // Unambiguously about the payload: the request was refused for its
+            // size or media type, which no retry and no reconfiguration changes.
             HttpStatusCode.RequestEntityTooLarge or HttpStatusCode.UnsupportedMediaType
                 => VisionFailureKind.DocumentFatal,
-            // 422 is the shape the service uses for "this payload is wrong",
-            // which for a fixed request envelope means the document. 400 is
-            // ambiguous but lands the same way — and DocumentFatal retires only
-            // this one attachment, so a misclassification here is bounded.
+            // 400/422 is the ONE status that needs the body to interpret, and
+            // getting it wrong is corpus-wide. Measured against the live Azure
+            // endpoint: a corrupt image and a malformed request envelope BOTH
+            // answer 400, distinguishable only by their bodies
+            // ("invalid_request_file" vs "unsupported_request_argument"). This
+            // used to map both to DocumentFatal on the reasoning that a
+            // misclassification is "bounded to one attachment" — which is
+            // false. It is bounded per CALL, not per corpus: a systematic
+            // envelope fault (schema drift, an API version change, a new
+            // payload requirement) applies to every attachment in turn and
+            // walks the whole archive into 'failed', permanently, since nothing
+            // re-selects a failed row.
             HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity
-                => VisionFailureKind.DocumentFatal,
+                => DescribesTheDocument(body) ? VisionFailureKind.DocumentFatal : VisionFailureKind.AuthOrConfig,
             _ => VisionFailureKind.Transient,
         };
 
-        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         // Body onto Data rather than into the message — the request was a
         // rendered page of the user's mail, and an echoing error would put it
         // into the logs. Same rule as OllamaVisionClient.
@@ -234,6 +245,32 @@ public sealed class MistralOcrClient(
         ex.Data["body"] = body.Length <= 400 ? body : body[..400] + "…";
         throw ex;
     }
+
+    /// <summary>
+    /// Provider error markers that refer to the SUBMITTED DOCUMENT rather than
+    /// to our request envelope, credentials, model or the service itself.
+    /// </summary>
+    /// <remarks>
+    /// An explicit allowlist, and it must stay one. Retiring a document is
+    /// irreversible in normal operation — nothing re-selects
+    /// extraction_status='failed' — so the safe default for an unrecognised
+    /// error is "don't retire", which is what a non-match yields. Adding a
+    /// pattern here is a decision to let that string destroy documents; adding
+    /// too few merely means a genuinely bad document is retried until its
+    /// transient strikes run out, which is recoverable.
+    /// </remarks>
+    private static readonly string[] DocumentErrorMarkers =
+    [
+        "invalid_request_file",   // observed: corrupt/undecodable image bytes
+        "could not be loaded",    // the human half of the same response
+        "invalid_file",
+        "document_parsing",
+        "corrupt",
+    ];
+
+    private static bool DescribesTheDocument(string? body) =>
+        body is not null
+        && DocumentErrorMarkers.Any(m => body.Contains(m, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Reachability + credential check, used to gate the OCR batch and by
