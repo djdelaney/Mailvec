@@ -91,7 +91,7 @@ public class AttachmentOcrServiceTests : IDisposable
         long poison = StageNoTextPdf("poison@x", MinimalPdf(1));
         var calls = 0;
         var svc = Build(new FakeVision(true, _ =>
-            ++calls % 2 == 1 ? throw new TaskCanceledException("poison render hangs the model") : "GOOD TEXT"));
+            ++calls % 2 == 1 ? throw new TaskCanceledException("poison render hangs the model") : "GOOD SCAN TEXT"));
 
         // Four counted failures — one short of MaxVisionAttempts (5).
         for (int cycle = 0; cycle < 4; cycle++)
@@ -178,7 +178,7 @@ public class AttachmentOcrServiceTests : IDisposable
         foreach (var id in new[] { "block1@x", "block2@x", "block3@x", "block4@x" })
             File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", id + ".eml"));
 
-        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED"));
+        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED SCAN TEXT"));
 
         // Batch of 4 — exactly filled by the four unreadable rows on cycle 1.
         var firstCycle = await svc.ProcessBatchAsync(4, default);
@@ -189,7 +189,7 @@ public class AttachmentOcrServiceTests : IDisposable
         var secondCycle = await svc.ProcessBatchAsync(4, default);
 
         secondCycle.ShouldBe(1);
-        TextOf(valid).ShouldBe("RECOVERED");
+        TextOf(valid).ShouldBe("RECOVERED SCAN TEXT");
         StatusOf(valid).ShouldBe(AttachmentTextExtractor.StatusOcr);
 
         // And the unreadable rows are left alone — not retired to 'failed'.
@@ -217,9 +217,9 @@ public class AttachmentOcrServiceTests : IDisposable
     {
         long id = StageNoTextPdf("multi@x", MinimalPdf(3));
 
-        await Build(new FakeVision(available: true, ocr: _ => "PAGE")).ProcessBatchAsync(10, default);
+        await Build(new FakeVision(available: true, ocr: _ => "PAGECONTENT")).ProcessBatchAsync(10, default);
 
-        TextOf(id).ShouldBe("PAGE\n\nPAGE\n\nPAGE");
+        TextOf(id).ShouldBe("PAGECONTENT\n\nPAGECONTENT\n\nPAGECONTENT");
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public class AttachmentOcrServiceTests : IDisposable
     {
         long id = StageNoTextPdf("scan@x", MinimalPdf(1));
 
-        var done = await Build(new FakeVision(available: false, ocr: _ => "x")).ProcessBatchAsync(10, default);
+        var done = await Build(new FakeVision(available: false, ocr: _ => "XTEXTVALUE")).ProcessBatchAsync(10, default);
 
         done.ShouldBe(0);
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText); // untouched, retried later
@@ -238,7 +238,7 @@ public class AttachmentOcrServiceTests : IDisposable
     {
         long id = StageNoTextPdf("bad@x", Encoding.ASCII.GetBytes("this is not a pdf at all"));
 
-        var done = await Build(new FakeVision(available: true, ocr: _ => "x")).ProcessBatchAsync(10, default);
+        var done = await Build(new FakeVision(available: true, ocr: _ => "XTEXTVALUE")).ProcessBatchAsync(10, default);
 
         done.ShouldBe(0);
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed); // poison PDF, not retried
@@ -341,7 +341,7 @@ public class AttachmentOcrServiceTests : IDisposable
     {
         long id = StageUnsupportedImage("img@x", MakePng(300, 300));
 
-        var done = await Build(new FakeVision(false, _ => "x"), ImageGate).ProcessImageBatchAsync(10, default);
+        var done = await Build(new FakeVision(false, _ => "XTEXTVALUE"), ImageGate).ProcessImageBatchAsync(10, default);
 
         done.ShouldBe(0);
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported); // retried later
@@ -352,7 +352,7 @@ public class AttachmentOcrServiceTests : IDisposable
     {
         long id = StageUnsupportedImage("bad@x", Encoding.ASCII.GetBytes("this is not an image, just bytes past the tiny byte gate"));
 
-        var done = await Build(new FakeVision(true, _ => "x"), ImageGate).ProcessImageBatchAsync(10, default);
+        var done = await Build(new FakeVision(true, _ => "XTEXTVALUE"), ImageGate).ProcessImageBatchAsync(10, default);
 
         done.ShouldBe(0);
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed); // undecodable, not retried
@@ -375,7 +375,7 @@ public class AttachmentOcrServiceTests : IDisposable
     {
         long id = StageUnsupportedImage("banner@x", MakePng(2000, 210)); // aspect 9.5 > 8
 
-        var done = await Build(new FakeVision(true, _ => "x"), ImageGate).ProcessImageBatchAsync(10, default);
+        var done = await Build(new FakeVision(true, _ => "XTEXTVALUE"), ImageGate).ProcessImageBatchAsync(10, default);
 
         done.ShouldBe(0);
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
@@ -452,7 +452,7 @@ public class AttachmentOcrServiceTests : IDisposable
             using var bmp = SKBitmap.Decode(jpeg);
             return bmp is not null && bmp.Width > failAboveWidth
                 ? throw new TaskCanceledException("poison render hangs the model")
-                : "GOOD TEXT";
+                : "GOOD SCAN TEXT";
         });
 
     [Fact]
@@ -481,7 +481,7 @@ public class AttachmentOcrServiceTests : IDisposable
         }
 
         StatusOf(healthy).ShouldBe(AttachmentTextExtractor.StatusOcr);
-        TextOf(healthy).ShouldBe("GOOD TEXT");
+        TextOf(healthy).ShouldBe("GOOD SCAN TEXT");
         StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusFailed);
     }
 
@@ -507,14 +507,14 @@ public class AttachmentOcrServiceTests : IDisposable
         for (var i = 0; i < 25; i++)
             File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", $"blk{i:D2}@x.eml"));
 
-        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED"));
+        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED SCAN TEXT"));
 
         var done = 0;
         for (var cycle = 0; cycle < 15; cycle++)
             done += await svc.ProcessBatchAsync(4, default);   // the default batch size
 
         done.ShouldBe(1);
-        TextOf(valid).ShouldBe("RECOVERED");
+        TextOf(valid).ShouldBe("RECOVERED SCAN TEXT");
         StatusOf(valid).ShouldBe(AttachmentTextExtractor.StatusOcr);
 
         // Blockers are left pending, not retired: "unreadable right now" says
@@ -568,7 +568,7 @@ public class AttachmentOcrServiceTests : IDisposable
             File.Delete(Path.Combine(_maildirRoot, "INBOX", "cur", $"iblk{i:D2}@x.eml"));
         }
 
-        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED"), ImageGate);
+        var svc = Build(new FakeVision(available: true, ocr: _ => "RECOVERED SCAN TEXT"), ImageGate);
 
         for (var cycle = 0; cycle < 15; cycle++)
         {
@@ -604,7 +604,7 @@ public class AttachmentOcrServiceTests : IDisposable
             if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return ""; // probe: model healthy
             return ++docCalls <= 10
                 ? throw new TaskCanceledException("this document hangs the model")
-                : "RECOVERED";
+                : "RECOVERED SCAN TEXT";
         }));
 
         for (int cycle = 0; cycle < 5; cycle++) // MaxVisionAttempts
@@ -618,7 +618,7 @@ public class AttachmentOcrServiceTests : IDisposable
         // healthy doc that was starving behind them.
         (await svc.ProcessBatchAsync(10, default)).ShouldBe(1);
         StatusOf(healthy).ShouldBe(AttachmentTextExtractor.StatusOcr);
-        TextOf(healthy).ShouldBe("RECOVERED");
+        TextOf(healthy).ShouldBe("RECOVERED SCAN TEXT");
     }
 
     [Fact]
@@ -635,7 +635,7 @@ public class AttachmentOcrServiceTests : IDisposable
         var svc = Build(new FakeVision(true, img =>
         {
             if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
-            return ++calls % 3 == 0 ? throw new TaskCanceledException("page 3 hangs") : "PAGE";
+            return ++calls % 3 == 0 ? throw new TaskCanceledException("page 3 hangs") : "PAGECONTENT";
         }));
 
         for (int cycle = 0; cycle < 5; cycle++) // MaxVisionAttempts
@@ -658,14 +658,14 @@ public class AttachmentOcrServiceTests : IDisposable
         // permanent, silent stall of the whole OCR queue.
         long poison = StageNoTextPdf("stale-part@x", MinimalPdf(1), partIndex: 7);
         long healthy = StageNoTextPdf("fine@x", MinimalPdf(1));
-        var svc = Build(new FakeVision(true, _ => "GOOD TEXT"));
+        var svc = Build(new FakeVision(true, _ => "GOOD SCAN TEXT"));
 
         var done = await svc.ProcessBatchAsync(10, default);
 
         done.ShouldBe(1);
         StatusOf(poison).ShouldBe(AttachmentTextExtractor.StatusFailed); // retired immediately, not retried
         StatusOf(healthy).ShouldBe(AttachmentTextExtractor.StatusOcr);   // the queue behind it still drains
-        TextOf(healthy).ShouldBe("GOOD TEXT");
+        TextOf(healthy).ShouldBe("GOOD SCAN TEXT");
     }
 
     [Fact]
@@ -770,7 +770,7 @@ public class AttachmentOcrServiceTests : IDisposable
         {
             if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
             return StatusOf(fatal) == AttachmentTextExtractor.StatusFailed
-                ? "RECOVERED"
+                ? "RECOVERED SCAN TEXT"
                 : throw new VisionException(VisionFailureKind.DocumentFatal, "413 Payload Too Large");
         }));
 
@@ -825,6 +825,103 @@ public class AttachmentOcrServiceTests : IDisposable
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported); // still selectable
     }
 
+    // ---- Minimum text floor ---------------------------------------------------
+
+    [Fact]
+    public async Task A_scrap_of_text_is_treated_as_no_text_rather_than_indexed()
+    {
+        // The real case: a 2.8MB phone photo of children's placemats OCR'd to
+        // "1.1" -- three characters off a book spine -- and was written back as
+        // status='ocr' with indexedForSearch true, joining the FTS
+        // attachment_text column and getting its own embedded chunk. Its
+        // near-identical sibling photo returned empty and was correctly marked
+        // no_text. Both states are terminal, so the junk was permanent.
+        long id = StageUnsupportedImage("scrap@x", MakePng(300, 300));
+
+        var done = await Build(new FakeVision(true, _ => "1.1"),
+            new EmbedderOptions { ImageOcrMinBytes = 1, OcrMinTextChars = 10 })
+            .ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(0);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        TextOf(id).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Text_at_or_above_the_floor_is_stored_normally()
+    {
+        long id = StageUnsupportedImage("real@x", MakePng(300, 300));
+
+        var done = await Build(new FakeVision(true, _ => "POWELL Pump & Well Drilling"),
+            new EmbedderOptions { ImageOcrMinBytes = 1, OcrMinTextChars = 10 })
+            .ProcessImageBatchAsync(10, default);
+
+        done.ShouldBe(1);
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        TextOf(id).ShouldBe("POWELL Pump & Well Drilling");
+    }
+
+    [Fact]
+    public async Task The_floor_can_be_disabled()
+    {
+        // 0 means "store whatever comes back" -- the pre-floor behaviour, kept
+        // reachable for a corpus where short results are genuinely wanted.
+        long id = StageUnsupportedImage("scrap@x", MakePng(300, 300));
+
+        await Build(new FakeVision(true, _ => "1.1"),
+            new EmbedderOptions { ImageOcrMinBytes = 1, OcrMinTextChars = 0 })
+            .ProcessImageBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        TextOf(id).ShouldBe("1.1");
+    }
+
+    [Fact]
+    public async Task A_scanned_PDF_under_the_floor_stores_no_text_and_is_not_requeued()
+    {
+        // The PDF pass has a different terminal marker (status='ocr' with empty
+        // text), so the floor collapses an under-floor result to empty and
+        // reuses SaveOcrText's existing blank path rather than inventing a
+        // second one. Crucially it must NOT re-queue the message: there is no
+        // new content to embed.
+        long id = StageNoTextPdf("scrap@x", MinimalPdf(1));
+        // Stamp it embedded first: a freshly-staged message has embedded_at
+        // NULL, so without this the assertion below could not tell "left alone"
+        // from "never set".
+        SetEmbeddedAt(id, "2026-01-01T00:00:00.0000000+00:00");
+
+        await Build(new FakeVision(true, _ => "1.1"),
+            new EmbedderOptions { OcrMinTextChars = 10 })
+            .ProcessBatchAsync(10, default);
+
+        // status='ocr' with EMPTY text is the PDF pass's existing terminal marker
+        // for "OCR ran, produced nothing" — the floor reuses it rather than
+        // inventing a second state, so the stored text is empty, not null.
+        TextOf(id).ShouldBeNullOrEmpty();
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        EmbeddedAtOf(id).ShouldNotBeNull("a blank OCR result must not burn a re-embed");
+    }
+
+    private void SetEmbeddedAt(long messageId, string iso)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE messages SET embedded_at = $t WHERE id = $id";
+        cmd.Parameters.AddWithValue("$t", iso);
+        cmd.Parameters.AddWithValue("$id", messageId);
+        cmd.ExecuteNonQuery();
+    }
+
+    private string? EmbeddedAtOf(long messageId)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT embedded_at FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        var v = cmd.ExecuteScalar();
+        return v is null or DBNull ? null : (string)v;
+    }
+
     // ---- Batch-outcome record -------------------------------------------------
     //
     // The signal that separates "backlog drained" from "silently failing
@@ -838,7 +935,7 @@ public class AttachmentOcrServiceTests : IDisposable
     {
         StageNoTextPdf("scan@x", MinimalPdf(1));
 
-        (await BuildWithMetadata(new FakeVision(true, _ => "RECOVERED")).ProcessBatchAsync(4, default)).ShouldBe(1);
+        (await BuildWithMetadata(new FakeVision(true, _ => "RECOVERED SCAN TEXT")).ProcessBatchAsync(4, default)).ShouldBe(1);
 
         Metadata.Get(OcrHealthKeys.LastSuccessAt).ShouldNotBeNullOrWhiteSpace();
         Metadata.Get(OcrHealthKeys.ConsecutiveFailures).ShouldBe("0");
@@ -884,7 +981,7 @@ public class AttachmentOcrServiceTests : IDisposable
         var svc = BuildWithMetadata(new FakeVision(true, img =>
         {
             if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
-            return fail ? throw new TaskCanceledException("boom") : "RECOVERED";
+            return fail ? throw new TaskCanceledException("boom") : "RECOVERED SCAN TEXT";
         }));
 
         await svc.ProcessBatchAsync(4, default);
@@ -902,7 +999,7 @@ public class AttachmentOcrServiceTests : IDisposable
         // re-OCR or a retry loop is invisible until the invoice arrives.
         StageNoTextPdf("scan@x", MinimalPdf(3));
 
-        await BuildWithMetadata(new FakeVision(true, _ => "PAGE")).ProcessBatchAsync(4, default);
+        await BuildWithMetadata(new FakeVision(true, _ => "PAGECONTENT")).ProcessBatchAsync(4, default);
 
         Metadata.Get(OcrHealthKeys.PagesSentTotal).ShouldBe("3");
     }

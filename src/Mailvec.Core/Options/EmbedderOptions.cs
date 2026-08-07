@@ -57,6 +57,32 @@ public sealed class EmbedderOptions
     public long ImageOcrMinBytes { get; set; } = 50 * 1024;
 
     /// <summary>
+    /// Minimum characters an OCR result must contain to be stored as recovered
+    /// text. Below it, the document is treated exactly as if OCR had returned
+    /// nothing — the same terminal state a genuinely textless image gets.
+    /// </summary>
+    /// <remarks>
+    /// Vision models return a stray glyph or two off photographs of physical
+    /// objects, and without a floor that becomes indexed content. Observed on a
+    /// real corpus: a 2.8 MB phone photo of children's placemats and books OCR'd
+    /// to <c>1.1</c> — three characters, presumably off a book spine — and was
+    /// written back as status='ocr' with <c>indexedForSearch: true</c>, joining
+    /// the FTS <c>attachment_text</c> column and getting its own embedded chunk.
+    /// Its near-identical sibling photo in the same email correctly came back
+    /// empty and was marked 'no_text'. The status is terminal either way, so
+    /// nothing revisits the junk.
+    ///
+    /// This is the OCR analogue of <see cref="MinBodyCharsForVector"/>, which
+    /// exists for the same reason on the body path.
+    ///
+    /// The trade is real and accepted: a genuinely short result — a door number,
+    /// a receipt total — is discarded too. 10 is chosen because a photo that
+    /// contains real text almost never yields ONLY a few characters; it yields
+    /// the surrounding text as well. Set 0 to store whatever comes back.
+    /// </remarks>
+    public int OcrMinTextChars { get; set; } = 10;
+
+    /// <summary>
     /// Ceiling on the decoded size of an attachment the OCR passes will pull
     /// out of the Maildir. Over it, the document is marked 'failed' and not
     /// retried — the size won't change.

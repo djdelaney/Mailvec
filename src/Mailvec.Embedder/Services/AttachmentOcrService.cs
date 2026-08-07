@@ -324,6 +324,20 @@ public sealed class AttachmentOcrService(
         }
     }
 
+    /// <summary>
+    /// Whether an OCR result is too short to be worth storing — treated exactly
+    /// as if the model had returned nothing.
+    /// </summary>
+    /// <remarks>
+    /// Empty is not the only worthless answer. A vision model reading a photo of
+    /// physical objects returns a stray glyph or two, and without a floor that
+    /// becomes searchable content on a document nothing will ever revisit
+    /// (both terminal states are terminal). See EmbedderOptions.OcrMinTextChars
+    /// for the real case that motivated this.
+    /// </remarks>
+    private bool BelowTextFloor(string? text) =>
+        string.IsNullOrWhiteSpace(text) || text.Trim().Length < _opts.OcrMinTextChars;
+
     /// <summary>What the batch loop should do with a classified vision failure.</summary>
     private enum VisionFailureAction
     {
@@ -637,7 +651,20 @@ public sealed class AttachmentOcrService(
             // it would inflate `done`, tell the worker OCR produced work (an
             // immediate extra poll for nothing), and clear failure strikes that
             // belong to a document we never actually transcribed.
-            if (messages.SaveOcrText(c, sb.ToString()) == OcrWriteOutcome.Stale)
+            // Apply the same floor as the image pass. SaveOcrText already treats
+            // blank text as the terminal "OCR'd it, got nothing" marker — it
+            // commits the status but skips the attachment_text rebuild and the
+            // re-embed — so collapsing an under-floor result to empty reuses
+            // that path exactly rather than inventing a second one.
+            var pdfText = BelowTextFloor(sb.ToString()) ? string.Empty : sb.ToString();
+            if (pdfText.Length == 0 && sb.Length > 0)
+            {
+                logger.LogInformation(
+                    "OCR: attachment {AttachmentId} produced only {Chars} chars (floor {Floor}); storing no text.",
+                    c.AttachmentId, sb.ToString().Trim().Length, _opts.OcrMinTextChars);
+            }
+
+            if (messages.SaveOcrText(c, pdfText) == OcrWriteOutcome.Stale)
             {
                 logger.LogInformation(
                     "OCR: attachment {AttachmentId} changed underneath the OCR pass; discarding the transcription. " +
@@ -840,7 +867,8 @@ public sealed class AttachmentOcrService(
 
             // Empty transcription (a photo with no legible text) is the common
             // case here — mark terminal rather than persisting an empty 'ocr' row.
-            if (string.IsNullOrWhiteSpace(text))
+            // A result under the floor counts as empty: see BelowTextFloor.
+            if (BelowTextFloor(text))
             {
                 if (messages.MarkAttachmentImageNoText(c) == OcrWriteOutcome.Stale)
                 {
@@ -851,7 +879,8 @@ public sealed class AttachmentOcrService(
                 else
                 {
                     logger.LogInformation(
-                        "Image OCR: attachment {AttachmentId} produced no text; marked no_text.", c.AttachmentId);
+                        "Image OCR: attachment {AttachmentId} produced no usable text ({Chars} chars, floor {Floor}); marked no_text.",
+                        c.AttachmentId, text?.Trim().Length ?? 0, _opts.OcrMinTextChars);
                 }
                 continue;
             }
