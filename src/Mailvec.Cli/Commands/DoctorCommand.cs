@@ -249,22 +249,55 @@ internal static class DoctorCommand
         {
             try
             {
-                // The remedy differs entirely by provider: a local model needs
-                // pulling, a hosted one needs a working endpoint and key. Telling
-                // an operator on the hosted provider to run `ollama pull` sends
-                // them somewhere there is nothing to fix.
+                // Report the provider that is ACTUALLY configured, and say what
+                // went wrong specifically. Two things this must never do:
+                // green-tick a provider that isn't in use (a doctor that
+                // cheerfully confirms `qwen2.5vl:7b available` while OCR runs on
+                // a hosted endpoint is worse than no check at all), or flag the
+                // deliberate no-credentials posture as a fault.
                 var visionOpts = sp.GetRequiredService<IOptions<VisionOptions>>().Value;
                 var provider = VisionRegistration.Describe(visionOpts, ollama);
-                var available = await sp.GetRequiredService<IVisionClient>().IsModelAvailableAsync(ct).ConfigureAwait(false);
-                var remedy = visionOpts.IsMistral
-                    ? "Check Vision:Mistral:Endpoint / :Model / :ApiKey"
-                    : $"Run `ollama pull {ollama.VisionModel}`";
-                checks.Add(available
-                    ? DoctorCheck.Ok("OCR model", $"{provider} available", "pipeline")
-                    : DoctorCheck.Warn("OCR model",
-                        $"{provider} unavailable — scanned PDFs won't be OCR'd. " +
-                        $"{remedy}, or set Embedder:OcrEnabled=false.",
-                        "pipeline"));
+                var probe = await sp.GetRequiredService<IVisionClient>().ProbeAsync(ct).ConfigureAwait(false);
+                var detail = string.IsNullOrEmpty(probe.Detail) ? "" : $" ({probe.Detail})";
+
+                checks.Add(probe.Status switch
+                {
+                    VisionProbeStatus.Available =>
+                        DoctorCheck.Ok("OCR model", $"{provider} available", "pipeline"),
+
+                    // Intended posture, not a problem — the key is scoped to the
+                    // embedder. Point at where the authoritative check lives.
+                    VisionProbeStatus.NotConfiguredHere =>
+                        DoctorCheck.Ok("OCR model",
+                            $"{provider} — configured; no credentials in this process by design. " +
+                            "Check it where OCR runs: `docker compose exec embedder mailvec doctor`.",
+                            "pipeline"),
+
+                    VisionProbeStatus.AuthFailed =>
+                        DoctorCheck.Warn("OCR model",
+                            $"{provider} rejected our credentials{detail} — scanned PDFs won't be OCR'd. " +
+                            "Check Vision:Mistral:ApiKey (env Vision__Mistral__ApiKey).",
+                            "pipeline"),
+
+                    VisionProbeStatus.RouteNotFound =>
+                        DoctorCheck.Warn("OCR model",
+                            $"{provider} answered 404 — the route or deployment name is wrong, not the key. " +
+                            "Check Vision:Mistral:Route and :Model (the Azure DEPLOYMENT name).",
+                            "pipeline"),
+
+                    VisionProbeStatus.ModelMissing =>
+                        DoctorCheck.Warn("OCR model",
+                            $"{provider} not pulled — scanned PDFs won't be OCR'd. " +
+                            $"Run `ollama pull {ollama.VisionModel}`, or set Embedder:OcrEnabled=false.",
+                            "pipeline"),
+
+                    _ => DoctorCheck.Warn("OCR model",
+                            $"{provider} unreachable{detail} — scanned PDFs won't be OCR'd. " +
+                            (visionOpts.IsMistral
+                                ? "Check Vision:Mistral:Endpoint and outbound network access."
+                                : "Check Ollama:BaseUrl and that Ollama is running."),
+                            "pipeline"),
+                });
             }
             catch (Exception ex)
             {

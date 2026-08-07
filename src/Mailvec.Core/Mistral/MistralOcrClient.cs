@@ -246,7 +246,15 @@ public sealed class MistralOcrClient(
     /// billable page** — which matters because this runs on every OCR cycle.
     /// A blank-image probe (the Ollama equivalent) would do neither.
     /// </summary>
-    public async Task<bool> IsModelAvailableAsync(CancellationToken ct = default)
+    public async Task<bool> IsModelAvailableAsync(CancellationToken ct = default) =>
+        (await ProbeAsync(ct).ConfigureAwait(false)).IsAvailable;
+
+    /// <summary>
+    /// Probe with a diagnosis. Distinguishing a rejected key from an unreachable
+    /// host from a wrong deployment name matters because each sends the operator
+    /// to a different setting; a bare false sends them to the logs.
+    /// </summary>
+    public async Task<VisionProbe> ProbeAsync(CancellationToken ct = default)
     {
         try
         {
@@ -256,13 +264,20 @@ public sealed class MistralOcrClient(
 
             // 422 means the route exists and accepted our credentials, then
             // rejected the deliberately-incomplete body. That is success here.
-            if (response.StatusCode == HttpStatusCode.UnprocessableEntity) return true;
-            if (response.IsSuccessStatusCode) return true;
+            if (response.StatusCode == HttpStatusCode.UnprocessableEntity || response.IsSuccessStatusCode)
+                return new VisionProbe(VisionProbeStatus.Available, null);
 
+            var status = (int)response.StatusCode;
+            var kind = response.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => VisionProbeStatus.AuthFailed,
+                HttpStatusCode.NotFound => VisionProbeStatus.RouteNotFound,
+                _ => VisionProbeStatus.Unreachable,
+            };
             logger.LogWarning(
-                "mistral-ocr probe returned {Status} for {Endpoint}/{Route} (model {Model}).",
-                (int)response.StatusCode, http.BaseAddress, _opts.Route, _opts.Model);
-            return false;
+                "mistral-ocr probe returned {Status} for {Endpoint}{Route} (model {Model}).",
+                status, http.BaseAddress, _opts.Route, _opts.Model);
+            return new VisionProbe(kind, $"HTTP {status}");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -271,7 +286,7 @@ public sealed class MistralOcrClient(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "mistral-ocr probe failed for {Endpoint}.", http.BaseAddress);
-            return false;
+            return new VisionProbe(VisionProbeStatus.Unreachable, ex.GetType().Name);
         }
     }
 

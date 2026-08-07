@@ -34,4 +34,20 @@ public interface IVisionClient
     /// warn — when the model hasn't been pulled.
     /// </summary>
     Task<bool> IsModelAvailableAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// The same check, but saying WHY. A bool collapses "the key is wrong",
+    /// "the endpoint is unreachable", "this process holds no credentials by
+    /// design" and "the model isn't pulled" into one indistinguishable false,
+    /// which is the difference between an operator fixing the problem in a
+    /// minute and reading container logs for twenty.
+    ///
+    /// Default implementation degrades to the bool so an existing
+    /// <see cref="IVisionClient"/> (or a test fake) keeps working; the real
+    /// clients override it with the detail they actually have.
+    /// </summary>
+    async Task<VisionProbe> ProbeAsync(CancellationToken ct = default) =>
+        await IsModelAvailableAsync(ct).ConfigureAwait(false)
+            ? new VisionProbe(VisionProbeStatus.Available, null)
+            : new VisionProbe(VisionProbeStatus.Unreachable, null);
 }

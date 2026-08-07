@@ -102,6 +102,11 @@ var host = builder.Build();
     logger.LogInformation(
         "Embedder starting (database={DatabasePath})",
         PathExpansion.Expand(archive.DatabasePath));
+
+    // One clear line beats a per-poll wall of "Connection refused" stack traces
+    // whose actual cause (an unset OLLAMA_BASE_URL) appears nowhere in them.
+    OllamaReachabilityCheck.WarnIfUnreachableFromContainer(
+        host.Services.GetRequiredService<IOptions<OllamaOptions>>().Value.BaseUrl, logger);
 }
 
 host.Run();

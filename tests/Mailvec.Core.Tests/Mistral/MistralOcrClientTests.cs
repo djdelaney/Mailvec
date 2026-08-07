@@ -185,6 +185,27 @@ public class MistralOcrClientTests
         (await client.IsModelAvailableAsync()).ShouldBeFalse();
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, VisionProbeStatus.AuthFailed)]
+    [InlineData(HttpStatusCode.Forbidden, VisionProbeStatus.AuthFailed)]
+    [InlineData(HttpStatusCode.NotFound, VisionProbeStatus.RouteNotFound)]
+    [InlineData(HttpStatusCode.BadGateway, VisionProbeStatus.Unreachable)]
+    public async Task Probe_says_WHY_it_failed(HttpStatusCode status, VisionProbeStatus expected)
+    {
+        // A bare bool collapses "the key is wrong" and "the deployment name is
+        // wrong" into one indistinguishable false, and those send the operator
+        // to completely different settings.
+        var client = ClientWith(_ => new HttpResponseMessage(status));
+        (await client.ProbeAsync()).Status.ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task Probe_reports_available_on_422()
+    {
+        (await ClientWith(_ => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)).ProbeAsync())
+            .Status.ShouldBe(VisionProbeStatus.Available);
+    }
+
     [Fact]
     public async Task Probe_reports_unavailable_when_the_endpoint_is_unreachable()
     {
