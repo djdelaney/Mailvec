@@ -12,6 +12,14 @@ procedure.
 > **~80k messages, 100% embedded**, with every eval label still resolving. The
 > teardown section is kept as a record and as the recipe if the Mac pipeline is
 > ever rebuilt.
+>
+> **The freeze is now enforced, not just documented.** `ops/install.sh`,
+> `ops/install-all.sh` and `ops/redeploy.sh` refuse to run while
+> `~/Library/Application Support/Mailvec/.frozen-corpus` exists — see
+> [`ops/frozen-corpus-guard.sh`](../../ops/frozen-corpus-guard.sh) for why a
+> written warning turned out not to be enough (it was ignored twice, once by an
+> agent that never read it). `--uninstall` is deliberately still allowed; it is
+> the remedy, not the hazard. To un-freeze deliberately, delete the marker.
 
 ## Why frozen-real (not truncated, not artificial)
 

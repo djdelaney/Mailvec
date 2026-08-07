@@ -81,6 +81,34 @@ jobs:
           print(f"Version lockstep OK: {manifest}")
           PY
 
+      # The frozen-corpus warning is duplicated verbatim in CLAUDE.md and
+      # AGENTS.md rather than one pointing at the other: an agent that skips a
+      # file also skips a redirect, which is exactly how the corpus got
+      # destroyed twice. Duplication is the right call here, so the drift it
+      # invites gets a machine watching it — same reasoning as the version
+      # lockstep check above. A symlink was considered and rejected: git
+      # materialises one as a plain file containing the target path on any
+      # checkout without symlink support, which reads as a corrupt file.
+      - name: Verify frozen-corpus warning is identical in CLAUDE.md and AGENTS.md
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+          B, E = "<!-- BEGIN frozen-corpus -->", "<!-- END frozen-corpus -->"
+          def block(name):
+              t = pathlib.Path(name).read_text()
+              if B not in t or E not in t:
+                  print(f"{name}: missing {B} / {E} markers.", file=sys.stderr); sys.exit(1)
+              return t[t.index(B) + len(B):t.index(E)]
+          a, c = block("AGENTS.md"), block("CLAUDE.md")
+          if a != c:
+              print("The frozen-corpus block has drifted between AGENTS.md and CLAUDE.md.\n"
+                    "Both copies must be byte-identical — edit one and paste it into the other.\n"
+                    "Why duplicated rather than linked: ops/frozen-corpus-guard.sh's header.",
+                    file=sys.stderr)
+              sys.exit(1)
+          print(f"frozen-corpus block in sync ({len(a)} chars)")
+          PY
+
       - name: Fetch sqlite-vec extension
         run: ./ops/fetch-sqlite-vec.sh
 

@@ -30,6 +30,10 @@ trap 'echo "install.sh: failed at line $LINENO" >&2' ERR
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMPLATE_DIR="$REPO_ROOT/ops/launchd"
 
+# Frozen-corpus guard. Sourced here, invoked after arg parsing below so that
+# --uninstall (the remedy) stays available on a guarded machine.
+source "$REPO_ROOT/ops/frozen-corpus-guard.sh"
+
 PREFIX="$HOME/.local/share/mailvec"
 LOG_DIR="$HOME/Library/Logs/Mailvec"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
@@ -166,6 +170,10 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# Placed AFTER the loop on purpose: --uninstall exits inside it, so the remedy
+# stays reachable on a frozen-corpus machine. See ops/frozen-corpus-guard.sh.
+require_unfrozen "ops/install.sh would install and start the launchd agents"
 
 # ---------------------------------------------------------------------------
 # 1. Preflight
