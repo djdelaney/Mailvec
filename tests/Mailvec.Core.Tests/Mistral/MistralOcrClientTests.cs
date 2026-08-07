@@ -95,7 +95,6 @@ public class MistralOcrClientTests
     [InlineData(HttpStatusCode.NotFound, VisionFailureKind.AuthOrConfig)]
     [InlineData(HttpStatusCode.RequestEntityTooLarge, VisionFailureKind.DocumentFatal)]
     [InlineData(HttpStatusCode.UnsupportedMediaType, VisionFailureKind.DocumentFatal)]
-    [InlineData(HttpStatusCode.UnprocessableEntity, VisionFailureKind.DocumentFatal)]
     [InlineData(HttpStatusCode.BadGateway, VisionFailureKind.Transient)]
     public async Task Http_status_maps_to_the_right_failure_kind(HttpStatusCode status, VisionFailureKind expected)
     {
@@ -106,6 +105,45 @@ public class MistralOcrClientTests
 
         var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
         ex.Kind.ShouldBe(expected);
+    }
+
+    // ---- 400/422: the one status that needs its body read ---------------------
+    //
+    // Measured against the live Azure endpoint, a corrupt image and a malformed
+    // request envelope BOTH answer 400, distinguishable only by the body. Mapping
+    // the status alone to DocumentFatal meant a systematic envelope fault (schema
+    // drift, an API version change) retired every attachment it touched, one call
+    // at a time, permanently -- nothing re-selects a failed row.
+
+    [Theory]
+    // Real Azure body for undecodable image bytes.
+    [InlineData(HttpStatusCode.BadRequest,
+        "{\"object\":\"Error\",\"message\":\"Image could not be loaded as a valid image\",\"type\":\"invalid_request_file\"}")]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "{\"type\":\"invalid_request_file\"}")]
+    public async Task A_400_that_names_the_document_retires_it(HttpStatusCode status, string body)
+    {
+        var client = ClientWith(_ => new HttpResponseMessage(status) { Content = new StringContent(body) },
+            o => o.MaxRetries = 0);
+
+        (await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]))).Kind
+            .ShouldBe(VisionFailureKind.DocumentFatal);
+    }
+
+    [Theory]
+    // Real Azure body for an envelope the service rejects -- nothing to do with
+    // the document, and fatal to every subsequent call too.
+    [InlineData("{\"error\":{\"code\":\"unsupported_request_argument\",\"message\":\"Model does not support request argument supplied\"}}")]
+    [InlineData("{\"error\":{\"code\":\"missing_required_parameter\"}}")]
+    [InlineData("")]
+    [InlineData("<html>502 from something in the middle</html>")]
+    public async Task A_400_that_does_not_name_the_document_must_not_retire_it(string body)
+    {
+        // Unrecognised is the safe default: abort the batch, retire nothing.
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent(body) },
+            o => o.MaxRetries = 0);
+
+        (await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]))).Kind
+            .ShouldBe(VisionFailureKind.AuthOrConfig);
     }
 
     [Fact]

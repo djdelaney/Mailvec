@@ -825,6 +825,36 @@ public class AttachmentOcrServiceTests : IDisposable
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported); // still selectable
     }
 
+    [Fact]
+    public async Task A_systematic_provider_fault_never_retires_documents()
+    {
+        // The corpus-wide version of the 400-classification bug. A provider
+        // problem that is NOT about the document -- schema drift, an API
+        // version change, a new payload requirement -- answers identically for
+        // every attachment. Classified as DocumentFatal it would walk the whole
+        // archive into 'failed' one call at a time, permanently, because
+        // nothing re-selects a failed row. As AuthOrConfig it aborts the batch
+        // and everything stays selectable for when the provider is fixed.
+        long a = StageNoTextPdf("a@x", MinimalPdf(1));
+        long b = StageNoTextPdf("b@x", MinimalPdf(1));
+        long c = StageNoTextPdf("c@x", MinimalPdf(1));
+
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new VisionException(VisionFailureKind.AuthOrConfig, "400 unsupported_request_argument");
+        }));
+
+        for (var cycle = 0; cycle < 20; cycle++) // 4x MaxVisionAttempts
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+
+        StatusOf(a).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        StatusOf(b).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        StatusOf(c).ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
     // ---- Minimum text floor ---------------------------------------------------
 
     [Fact]
