@@ -113,10 +113,11 @@ echo "Verified SHA-256 ${ACTUAL}"
 tar -xzf "${TMPDIR}/${ASSET}" -C "${TMPDIR}"
 
 mv "${TMPDIR}/${LIB}" "${REPO_ROOT}/${DEST_DIR}/${LIB}"
-# Sidecar file that TraySystemService.TryReadVecVersion reads to render
-# the "sqlite-vec extension" row in the Advanced prefs tab. The library
-# can't be introspected for its version (it's loaded via SQLite's
-# extension API, before any internal version function is callable), so
-# we cooperate at install time and persist it here.
+# Record which sqlite-vec release landed here. The library can't be
+# introspected for its version (it's loaded via SQLite's extension API,
+# before any internal version function is callable), so we cooperate at
+# install time and persist it. Nothing reads this programmatically now that
+# the tray is gone — it's a note for whoever is following ops/UPGRADING.md
+# and needs to know what's actually installed.
 echo "v${VERSION}" > "${REPO_ROOT}/${DEST_DIR}/VERSION"
 echo "Installed: ${DEST_DIR}/${LIB} (sqlite-vec ${VERSION})"

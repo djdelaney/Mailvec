@@ -58,8 +58,8 @@ Reverting the URL fails four of its tests — that's the alarm.
 
 `mcpOpts` exists only for wiring that genuinely cannot wait for `Build()` —
 Kestrel's listen address, and the `HostGuard` allowlist baked into a middleware
-closure. `EnableTrayEndpoints`, `TrayExposureGuard`, and everything under
-`Mcp:Access` read `resolvedMcpOpts`. `AccessAuth` goes further and reads
+closure. `RestrictHealthToLoopback` and everything under `Mcp:Access` read
+`resolvedMcpOpts`. `AccessAuth` goes further and reads
 `IOptions<McpOptions>` at *request* time, so even its registration carries no
 snapshot.
 

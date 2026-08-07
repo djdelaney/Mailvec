@@ -88,7 +88,8 @@ public sealed class HealthService(
 
         // OCR (vision) is a separate, best-effort pipeline stage. Probe the
         // vision model concurrently with the embedding-Ollama ping so /health
-        // (polled by the tray every 5s) doesn't pay two serial round-trips.
+        // doesn't pay two serial round-trips — the compose healthcheck times
+        // out at 10s, which is the budget everything in here shares.
         var embOpts = embedderOpts?.Value ?? new EmbedderOptions();
         // The vision model is shared by both OCR passes (scanned PDFs and image
         // attachments); the stage is "on" if either is enabled.
@@ -117,8 +118,8 @@ public sealed class HealthService(
         // A failed embed ping has two very different causes with opposite
         // remediation: the server is down (restart Ollama), or the server is
         // fine and the embedding model was never pulled (`ollama pull ...`).
-        // One cheap /api/tags follow-up disambiguates; doctor and the tray
-        // key their hints off this. A successful ping implies the model works.
+        // One cheap /api/tags follow-up disambiguates; doctor keys its hints
+        // off this. A successful ping implies the model works.
         bool? embeddingModelAvailable;
         if (ollamaReachable)
         {
@@ -129,8 +130,9 @@ public sealed class HealthService(
             // Cap the follow-up at 2s instead of the probe's own 5s. It runs
             // serially after the ping, so against a hang-accepting Ollama
             // (ping eats its full 5s) the old worst case pushed /health to
-            // ~10s while the tray polls every 5s — permanently overlapping
-            // polls. 2s loses no information: every scenario where the probe
+            // ~10s — the compose healthcheck's own timeout, so the container
+            // started failing its healthcheck on a slow Ollama rather than
+            // reporting one. 2s loses no information: every scenario where the probe
             // answers (server down → fast failure; model missing → fast tags
             // list; model can't load → tags is metadata, no model load) does
             // so well inside 2s, and a server too hung to list tags reads as
@@ -158,7 +160,7 @@ public sealed class HealthService(
             Enabled: ocrEnabled,
             // The provider that is actually configured — NOT Ollama's model name
             // unconditionally. Reporting `qwen2.5vl:7b` while OCR runs on a
-            // hosted endpoint sent the tray, /health and doctor all confidently
+            // hosted endpoint sent /health and doctor both confidently
             // describing an engine the deployment wasn't using.
             VisionModel: VisionRegistration.Describe(visionOptions?.Value ?? new VisionOptions(), ollamaOpts.Value),
             ModelAvailable: visionModelAvailable,
@@ -200,7 +202,7 @@ public sealed class HealthService(
         // OCR is deliberately NOT part of the degraded decision. Scanned PDFs are
         // a minority of the corpus and search works fine without them, so a
         // missing vision model or an OCR backlog is informational — surfaced in
-        // the Ocr section and as a tray *warn*, never a /health 503. Broadening
+        // the Ocr section, never as a /health 503. Broadening
         // the degraded set here would page on a non-critical, best-effort stage.
         //
         // Service liveness is excluded for a DIFFERENT reason, worth stating so

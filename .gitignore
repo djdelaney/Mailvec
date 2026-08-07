@@ -66,7 +66,7 @@ appsettings.Local.json
 # sqlite-vec natives fetched by ops/fetch-sqlite-vec.sh (any RID)
 runtimes/*/native/
 /dist/
-# Tray app build artifacts (ops/build-tray.sh output).
+# Stray build output (the tray's xcodebuild archive used to land here).
 /build/
 *.mcpb
 .DS_Store

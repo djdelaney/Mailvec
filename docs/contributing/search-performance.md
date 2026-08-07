@@ -1,6 +1,6 @@
 # Search performance — investigation notes
 
-A playbook for diagnosing tray / MCP search latency, plus the findings from the
+A playbook for diagnosing MCP search latency, plus the findings from the
 first investigation (2026-06, ~74k messages / 322k chunks, 24 GB machine). Read
 this before "optimising" search — most of the obvious suspects are already ruled
 out below.
@@ -10,9 +10,9 @@ This is about **latency**, not retrieval **quality**. For quality regressions
 
 ## TL;DR root cause
 
-- The tray defaults to **hybrid** mode; the CLI `mailvec search` (no flags)
-  defaults to **keyword**. Hybrid embeds the query (Ollama) and runs a vector
-  KNN scan; keyword is pure FTS5. Comparing tray-hybrid to CLI-keyword is
+- `search_emails` defaults to **hybrid** mode; the CLI `mailvec search` (no
+  flags) defaults to **keyword**. Hybrid embeds the query (Ollama) and runs a
+  vector KNN scan; keyword is pure FTS5. Comparing MCP-hybrid to CLI-keyword is
   apples-to-oranges — the CLI looks ~10× faster because it's doing less work.
   Compare like-for-like with `mailvec search --hybrid`.
 - The dominant per-search cost in hybrid/semantic is the **vector KNN scan over
@@ -37,18 +37,28 @@ This is about **latency**, not retrieval **quality**. For quality regressions
     does **not** keep hybrid warm — only touching the vectors does. So the warm
     state lives in the vector data cache, not in process scheduling.
 
-## Mitigation in place
+## Mitigation
 
-- **`POST /tray/warm`** ([TrayEndpoints.cs](../../src/Mailvec.Mcp/Tray/TrayEndpoints.cs))
-  runs a throwaway hybrid query to pull the vectors into cache (and warm Ollama).
-  The tray fires it on search-pane open (`SearchView` `.task`), so the warm runs
-  behind the user's typing + the 350 ms debounce, and the first real search lands
-  warm. Zero standing cost.
-- **Rejected: a periodic keep-warm tick.** It would hold the cache hot
-  continuously, but the periodic CPU wake-ups (every ~20–30 s) are a real laptop
-  battery drain — not worth ~1 s on an occasional search now that we know the
-  steady-state cold penalty is ~1 s, not 6 s. Revisit only if profiling shows the
-  cache cooling much faster on the target hardware.
+**There is none right now, and that's a deliberate consequence of removing the
+tray.** A `POST /tray/warm` endpoint used to run a throwaway hybrid query to pull
+the vectors into cache (and warm Ollama); the tray fired it on search-pane open,
+so the warm ran behind the user's typing and the first real search landed warm at
+zero standing cost. Both the endpoint and its only caller are gone. An idle
+server now pays the full cold penalty (~1 s at the measurements below) on the
+first search.
+
+Two things to know if you reinstate one:
+
+- **A caller has to fire it.** The warm only worked because the tray knew the
+  user was *about to* search. Nothing in the MCP path has that signal — by the
+  time a `tools/call` arrives, the search is already happening. Any replacement
+  needs either a client that pre-warms or a periodic tick.
+- **A periodic keep-warm tick was rejected before, and the reasoning still
+  holds.** It would keep the cache hot continuously, but the CPU wake-ups (every
+  ~20–30 s) are a real laptop battery drain — not worth ~1 s on an occasional
+  search, given the steady-state cold penalty is ~1 s, not 6 s. Less relevant on
+  an always-on homelab VM than it was on a laptop, which is the one thing that
+  has changed; re-measure on the target hardware before assuming either way.
 
 ## Resource facts
 
@@ -62,15 +72,21 @@ This is about **latency**, not retrieval **quality**. For quality regressions
 
 ## How to re-measure
 
-Hit the live endpoint directly to bypass the SwiftUI / debounce layer (server must
-be running on `127.0.0.1:3333`). curl's `time_total` is the client-observed end-to-end time (connect + request + transfer); over loopback that's effectively the server's wall clock.
+Hit the MCP endpoint directly (server must be running on `127.0.0.1:3333`).
+Stateless Streamable HTTP takes a bare `tools/call` with no handshake and no
+session header, so a single curl is the whole measurement. curl's `time_total`
+is the client-observed end-to-end time (connect + request + transfer); over
+loopback that's effectively the server's wall clock.
 
 ```sh
 URL=http://127.0.0.1:3333
-hy(){ curl -s -o /dev/null -w "%{time_total}s\n" -X POST "$URL/tray/search" \
-  -H 'Content-Type: application/json' -d '{"query":"artemis","mode":"hybrid","limit":20}'; }
-kw(){ curl -s -o /dev/null -w "%{time_total}s\n" -X POST "$URL/tray/search" \
-  -H 'Content-Type: application/json' -d '{"query":"artemis","mode":"keyword","limit":20}'; }
+call(){ curl -s -o /dev/null -w "%{time_total}s\n" -X POST "$URL/" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_emails",
+       "arguments":{"query":"artemis","mode":"'"$1"'","limit":20}}}'; }
+hy(){ call hybrid; }
+kw(){ call keyword; }
 
 # Warm vs cold: hammer, then vary idle and watch the first-call latency climb.
 for i in $(seq 6); do hy >/dev/null; done; hy          # warm baseline (~0.3s)

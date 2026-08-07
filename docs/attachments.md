@@ -20,7 +20,7 @@ All three take the email (`id` or `messageId`) plus `partIndex` from the `get_em
 
 It deliberately does **not** ship arbitrary binary back through MCP — Claude.ai's bridge maps every non-image blob to an image block and rejects it as "unsupported image format" (which is why only `image/*` is inlined). It also no longer persists the file to `~/Downloads/mailvec/`: writing mail content to disk on every read was a needless privacy footprint (see the pre-go-live data-leak review) and is meaningless in a containerised deployment, where that path isn't the user's Downloads folder.
 
-**Need the actual file on disk?** Use the tray's Save button (which calls `/tray/attachment`) or `mailvec extract-attachments` — the explicit, user-initiated download paths. `Mcp:AttachmentDownloadDir` (default `~/Downloads/mailvec/`) configures where those write.
+**Need the actual file on disk?** Use `mailvec extract-attachments` — the explicit, user-initiated download path. `Mcp:AttachmentDownloadDir` (default `~/Downloads/mailvec/`) configures where it writes.
 
 ## `get_attachment_text` — the document's text
 

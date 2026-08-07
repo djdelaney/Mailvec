@@ -54,8 +54,8 @@ DNS/cert problems. Polling `https://mailvec.<domain>/up` end-to-end
 exercises the exact path a real client takes.
 
 `/up` is intentionally forwarded through the tunnel for this purpose. The
-mail-bearing `/tray/*` endpoints are **not** reachable (disabled at the origin
-and 404'd at the tunnel) — do not try to monitor them.
+only other mail-bearing surface is the MCP root itself, which is gated by
+Access — do not point a monitor at it.
 
 ## Prerequisites: a scoped Cloudflare Access service token
 
@@ -407,11 +407,6 @@ curl -i -s -X POST \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
   "https://mailvec.<domain>/"
-
-# Should return HTTP 404 (mail surface is closed — must NOT return JSON):
-curl -i -s \
-  -H "CF-Access-Client-Id: $CF_ID" -H "CF-Access-Client-Secret: $CF_SECRET" \
-  "https://mailvec.<domain>/tray/folders"
 ```
 
 If `/up` returns a `302`/login page instead of JSON, the service token
@@ -439,8 +434,8 @@ standing here.)
 
 ## References (Mailvec repo)
 
-- `docs/security.md` → "`/up`, `/health` and `/tray/*`" — why `/up` is forwarded
-  single-layer and `/tray/*` is closed.
+- `docs/security.md` → "`/up` and `/health`" — why `/up` is forwarded
+  single-layer and `/health` is loopback-only.
 - `docs/remote-access-cloudflare.md` — the tunnel + Access setup, and the
   service-token path-scoping note.
 - `src/Mailvec.Core/Health/ServiceHeartbeat.cs` — the liveness contract

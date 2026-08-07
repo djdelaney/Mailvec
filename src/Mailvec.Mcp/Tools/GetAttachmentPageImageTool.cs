@@ -99,7 +99,7 @@ public sealed class GetAttachmentPageImageTool(
             // whole PDF in hand. Extracted text is the remaining route.
             throw new McpException(
                 $"{ex.Message} Call get_attachment_text to read its extracted text instead. " +
-                "The user can save the file itself via the tray's Save button or `mailvec extract-attachments`.");
+                "The user can save the file itself with `mailvec extract-attachments`.");
         }
 
         if (!IsPdf(att.ContentType, att.FileName))

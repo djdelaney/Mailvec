@@ -909,7 +909,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
     // generic content-type qualifies too; ImageRenderer.TryNormalize is the
     // backstop that marks any non-image binary 'failed'. GIF stays excluded in
     // both arms. Shared verbatim by the OCR candidate query and the pending-count
-    // query so /health, the tray, and the embedder never disagree.
+    // query so /health and the embedder never disagree.
     private const string ImageOcrMatch = """
         (
           (lower(a.content_type) LIKE 'image/%' AND lower(a.content_type) <> 'image/gif')
@@ -1018,7 +1018,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
 
     /// <summary>
     /// Pipeline counts for the OCR stage, split by source (scanned PDFs vs image
-    /// attachments), surfaced by <c>/health</c>, the tray, and
+    /// attachments), surfaced by <c>/health</c> and
     /// <c>mailvec status</c>. The pending predicates mirror
     /// <see cref="EnumerateAttachmentsNeedingOcr"/> (PDFs) and
     /// <see cref="EnumerateImagesNeedingOcr"/> (images) exactly, so the numbers

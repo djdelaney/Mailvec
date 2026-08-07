@@ -179,7 +179,7 @@ public sealed class GetAttachmentTextTool(
             "Use get_attachment_page_image to view its pages.",
         AttachmentTextExtractor.StatusEncrypted =>
             $"'{name}' is encrypted, so its text could not be extracted and its pages cannot be rendered. " +
-            "Mailvec cannot decrypt it — the user can save the file via the tray's Save button or `mailvec extract-attachments` and open it themselves.",
+            "Mailvec cannot decrypt it — the user can save the file with `mailvec extract-attachments` and open it themselves.",
         AttachmentTextExtractor.StatusOversize =>
             $"'{name}' exceeds the text-extraction size cap, so its text was not extracted. " +
             "If it is a PDF, get_attachment_page_image can still render individual pages.",

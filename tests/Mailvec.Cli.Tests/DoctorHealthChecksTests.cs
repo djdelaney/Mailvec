@@ -163,8 +163,10 @@ public class DoctorHealthChecksTests
     [Fact]
     public void A_failed_probe_while_the_embedder_is_working_reads_as_contention_not_breakage()
     {
-        // The probe is bounded at 5s and must stay there (the tray polls /health
-        // every 5s), so on a CPU-only host behind a busy embedder it times out
+        // The probe is bounded at 5s and must stay there (the compose
+        // healthcheck times out at 10s, and /health's own Ollama ping plus its
+        // follow-up already spend most of that), so on a CPU-only host behind a
+        // busy embedder it times out
         // even though each embed returns in milliseconds. Observed for real: a
         // 0.1s embed by hand while doctor reported "the model can't load", which
         // sent the operator hunting a non-existent fault.

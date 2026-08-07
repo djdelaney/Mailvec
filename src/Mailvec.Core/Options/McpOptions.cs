@@ -39,30 +39,6 @@ public sealed class McpOptions
     public string[] DisabledTools { get; set; } = [];
 
     /// <summary>
-    /// Whether to map the plain-REST <c>/tray/*</c> endpoints (consumed only by
-    /// the macOS menu-bar tray app). Default true for the loopback / launchd
-    /// install. **Set false on any internet-fronted deployment** — the tray
-    /// surface is unauthenticated at the origin and returns mail content
-    /// (<c>/tray/email/{id}</c> = full bodies, <c>/tray/folders</c> = folder map,
-    /// <c>/tray/search</c> = full-text search, <c>/tray/system</c> = IMAP
-    /// account), yet nothing consumes it in a container (the tray is a local
-    /// macOS client). Disabling it at the origin is defense-in-depth that holds
-    /// even if the tunnel's path-404 rule is ever wrong — the same
-    /// server-side-authoritative reasoning as <see cref="DisabledTools"/>. The
-    /// container image bakes this to false; see docs/security.md. <c>/health</c>
-    /// and <c>/up</c> are mapped separately and are unaffected.
-    ///
-    /// <para>**This is enforced, not merely defaulted.** Leaving it true on a
-    /// server that isn't loopback-only — a non-loopback <see cref="BindAddress"/>,
-    /// or a non-loopback name in <see cref="AllowedHosts"/> — makes the MCP
-    /// server refuse to start (<c>TrayExposureGuard</c>). Note the bind address
-    /// is the signal that matters: HostGuard always admits the loopback Host
-    /// names, so a 0.0.0.0 bind is reachable by anything that can route to the
-    /// port even with AllowedHosts entirely empty.</para>
-    /// </summary>
-    public bool EnableTrayEndpoints { get; set; } = true;
-
-    /// <summary>
     /// Cloudflare Access assertion validation at the origin. Off by default —
     /// see <see cref="AccessOptions"/> for why that's the right default rather
     /// than a gap.
@@ -75,8 +51,8 @@ public sealed class McpOptions
     /// documented consumer is already loopback**: the compose healthcheck curls
     /// <c>127.0.0.1:3333/health</c> from inside the mcp container,
     /// <c>mailvec doctor</c>'s probe rewrites a <c>0.0.0.0</c> bind to
-    /// <c>127.0.0.1</c> (<c>DoctorCommand.HealthProbeUrl</c>), and the tray polls
-    /// loopback on local installs. Nothing off-box has ever needed this body.
+    /// <c>127.0.0.1</c> (<c>DoctorCommand.HealthProbeUrl</c>). Nothing off-box
+    /// has ever needed this body.
     ///
     /// <para>What it's for: <c>/health</c> is the detailed sibling of
     /// <c>/up</c> and discloses the archive's filesystem path, corpus counts,
@@ -85,12 +61,11 @@ public sealed class McpOptions
     /// monitor never needs any of that, so forwarding <c>/health</c> off-box
     /// hands out the disclosure <c>/up</c> was built to avoid.</para>
     ///
-    /// <para>404 rather than 403, matching how the tunnel treats
-    /// <c>/tray/</c>: a refusal confirms the endpoint is there, and there is no
-    /// caller who benefits from learning that.</para>
+    /// <para>404 rather than 403: a refusal confirms the endpoint is there, and
+    /// there is no caller who benefits from learning that.</para>
     ///
-    /// <para>This is the load-bearing barrier, in the same sense as
-    /// <see cref="EnableTrayEndpoints"/>: it's server-side, so it holds
+    /// <para>This is the load-bearing barrier, in the same
+    /// server-side-authoritative sense as <see cref="DisabledTools"/>: it holds
     /// regardless of what the tunnel's ingress rules say. The matching
     /// <c>health</c> 404 rule at the tunnel is defense in depth. Set false only
     /// if something genuinely off-box needs the detailed body — and prefer
@@ -135,8 +110,8 @@ public sealed class McpOptions
     public bool LogToolCalls { get; set; }
 
     /// <summary>
-    /// Where the explicit save-to-disk paths (the tray's Save button and
-    /// `mailvec extract-attachments`) write attachment files — the MCP tools
+    /// Where the explicit save-to-disk path (`mailvec extract-attachments`)
+    /// writes attachment files — the MCP tools
     /// never write here. The default is inside ~/Downloads so the user can find
     /// files in Finder / their browser's Downloads list. Avoid ~/Library/Caches
     /// (hidden from users) and ~/Documents (TCC-blocked from Claude Desktop's

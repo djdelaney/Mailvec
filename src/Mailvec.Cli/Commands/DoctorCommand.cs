@@ -245,8 +245,8 @@ internal static class DoctorCommand
         // ---------------------------------------------------------------
         checks.Add(MbsyncToolCheck(ResolveOnPath("mbsync"), InContainer(), OperatingSystem.IsMacOS()));
 
-        // Tail the stderr log and surface anything recent — same source the
-        // tray's mbsync tile reads from.
+        // Tail the stderr log and surface anything recent — same source
+        // /health's mbsync section reads from.
         //
         // This used to claim mbsync exits 0 even when its sync fails. It does
         // not: upstream propagates sync errors through a nonzero return, which
@@ -487,7 +487,8 @@ internal static class DoctorCommand
             // scarier one.
             //
             // The probe is bounded at 5s (OllamaClient.PingAsync — deliberately
-            // tight, because the tray polls /health every 5s, so it must not be
+            // tight, because /health is the container's compose healthcheck
+            // (10s timeout), so it must not be
             // raised). On a CPU-only host behind a busy embedder, requests queue
             // and that budget is easy to blow even though every individual embed
             // returns in milliseconds. Observed exactly that: a 0.1s embed by
@@ -703,9 +704,7 @@ internal static class DoctorCommand
     /// <summary>
     /// Reports the most recent error written to
     /// <c>~/Library/Logs/Mailvec/mailvec-mbsync.err.log</c>, if any fall
-    /// inside the freshness window. Uses the same MbsyncErrorTail the
-    /// tray reads from so the doctor checklist and the tray's mbsync tile
-    /// can't disagree about what's wrong.
+    /// inside the freshness window.
     /// </summary>
     private static DoctorCheck InspectMbsyncStderr(bool inContainer)
     {
@@ -722,17 +721,17 @@ internal static class DoctorCommand
                 "services");
         }
 
-        var logPath = PathExpansion.Expand(Mailvec.Core.Tray.MbsyncErrorTail.DefaultLogPath);
+        var logPath = PathExpansion.Expand(MbsyncErrorTail.DefaultLogPath);
         if (!File.Exists(logPath))
         {
             // Same distinction as above, off-container: no log is not the same
             // finding as a clean log.
             return DoctorCheck.Ok("mbsync stderr",
-                $"no log at {Mailvec.Core.Tray.MbsyncErrorTail.DefaultLogPath} — mbsync has not run under launchd here",
+                $"no log at {MbsyncErrorTail.DefaultLogPath} — mbsync has not run under launchd here",
                 "services");
         }
 
-        var err = new Mailvec.Core.Tray.MbsyncErrorTail().CheckRecent();
+        var err = new MbsyncErrorTail().CheckRecent();
         if (err is null)
         {
             return DoctorCheck.Ok("mbsync stderr", "no recent errors", "services");
@@ -740,10 +739,10 @@ internal static class DoctorCommand
 
         var hint = err.Kind switch
         {
-            Mailvec.Core.Tray.MbsyncErrorKind.Locked  => " Remove the stale .mbsyncstate.lock and kickstart com.mailvec.mbsync.",
-            Mailvec.Core.Tray.MbsyncErrorKind.Dns     => " Check network connectivity / DNS — usually transient.",
-            Mailvec.Core.Tray.MbsyncErrorKind.Network => " Usually transient; will retry on next schedule.",
-            Mailvec.Core.Tray.MbsyncErrorKind.Auth    => " Rotate the Fastmail / IMAP app password and update the keychain entry.",
+            MbsyncErrorKind.Locked  => " Remove the stale .mbsyncstate.lock and kickstart com.mailvec.mbsync.",
+            MbsyncErrorKind.Dns     => " Check network connectivity / DNS — usually transient.",
+            MbsyncErrorKind.Network => " Usually transient; will retry on next schedule.",
+            MbsyncErrorKind.Auth    => " Rotate the Fastmail / IMAP app password and update the keychain entry.",
             _                                          => string.Empty,
         };
         var detail = $"recent error: {Truncate(err.Message, 120)}.{hint} Full log: ~/Library/Logs/Mailvec/mailvec-mbsync.err.log";
@@ -752,7 +751,7 @@ internal static class DoctorCommand
         // also fail until the lock is cleared. The rest are usually
         // transient — flag them so they're visible but don't fail the
         // overall check.
-        return err.Kind == Mailvec.Core.Tray.MbsyncErrorKind.Locked
+        return err.Kind == MbsyncErrorKind.Locked
             ? DoctorCheck.Fail("mbsync stderr", detail, "services")
             : DoctorCheck.Warn("mbsync stderr", detail, "services");
     }

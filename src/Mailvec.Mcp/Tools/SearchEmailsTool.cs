@@ -234,7 +234,7 @@ public sealed class SearchEmailsTool(
     }
 
     // Delegates to the shared Core parser so the "date-only dateTo means end
-    // of that day" rule stays identical across MCP / tray / CLI.
+    // of that day" rule stays identical across MCP and CLI.
     private static DateTimeOffset? ParseDate(string? value, string fieldName, bool isUpperBound)
     {
         if (Mailvec.Core.Search.SearchDateParser.TryParse(value, isUpperBound, out var bound))

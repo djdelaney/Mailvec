@@ -7,8 +7,8 @@ This page is the one-time teardown, the day-to-day workflow, and the refresh
 procedure.
 
 > **Status: done.** The teardown ran on **2026-07-16** — the four launchd
-> agents are booted out and their plists removed, mbsync included, and the tray
-> is quit. The Mac is a dev machine now; the archive below is frozen at
+> agents are booted out and their plists removed, mbsync included. The Mac is
+> a dev machine now; the archive below is frozen at
 > **~80k messages, 100% embedded**, with every eval label still resolving. The
 > teardown section is kept as a record and as the recipe if the Mac pipeline is
 > ever rebuilt.
@@ -91,9 +91,6 @@ pure-code loop with no corpus at all.
    eval drift is back. The VM sidecar is the consumer of record now. Once
    confident, you can also revoke the Mac's Fastmail app password — the
    container reads its own compose secret, not the Mac keychain.
-
-3. **Quit the tray app** (or live with red service tiles — the launchd HTTP
-   MCP it polls is gone). Its CLI buttons still work via the shim.
 
 Keep the frozen `~/Mail`: `view_attachment`, page images, OCR experiments,
 and reindex-from-source all read `.eml` bytes from it, and the disk is

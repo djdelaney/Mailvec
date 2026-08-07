@@ -3,8 +3,8 @@
   <!--
     The version surfaced via initialize.serverInfo.version comes from the
     repo-wide <Version> in Directory.Build.props (one version for all four
-    binaries + manifest.json + the tray). ops/build-mcpb.sh "bump" updates
-    all of them atomically — don't add a per-project override here.
+    binaries + manifest.json). ops/build-mcpb.sh "bump" updates
+    both of them atomically — don't add a per-project override here.
   -->
 
   <ItemGroup>

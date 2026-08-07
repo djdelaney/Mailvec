@@ -64,8 +64,7 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   the Fastmail app password is a compose file-secret read via `PassCmd`.
   Pull-only sync is enforced structurally: the maildir is mounted read-only
   into every service except mbsync.
-- **macOS-only code degrades, by design.** The `/tray/*` launchd inspector
-  returns "unloaded" without `launchctl`. `mailvec doctor` detects the
+- **macOS-only code degrades, by design.** `mailvec doctor` detects the
   container (`DOTNET_RUNNING_IN_CONTAINER` / `/.dockerenv`) and adapts rather
   than warning: it reports compose as the supervisor instead of a missing
   launchd, treats an absent `mbsync` binary as expected (sync runs in the
@@ -148,8 +147,8 @@ Two kinds of pin, with different lifetimes:
 
 **The tag value is not free-form.** The repo-wide `<Version>` in
 `Directory.Build.props` stamps all four binaries and `serverInfo.version`,
-kept in lockstep with `manifest.json` and the tray by **`ops/release.sh`**
-(the only sanctioned bump path; `ops/build-mcpb.sh --bump` delegates to it).
+kept in lockstep with `manifest.json` by **`ops/release.sh`** (the only
+sanctioned bump path; `ops/build-mcpb.sh --bump` delegates to it).
 The `v*` tag must equal that version at the tagged commit, or the image's
 label and what its binaries report from `mailvec status` / the MCP handshake
 disagree forever — `publish-images.yml` enforces this: a `v*` push whose tag
@@ -408,12 +407,9 @@ someone has ticked off is a claim about one machine.
 7. **Tunnel go-live**, with `TUNNEL_TOKEN` + `MCP_PUBLIC_HOSTNAME` set and the
    sidecar started via `docker compose --profile tunnel up -d`.
 8. **Endpoint posture.** `/up` is the endpoint external monitors poll; `/health`
-   is loopback-only from 0.2.0 (`Mcp:RestrictHealthToLoopback`); `/tray/*` is
-   disabled at the origin (`Mcp:EnableTrayEndpoints=false`, baked into the
-   image) *and* 404'd at the tunnel, because it returns mail content and has no
-   container consumer. See
-   [security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray),
-   and migrate any monitor still on `/health` **before** shipping the loopback
+   is loopback-only from 0.2.0 (`Mcp:RestrictHealthToLoopback`). See
+   [security.md → `/up` and `/health`](security.md#up-and-health), and migrate
+   any monitor still on `/health` **before** shipping the loopback
    restriction.
 9. **The tool surface you actually want.** The `Mcp__DisabledTools__*` trim for
    `view_attachment` / `get_attachment_page_image` is staged-but-commented in
@@ -427,12 +423,9 @@ someone has ticked off is a claim about one machine.
 
 ## Known gaps
 
-1. **The tray app has no remote story — open, deliberately parked.** It polls
-   `/tray/*`, which the container disables outright
-   (`Mcp:EnableTrayEndpoints=false`) *and* the tunnel 404s — the surface returns
-   mail content with no per-request auth, so it stays off any internet-fronted
-   deployment. Three ways out, none chosen: keep it as a local-only tool against
-   a local install; give `/tray/*` an authenticated remote path (which means
-   designing auth for the origin — today it has none, by design — before
-   re-enabling the flag); or retire it. Nothing else depends on it, but it
-   shouldn't drift as unowned code indefinitely.
+1. **No GUI — the tray app was retired.** This gap used to read "the tray app
+   has no remote story"; it was resolved by removing the tray and its
+   `/tray/*` surface rather than by building auth for them. The container
+   never had a consumer for either. If a GUI is ever wanted again, see
+   [future-ideas.md](future-ideas.md) for what recovering it costs — the
+   identity work dominates.

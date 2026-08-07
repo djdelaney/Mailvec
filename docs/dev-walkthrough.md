@@ -45,7 +45,7 @@ Watch for `Embedded N messages (M chunks)` lines. First call is slow (model load
 
 ## 4. Query
 
-Third terminal, same env vars. Any CLI subcommand works against the test DB while the env vars are set. **Don't use the installed `mailvec` shim** — it inherits whatever env its parent process had, so launching it from the tray or another shell hits production. For test-DB work, always go through `dotnet run --project src/Mailvec.Cli -- …` from the shell that has the overrides.
+Third terminal, same env vars. Any CLI subcommand works against the test DB while the env vars are set. **Don't use the installed `mailvec` shim** — it inherits whatever env its parent process had, so launching it from another shell hits production. For test-DB work, always go through `dotnet run --project src/Mailvec.Cli -- …` from the shell that has the overrides.
 
 ```sh
 dotnet run --project src/Mailvec.Cli -- status

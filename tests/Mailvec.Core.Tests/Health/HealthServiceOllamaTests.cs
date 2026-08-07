@@ -9,7 +9,7 @@ namespace Mailvec.Core.Tests.Health;
 /// <summary>
 /// The Ollama tri-state on <see cref="HealthService.CheckAsync"/>: a failed
 /// embed ping is followed up with the /api/tags model probe so /health (and
-/// doctor / the tray, which read this field) can distinguish "server down"
+/// doctor, which reads this field) can distinguish "server down"
 /// from "server up but the embedding model was never pulled" — the two need
 /// opposite remediation, and conflating them used to send fresh-install users
 /// restarting a healthy Ollama.
@@ -33,8 +33,8 @@ public class HealthServiceOllamaTests
 
         r.Ollama.Reachable.ShouldBeTrue();
         // A real embed succeeded, so the model necessarily works — and the
-        // extra /api/tags round-trip must be skipped (this runs on the tray's
-        // 5s poll cadence).
+        // extra /api/tags round-trip must be skipped — /health runs under the
+        // compose healthcheck's 10s timeout.
         r.Ollama.EmbeddingModelAvailable.ShouldBe(true);
         fake.ProbeCalls.ShouldBe(0);
     }
@@ -79,7 +79,9 @@ public class HealthServiceOllamaTests
     {
         // A hang-accepting Ollama (host suspended mid-connection) eats the
         // ping's full 5s AND used to eat the follow-up probe's full 5s
-        // serially — ~10s per /health while the tray polls every 5s. The
+        // serially — ~10s per /health, which is the compose healthcheck's own
+        // timeout, so a slow Ollama made the container fail its healthcheck
+        // rather than report one. The
         // follow-up now carries its own 2s deadline; a server too hung to
         // list tags reads as null, the same answer the full-length probe
         // gives. Without the cap this test never completes (the fake only

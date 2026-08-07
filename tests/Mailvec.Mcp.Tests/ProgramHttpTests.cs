@@ -160,7 +160,7 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     // embedding model identity and the internal Ollama LAN address. /up exists
     // so that no external caller ever needs any of it, which only holds if
     // /health isn't reachable from off-box. Every documented consumer is
-    // already loopback (compose healthcheck, `mailvec doctor`, the tray), so
+    // already loopback (the compose healthcheck and `mailvec doctor`), so
     // the restriction costs nothing — see McpOptions.RestrictHealthToLoopback.
 
     [Fact]
@@ -172,7 +172,7 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         var response = await client.GetAsync("/health");
 
         // 404, not 403: a refusal confirms the endpoint is there, and no caller
-        // benefits from learning that. Same shape the tunnel gives /tray/.
+        // benefits from learning that.
         response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
     }
 
@@ -308,7 +308,7 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         // End-to-end through the real endpoint: write a beat the way a worker's
         // HeartbeatService would, then confirm /health flips that service to
         // known+live. This is the wire that connects a running background
-        // container to what a monitor or the tray can see.
+        // container to what a monitor can see.
         using var client = _factory.CreateClient();
         var metadata = new Mailvec.Core.Data.MetadataRepository(
             new Mailvec.Core.Data.ConnectionFactory(
@@ -403,162 +403,6 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 }
 
-public class TrayEndpointsHttpTests : IClassFixture<MailvecMcpFactory>
-{
-    private readonly MailvecMcpFactory _factory;
-
-    public TrayEndpointsHttpTests(MailvecMcpFactory factory) => _factory = factory;
-
-    private Mailvec.Core.Data.MessageRepository Repo() => new(
-        new Mailvec.Core.Data.ConnectionFactory(
-            Microsoft.Extensions.Options.Options.Create(
-                new Mailvec.Core.Options.ArchiveOptions { DatabasePath = _factory.DatabasePath })));
-
-    private static Mailvec.Core.Parsing.ParsedMessage Sample(string id) => new(
-        MessageId: id, ThreadId: id, Subject: id, FromAddress: "a@x", FromName: null,
-        ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
-        BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 10,
-        ContentHash: $"h-{id}", Attachments: []);
-
-    [Fact]
-    public async Task Tray_email_returns_404_for_soft_deleted_message()
-    {
-        // Soft-deleted = gone from disk. Every MCP tool refuses these; the
-        // tray preview endpoint must too (a stale popover id used to get the
-        // full body back).
-        // Ensure the server (and its startup migration) ran before touching the DB.
-        using var client = _factory.CreateClient();
-        var repo = Repo();
-        var id = repo.Upsert(Sample("traydel@x"), "INBOX", "INBOX/cur", "td", DateTimeOffset.UtcNow).Id;
-        repo.MarkDeleted([id], DateTimeOffset.UtcNow);
-
-        var response = await client.GetAsync($"/tray/email/{id}");
-
-        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
-    }
-
-    [Fact]
-    public async Task Tray_email_returns_live_message()
-    {
-        using var client = _factory.CreateClient();
-        var repo = Repo();
-        var id = repo.Upsert(Sample("traylive@x"), "INBOX", "INBOX/cur", "tl", DateTimeOffset.UtcNow).Id;
-
-        var response = await client.GetAsync($"/tray/email/{id}");
-
-        response.StatusCode.ShouldBe(HttpStatusCode.OK);
-        (await response.Content.ReadAsStringAsync()).ShouldContain("traylive@x");
-    }
-
-    [Fact]
-    public async Task Tray_control_with_missing_fields_is_a_400_not_a_500()
-    {
-        using var client = _factory.CreateClient();
-
-        var response = await client.PostAsync("/tray/control",
-            new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
-
-        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
-    }
-}
-
-/// <summary>
-/// Covers the internet-fronted posture: Mcp:EnableTrayEndpoints=false (baked
-/// into the container image) must remove the mail-bearing /tray/* surface at
-/// the origin — defense-in-depth behind the tunnel's path-404 — while leaving
-/// /health mapped for monitoring.
-/// </summary>
-public class TrayDisabledHttpTests : IClassFixture<TrayDisabledMcpFactory>
-{
-    private readonly TrayDisabledMcpFactory _factory;
-
-    public TrayDisabledHttpTests(TrayDisabledMcpFactory factory) => _factory = factory;
-
-    [Theory]
-    [InlineData("/tray/folders")]
-    [InlineData("/tray/status")]
-    [InlineData("/tray/email/1")]
-    [InlineData("/tray/system")]
-    public async Task Tray_endpoints_are_unmapped_when_disabled(string path)
-    {
-        // 404 = no route. The mail-bearing endpoints (/tray/email, /tray/folders,
-        // /tray/search, /tray/system) must not exist at the origin at all — not
-        // merely be gated — so a misconfigured tunnel rule can't reach them.
-        using var client = _factory.CreateClient();
-
-        var response = await client.GetAsync(path);
-
-        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
-    }
-
-    [Fact]
-    public async Task Health_stays_mapped_when_tray_is_disabled()
-    {
-        // /health is mapped independently of the tray surface — disabling tray
-        // must not take monitoring down with it. 503 here (Ollama unreachable in
-        // tests), never 404.
-        using var client = _factory.CreateClient();
-
-        var response = await client.GetAsync("/health");
-
-        response.StatusCode.ShouldNotBe(HttpStatusCode.NotFound);
-        JsonDocument.Parse(await response.Content.ReadAsStringAsync())
-            .RootElement.TryGetProperty("status", out _).ShouldBeTrue();
-    }
-}
-
-/// <summary>
-/// Pins that TrayExposureGuard is actually WIRED IN, not merely present.
-/// TrayExposureGuardTests covers the decision matrix by calling the guard
-/// directly, so deleting the two lines in Program.cs that invoke it would leave
-/// every one of those tests green while the dangerous config boots happily —
-/// the exact "tests pass, production broken" shape the MCP surface tests exist
-/// to prevent. This one goes through the real startup path.
-/// </summary>
-public class TrayExposureGuardWiringTests
-{
-    [Fact]
-    public void Server_refuses_to_start_with_tray_enabled_on_a_non_loopback_bind()
-    {
-        using var factory = new ExposedTrayMcpFactory();
-
-        // The guard throws during app startup, so the failure surfaces when the
-        // host is first built rather than on the request.
-        var ex = Should.Throw<InvalidOperationException>(() => factory.CreateClient());
-
-        ex.Message.ShouldContain("Mcp:EnableTrayEndpoints");
-        ex.Message.ShouldContain("0.0.0.0");
-    }
-}
-
-/// <summary>The refused combination: mail-bearing tray surface, off-host bind.</summary>
-public sealed class ExposedTrayMcpFactory : MailvecMcpFactory
-{
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        base.ConfigureWebHost(builder);
-        builder.ConfigureAppConfiguration((_, config) =>
-            config.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Mcp:EnableTrayEndpoints"] = "true",
-                ["Mcp:BindAddress"] = "0.0.0.0",
-            }));
-    }
-}
-
-public sealed class TrayDisabledMcpFactory : MailvecMcpFactory
-{
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        base.ConfigureWebHost(builder);
-        builder.ConfigureAppConfiguration((_, config) =>
-            config.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Mcp:EnableTrayEndpoints"] = "false",
-            }));
-    }
-}
-
 public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
 {
     private readonly string _tempDir;
@@ -599,8 +443,8 @@ public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
         });
 
         // Declare this factory to be the loopback caller it stands in for — the
-        // launchd/local install, where the tray, `mailvec doctor` and the
-        // compose healthcheck all reach /health over 127.0.0.1. TestServer
+        // launchd/local install, where `mailvec doctor` and the compose
+        // healthcheck both reach /health over 127.0.0.1. TestServer
         // leaves RemoteIpAddress null, and the /health loopback restriction
         // fails closed on null, so without this every /health test here 404s.
         // See RemoteIpStartupFilter.

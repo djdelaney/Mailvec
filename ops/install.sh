@@ -350,11 +350,10 @@ for svc in "${SERVICES[@]}"; do
 done
 
 # Publish the CLI to $PREFIX/cli/ and install a shim at ~/.local/bin/mailvec.
-# Without this, every "Doctor / Reindex / Checkpoint / etc." button in the
-# tray UI silently fails — the tray spawns `mailvec <args>` via AppleScript
-# and there's no global mailvec binary on PATH by default. The shim resolves
-# DOTNET_ROOT (Claude Desktop's spawned children get a sanitized PATH that
-# excludes /usr/local/share/dotnet) before exec'ing the dll.
+# .NET needs `dotnet <dll>` rather than a directly-executable binary, so the
+# shim is what makes `mailvec` a command. It also resolves DOTNET_ROOT
+# (Claude Desktop's spawned children get a sanitized PATH that excludes
+# /usr/local/share/dotnet) before exec'ing the dll.
 echo "  -> cli"
 dotnet publish "$REPO_ROOT/src/Mailvec.Cli/Mailvec.Cli.csproj" -c Release -o "$PREFIX/cli" --nologo -v quiet
 mailvec_sign_publish "$PREFIX/cli" "Mailvec.Cli" "com.mailvec.cli"

@@ -64,75 +64,52 @@ Un-defer when either a mutating tool lands (raising what a successful injection
 gets you from "read your own mail" to "act on your behalf"), or Mailvec is
 routinely used alongside connectors that can send or post.
 
-## A remote story for `/tray/*`
+## A GUI, if one is ever wanted again
 
-Referenced from [security.md](security.md#up-health-and-tray), which says
-re-enabling the tray surface on an internet-fronted deployment "means building
-that first". This is that entry.
+A SwiftUI menu-bar tray app and the plain-REST `/tray/*` surface it polled were
+**removed** once the container became the only deployment in use and the author
+stopped using the tray. Recoverable from git history if that reverses.
 
-Today `/tray/*` is loopback-only by construction, and `TrayExposureGuard`
-**refuses to start** the server if it is enabled on anything but a loopback-only
-deployment — a deliberate hard failure, not a default, because the symptom of
-getting it wrong is full message bodies, the folder map, full-text search and
-the IMAP account served with no authentication, plus mutating POSTs. That guard
-is the invariant; nothing below weakens it.
+Two things to know before recovering it, because neither is visible in the diff:
 
-What a remote tray would actually need, and why none of it is free:
-
-- **Per-request authentication at the origin.** The surface has none of its own.
-  `Mcp:Access` now exists and could plausibly cover `/tray/*` with an audience
-  policy — that's the cheapest path and didn't exist when the guard was written.
-- **A credential the tray can hold.** A SwiftUI menu-bar app polling every 5s
-  needs a non-interactive credential; an Access service token in the macOS
-  keychain is the obvious candidate, which makes the tray a *second identity*
-  and invalidates the single-identity acceptances in security.md.
-- **CSRF protection on the mutating POSTs** (`/tray/control`, `/tray/attachment`),
-  which currently rely on being unreachable rather than on any token.
-- **Revisiting the guard's trigger**, which keys off a non-loopback bind — the
-  correct signal today precisely because HostGuard always admits loopback Host
-  names.
-
-**Not worth doing for its own sake.** The tray is a local-install convenience;
-the container deployment has no consumer for it. Un-defer only if someone
-actually wants a remote tray, and expect the identity work above to dominate.
+- **The Swift app recovers cleanly; the C# glue does not.** The app talks JSON
+  over HTTP and is self-contained. The ~3.4k lines of `Core/Tray` + `Mcp/Tray`
+  glue were wired into Core and Mcp APIs that will have moved, so expect to
+  rewrite it rather than cherry-pick.
+- **A remote GUI needs identity work that dominates the effort.** `/tray/*` had
+  no per-request auth and relied entirely on being loopback-only. Exposing it
+  needs origin authentication (`Mcp:Access` could cover it with an audience
+  policy), a non-interactive credential the app can hold — which makes it a
+  *second identity* and invalidates the single-identity acceptances in
+  security.md — and CSRF protection on the mutating POSTs, which previously
+  relied on being unreachable rather than on any token.
 
 ## Packaged distribution (installer + notarized artifacts)
 
 Today the **only** way to get any part of Mailvec is to build from source: clone
-the repo, install the prereqs via Homebrew (including the .NET 10 SDK, and full
-Xcode + xcodegen if you want the tray), then `ops/install-all.sh`. That's fine
-for the author and for contributors; it's a real adoption wall for anyone else.
-A distribution story would have three artifacts, all buildable from the
-existing scripts:
+the repo, install the prereqs via Homebrew (including the .NET 10 SDK), then
+`ops/install-all.sh`. That's fine for the author and for contributors; it's a
+real adoption wall for anyone else. A distribution story would have two
+artifacts, both buildable from the existing scripts:
 
-1. **Notarized tray `.app`.** `ops/build-tray.sh` already signs with a
-   Developer ID certificate when one is in the keychain — but without
-   notarization, a downloaded `.app` is killed by Gatekeeper on another
-   machine (`install-tray.sh`'s quarantine-strip only covers local builds).
-   The missing lane is `xcrun notarytool submit` (App Store Connect API key)
-   + `xcrun stapler staple`, after which a zipped `.app` can be attached to a
-   GitHub Release. This removes the Xcode + xcodegen prerequisite for tray
-   users entirely.
-2. **Services + CLI.** The four .NET binaries are already `dotnet publish`-ed
+1. **Services + CLI.** The four .NET binaries are already `dotnet publish`-ed
    by `ops/install.sh`; a release artifact would be that published output
    (self-contained, like the MCPB, to drop the .NET SDK prerequisite) plus
    the installer running against it instead of the working tree. Signing +
    notarization applies here too — launchd runs local unsigned binaries fine,
    but downloaded ones carry quarantine. A Homebrew tap/cask is the
    alternative packaging, with its own update story.
-3. **Prebuilt `.mcpb` per release.** `ops/build-mcpb.sh` output attached to
+2. **Prebuilt `.mcpb` per release.** `ops/build-mcpb.sh` output attached to
    the GitHub Release — it's already self-contained; it just isn't published
    anywhere. (It's the read-side only: without the installed services there
    is nothing to search — the `setupHint` guard covers that failure mode.)
 
-CI can build all three on a `v*` tag now that unified versioning + tagging
+CI can build both on a `v*` tag now that unified versioning + tagging
 exist. What stays user-owned regardless of packaging: mbsync config, the IMAP
 app-password in the Keychain, and Ollama model pulls — the installer
 prompts/checks for these but deliberately doesn't own them.
 
-Deferred until there are actual second users to distribute to; sequenced so
-the tray notarization lane (the biggest UX win per unit of work) can ship
-first on its own.
+Deferred until there are actual second users to distribute to.
 
 ## Internationalization (CJK search + localized reply trimming)
 
@@ -214,8 +191,8 @@ it would have failed the canary's own acceptance criteria.
 At 600s that gave a 30-minute window, comfortably wider than the 12-minute
 backlog pull above — so the flaw was invisible. At 60s the window becomes 180
 seconds, and **any sync longer than three minutes would report a busy sidecar as
-dead** on `/health`, the tray and `mailvec doctor`, during precisely the long
-pulls an operator most wants to watch.
+dead** on `/health` and `mailvec doctor`, during precisely the long pulls an
+operator most wants to watch.
 
 This is the failure CLAUDE.md already documents for the .NET services ("the
 liveness beat must never be emitted from the work loop"). The tempting patch —
@@ -289,8 +266,7 @@ now, and joining them reintroduces the bug this removed.
    requires no database work.
 6. **Only then change repository defaults and docs.** If the production result
    is good, change the Compose default, Dockerfile commentary, launchd template,
-   IMAP setup guide, tray schedule expectations, `docs/monitoring-uptime-kuma.md`,
-   and this section together so the shipped configuration no longer preserves the
+   IMAP setup guide, `docs/monitoring-uptime-kuma.md`, and this section together so the shipped configuration no longer preserves the
    superseded overlap rationale. The monitoring runbook is on that list because
    the heartbeat fix already moved mbsync's staleness window from 30 minutes to
    3, so a dead sidecar shows up roughly ten times faster.

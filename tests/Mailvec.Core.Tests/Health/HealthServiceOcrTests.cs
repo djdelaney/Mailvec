@@ -14,7 +14,7 @@ namespace Mailvec.Core.Tests.Health;
 /// The OCR block of <see cref="HealthService.CheckAsync"/>: the stage is enabled
 /// when *either* OCR pass is on, a disabled pass's pending is zeroed (so /health
 /// never shows a backlog that will never drain), and recovered totals are shown
-/// regardless. Complements the wire-shape coverage in TrayStatusServiceTests.
+/// regardless.
 /// </summary>
 public class HealthServiceOcrTests
 {

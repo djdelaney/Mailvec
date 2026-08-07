@@ -4,7 +4,7 @@ namespace Mailvec.Core.Search;
 
 /// <summary>
 /// Shared parsing for the dateFrom/dateTo filter bounds so the three surfaces
-/// (MCP tool, tray, CLI) keep identical semantics — the same reason
+/// (MCP tool, CLI) keep identical semantics — the same reason
 /// SearchFilterSql is shared.
 ///
 /// The load-bearing rule: a date-only UPPER bound ("2024-12-31") means the
