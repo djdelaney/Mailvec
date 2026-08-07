@@ -97,6 +97,15 @@ static async Task RunHttp(string[] args)
 
     var app = builder.Build();
     WarnIfInstallerNeverRan(app.Services);
+
+    // The MCP server needs Ollama too — for QUERY embeddings. A loopback URL in
+    // a container breaks semantic search here exactly as it breaks indexing in
+    // the embedder, but far more quietly: keyword search still returns results,
+    // so the vector leg just silently stops contributing.
+    OllamaReachabilityCheck.WarnIfUnreachableFromContainer(
+        app.Services.GetRequiredService<IOptions<OllamaOptions>>().Value.BaseUrl,
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Mcp"));
+
     app.Services.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
 
     // The DI-resolved options — the authoritative McpOptions, reflecting env

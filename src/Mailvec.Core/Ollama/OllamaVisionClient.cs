@@ -139,6 +139,20 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
     public async Task<bool> IsModelAvailableAsync(CancellationToken ct = default) =>
         await OllamaModelProbe.IsModelAvailableAsync(http, _opts.VisionModel, ct).ConfigureAwait(false) == true;
 
+    /// <summary>
+    /// Probe with a diagnosis. The tri-state from <c>OllamaModelProbe</c> is
+    /// exactly the distinction worth keeping: null means Ollama itself didn't
+    /// answer (wrong host, service down), false means it answered and the model
+    /// simply isn't pulled. Those need different fixes.
+    /// </summary>
+    public async Task<VisionProbe> ProbeAsync(CancellationToken ct = default) =>
+        await OllamaModelProbe.IsModelAvailableAsync(http, _opts.VisionModel, ct).ConfigureAwait(false) switch
+        {
+            true => new VisionProbe(VisionProbeStatus.Available, null),
+            false => new VisionProbe(VisionProbeStatus.ModelMissing, _opts.VisionModel),
+            null => new VisionProbe(VisionProbeStatus.Unreachable, http.BaseAddress?.ToString()),
+        };
+
     private sealed class GenerateRequest
     {
         [JsonPropertyName("model")]      public required string Model { get; init; }

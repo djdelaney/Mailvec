@@ -137,7 +137,26 @@ x-mailvec: &mailvec-common
   pids_limit: 512
   environment: &mailvec-env
     Ingest__MaildirRoot: /mail/Fastmail
+    # ALWAYS required, whatever Vision:Provider is set to: this is the EMBEDDING
+    # model (mxbai-embed-large), which the embedder needs for chunk vectors and
+    # the MCP server needs for query vectors. Switching OCR to a hosted provider
+    # moves the VISION model only. Leaving this unset does not disable Ollama —
+    # it falls back to localhost:11434, which inside a container is the
+    # container itself, and every embed fails with "Connection refused".
     Ollama__BaseUrl: ${OLLAMA_BASE_URL:-http://localhost:11434}
+    #
+    # Vision provider IDENTITY, shared by every service on purpose. The key
+    # below is not: it lives on the embedder alone (OCR runs there). But the
+    # provider name/endpoint/model must be identical everywhere, because
+    # `mailvec doctor` and /health report on whatever THIS process thinks is
+    # configured — and a container left on the default reported
+    # "qwen2.5vl:7b available" while OCR actually ran on a hosted endpoint.
+    # A confident green tick for the engine you are not using is worse than no
+    # check at all.
+    Vision__Provider: ${MAILVEC_VISION_PROVIDER:-ollama}
+    Vision__Mistral__Endpoint: ${MAILVEC_MISTRAL_ENDPOINT:-}
+    Vision__Mistral__Model: ${MAILVEC_MISTRAL_MODEL:-}
+    Vision__Mistral__Route: ${MAILVEC_MISTRAL_ROUTE:-providers/mistral/azure/ocr}
     # Refuse to start against a missing/empty archive (the expected state for
     # a snapshot-seeded deployment — see the entrypoint guard in Dockerfile).
     MAILVEC_REQUIRE_SEEDED_DB: ${MAILVEC_REQUIRE_SEEDED_DB:-1}
@@ -331,21 +350,15 @@ services:
       Ollama__VisionRequestTimeoutSeconds: ${MAILVEC_VISION_TIMEOUT_SECONDS:-120}
       Ollama__VisionMaxTokens: ${MAILVEC_VISION_MAX_TOKENS:-2048}
       #
-      # Vision provider. Default `ollama` (the LAN GPU box) — unset means the
-      # local model, exactly as before. Set MAILVEC_VISION_PROVIDER=mistral to
-      # OCR through the hosted mistral-ocr API instead; that sends rendered
-      # pages of mail OFF-NETWORK, unattended, so read docs/security.md before
-      # switching.
+      # The API key, and ONLY here — OCR runs in this container. The provider
+      # identity comes from the shared anchor above so every service agrees on
+      # which engine is configured; the credential does not, so a compromise of
+      # the internet-fronted mcp container doesn't hand over the key. The MCP
+      # server and CLI therefore report the provider as "configured, not
+      # checkable from this process", which is the truth rather than a fault.
       #
-      # This container is the ONLY one that needs the API key: OCR runs here.
-      # The MCP server and CLI only probe the provider for /health and doctor,
-      # and are deliberately left without credentials — they degrade to
-      # reporting OCR unavailable rather than refusing to start, which keeps an
-      # OCR misconfiguration from crashlooping the search surface.
-      Vision__Provider: ${MAILVEC_VISION_PROVIDER:-ollama}
-      Vision__Mistral__Endpoint: ${MAILVEC_MISTRAL_ENDPOINT:-}
-      Vision__Mistral__Model: ${MAILVEC_MISTRAL_MODEL:-}
-      Vision__Mistral__Route: ${MAILVEC_MISTRAL_ROUTE:-providers/mistral/azure/ocr}
+      # Setting MAILVEC_VISION_PROVIDER=mistral sends rendered pages of mail
+      # OFF-NETWORK, unattended — read docs/security.md before switching.
       Vision__Mistral__ApiKey: ${MAILVEC_MISTRAL_API_KEY:-}
     volumes:
       - ./data:/data

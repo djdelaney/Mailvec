@@ -123,4 +123,13 @@ internal sealed class UnconfiguredVisionClient : IVisionClient
         throw new VisionException(VisionFailureKind.AuthOrConfig, Message);
 
     public Task<bool> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult(false);
+
+    /// <summary>
+    /// Reports the deliberate posture, not a fault. This process was never meant
+    /// to hold credentials, so surfacing it as "unavailable" would put a
+    /// permanent warning on a correctly-configured deployment — and a warning
+    /// that is always on is a warning nobody reads.
+    /// </summary>
+    public Task<VisionProbe> ProbeAsync(CancellationToken ct = default) =>
+        Task.FromResult(new VisionProbe(VisionProbeStatus.NotConfiguredHere, null));
 }

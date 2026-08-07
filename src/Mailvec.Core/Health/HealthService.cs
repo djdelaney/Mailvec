@@ -27,6 +27,10 @@ public sealed class HealthService(
     MessageRepository? messages = null,
     IVisionClient? vision = null,
     IOptions<EmbedderOptions>? embedderOpts = null,
+    // Which vision provider is configured, so the reported model identity
+    // follows the provider instead of always naming the Ollama one. Optional
+    // for the same reason as the deps above; null => the Ollama default.
+    IOptions<VisionOptions>? visionOptions = null,
     // Same optional-dep rationale as above. Null => mbsync liveness reports
     // "unknown", which is also the honest answer on a launchd install where
     // no sidecar writes the beat file.
@@ -67,14 +71,23 @@ public sealed class HealthService(
         var imageOcrEnabled = embOpts.ImageOcrEnabled;
         var ocrEnabled = pdfOcrEnabled || imageOcrEnabled;
         var ollamaPing = ollama.PingAsync(ct);
-        var visionProbe = ocrEnabled && vision is not null
-            ? vision.IsModelAvailableAsync(ct)
+        var visionProbeTask = ocrEnabled && vision is not null
+            ? vision.ProbeAsync(ct)
             : null;
 
         var ollamaReachable = await ollamaPing.ConfigureAwait(false);
+        var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);
+
+        // "Not checkable from this process" is not the same as "broken", and
+        // must not read as false: the MCP server deliberately holds no
+        // credentials for a hosted provider, so a false here would show a
+        // permanent OCR fault on a correctly-configured deployment. Null is the
+        // existing "unknown" signal and is the honest answer.
         bool? visionModelAvailable = visionProbe is null
             ? null
-            : await visionProbe.ConfigureAwait(false);
+            : visionProbe.Status == VisionProbeStatus.NotConfiguredHere
+                ? null
+                : visionProbe.IsAvailable;
 
         // A failed embed ping has two very different causes with opposite
         // remediation: the server is down (restart Ollama), or the server is
@@ -118,7 +131,11 @@ public sealed class HealthService(
         var imagePending = imageOcrEnabled ? counts.ImagePending : 0;
         var ocr = new OcrHealth(
             Enabled: ocrEnabled,
-            VisionModel: ollamaOpts.Value.VisionModel,
+            // The provider that is actually configured — NOT Ollama's model name
+            // unconditionally. Reporting `qwen2.5vl:7b` while OCR runs on a
+            // hosted endpoint sent the tray, /health and doctor all confidently
+            // describing an engine the deployment wasn't using.
+            VisionModel: VisionRegistration.Describe(visionOptions?.Value ?? new VisionOptions(), ollamaOpts.Value),
             ModelAvailable: visionModelAvailable,
             Pending: pdfPending + imagePending,
             Recovered: counts.Recovered,
