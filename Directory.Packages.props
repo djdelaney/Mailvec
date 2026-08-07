@@ -58,8 +58,8 @@
     <PackageVersion Include="Serilog.Settings.Configuration"                Version="10.0.1" />
 
     <!-- MCP server -->
-    <PackageVersion Include="ModelContextProtocol"              Version="2.0.0" />
-    <PackageVersion Include="ModelContextProtocol.AspNetCore"   Version="2.0.0" />
+    <PackageVersion Include="ModelContextProtocol"              Version="2.1.0" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore"   Version="2.1.0" />
     <!-- Cloudflare Access assertion validation at the origin (AccessAuth.cs).
          Rides the same 10.0.x servicing band as the Microsoft.Extensions.*
          cluster — it pulls Microsoft.IdentityModel.* transitively, and that's
