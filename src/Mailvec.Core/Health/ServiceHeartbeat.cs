@@ -9,7 +9,7 @@ namespace Mailvec.Core.Health;
 /// Liveness heartbeats for the pipeline's background services.
 ///
 /// <para><b>Why this exists.</b> Before containers, "is the indexer running?"
-/// was answered by <c>launchctl print</c> (see <c>LaunchdInspector</c>). In the
+/// was answered by shelling out to <c>launchctl print</c>. In the
 /// compose deployment there is no launchd, and the MCP server cannot see
 /// another container's state without mounting the Docker socket — which would
 /// hand a read-only service root on the host. So liveness travels the way

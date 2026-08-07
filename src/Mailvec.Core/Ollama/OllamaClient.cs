@@ -35,8 +35,10 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
     /// Bounded by a short internal timeout so the MCP health endpoint can't
     /// hang on the shared embedder HttpClient's 60s timeout — 5s allows for a
     /// cold model load on the first probe (subsequent probes hit a warm model
-    /// kept resident by KeepAlive). Returns false on any error; does not
-    /// surface detail.
+    /// kept resident by KeepAlive). Don't raise it: /health is the mcp
+    /// container's compose healthcheck, which times out at 10s, and this probe
+    /// plus the 2s /api/tags follow-up already spend most of that. Returns
+    /// false on any error; does not surface detail.
     /// </summary>
     public async Task<bool> PingAsync(CancellationToken ct = default)
     {

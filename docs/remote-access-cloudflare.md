@@ -158,16 +158,23 @@ is optional and off by default):
   `docker compose --profile tunnel up -d`. The tunnel is remotely-managed:
   `tunnel --no-autoupdate run`, no `cloudflared tunnel login`, no config.yml.
 
-**Ingress: forward MCP + `/health`, 404 the mail-bearing `/tray/`.** MCP is
-mounted at the root `/` (there is no dedicated "MCP path" to allow-list), so the
-shape is path-differentiated on the same hostname, in this order:
+**Ingress: forward MCP, 404 `/health`.** MCP is mounted at the root `/` (there
+is no dedicated "MCP path" to allow-list), so the shape is path-differentiated
+on the same hostname, in this order:
 
 | # | Hostname | Path | Service |
 |---|---|---|---|
-| 1 | `mailvec.<domain>` | `tray/*` | `http_status:404` |
+| 1 | `mailvec.<domain>` | `tray/*` | `http_status:404` — **vestigial**, see below |
 | 2 | `mailvec.<domain>` | `^/health$` | `http_status:404` |
 | 3 | `mailvec.<domain>` | *(empty)* | `http://mcp:3333` |
 | 4 | *(catch-all)* | | `http_status:404` |
+
+> **Rule 1 is vestigial.** The `/tray/*` endpoints and the macOS tray app that
+> consumed them have been removed, so the origin serves nothing under that path
+> in any build. The rule is harmless and may still be present in your tunnel —
+> check the dashboard rather than this table. Removing it is safe; leaving it
+> costs nothing. **Don't count it as a barrier against anything** — it now 404s
+> a path that would 404 anyway.
 
 > ### `path` is an unanchored regular expression, not a prefix
 >
@@ -175,21 +182,19 @@ shape is path-differentiated on the same hostname, in this order:
 > regular expression", parsed with Go's `regexp` syntax — which anchors nothing
 > by default. Their own example, `\.(jpg|png|css|js)$`, matches anywhere in the
 > path. So a bare `health` rule matches **any path containing "health"**, and
-> the existing `tray/*` rule is a regex whose `/*` means "zero or more slashes"
-> — it works, but by accident rather than by prefix semantics.
+> the legacy `tray/*` rule is a regex whose `/*` means "zero or more slashes"
+> — it worked, but by accident rather than by prefix semantics.
 >
 > **Anchor deliberately.** `^/health$` matches that path and nothing else. Same
 > reasoning that made the minimal endpoint `/up` rather than `/healthz`: a loose
 > pattern over "health" silently widens what it covers, and the failure is
-> invisible until someone probes for it. (Rule 1 predates this and is left
-> alone here — retightening a working rule is its own change, but `^/tray/`
-> would be the correct form.)
+> invisible until someone probes for it.
 
 > **Rule 2 lives in the Cloudflare dashboard, not in this repo**, so nothing in
 > a commit can apply or confirm it — check the dashboard, not this file. The
 > origin already refuses off-box `/health` on its own
 > (`Mcp:RestrictHealthToLoopback`, default true, which is the load-bearing
-> barrier); this rule is the outer of the two, exactly like `/tray/`.
+> barrier); this rule is the outer of the two.
 >
 > Its prerequisite: **migrate any external monitor to `/up` first**, since the
 > rule blinds anything still polling `/health` — and a blind monitor looks
@@ -201,10 +206,9 @@ polls `/up` end-to-end through the tunnel, which detects tunnel / Access / edge
 failures an in-network probe can't. `/health` is its detailed sibling and
 discloses the archive path, corpus counts, embedding model identity and the
 internal Ollama LAN address — `/up` exists precisely so nothing external needs
-any of that. Its real consumers are all loopback (the compose healthcheck,
-`mailvec doctor` under `docker compose exec`, the tray on local installs), so
-keeping it off-box costs nothing. See
-[security.md → `/up`, `/health` and `/tray/*`](security.md#up-health-and-tray).
+any of that. Its real consumers are all loopback (the compose healthcheck and
+`mailvec doctor` under `docker compose exec`), so keeping it off-box costs
+nothing. See [security.md → `/up` and `/health`](security.md#up-and-health).
 
 **Verify** rule 2 after adding it (as the owner, from outside):
 
@@ -218,20 +222,10 @@ curl -i https://mailvec.<domain>/up       # 200 or 503, with the boolean body
 docker compose exec mcp curl -fsS http://127.0.0.1:3333/health   # full report
 ```
 
-**`/tray/*` has two independent barriers**, and the origin one is load-bearing —
-do not rely on this ingress rule alone:
-
-1. **Origin:** `Mcp:EnableTrayEndpoints=false` (container image) — `mcp` never
-   maps `/tray/*`; a request 404s from Kestrel with no handler. Holds regardless
-   of tunnel config.
-2. **Tunnel:** rule 1 above 404s `/tray/` before the catch-all.
-
-**Verify after any ingress or image change**: `curl -i .../tray/folders` →
-**404**, `curl -i .../up` → the boolean status body. From 0.2.0 `curl -i
-.../health` → **404** as well (the origin serves it to loopback only); the
-compose healthcheck curls it from inside the container and is unaffected.
-Belt-and-braces third option if the rules get fragile: a zone-level WAF rule
-blocking URI path `/tray/*`.
+**Verify after any ingress or image change**: `curl -i .../up` → the boolean
+status body, and `curl -i .../health` → **404** (the origin serves it to
+loopback only); the compose healthcheck curls it from inside the container and
+is unaffected.
 
 **Scope the monitoring service token to `/up`.** The Uptime Kuma service token
 passes Access; if it's authorized on the whole-subdomain app it can reach MCP
@@ -417,7 +411,7 @@ exempt, which is exactly what the `docker compose exec` check above proves.
    remotely-managed tunnels. The external `curl -i` checks confirm the current
    rules behave; the semantics are still unpinned, so prefer the
    tunnel-configurations API over the dashboard field when editing them, and
-   re-run the checks. The stakes are bounded for the sensitive surface: even if
-   the `/tray/` 404 rule silently stopped matching, `/tray/*` is *also* disabled
-   at the origin (`Mcp:EnableTrayEndpoints=false`), so no mail data is served.
-   The ingress rule is the outer of two barriers, not the only one.
+   re-run the checks. The stakes are bounded for `/health`: the origin refuses
+   it off-box on its own (`Mcp:RestrictHealthToLoopback`), so rule 2 silently
+   ceasing to match discloses nothing. The ingress rule is the outer of two
+   barriers, not the only one.

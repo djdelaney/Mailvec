@@ -37,20 +37,18 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | MCP stdio | child process of the spawning agent | inherits agent's identity | dormant — retired as the Claude Desktop transport; still available for local dev |
 | `/up` (minimal: status/version + liveness booleans) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a **path-scoped** Access service token for the external monitor (see below — the scoping is a requirement, and one worth verifying rather than assuming) |
 | `/health` (detailed) | **loopback only** (`Mcp:RestrictHealthToLoopback`, default true); 404 to anything else, and 404'd at the tunnel as well | n/a — not reachable off-box | only the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` under `docker compose exec` |
-| `/tray/*` | **not mapped in the container** (`Mcp:EnableTrayEndpoints=false`) *and* 404'd at the tunnel | served nowhere reachable | nobody — it's a local macOS-only surface |
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and**, when `Vision:Provider=ollama`, rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
 | **mistral-ocr (outbound, off-network)** | **the public internet** — `Vision:Mistral:Endpoint` (an Azure AI Foundry resource or api.mistral.ai) | API key, embedder container only | **only when `Vision:Provider=mistral`** (default is `ollama`, which sends nothing off-LAN). Rendered pages of scanned PDFs and image attachments leave the network. See [below](#hosted-ocr-vision-provider-mistral) |
 | SQLite file | bind mount on the VM | unix permissions (0600, container root) | root on the VM, and every container that mounts `./data` |
 | Maildir | bind mount on the VM | unix permissions; mounted **read-only** into every service except mbsync | same |
 
-### `/up`, `/health` and `/tray/*`
+### `/up` and `/health`
 
-All three are unauthenticated at the origin by default (see
-[origin validation](#origin-authentication-mcpaccess) for the exception, which
-covers `/up` and `/health` but not `/tray/*`), and they carry very different
-data, so they have deliberately different postures: `/up` is the internet-facing
-monitoring endpoint, `/health` is its detailed sibling, and the mail-bearing
-`/tray/*` is kept off the internet by two independent barriers.
+Both are unauthenticated at the origin by default (see
+[origin validation](#origin-authentication-mcpaccess) for the exception), and
+they carry very different data, so they have deliberately different postures:
+`/up` is the internet-facing monitoring endpoint and `/health` is its detailed,
+loopback-only sibling.
 
 **`/up` — the minimal monitoring endpoint.** The rule for its body is
 **booleans yes, values no**: `status`, `version`, and the flags an external
@@ -132,54 +130,20 @@ was the `Any Access Service Token` rule above — and the monitoring credential 
 read mail. Treat it as owner-equivalent until that's fixed. This check is the
 authority on the question; the dated report above is not.
 
-**`/tray/*` — mail-bearing, so belt-and-braces.** These return mail content
-(`/tray/email/<id>` = full bodies, `/tray/folders` = folder map + counts,
-`/tray/search` = full-text search, `/tray/system` = IMAP account) and accept
-mutating POSTs (`/tray/control`, `/tray/attachment`), all unauthenticated at the
-origin. They exist for the local macOS tray app and have **no consumer in the
-container**. Two independent barriers now keep them unreachable, either
-sufficient on its own:
+**No other HTTP surface carries mail.** A plain-REST `/tray/*` surface once
+served the macOS menu-bar app — full message bodies, the folder map, full-text
+search, the IMAP account, plus mutating POSTs, all unauthenticated at the
+origin. It was kept off the internet by an origin disable, a startup guard and a
+tunnel path-404. **The tray and those endpoints have been removed**, so the
+routes no longer exist in any build, and the config knob
+(`Mcp:EnableTrayEndpoints`) and its `TrayExposureGuard` are gone with them. The
+mail-bearing surface is the MCP endpoint alone, gated by Access — which is what
+the verification above already covers, so there is no separate check to run for
+this.
 
-1. **Disabled at the origin**, twice over. `Mcp:EnableTrayEndpoints=false` is
-   baked into the container image (Dockerfile) *and* set explicitly in
-   `compose.yml`. Either alone is sufficient — `mcp` never maps `/tray/*`, so a
-   request gets a plain Kestrel 404 with no handler run. Server-side and
-   authoritative: it holds regardless of the tunnel config, the same reasoning
-   as `Mcp:DisabledTools`. This is the load-bearing barrier. The redundancy is
-   deliberate: the image default covers a compose file that forgets, and the
-   compose line states the deployment's posture where an operator will actually
-   read it, without needing to know what the image bakes in.
-2. **The combination is unrepresentable.** `TrayExposureGuard` makes the server
-   **refuse to start** if the tray is enabled on anything but a loopback-only
-   deployment. So re-enabling it in a container isn't a risky setting — it's a
-   crash on boot with a message saying which knob to change. A default only
-   protects until someone overrides it; this holds even then.
-3. **404'd at the tunnel.** The cloudflared ingress 404s the `/tray/` path
-   before the catch-all that forwards to `mcp:3333`.
-
-**What the guard treats as "exposed"** — and this is the part worth
-understanding, because the intuitive answer is wrong. The trigger is a
-non-loopback `Mcp:BindAddress`, or a non-loopback name in `Mcp:AllowedHosts`.
-It is deliberately **not** "is a public hostname configured", because HostGuard
-always admits the loopback Host names whatever `AllowedHosts` says: a server
-bound to `0.0.0.0` with an entirely empty `AllowedHosts` is still readable by
-anything that can route to the port — it just sends `Host: localhost`. Keying
-the guard off a configured hostname would miss exactly that shape.
-
-(Access covering the subdomain is a third barrier against anonymous callers, but
-the origin disable is the one to rely on — it's server-side and independent of
-any Cloudflare config.)
-
-**Don't re-enable `/tray/*` on an internet-fronted deployment.** The surface has
-no per-request auth of its own; giving it a remote story means building that
-first (see [future-ideas.md](future-ideas.md)). The macOS / loopback install
-keeps `EnableTrayEndpoints=true` because there the surface is loopback-only.
-
-**Verify after any ingress or image change** (with a valid service token):
-`curl -i .../tray/folders` must return **404** (origin unmapped), and
-`curl -i .../up` must return the status/version/liveness-boolean body. Once the pending
-Access migration lands, add the negative check that actually proves the split:
-`curl -i .../health` with the **monitoring** token must be **denied**.
+The tunnel may still carry a `/tray/` 404 ingress rule; it is vestigial and
+harmless. **Don't treat its presence as protection** — it now 404s a path
+nothing serves, so it proves nothing about the origin either way.
 
 ## Container hardening
 
@@ -331,7 +295,7 @@ use `mailvec reocr` for that.
 
 ## The other shape: a loopback-only local install
 
-`ops/install-all.sh` still produces the original single-Mac deployment — launchd services, MCP bound to `127.0.0.1:3333`, the MCPB bundle for Claude Desktop, the tray polling `/tray/*` over loopback. It remains supported and is what [`docs/clients/`](clients/README.md) documents. Its model is the one this page used to describe in full:
+`ops/install-all.sh` still produces the original single-Mac deployment — launchd services, MCP bound to `127.0.0.1:3333`, the MCPB bundle for Claude Desktop. It remains supported and is what [`docs/clients/`](clients/README.md) documents. Its model is the one this page used to describe in full:
 
 - **The trust boundary is the macOS user account.** Inside it, any local process can call any tool; outside, Mailvec is unreachable.
 - **Loopback is per-host, not per-user.** A second account on the same Mac can `curl http://127.0.0.1:3333/` and read your mail. Accepted because the realistic adversary already has unix-level read access to `~/Mail/` and `~/Library/Application Support/Mailvec/archive.sqlite` and doesn't need MCP to extract them.
@@ -342,7 +306,7 @@ The two shapes are not meant to be mixed. Everything else on this page describes
 
 ## Tools and data flow
 
-All seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) are **read-only against the database** — none mutate `messages`, `chunks`, or `attachments` — and, as of the attachment-in-memory rework, **none write to the filesystem** either. `view_attachment` and `get_attachment_page_image` decode attachment bytes out of the Maildir *in memory* (inlining an image / small text file, or rasterising a PDF page) and persist nothing; `get_attachment_text` is a pure DB read of stored `extracted_text`. The only attachment writes to disk are the explicit, user-initiated download paths — the tray's Save button (`/tray/attachment`) and `mailvec extract-attachments` — which go through `AttachmentExtractor.Extract` and its [defense-in-depth path checks](../src/Mailvec.Core/Attachments/AttachmentExtractor.cs):
+All seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) are **read-only against the database** — none mutate `messages`, `chunks`, or `attachments` — and, as of the attachment-in-memory rework, **none write to the filesystem** either. `view_attachment` and `get_attachment_page_image` decode attachment bytes out of the Maildir *in memory* (inlining an image / small text file, or rasterising a PDF page) and persist nothing; `get_attachment_text` is a pure DB read of stored `extracted_text`. The only attachment writes to disk come from the explicit, user-initiated download path — `mailvec extract-attachments` — which goes through `AttachmentExtractor.Extract` and its [defense-in-depth path checks](../src/Mailvec.Core/Attachments/AttachmentExtractor.cs):
 
 - `Path.GetFileName` strips directory components from caller-supplied filenames
 - canonical-path containment refuses any target outside the configured download dir
@@ -355,18 +319,18 @@ All seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`,
 
 ## Host / origin validation (DNS-rebinding guard)
 
-Loopback binding stops other *hosts* on the network from routing to `:3333`, but it does **not** stop a web page the user visits from reaching it. A page on `evil.com` can hold a connection, let its DNS TTL expire, re-resolve `evil.com` to `127.0.0.1`, and then issue requests the browser treats as *same-origin* — at which point page JavaScript could read `/tray/email/<id>` (mail bodies), `/tray/system` (IMAP username), or POST to the mutating `/tray/control` and `/tray/attachment` endpoints.
+Loopback binding stops other *hosts* on the network from routing to `:3333`, but it does **not** stop a web page the user visits from reaching it. A page on `evil.com` can hold a connection, let its DNS TTL expire, re-resolve `evil.com` to `127.0.0.1`, and then issue requests the browser treats as *same-origin* — at which point page JavaScript could POST to the MCP endpoint and read the response. Statelessness makes that a single request: no handshake, no session header, so one `tools/call` runs `search_emails` or `get_email` and the page reads mail straight out of the reply.
 
-Every HTTP request (MCP, `/health`, and all `/tray/*`) therefore passes through a guard ([`HostGuard`](../src/Mailvec.Mcp/HostGuard.cs), wired in [`Program.cs`](../src/Mailvec.Mcp/Program.cs) `RunHttp`) that returns **403** unless:
+Every HTTP request (MCP, `/health`, `/up`) therefore passes through a guard ([`HostGuard`](../src/Mailvec.Mcp/HostGuard.cs), wired in [`Program.cs`](../src/Mailvec.Mcp/Program.cs) `RunHttp`) that returns **403** unless:
 
 - the `Host` header's hostname is an allowed name (`localhost` / `127.0.0.1` / `::1` always, plus anything in `Mcp:AllowedHosts`), and
 - the `Origin` header, when present, also resolves to an allowed name.
 
-After a rebind the browser still sends `Host: evil.com`, so the request is refused before reaching any handler. Native clients (Claude Code's MCP transport, the tray's `URLSession`) connect to loopback and send no `Origin`, so they're unaffected. This is **not** authentication — a hostile local process can still spoof the `Host` header; it defends specifically against the browser-mediated cross-origin vector.
+After a rebind the browser still sends `Host: evil.com`, so the request is refused before reaching any handler. Native clients (Claude Code's MCP transport) connect to loopback and send no `Origin`, so they're unaffected. This is **not** authentication — a hostile local process can still spoof the `Host` header; it defends specifically against the browser-mediated cross-origin vector.
 
 **The tunnel depends on this.** cloudflared forwards the original public `Host` header, so `MCP_PUBLIC_HOSTNAME` must be set in the VM's `.env` (compose wires it into `Mcp:AllowedHosts`, alongside `mcp` for in-network access) or **every request through the tunnel 403s**. See [remote-access-cloudflare.md](remote-access-cloudflare.md).
 
-The guard is defense-in-depth, **not** the auth boundary — that's Cloudflare Access. A `Host` header is trivially spoofed by anything that can already reach the origin, so HostGuard buys nothing against a caller inside the compose network or on the LAN if a port were published. It defends specifically against the browser-mediated rebinding vector. Note `/tray/*` is additionally unmapped in the container (`Mcp:EnableTrayEndpoints=false`) and 404'd at the tunnel — see [the endpoint posture above](#up-health-and-tray); `/up` and `/health` are intentionally forwarded.
+The guard is defense-in-depth, **not** the auth boundary — that's Cloudflare Access. A `Host` header is trivially spoofed by anything that can already reach the origin, so HostGuard buys nothing against a caller inside the compose network or on the LAN if a port were published. It defends specifically against the browser-mediated rebinding vector. See [the endpoint posture above](#up-and-health) for how `/up` and `/health` differ.
 
 ## Origin authentication (`Mcp:Access`)
 
@@ -505,7 +469,7 @@ still no rate limiting; see below).
 These are explicit decisions, not oversights:
 
 - **The MCP origin has no auth of its own *unless `Mcp:Access` is configured*; otherwise Cloudflare Access is the entire gate.** With it unset — the default, and how this stack has always run — anything that can reach `mcp:3333` inside the compose network can call any tool. That was a deliberate division of labour (the origin stays simple, the edge does identity) and it holds precisely as long as the tunnel is the only ingress. **Publishing the mcp container's `ports:` mapping breaks it**: port 3333 then answers any host on the LAN with no OAuth at all, and several of the acceptances below stop holding. Turning on origin validation ([below](#origin-authentication-mcpaccess)) removes this acceptance rather than mitigating it — the server then refuses anything without a valid assertion, LAN callers included.
-- **No per-tool authorization.** Any caller that clears the Access gate and can invoke `search_emails` can also invoke `view_attachment`. Trivially simple while every tool is read-only and every caller that clears the gate is owner-equivalent — which means the Claude Code service token as well as the owner's OAuth session, so it's a property of the Access policy rather than of the number of humans involved ([above](#up-health-and-tray)). Revisit if a write tool ever lands, or if a caller who *shouldn't* be owner-equivalent is admitted (sending mail is out of scope, but the principle applies if anything in that direction ever gets considered).
+- **No per-tool authorization.** Any caller that clears the Access gate and can invoke `search_emails` can also invoke `view_attachment`. Trivially simple while every tool is read-only and every caller that clears the gate is owner-equivalent — which means the Claude Code service token as well as the owner's OAuth session, so it's a property of the Access policy rather than of the number of humans involved ([above](#up-and-health)). Revisit if a write tool ever lands, or if a caller who *shouldn't* be owner-equivalent is admitted (sending mail is out of scope, but the principle applies if anything in that direction ever gets considered).
 - **Untrusted PDFs and images are parsed by native code, and the two tools that do it on demand are exposed over the tunnel.** PDFtoImage/PDFium (PDF rasterisation) and SkiaSharp (image decode) are native C++ libraries, so a malicious PDF/image is a memory-safety attack surface the managed extractors (`PdfPig` / `OpenXml`) aren't. This runs in **two** places: `get_attachment_page_image` / `view_attachment` (on demand, via MCP) and the **embedder's OCR pass**, which renders scanned PDFs and images *automatically and unattended* for every such attachment that arrives by mail.
 
   `Mcp:DisabledTools` (which drops tools from both tools/list and tools/call at the server) is staged-but-**commented** in compose.yml, so the on-demand pair stays reachable through the tunnel. That's a deliberate call, resting on two things:
@@ -518,7 +482,7 @@ These are explicit decisions, not oversights:
      - the **owner**, via Access Managed OAuth;
      - the **named Claude Code service token**, the owner's own agent credential.
 
-     Both are the owner. But "owner-equivalent" is the honest frame rather than "one identity", because *which* credentials are owner-equivalent is a Cloudflare-side fact this repo cannot see — and one that has been wrong before: an `Any Access Service Token` rule on the root application silently makes every token in the account owner-equivalent, monitoring credentials included ([above](#up-health-and-tray)). **Verify it rather than inheriting this sentence's assumption**, and don't let the acceptance drift back to resting on a claim whose truth lives in a dashboard nobody re-reads.
+     Both are the owner. But "owner-equivalent" is the honest frame rather than "one identity", because *which* credentials are owner-equivalent is a Cloudflare-side fact this repo cannot see — and one that has been wrong before: an `Any Access Service Token` rule on the root application silently makes every token in the account owner-equivalent, monitoring credentials included ([above](#up-and-health)). **Verify it rather than inheriting this sentence's assumption**, and don't let the acceptance drift back to resting on a claim whose truth lives in a dashboard nobody re-reads.
 
      So the durable form: **if a credential that clears this gate ever stops being owner-equivalent, this acceptance is void.** Note also what scoping the credentials does *not* change — a leaked owner-equivalent credential still has the whole mailbox through `search_emails` + `get_email`, no native parsing involved. Trimming the two tools would narrow what *else* such a leak reaches, and that is a real difference in kind (data disclosure vs. a memory-safety surface) — but point 1 is what makes it an acceptable trade: the same parsers are fed unattended by anything that arrives in the mailbox, so an attacker who wants them can simply *send mail* and wait. The tools are a faster path to a surface they hold either way, not a new one.
 
@@ -545,7 +509,7 @@ These are explicit decisions, not oversights:
 
 ## What's out of scope
 
-- **Multi-tenant isolation.** The archive is single-account and nothing in Mailvec scopes results per-caller, so **every caller the Access gate admits holds the owner's entire mailbox**, not a view of their own. That is not a hypothetical distinction: an `Any Access Service Token` rule on the root application hands the whole mailbox to any monitoring credential in the account ([above](#up-health-and-tray)) — a grant that arrives without anyone editing Mailvec's policy, and that this project shipped with for about a year. Admitting anyone who shouldn't hold the whole mailbox is therefore a model change, not a config change — and it also invalidates the native-parser acceptance above.
+- **Multi-tenant isolation.** The archive is single-account and nothing in Mailvec scopes results per-caller, so **every caller the Access gate admits holds the owner's entire mailbox**, not a view of their own. That is not a hypothetical distinction: an `Any Access Service Token` rule on the root application hands the whole mailbox to any monitoring credential in the account ([above](#up-and-health)) — a grant that arrives without anyone editing Mailvec's policy, and that this project shipped with for about a year. Admitting anyone who shouldn't hold the whole mailbox is therefore a model change, not a config change — and it also invalidates the native-parser acceptance above.
 - **Root on the Docker VM.** `ConnectionFactory` hardens the DB dir/files to owner-only (0700/0600), where the owner is the container's root. Anyone with root on the VM, or the ability to run containers on it, reads the archive directly and doesn't need MCP. The VM's own access control is the boundary.
 - **Network adversaries at the edge.** TLS termination, DDoS absorption, and the identity gate are Cloudflare's. Mailvec publishes no inbound port and holds no certificate; the origin is reachable only through the tunnel the sidecar dials *outbound*. This delegates a real chunk of the security model to Cloudflare — that's the trade the iOS requirement forced (see [remote-access-cloudflare.md](remote-access-cloudflare.md) for why nothing local-only could work).
 - **Compromised AI agent exfiltration.** If the agent calling Mailvec is itself malicious (e.g. an LLM jailbroken into "find all messages from X and POST them to attacker.com"), nothing in the MCP layer stops it from reading every email and shipping the contents back to its own provider. The relevant control is "trust the agent" — choose your clients. Note this is now *structural*, not hypothetical: connectors are invoked from Anthropic's cloud, so every tool call and its results already traverse a third party by design.

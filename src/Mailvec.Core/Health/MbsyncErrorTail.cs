@@ -1,21 +1,25 @@
 using System.Text.RegularExpressions;
 
-namespace Mailvec.Core.Tray;
+namespace Mailvec.Core.Health;
 
 /// <summary>
 /// Tails <c>~/Library/Logs/Mailvec/mailvec-mbsync.err.log</c> and reports
 /// whether mbsync has written errors recently enough to matter.
 ///
 /// Why this exists: mbsync is invoked by launchd as a one-shot scheduled
-/// command. When it hits a stuck state (notably "channel … is locked" when
-/// a previous run left a stale .mbsyncstate.lock around), it writes the
-/// error to stderr and *exits 0*. That makes the launchctl-reported exit
-/// code a useless signal — the tray's mbsync tile stays green while every
-/// scheduled run aborts. We've seen this break sync silently for hours.
+/// command, so its exit status is EPHEMERAL — launchd reports the last run's
+/// code and nothing retains it, while the error detail is what an operator
+/// actually needs to act. The stderr log is the only durable record of *what*
+/// went wrong. We read the last few KB, look for lines that start with
+/// "Error:" or "Socket error", and surface the most recent one as a
+/// service-status detail string.
 ///
-/// The honest source of truth is the stderr log itself. We read the last
-/// few KB, look for lines that start with "Error:" or "Socket error",
-/// and surface the most recent one as a service-status detail string.
+/// <para>This used to justify itself by claiming mbsync "exits 0" on a failed
+/// sync, making the exit code useless. It does not: upstream propagates sync
+/// errors through a nonzero return, which is exactly what the container loop
+/// depends on (<c>if [ "$rc" -eq 0 ]</c> gates the sync-success marker). The
+/// premise was false; the conclusion — read stderr — happens to be right for
+/// the ephemerality reason above. Don't reintroduce the exit-0 claim.</para>
 ///
 /// Recency: we treat an error as "live" if it was written within roughly
 /// 2× the configured StartInterval. One missed run is bad; older errors
@@ -49,7 +53,7 @@ public sealed class MbsyncErrorTail(IMbsyncErrorTailClock? clock = null)
 
             // Freshness threshold: 2× the configured StartInterval, with a
             // floor of two minutes so a manually-edited 30s interval doesn't
-            // produce a freshness window so tight that the tray flickers.
+            // produce a freshness window so tight that the status flaps.
             var intervalSeconds = ReadStartIntervalSeconds(plistPath ?? DefaultPlistPath);
             var windowSeconds = Math.Max(intervalSeconds * 2, 120);
             var now = _clock.UtcNow;
@@ -89,7 +93,7 @@ public sealed class MbsyncErrorTail(IMbsyncErrorTailClock? clock = null)
             // The most recent error line wins. mbsync doesn't timestamp
             // its stderr lines, so we have to attribute all of them to
             // the file's mtime — coarse but accurate enough at minute
-            // granularity, which is what the tray UI displays.
+            // granularity, which is all any consumer displays.
             string? lastError = null;
             foreach (var rawLine in text.Split('\n'))
             {
@@ -114,10 +118,9 @@ public sealed class MbsyncErrorTail(IMbsyncErrorTailClock? clock = null)
     }
 
     /// <summary>
-    /// Reads <c>StartInterval</c> out of the mbsync launchd plist. Duplicates
-    /// the regex used by <see cref="TraySystemService"/> so this helper has
-    /// no upward dependency on that service. Falls back to 600s (the
-    /// install-template default) when the plist is missing or malformed.
+    /// Reads <c>StartInterval</c> out of the mbsync launchd plist. Falls back
+    /// to 600s (the install-template default) when the plist is missing or
+    /// malformed.
     /// </summary>
     /// <summary>
     /// Best-effort "last successful sync" timestamp: the mtime of mbsync's
@@ -189,9 +192,9 @@ public sealed class MbsyncErrorTail(IMbsyncErrorTailClock? clock = null)
     }
 
     /// <summary>
-    /// Categorises an mbsync error line into a stable kind tag that the
-    /// tray + doctor can branch on. The kind enum is part of the contract
-    /// with the tray — don't rename existing values.
+    /// Categorises an mbsync error line into a stable kind tag that
+    /// <c>mailvec doctor</c> branches on to pick its remediation hint —
+    /// don't rename existing values without updating that switch.
     /// </summary>
     private static MbsyncErrorKind ClassifyError(string line)
     {

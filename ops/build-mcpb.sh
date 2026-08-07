@@ -47,23 +47,22 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # Patch-bump THE Mailvec version via ops/release.sh — the sanctioned bump path
-# for all three carriers (manifest.json, Directory.Build.props <Version>,
-# project.yml MARKETING_VERSION). --no-commit preserves this script's
-# historical behavior: it bumps and builds, and committing stays in your hands.
+# for both carriers (manifest.json, Directory.Build.props <Version>).
+# --no-commit preserves this script's historical behavior: it bumps and builds,
+# and committing stays in your hands.
 if [[ $BUMP -eq 1 ]]; then
     "$REPO_ROOT/ops/release.sh" --patch --no-commit
 fi
 
 # Read version from manifest so the artifact filename matches, and verify the
-# three version carriers are in lockstep — a drifted version means an
-# installed bundle whose serverInfo (or tray About) lies about what it is.
+# two version carriers are in lockstep — a drifted version means an installed
+# bundle whose serverInfo lies about what it is.
 VERSION="$(python3 - <<'PY'
 import json, pathlib, re, sys
 manifest = json.load(open("manifest.json"))["version"]
 props = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", pathlib.Path("Directory.Build.props").read_text()).group(1)
-tray = re.search(r'MARKETING_VERSION:\s*"(\d+\.\d+\.\d+)"', pathlib.Path("src/Mailvec.Tray/project.yml").read_text()).group(1)
-if not (manifest == props == tray):
-    print(f"ERROR: version drift — manifest.json={manifest} Directory.Build.props={props} project.yml={tray}. "
+if manifest != props:
+    print(f"ERROR: version drift — manifest.json={manifest} Directory.Build.props={props}. "
           "Re-align them (ops/release.sh keeps them in lockstep).", file=sys.stderr)
     sys.exit(1)
 print(manifest)

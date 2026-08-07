@@ -295,7 +295,7 @@ public class OllamaClientTests
     public async Task Model_probe_false_when_server_answers_but_model_absent()
     {
         // false ≠ null: the server IS up, the model was never pulled. Doctor
-        // and the tray key "run `ollama pull …`" advice off this exact value.
+        // keys its "run `ollama pull …`" advice off this exact value.
         (await ClientWith(_ => Tags("qwen2.5vl:7b")).IsModelAvailableAsync()).ShouldBe(false);
         (await ClientWith(_ => Tags()).IsModelAvailableAsync()).ShouldBe(false);
         // Base-name prefixing must not false-positive on a different model

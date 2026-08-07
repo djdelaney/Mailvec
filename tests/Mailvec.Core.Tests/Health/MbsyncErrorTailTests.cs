@@ -1,12 +1,12 @@
-using Mailvec.Core.Tray;
+using Mailvec.Core.Health;
 
-namespace Mailvec.Core.Tests.Tray;
+namespace Mailvec.Core.Tests.Health;
 
 /// <summary>
 /// Verifies the mbsync stderr tail surfaces the right kinds of errors and
 /// honours the freshness window. The "freshness" check is what stops a
-/// log file from a network outage two weeks ago turning the tray tile
-/// yellow today.
+/// log file from a network outage two weeks ago reading as a live failure
+/// today.
 ///
 /// All tests write to a tmp file and inject a fake clock so we don't rely
 /// on wall-clock timing or the real LaunchAgents plist on the test machine.

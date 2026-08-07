@@ -19,7 +19,7 @@ namespace Mailvec.Mcp;
 /// but not one of them looks at a value until a request is being evaluated —
 /// which is after <c>Build()</c>, and therefore after the options pipeline has
 /// applied env vars and every other source. This is the same reason
-/// <c>Program.cs</c> reads <c>EnableTrayEndpoints</c> from
+/// <c>Program.cs</c> reads its security-relevant options from
 /// <c>IOptions&lt;McpOptions&gt;</c> rather than the builder-time snapshot: a
 /// builder-time <c>Configuration.Get&lt;McpOptions&gt;()</c> misses overrides
 /// applied later, so a security control keyed off one can be silently off.</para>

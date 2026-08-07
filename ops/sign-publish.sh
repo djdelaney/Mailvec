@@ -7,8 +7,7 @@
 # publish` — so each redeploy makes the MCP server look like a brand-new app
 # and Claude Desktop re-fires every TCC dialog. A stable Developer ID
 # signature anchored to the Team ID gives a constant designated requirement,
-# so the grants persist across rebuilds. Same idea as ops/build-tray.sh, but
-# for the four .NET apphost binaries.
+# so the grants persist across rebuilds, for the four .NET apphost binaries.
 #
 # Deliberately NOT hardened runtime and NOT notarized: neither is needed for a
 # local-only tool (the install scripts strip the quarantine xattr), and
@@ -16,8 +15,8 @@
 # (allow-jit / allow-unsigned-executable-memory / disable-library-validation).
 # We only need a stable signature + designated requirement, so we sign plain.
 #
-# Identity precedence (matches ops/build-tray.sh): MAILVEC_SIGN_IDENTITY env →
-# first "Developer ID Application" cert in the keychain → ad-hoc ("-").
+# Identity precedence: MAILVEC_SIGN_IDENTITY env → first "Developer ID
+# Application" cert in the keychain → ad-hoc ("-").
 #
 # Usage:
 #   Standalone:  ops/sign-publish.sh <publish-dir> <apphost-filename> <identifier>

@@ -2,11 +2,10 @@
 # Bump THE Mailvec version and stage a release.
 #
 # The sanctioned bump path (extracted from ops/build-mcpb.sh --bump, which now
-# delegates here). Bumps the three version carriers in lockstep — manifest.json,
-# the repo-wide <Version> in Directory.Build.props (stamps all four .NET
-# binaries and initialize.serverInfo.version), and the tray's MARKETING_VERSION
-# in src/Mailvec.Tray/project.yml — commits the bump, and prints the tag
-# commands that cut the release. The v<version> tag push publishes the durable
+# delegates here). Bumps the two version carriers in lockstep — manifest.json
+# and the repo-wide <Version> in Directory.Build.props (which stamps all four
+# .NET binaries and initialize.serverInfo.version) — commits the bump, and
+# prints the tag commands that cut the release. The v<version> tag push publishes the durable
 # GHCR images the homelab pins (docs/deploy-docker.md "Release tags"); the
 # publish workflow refuses a v* tag that doesn't match <Version> at the tagged
 # commit.
@@ -85,7 +84,7 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-CARRIERS=(manifest.json Directory.Build.props src/Mailvec.Tray/project.yml)
+CARRIERS=(manifest.json Directory.Build.props)
 
 # Refuse to fold unrelated uncommitted edits to the carrier files into the
 # bump commit (or to bump on top of them with --no-commit).
@@ -99,19 +98,17 @@ import json, os, pathlib, re, sys
 
 part = os.environ["BUMP_PART"]
 
-# Verify the three carriers are in lockstep before touching anything — a
+# Verify the two carriers are in lockstep before touching anything — a
 # pre-existing drift means a hand-edited version, and bumping on top of it
 # would ship the drift half-applied.
 manifest_path = pathlib.Path("manifest.json")
 props_path = pathlib.Path("Directory.Build.props")
-tray_path = pathlib.Path("src/Mailvec.Tray/project.yml")
 
 manifest_ver = json.load(open(manifest_path))["version"]
 props_ver = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", props_path.read_text()).group(1)
-tray_ver = re.search(r'MARKETING_VERSION:\s*"(\d+\.\d+\.\d+)"', tray_path.read_text()).group(1)
-if not (manifest_ver == props_ver == tray_ver):
+if manifest_ver != props_ver:
     print(f"ERROR: version drift — manifest.json={manifest_ver} "
-          f"Directory.Build.props={props_ver} project.yml={tray_ver}. "
+          f"Directory.Build.props={props_ver}. "
           "Re-align them by hand before bumping.", file=sys.stderr)
     sys.exit(1)
 
@@ -129,7 +126,6 @@ else:
 edits = [
     (manifest_path, r'("version"\s*:\s*")(\d+\.\d+\.\d+)(")'),
     (props_path, r"(<Version>)(\d+\.\d+\.\d+)(</Version>)"),
-    (tray_path, r'(MARKETING_VERSION:\s*")(\d+\.\d+\.\d+)(")'),
 ]
 for path, pattern in edits:
     text = path.read_text()

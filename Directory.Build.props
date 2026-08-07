@@ -4,8 +4,7 @@
     <!--
       THE Mailvec version: single source of truth for every .NET binary
       (indexer, embedder, MCP, CLI all stamp their assemblies from this).
-      Kept in lockstep with manifest.json's "version" and the tray's
-      MARKETING_VERSION in src/Mailvec.Tray/project.yml by ops/release.sh,
+      Kept in lockstep with manifest.json's "version" by ops/release.sh,
       which is the only sanctioned way to bump (the bump mode of
       ops/build-mcpb.sh delegates to it; its plain build fails on drift, and
       the v-tag image publish refuses a tag that disagrees with this value).

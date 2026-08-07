@@ -23,8 +23,7 @@
 # Directory.Packages.props and csproj files carry no Version attribute. The
 # per-project `directories` list is how Dependabot finds the projects that
 # resolve against it — the root holds Mailvec.slnx (the .NET 10 XML solution
-# format), which Dependabot's NuGet support may not parse. Mailvec.Tray is
-# deliberately absent: it's a SwiftUI target with no csproj. Note the list is
+# format), which Dependabot's NuGet support may not parse. Note the list is
 # not the full scope: Dependabot also discovered `.config/dotnet-tools.json`
 # on its own, which is why PRs can touch a directory not named here.
 

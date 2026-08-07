@@ -209,8 +209,7 @@ services:
       # archive path, corpus counts, the embedding model identity and the
       # internal Ollama LAN address; /up exists so nothing external needs any of
       # that. The in-container consumers are all loopback and unaffected: the
-      # healthcheck below, `mailvec doctor` under `docker compose exec`, the
-      # tray on local installs.
+      # healthcheck below, and `mailvec doctor` under `docker compose exec`.
       #
       # ⚠️ CHECK THE MONITORS BEFORE DEPLOYING THIS. An off-box Uptime Kuma
       # monitor pointed at /health goes hard-down the moment this takes effect,
@@ -221,26 +220,11 @@ services:
       # off-box until the repoint is done.
       # Procedure: docs/monitoring-uptime-kuma.md "Migrating existing monitors".
       #
-      # Stated explicitly rather than left to the code default for the same
-      # reason as Mcp__EnableTrayEndpoints above: an operator reading compose.yml
-      # should be able to see the deployment's posture without going and reading
-      # McpOptions. Set false only if something genuinely off-box needs the
-      # detailed body — and prefer pointing it at /up instead.
+      # Stated explicitly rather than left to the code default so that an
+      # operator reading compose.yml can see the deployment's posture without
+      # going and reading McpOptions. Set false only if something genuinely
+      # off-box needs the detailed body — and prefer pointing it at /up instead.
       Mcp__RestrictHealthToLoopback: ${MCP_RESTRICT_HEALTH_TO_LOOPBACK:-true}
-      # The mail-bearing /tray/* surface, off. Three independent things now say
-      # so, and each covers a gap the others don't:
-      #   1. this line — the deployment's own stated posture, visible to anyone
-      #      reading compose.yml without having to go and read the Dockerfile;
-      #   2. the IMAGE default (Mcp__EnableTrayEndpoints=false, baked into the
-      #      Dockerfile), which still holds for a compose file that forgets;
-      #   3. TrayExposureGuard, which refuses to start the server at all when
-      #      the tray is enabled on a non-loopback bind — and this container
-      #      binds 0.0.0.0. Flipping this to "true" is a crash loop naming the
-      #      knob, not an unauthenticated mailbox.
-      # Redundant on purpose: /tray/* returns full message bodies, the folder
-      # map, full-text search and the IMAP account, with no auth of its own.
-      # See docs/security.md "/up, /health and /tray/*".
-      Mcp__EnableTrayEndpoints: "false"
       #
       # Drops the two tools that feed mail bytes to native parsers
       # (PDFium/SkiaSharp) on demand. It's the native parsing that's the risk,
@@ -257,9 +241,8 @@ services:
       # REINSTATE (uncomment) if any of that stops holding: a host port gets
       # published below, a caller that ISN'T owner-equivalent clears Access
       # (watch for the root policy reverting to `Any Access Service Token`, which
-      # admits every token in the account with no edit here), the tunnel stops
-      # 404-ing /tray/*, or a mutating tool lands. Full rationale + conditions:
-      # docs/security.md "What's accepted".
+      # admits every token in the account with no edit here), or a mutating tool
+      # lands. Full rationale + conditions: docs/security.md "What's accepted".
       #
       # An unknown name here fails startup on purpose (a typo would silently
       # leave the tool exposed).

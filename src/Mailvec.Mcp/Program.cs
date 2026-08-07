@@ -7,10 +7,8 @@ using Mailvec.Core.Logging;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
-using Mailvec.Core.Tray;
 using Mailvec.Core.Vision;
 using Mailvec.Mcp;
-using Mailvec.Mcp.Tray;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -122,9 +120,9 @@ static async Task RunHttp(string[] args)
         throw new InvalidOperationException(accessConfigError);
 
     // DNS-rebinding / same-origin guard. Runs before every route (MCP, /health,
-    // /tray/*) so a browser rebound to 127.0.0.1 can't read mail or POST to the
-    // mutating /tray endpoints. Loopback Host names are always allowed; add a
-    // fronting hostname via Mcp:AllowedHosts. See HostGuard.
+    // /up) so a browser rebound to 127.0.0.1 can't reach the MCP endpoint and
+    // read mail out of a tools/call response. Loopback Host names are always
+    // allowed; add a fronting hostname via Mcp:AllowedHosts. See HostGuard.
     var allowedHosts = HostGuard.BuildAllowedHosts(mcpOpts.AllowedHosts);
     app.Use(async (context, next) =>
     {
@@ -189,7 +187,7 @@ static async Task RunHttp(string[] args)
     // wrong. Defense in depth, not one replacing the other.
     // /health stays detailed for the loopback
     // consumers that need it (the compose healthcheck, `mailvec doctor`'s HTTP
-    // probe, the tray on local installs); /up is what the internet-facing
+    // probe); /up is what the internet-facing
     // monitor polls, so a leaked monitoring credential yields no archive path,
     // no corpus counts, no model config, and — the one that matters most — not
     // the internal Ollama LAN address.
@@ -230,38 +228,6 @@ static async Task RunHttp(string[] args)
             ? Results.Ok(minimal)
             : Results.Json(minimal, statusCode: StatusCodes.Status503ServiceUnavailable);
     });
-    // /tray/* serves the SwiftUI menu-bar app — plain REST, not MCP-framed.
-    // Gated off on internet-fronted deployments (Mcp:EnableTrayEndpoints=false,
-    // baked into the container image): the surface is unauthenticated at the
-    // origin and returns mail content, and nothing consumes it in a container.
-    // Origin-side disable is defense-in-depth behind the tunnel's path-404 —
-    // it holds even if that ingress rule is ever misconfigured. See
-    // TrayEndpoints.cs and docs/security.md. /health above is unaffected.
-    // Read from `resolvedMcpOpts` (the bound options, resolved just after
-    // Build), NOT the builder-time mcpOpts: it's the DI-registered value, so an
-    // env var / appsettings override — and the container image's baked
-    // Mcp__EnableTrayEndpoints=false — is reflected here. (The builder-time
-    // mcpOpts is only used for Kestrel/middleware wiring that has to happen
-    // before Build.)
-    // Refuse the one combination that silently publishes the mailbox: the
-    // unauthenticated, mail-bearing /tray/* surface on a server reachable from
-    // off-host. Checked against the DI-resolved options (not builder-time
-    // mcpOpts) so an env var or appsettings override is what's judged — the
-    // same reason trayEnabled is read from here. See TrayExposureGuard.
-    if (TrayExposureGuard.Violation(resolvedMcpOpts) is { } trayViolation)
-        throw new InvalidOperationException(trayViolation);
-
-    var trayEnabled = resolvedMcpOpts.EnableTrayEndpoints;
-    if (trayEnabled)
-    {
-        app.MapTrayEndpoints();
-    }
-    else
-    {
-        app.Services.GetRequiredService<ILoggerFactory>()
-            .CreateLogger("Mailvec.Mcp.Startup")
-            .LogInformation("Tray endpoints (/tray/*) disabled by Mcp:EnableTrayEndpoints=false.");
-    }
     var mcpEndpoint = app.MapMcp();
 
     if (accessEnabled)
@@ -270,8 +236,7 @@ static async Task RunHttp(string[] args)
         // the path-scoped monitoring app. The asymmetry IS the control — a
         // leaked monitoring credential must not reach the mailbox, and until
         // now that depended entirely on Cloudflare-side path scoping being
-        // right. /tray/* needs no policy: TrayExposureGuard has already refused
-        // to start if it's mapped on anything but a loopback-only deployment.
+        // right.
         mcpEndpoint.RequireAuthorization(AccessAuth.OwnerPolicy);
         healthEndpoint.RequireAuthorization(AccessAuth.OwnerPolicy);
         upEndpoint.RequireAuthorization(AccessAuth.MonitoringPolicy);
@@ -289,7 +254,7 @@ static async Task RunHttp(string[] args)
         // AccessAuth.VerifySigningKeysAsync.
         await AccessAuth.VerifySigningKeysAsync(app.Services, accessLogger).ConfigureAwait(false);
     }
-    else if (!TrayExposureGuard.IsLoopbackBind(mcpOpts.BindAddress))
+    else if (!HostGuard.IsLoopbackBind(mcpOpts.BindAddress))
     {
         // Not a refusal, deliberately. The container binds 0.0.0.0 and has
         // shipped that way with Cloudflare Access as the sole gate — turning
@@ -341,7 +306,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.Configure<McpOptions>(config.GetSection(McpOptions.SectionName));
     services.Configure<FastmailOptions>(config.GetSection(FastmailOptions.SectionName));
     // EmbedderOptions so HealthService can report whether OCR is enabled (the
-    // MCP doesn't run OCR; it just surfaces the config + backlog to the tray).
+    // MCP doesn't run OCR; it just surfaces the config + backlog on /health).
     services.Configure<EmbedderOptions>(config.GetSection(EmbedderOptions.SectionName));
 
     services.AddSingleton<ConnectionFactory>();
@@ -363,16 +328,6 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<MbsyncSyncFile>();
     services.AddSingleton<HealthService>();
     services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
-    // Tray-facing services (consumed by the REST /tray/* endpoints).
-    // TrayEventRecorder is a BackgroundService — it samples the DB once a
-    // minute and keeps a 30-bucket ring buffer of embeddings/min.
-    services.AddSingleton<LaunchdInspector>();
-    services.AddSingleton<TrayEventRecorder>();
-    services.AddHostedService(sp => sp.GetRequiredService<TrayEventRecorder>());
-    services.AddSingleton<MbsyncErrorTail>();
-    services.AddSingleton<TrayStatusService>();
-    services.AddSingleton<TraySystemService>();
-    services.AddSingleton<TraySearchService>();
 
     services.AddHttpClient<OllamaClient>((sp, client) =>
     {
@@ -383,7 +338,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
 
     // Vision client so HealthService can probe whether OCR is reachable
-    // (surfaced as a tray warn, never a /health 503). Mirrors CliServices.
+    // (surfaced in /health's Ocr section, never as a 503). Mirrors CliServices.
     services.AddMailvecVision(config);
 }
 

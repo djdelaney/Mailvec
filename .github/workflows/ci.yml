@@ -1,4 +1,4 @@
-# CI for Mailvec. Three independent jobs:
+# CI for Mailvec. Two independent jobs:
 #
 #   dotnet — fetch vec0.dylib, build all projects (TreatWarningsAsErrors is on,
 #            so a warning fails here), run the full xUnit suite. No Ollama is
@@ -20,16 +20,9 @@
 #            the job for why a macOS-only suite could not catch a per-RID
 #            native break, and did not for three days.
 #
-#   tray   — XcodeGen + xcodebuild test. This runs the Swift wire-contract
-#            tests, which are the only automated guard on the tray/server
-#            JSON contract: a field renamed on one side otherwise decodes as
-#            silent nil at runtime. Ad-hoc code signing (no cert in the CI
-#            keychain; the identity override mirrors ops/build-tray.sh's
-#            fallback).
-#
 # The version-lockstep check mirrors the guard in ops/release.sh (and
-# ops/build-mcpb.sh's plain build) so drift between Directory.Build.props /
-# manifest.json / project.yml fails a PR, not the next release build.
+# ops/build-mcpb.sh's plain build) so drift between Directory.Build.props and
+# manifest.json fails a PR, not the next release build.
 
 name: CI
 
@@ -75,15 +68,14 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
           restore-keys: nuget-${{ runner.os }}-
 
-      - name: Verify version lockstep (props / manifest / tray)
+      - name: Verify version lockstep (props / manifest)
         run: |
           python3 - <<'PY'
           import json, pathlib, re, sys
           manifest = json.load(open("manifest.json"))["version"]
           props = re.search(r"<Version>(\d+\.\d+\.\d+)</Version>", pathlib.Path("Directory.Build.props").read_text()).group(1)
-          tray = re.search(r'MARKETING_VERSION:\s*"(\d+\.\d+\.\d+)"', pathlib.Path("src/Mailvec.Tray/project.yml").read_text()).group(1)
-          if not (manifest == props == tray):
-              print(f"Version drift: manifest.json={manifest} Directory.Build.props={props} project.yml={tray}. "
+          if manifest != props:
+              print(f"Version drift: manifest.json={manifest} Directory.Build.props={props}. "
                     "Use ops/release.sh to keep them in lockstep.", file=sys.stderr)
               sys.exit(1)
           print(f"Version lockstep OK: {manifest}")
@@ -132,7 +124,7 @@ jobs:
   #
   # Cheap to add: Linux runners bill at 1x against macOS's 10x, and this job is
   # the faster of the two. It does NOT replace the macOS job — macOS is a
-  # supported install target (launchd agents, the tray, the MCPB bundle) and the
+  # supported install target (launchd agents, the MCPB bundle) and the
   # development platform, so dropping it would just relocate the blind spot.
   #
   # Note this still isn't the container: it tests against the SDK image's
@@ -166,40 +158,11 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release
 
-      # Full suite, unfiltered and with nothing skipped for the platform. It
-      # passes as-is: the only test that needed the OS was LaunchdInspector's,
-      # and that was fixed in the code (launchctl's absence now degrades to "no
-      # agents", which is what CLAUDE.md always claimed it did) rather than
-      # papered over with a skip. If a test ever genuinely cannot run here,
-      # gate that test — do not narrow this filter.
+      # Full suite, unfiltered and with nothing skipped for the platform, and
+      # it passes as-is. The one test that ever needed macOS was fixed in the
+      # code rather than papered over with a skip — that's the precedent. If a
+      # test ever genuinely cannot run here, gate that test; do not narrow this
+      # filter.
       - name: Test
         run: dotnet test --configuration Release --no-build --logger "console;verbosity=normal"
 
-  tray:
-    name: Tray build + wire-contract tests
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode project
-        working-directory: src/Mailvec.Tray
-        run: xcodegen generate
-
-      - name: Run Swift tests
-        working-directory: src/Mailvec.Tray
-        # Ad-hoc signing: the runner keychain has no Developer ID, and the
-        # unit tests don't need one — same fallback ops/build-tray.sh uses.
-        # Raw xcodebuild output on purpose: piping through a prettifier makes
-        # the pipeline's exit code the prettifier's, silently masking test
-        # failures unless pipefail is set everywhere.
-        run: |
-          xcodebuild test \
-            -project Mailvec.Tray.xcodeproj \
-            -scheme Mailvec.Tray \
-            -destination "platform=macOS" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY=-

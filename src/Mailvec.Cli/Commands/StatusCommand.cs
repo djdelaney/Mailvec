@@ -37,7 +37,7 @@ internal static class StatusCommand
         var embedder = sp.GetRequiredService<IOptions<EmbedderOptions>>().Value;
         var (total, deleted, embedded, chunkCount) = ReadCounts(conn);
         // OCR backlog via the shared predicate so this line can never disagree
-        // with /health, the tray, or what the embedder actually OCRs.
+        // with /health or what the embedder actually OCRs.
         var ocrCounts = sp.GetRequiredService<MessageRepository>().OcrCounts(embedder.ImageOcrMinBytes);
         var schemaModel = metadata.Get("embedding_model") ?? "(not set)";
         var schemaDim = metadata.Get("embedding_dimensions") ?? "(not set)";

@@ -33,8 +33,8 @@ namespace Mailvec.Mcp.Tools;
 /// EmbeddedResourceBlock to an image block regardless of MIME and rejects
 /// non-image MIMEs as "unsupported image format" — and we no longer persist the
 /// file to a download directory (that made every read leak mail content to disk
-/// and is meaningless in a containerised deployment). The tray's Save button and
-/// `mailvec extract-attachments` remain the explicit save-to-disk paths.
+/// and is meaningless in a containerised deployment).
+/// `mailvec extract-attachments` is the explicit save-to-disk path.
 /// </summary>
 [McpServerToolType]
 public sealed class ViewAttachmentTool(
@@ -168,7 +168,7 @@ public sealed class ViewAttachmentTool(
             throw new McpException(
                 $"{ex.Message} For a PDF, call get_attachment_page_image to view a page as an image; " +
                 "for any document, call get_attachment_text to read its extracted text. " +
-                "The user can save the file itself via the tray's Save button or `mailvec extract-attachments`.");
+                "The user can save the file itself with `mailvec extract-attachments`.");
         }
 
         var isImage = IsImageContentType(att.ContentType);
@@ -296,7 +296,7 @@ public sealed class ViewAttachmentTool(
         if (isImage)
             return
                 $"{header}. This image format can't be decoded for inline display (e.g. HEIC or SVG). " +
-                "The user can save the file via the tray's Save button or `mailvec extract-attachments` and open it themselves.";
+                "The user can save the file with `mailvec extract-attachments` and open it themselves.";
         if (textInlined)
             return inlineTruncated
                 ? $"{header} — first {GetAttachmentTextTool.DefaultMaxChars:N0} of {inlineTotalChars:N0} decoded chars included below; " +

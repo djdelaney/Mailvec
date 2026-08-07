@@ -105,8 +105,8 @@ for svc in "${SERVICES[@]}"; do
     dotnet publish "$REPO_ROOT/$proj" -c Release -o "$out" --nologo -v quiet
     mailvec_sign_publish "$out" "$(apphost_for "$svc")" "com.mailvec.$svc"
 
-    # CLI has no launchd agent — it's invoked on demand from the tray UI
-    # and the user's shell via ~/.local/bin/mailvec. Skip the kickstart.
+    # CLI has no launchd agent — it's invoked on demand from the user's
+    # shell via ~/.local/bin/mailvec. Skip the kickstart.
     if [[ "$svc" == "cli" ]]; then
         continue
     fi

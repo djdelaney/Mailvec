@@ -104,7 +104,7 @@ misconfiguration, not the chunk size.
   Set `Ollama:QueryInstructionPrefix` (env:
   `Ollama__QueryInstructionPrefix=$'Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: '`)
   — it's applied centrally in `VectorSearchService.SearchAsync`, so CLI,
-  MCP, tray, and eval all get it. Leave it empty for symmetric models like
+  MCP, and eval all get it. Leave it empty for symmetric models like
   mxbai. An eval of an instruction-tuned model without it *understates* the
   model badly — treat such numbers as a floor, not a verdict.
 - **Date-filtered eval queries amplify any ranking loss into zeros.** The

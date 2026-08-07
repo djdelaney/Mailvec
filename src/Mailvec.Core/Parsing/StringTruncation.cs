@@ -2,7 +2,7 @@ namespace Mailvec.Core.Parsing;
 
 /// <summary>
 /// The single snippet-truncation helper for every surface (search snippets,
-/// tray previews, thread summaries). Slicing a string at a raw UTF-16 index
+/// previews, thread summaries). Slicing a string at a raw UTF-16 index
 /// (<c>s[..240]</c>) can split a surrogate pair, leaving a lone high
 /// surrogate at the tail; System.Text.Json then emits U+FFFD and the snippet
 /// ends in garbage on any emoji-adjacent boundary. Backing off one unit when

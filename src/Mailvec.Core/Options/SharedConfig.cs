@@ -15,7 +15,7 @@ namespace Mailvec.Core.Options;
 /// manifest's user_config UI. Users had to enter the same values twice and
 /// the two sides could drift silently — most visibly when a Fastmail account
 /// id worked in Claude Desktop but the launchd HTTP MCP returned
-/// `webmailUrl: null` to Claude Code, the tray, and the CLI.
+/// `webmailUrl: null` to Claude Code and the CLI.
 ///
 /// The file is gitignored, owned entirely by <c>ops/install.sh</c>. Users
 /// can also edit it directly; the host won't reload changes mid-run (we
@@ -63,7 +63,7 @@ public static class SharedConfig
     /// <c>appsettings.json</c>. Inserting before that put the shared file
     /// *below* <c>appsettings.json</c>, so a shared <c>Ollama:BaseUrl</c> was
     /// silently shadowed by the binary's own <c>appsettings.json</c> — the
-    /// HTTP MCP (and thus the tray) ignored the shared endpoint while the
+    /// HTTP MCP ignored the shared endpoint while the
     /// embedder appeared to honour it (only because we'd set an env override).
     /// Anchoring to the appsettings source is correct for both
     /// <c>Host.CreateApplicationBuilder</c> and <c>WebApplication.CreateBuilder</c>.

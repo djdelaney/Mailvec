@@ -39,6 +39,6 @@ public sealed class OllamaOptions
     //   "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
     // Empty (the default) embeds the bare query — correct for symmetric
     // models like mxbai-embed-large. Applied in VectorSearchService, so the
-    // same prefix reaches the CLI, MCP, tray, and eval paths identically.
+    // same prefix reaches the CLI, MCP, and eval paths identically.
     public string QueryInstructionPrefix { get; set; } = "";
 }

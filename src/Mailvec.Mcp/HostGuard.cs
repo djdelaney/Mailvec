@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace Mailvec.Mcp;
 
 /// <summary>
@@ -7,27 +9,45 @@ namespace Mailvec.Mcp;
 /// the port — but it does not stop a browser on the same machine. A page on
 /// evil.com can hold a connection, let its DNS TTL expire, re-resolve evil.com
 /// to 127.0.0.1, and then issue requests to :3333 that the browser treats as
-/// same-origin — so page JS can read the response (mail bodies via /tray/email,
-/// IMAP username via /tray/system) and POST to mutating endpoints (/tray/control
-/// stops the launchd agents; /tray/attachment writes files).
+/// same-origin — so page JS can read the response. The MCP endpoint is the
+/// prize: stateless Streamable HTTP takes a bare POST with no handshake, so a
+/// single request runs <c>search_emails</c> or <c>get_email</c> and the page
+/// reads mail bodies straight out of the response.
 ///
 /// We defend by pinning the Host header (and the Origin header, when a browser
 /// sends one) to an allowlist. After a rebind the browser still sends
 /// "Host: evil.com", so the request is rejected before it reaches any handler.
 /// Loopback names are always allowed; an operator fronting the server with a
-/// real hostname (the Cloudflare/container future) adds it via Mcp:AllowedHosts.
-/// Native clients (Claude Code's MCP transport, the SwiftUI tray's URLSession)
-/// connect to 127.0.0.1/localhost and send no Origin, so they are unaffected.
+/// real hostname (the Cloudflare/container deployment) adds it via
+/// Mcp:AllowedHosts. Native clients (Claude Code's MCP transport) connect to
+/// 127.0.0.1/localhost and send no Origin, so they are unaffected.
 /// </summary>
 public static class HostGuard
 {
     /// <summary>
     /// Host-header names that are always allowed, whatever <c>Mcp:AllowedHosts</c>
-    /// says. Internal rather than private so <see cref="TrayExposureGuard"/>
-    /// classifies names against the same list — two copies would drift, and the
-    /// guard's job is to reason about exactly this set.
+    /// says.
     /// </summary>
     internal static readonly string[] Loopback = ["localhost", "127.0.0.1", "::1"];
+
+    /// <summary>
+    /// Whether <c>Mcp:BindAddress</c> is a loopback address — i.e. whether this
+    /// server is reachable from off-host at all. Used by the origin-authentication
+    /// warning in <c>Program.cs</c>.
+    ///
+    /// <para>Unparseable addresses count as non-loopback. Program.cs rejects
+    /// those separately and earlier, so this is only reached defensively — and
+    /// "couldn't tell" must not resolve to "safe" in a check that gates a
+    /// security warning.</para>
+    ///
+    /// <para>Note the bind address is the signal that matters, not whether a
+    /// public hostname is configured: the loopback Host names above are always
+    /// admitted regardless of <c>Mcp:AllowedHosts</c>, so a 0.0.0.0 bind with an
+    /// entirely empty allowlist is still reachable by anything that can route to
+    /// the port — it simply sends <c>Host: localhost</c>.</para>
+    /// </summary>
+    public static bool IsLoopbackBind(string? bindAddress) =>
+        IPAddress.TryParse(bindAddress, out var ip) && IPAddress.IsLoopback(ip);
 
     public static HashSet<string> BuildAllowedHosts(IEnumerable<string>? configured)
     {
