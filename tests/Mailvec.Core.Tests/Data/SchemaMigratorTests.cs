@@ -426,6 +426,16 @@ public class SchemaMigratorTests
             TableHasColumn(connections, "chunks", "attachment_id").ShouldBeTrue();
             TableHasColumn(connections, "messages", "embed_epoch").ShouldBeTrue();     // v7
             TableHasColumn(connections, "sync_state", "folder").ShouldBeTrue();        // v8
+            // Every migration adds its column here. Without that, the only other
+            // check is that schema_version reached latest — which a migration
+            // file that silently no-ops would also satisfy, on the one-way path
+            // that runs unattended at container startup.
+            TableHasColumn(connections, "sync_state", "file_mtime_utc").ShouldBeTrue(); // v9
+            TableHasColumn(connections, "sync_state", "file_size").ShouldBeTrue();      // v9
+            TableHasColumn(connections, "attachments", "ocr_model").ShouldBeTrue();     // v10
+            // Partial index (WHERE ocr_model IS NOT NULL) — a typo in the
+            // predicate still creates *an* index, so assert it by name.
+            IndexExists(connections, "idx_attachments_ocr_model").ShouldBeTrue();       // v10
 
             // The pre-existing row survives and is still searchable via FTS,
             // i.e. the rebuild repopulated the index from messages.
@@ -676,6 +686,20 @@ public class SchemaMigratorTests
     }
 
     private static bool TableHasColumn(TempDatabase db, string table, string column) => TableHasColumn(db.Connections, table, column);
+
+    /// <summary>
+    /// Indexes were entirely unasserted before v10. A partial index is the case
+    /// that needs it: a wrong predicate still produces an index of that name, so
+    /// existence-by-name is the floor, not the whole story.
+    /// </summary>
+    private static bool IndexExists(ConnectionFactory connections, string name)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = $n;";
+        cmd.Parameters.AddWithValue("$n", name);
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) > 0;
+    }
 
     private static bool TableHasColumn(ConnectionFactory connections, string table, string column)
     {

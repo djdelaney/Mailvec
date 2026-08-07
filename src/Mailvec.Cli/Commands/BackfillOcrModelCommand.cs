@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Globalization;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Vision;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Mailvec.Cli.Commands;
@@ -116,7 +117,19 @@ internal static class BackfillOcrModelCommand
         // skipped. One string, so they cannot drift apart again.
         var verdict = AttachmentOcrSql.BackfillableVerdict;
         var inRange = $"{verdict} AND a.extracted_at IS NOT NULL AND datetime(a.extracted_at) < datetime($cutoff)";
-        var predicate = overwrite ? inRange : $"{inRange} AND a.ocr_model IS NULL";
+
+        // OcrProvenance.PreProvider survives even --overwrite. It is not an
+        // engine attribution to be corrected — it records that NO engine looked
+        // at the document (unreadable bytes, or the image gate). Rewriting it to
+        // an engine id would put gate-rejected banner images back in range of
+        // `reocr --engine <that id>`, which would re-attempt them forever: the
+        // exact failure PreProvider exists to prevent, reached through the other
+        // door. --overwrite is for correcting a wrong ENGINE, and the command's
+        // own rule is that a value the pass observed at write time wins —
+        // 'pipeline' is such a value.
+        var predicate = overwrite
+            ? $"{inRange} AND (a.ocr_model IS NULL OR a.ocr_model <> $preProvider)"
+            : $"{inRange} AND a.ocr_model IS NULL";
 
         var cutoffIso = cutoff.ToString("O");
 
@@ -132,6 +145,7 @@ internal static class BackfillOcrModelCommand
                      AND (a.extracted_at IS NULL OR datetime(a.extracted_at) >= datetime($cutoff)));
                 """;
             q.Parameters.AddWithValue("$cutoff", cutoffIso);
+            q.Parameters.AddWithValue("$preProvider", OcrProvenance.PreProvider);
             using var r = q.ExecuteReader();
             r.Read();
             candidates = r.GetInt64(0);
@@ -142,7 +156,7 @@ internal static class BackfillOcrModelCommand
         @out.WriteLine($"Cutoff        : {cutoffIso} (rows strictly before this)");
         @out.WriteLine($"Engine id     : {model}");
         @out.WriteLine($"Would stamp   : {candidates} attachment(s) holding an OCR verdict ('ocr', or an image at 'no_text')");
-        @out.WriteLine($"Already stamped: {alreadyStamped} (left alone{(overwrite ? " — but --overwrite is set, so in-range ones WILL be rewritten" : "")})");
+        @out.WriteLine($"Already stamped: {alreadyStamped} (left alone{(overwrite ? " — but --overwrite is set, so in-range ones are rewritten, except '" + OcrProvenance.PreProvider + "'" : "")})");
         // Counts only the UNSTAMPED ones. Once the passes have been stamping for
         // a while most post-cutoff rows carry an observed value, and reporting
         // those as "left NULL, re-OCR these" would turn a dry run whose whole
@@ -177,6 +191,7 @@ internal static class BackfillOcrModelCommand
                 """;
             upd.Parameters.AddWithValue("$model", model);
             upd.Parameters.AddWithValue("$cutoff", cutoffIso);
+            upd.Parameters.AddWithValue("$preProvider", OcrProvenance.PreProvider);
             updated = upd.ExecuteNonQuery();
         }
         tx.Commit();
