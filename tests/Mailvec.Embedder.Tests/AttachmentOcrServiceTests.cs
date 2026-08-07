@@ -873,6 +873,40 @@ public class AttachmentOcrServiceTests : IDisposable
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
     }
 
+    [Fact]
+    public async Task A_textless_image_backlog_draining_counts_as_OCR_working()
+    {
+        // An images-only deployment, or any backlog dominated by ordinary
+        // photographs, drains perfectly while recovering no text at all. Keying
+        // liveness on "a document gained text" reported that working pass as
+        // "no successful OCR on record yet" -- and the OcrMinTextChars floor
+        // makes it MORE common, since it converts marginal results into no-text
+        // decisions.
+        StageUnsupportedImage("photo1@x", MakePng(300, 300));
+        StageUnsupportedImage("photo2@x", MakePng(300, 300));
+
+        // Every image legitimately textless.
+        await BuildWithMetadata(new FakeVision(true, _ => ""), ImageGate)
+            .ProcessImageBatchAsync(10, default);
+
+        Metadata.Get(OcrHealthKeys.LastDecisionAt).ShouldNotBeNullOrWhiteSpace(
+            "committing a no-text verdict is a full round trip and proves the pass works");
+        // ...but no TEXT was recovered, so the product metric stays untouched.
+        Metadata.Get(OcrHealthKeys.LastSuccessAt).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Recovering_text_records_both_a_decision_and_a_success()
+    {
+        StageUnsupportedImage("real@x", MakePng(300, 300));
+
+        await BuildWithMetadata(new FakeVision(true, _ => "POWELL Pump & Well Drilling"), ImageGate)
+            .ProcessImageBatchAsync(10, default);
+
+        Metadata.Get(OcrHealthKeys.LastDecisionAt).ShouldNotBeNullOrWhiteSpace();
+        Metadata.Get(OcrHealthKeys.LastSuccessAt).ShouldNotBeNullOrWhiteSpace();
+    }
+
     // ---- Minimum text floor ---------------------------------------------------
 
     [Fact]

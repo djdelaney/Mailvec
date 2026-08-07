@@ -33,6 +33,27 @@ public static class OcrHealthKeys
     /// </summary>
     public const string LastSuccessAt = "ocr.last_success_at";
 
+    /// <summary>
+    /// When the pass last reached a committed TERMINAL DECISION about a
+    /// document — text recovered, or a definitive "this has none".
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="LastSuccessAt"/>, and the distinction is
+    /// operational rather than pedantic. "A document gained text" is a product
+    /// metric; it is not the same question as "is the pass working". A
+    /// legitimately textless photo is a full round trip — provider called,
+    /// answer received, terminal state committed, document removed from the
+    /// queue — and it is a SUCCESS by every operational measure.
+    ///
+    /// Keying stall detection on text alone meant an images-only deployment, or
+    /// any backlog dominated by ordinary photographs, could drain perfectly
+    /// while `mailvec status` reported "no successful OCR on record yet" and the
+    /// stalled flag stayed unknown or went true. The OcrMinTextChars floor makes
+    /// that MORE likely, not less, since it converts marginal results into
+    /// no-text decisions.
+    /// </remarks>
+    public const string LastDecisionAt = "ocr.last_decision_at";
+
     /// <summary>When a vision call last failed, for any reason in <see cref="Vision.VisionFailureKind"/>.</summary>
     public const string LastFailureAt = "ocr.last_failure_at";
 
