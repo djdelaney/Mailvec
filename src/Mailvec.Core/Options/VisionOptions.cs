@@ -130,6 +130,36 @@ public sealed class MistralVisionOptions
     {
         if (string.IsNullOrWhiteSpace(Endpoint))
             throw new InvalidOperationException("Vision:Mistral:Endpoint is required when Vision:Provider=mistral.");
+
+        // Parse and require TLS. What crosses this connection is the API key on
+        // every request plus base64 rendered pages of the user's mail — and the
+        // OCR pass submits them UNATTENDED, so nobody is present to notice a
+        // cleartext endpoint. The documents most likely to reach it are the
+        // scanned ones: bank statements, tax forms, medical letters, identity
+        // documents. Only non-empty values were checked before, so a typo'd
+        // http:// endpoint shipped all of that in the clear.
+        if (!Uri.TryCreate(Endpoint, UriKind.Absolute, out var uri))
+            throw new InvalidOperationException(
+                $"Vision:Mistral:Endpoint must be an absolute URL (e.g. https://host), got '{Endpoint}'.");
+
+        // Require an HTTP(S) scheme before anything else. On Unix,
+        // Uri.TryCreate parses a bare path like "/relative/path" as
+        // file:///relative/path — an ABSOLUTE uri whose IsLoopback is true — so
+        // a scheme check alone would wave it past the TLS rule below.
+        if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            && !uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Vision:Mistral:Endpoint must be an absolute http(s) URL, got scheme '{uri.Scheme}' from '{Endpoint}'.");
+        }
+
+        // Loopback is the one exception: a local mock or proxy during
+        // development never leaves the machine. Named explicitly rather than
+        // allowing arbitrary cleartext hosts.
+        if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) && !uri.IsLoopback)
+            throw new InvalidOperationException(
+                $"Vision:Mistral:Endpoint must use https (got '{uri.Scheme}'). The API key and rendered pages of " +
+                "mail travel over this connection, unattended. Only loopback may use http, for local testing.");
         if (string.IsNullOrWhiteSpace(Model))
             throw new InvalidOperationException("Vision:Mistral:Model (the deployment name) is required when Vision:Provider=mistral.");
         if (string.IsNullOrWhiteSpace(ApiKey))

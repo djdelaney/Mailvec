@@ -92,6 +92,63 @@ public class VisionRegistrationTests
         Resolve(new() { ["Vision:Provider"] = "Ollama" }).ShouldBeOfType<OllamaVisionClient>();
     }
 
+    // ---- Endpoint transport security ------------------------------------------
+    //
+    // The API key travels on every request, alongside base64 rendered pages of
+    // the user's mail, and the OCR pass submits them UNATTENDED — nobody is
+    // present to notice a cleartext endpoint. The documents most likely to
+    // reach it are the scanned ones: statements, tax forms, medical letters.
+
+    [Theory]
+    [InlineData("http://mistral.example.com")]
+    [InlineData("http://10.0.0.5:8080")]
+    public void A_cleartext_endpoint_is_refused(string endpoint)
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = endpoint,
+            ["Vision:Mistral:Model"] = "d",
+            ["Vision:Mistral:ApiKey"] = "k",
+        }, requiresCredentials: true));
+
+        ex.Message.ShouldContain("https");
+    }
+
+    [Theory]
+    [InlineData("not-a-url")]
+    [InlineData("/relative/path")]
+    public void A_non_absolute_endpoint_is_refused(string endpoint)
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = endpoint,
+            ["Vision:Mistral:Model"] = "d",
+            ["Vision:Mistral:ApiKey"] = "k",
+        }, requiresCredentials: true));
+
+        // "not-a-url" fails the absolute parse; "/relative/path" parses on Unix
+        // as file:///relative/path (absolute, and IsLoopback true), so it is the
+        // scheme check that has to catch it.
+        ex.Message.ShouldContain("absolute", Case.Insensitive);
+    }
+
+    [Theory]
+    [InlineData("https://mistral.example.com")]
+    [InlineData("http://localhost:8080")]   // loopback exception, for local mocks
+    [InlineData("http://127.0.0.1:8080")]
+    public void Https_and_loopback_are_accepted(string endpoint)
+    {
+        Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = endpoint,
+            ["Vision:Mistral:Model"] = "d",
+            ["Vision:Mistral:ApiKey"] = "k",
+        }, requiresCredentials: true).ShouldBeOfType<MistralOcrClient>();
+    }
+
     private static IVisionClient Resolve(
         Dictionary<string, string?> settings, bool requiresCredentials = false)
     {

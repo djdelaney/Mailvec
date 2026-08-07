@@ -72,7 +72,14 @@ public static class VisionRegistration
                 client.BaseAddress = new Uri(opts.Endpoint.TrimEnd('/') + "/");
                 client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.RequestTimeoutSeconds));
                 MistralOcrClient.ApplyAuth(client, opts);
-            });
+            })
+            // Do not follow redirects. HttpClient strips the standard
+            // Authorization header on a cross-host redirect, but a CUSTOM auth
+            // header — which Vision:Mistral:AuthHeader allows, e.g. `api-key` —
+            // is not stripped, so a redirect to another host would forward the
+            // credential AND the rendered page of mail. Nothing legitimate here
+            // redirects; a 3xx becomes a plain non-success and is classified.
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
             services.AddTransient<IVisionClient>(sp => sp.GetRequiredService<MistralOcrClient>());
             return services;
         }
