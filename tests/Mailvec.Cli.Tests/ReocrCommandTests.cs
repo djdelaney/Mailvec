@@ -2,6 +2,7 @@ using Mailvec.Cli.Commands;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Parsing;
+using Mailvec.Core.Vision;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -358,6 +359,53 @@ public class ReocrCommandTests
             limit: 1, engine: "ollama:old").ShouldBe(0);
 
         TextOf(ctx, wanted).ShouldBeNull("the one matching row should have been found despite --limit 1");
+    }
+
+    [Fact]
+    public void Include_failed_combined_with_an_engine_retries_only_that_engine_s_give_ups()
+    {
+        // This combination is the entire reason MarkAttachmentOcrFailed stamps an
+        // engine at all: "retry everything the old provider gave up on". If the
+        // engine clause ever stopped applying to the failed branch, that
+        // capability would vanish and every other test here would stay green.
+        //
+        // The 'pipeline' row is the control. A document retired BEFORE any
+        // provider call — a corrupt .eml, an unopenable PDF — is not the old
+        // engine's give-up, and no provider switch will change the outcome, so
+        // selecting it would re-attempt it forever at the same failing step.
+        using var ctx = new TestServiceProvider();
+        var engineGaveUp = StageAttachment(ctx, "gaveup@x", "hard.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusFailed, null);
+        var neverReachedEngine = StageAttachment(ctx, "corrupt@x", "broken.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusFailed, null);
+        Stamp(ctx, engineGaveUp, "ollama:qwen2.5vl:7b");
+        Stamp(ctx, neverReachedEngine, OcrProvenance.PreProvider);
+
+        var writer = new StringWriter();
+        ReocrCommand.Execute(ctx.Services, writer, apply: true, includeFailed: true, limit: 0,
+            engine: "ollama:qwen2.5vl:7b").ShouldBe(0);
+
+        StatusOf(ctx, engineGaveUp).ShouldBe(AttachmentTextExtractor.StatusNoText,
+            "the old engine's give-up should be re-queued");
+        StatusOf(ctx, neverReachedEngine).ShouldBe(AttachmentTextExtractor.StatusFailed,
+            "a pre-provider failure is not an engine give-up");
+    }
+
+    [Fact]
+    public void An_engine_selector_alone_never_reaches_failed_rows()
+    {
+        // --include-failed stays load-bearing. Selecting by engine must not
+        // quietly widen the status set: 'failed' is opt-in because it also covers
+        // extraction failures a new provider won't fix.
+        using var ctx = new TestServiceProvider();
+        var failed = StageAttachment(ctx, "gaveup@x", "hard.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusFailed, null);
+        Stamp(ctx, failed, "ollama:qwen2.5vl:7b");
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false,
+            limit: 0, engine: "ollama:qwen2.5vl:7b").ShouldBe(0);
+
+        StatusOf(ctx, failed).ShouldBe(AttachmentTextExtractor.StatusFailed);
     }
 
     private static void Stamp(TestServiceProvider ctx, long attachmentId, string model)

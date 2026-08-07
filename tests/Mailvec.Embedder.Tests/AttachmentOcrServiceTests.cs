@@ -1138,12 +1138,58 @@ public class AttachmentOcrServiceTests : IDisposable
         ModelOf(id).ShouldBe(vision.ModelId);
     }
 
-    private string? ModelOf(long messageId)
+    [Fact]
+    public async Task An_undecodable_image_is_not_attributed_to_the_vision_engine()
+    {
+        // ImageRenderer.TryNormalize returns null (HEIC without a codec, or a
+        // mislabeled binary). The provider is never called.
+        long id = StageUnsupportedImage("notanimage@x", "definitely not image bytes"u8.ToArray());
+        var vision = new FakeVision(true, _ => "SHOULD NEVER BE CALLED");
+
+        await Build(vision, ImageGate).ProcessImageBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        ModelOf(id).ShouldBe(OcrProvenance.PreProvider);
+    }
+
+    [Fact]
+    public async Task An_image_rejected_by_the_dimension_gate_is_not_attributed_to_the_engine()
+    {
+        // The gate skips icons/avatars and banner strips as non-content, before
+        // any provider call. This is the site the review's own location list
+        // omitted, and it is the only pre-provider path that writes through
+        // MarkAttachmentImageNoText rather than MarkAttachmentOcrFailed — so a
+        // regression here would be invisible to the other tests.
+        long id = StageUnsupportedImage("tinyicon@x", MakePng(8, 8));
+        var vision = new FakeVision(true, _ => "SHOULD NEVER BE CALLED");
+
+        await Build(vision, ImageGate).ProcessImageBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        ModelOf(id).ShouldBe(OcrProvenance.PreProvider);
+    }
+
+    [Fact]
+    public async Task An_unreadable_eml_is_not_attributed_to_the_vision_engine()
+    {
+        // Deterministic read failure: a stale DB row whose part_index doesn't
+        // exist in the .eml, so the Maildir read throws before any render.
+        long id = StageNoTextPdf("staleidx@x", MinimalPdf(1), partIndex: 5);
+        var vision = new FakeVision(true, _ => "SHOULD NEVER BE CALLED");
+
+        await Build(vision).ProcessBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        ModelOf(id, partIndex: 5).ShouldBe(OcrProvenance.PreProvider);
+    }
+
+    private string? ModelOf(long messageId, int partIndex = 0)
     {
         using var conn = _connections.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ocr_model FROM attachments WHERE message_id = $id AND part_index = 0;";
+        cmd.CommandText = "SELECT ocr_model FROM attachments WHERE message_id = $id AND part_index = $p;";
         cmd.Parameters.AddWithValue("$id", messageId);
+        cmd.Parameters.AddWithValue("$p", partIndex);
         return cmd.ExecuteScalar() as string;
     }
 
