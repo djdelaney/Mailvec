@@ -83,6 +83,54 @@ public class MistralOcrClientTests
         (await client.OcrAsync([1])).ShouldBe("Short and legitimate.");
     }
 
+    // ---- Response validation --------------------------------------------------
+    //
+    // A 2xx with no pages used to become an empty transcription, which the
+    // caller commits as a TERMINAL state -- status='ocr' with no text for a
+    // PDF, 'no_text' for an image. The attachment then leaves the candidate set
+    // with neither text recovered nor any failure recorded, so a gateway
+    // returning an unexpected 2xx, or a provider schema change, could drain the
+    // entire queue silently.
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"pages\":null}")]
+    [InlineData("{\"pages\":[]}")]
+    public async Task A_2xx_without_pages_is_a_protocol_failure_not_blank_text(string body)
+    {
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        });
+
+        var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
+        // Transient, so the document stays selectable and retries.
+        ex.Kind.ShouldBe(VisionFailureKind.Transient);
+    }
+
+    [Fact]
+    public async Task A_2xx_carrying_unparseable_content_is_a_protocol_failure()
+    {
+        // A gateway interstitial or HTML error page served with 200.
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<html>hello</html>", Encoding.UTF8, "application/json"),
+        });
+
+        (await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]))).Kind
+            .ShouldBe(VisionFailureKind.Transient);
+    }
+
+    [Fact]
+    public async Task An_empty_markdown_inside_a_valid_page_is_still_legitimate_blank_text()
+    {
+        // The real textless-photo case must keep working: a page IS present,
+        // it just has nothing on it.
+        var client = ClientWith(_ => Ok(new { pages = new[] { new { index = 0, markdown = "" } } }));
+
+        (await client.OcrImageAsync([1])).ShouldBe(string.Empty);
+    }
+
     // ---- Failure classification ----------------------------------------------
     //
     // Each of these decides whether a perfectly good document survives. See
