@@ -47,6 +47,31 @@ public sealed class HealthService(
     private static readonly string BinaryVersion =
         typeof(HealthService).Assembly.GetName().Version?.ToString(3) ?? "unknown";
 
+    private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    /// <summary>
+    /// Whether OCR looks stalled: work is waiting and nothing has committed
+    /// within <see cref="OcrHealthKeys.StalledAfter"/>.
+    /// </summary>
+    /// <remarks>
+    /// Three deliberate non-answers, each of which would otherwise be a false
+    /// alarm — and a permanently-lit indicator is one nobody reads:
+    /// OCR disabled (nothing should be happening), nothing pending (a drained
+    /// queue is the healthy steady state, and the whole point of this signal is
+    /// that idle must not read as broken), and no success on record at all
+    /// (a fresh deployment that simply hasn't OCR'd anything yet — unknown, not
+    /// stale, the same rule the service heartbeats follow).
+    /// </remarks>
+    private static bool? IsOcrStalled(string? lastSuccessAtRaw, long pending, bool enabled)
+    {
+        if (!enabled || pending == 0) return false;
+        if (!DateTimeOffset.TryParse(
+                lastSuccessAtRaw, CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind, out var lastSuccess))
+            return null;
+        return DateTimeOffset.UtcNow - lastSuccess > OcrHealthKeys.StalledAfter;
+    }
+
     public async Task<HealthReport> CheckAsync(CancellationToken ct = default)
     {
         var (total, deleted, embedded, chunks, lastIndexedAt) = ReadCounts();
@@ -140,7 +165,19 @@ public sealed class HealthService(
             Pending: pdfPending + imagePending,
             Recovered: counts.Recovered,
             ImagePending: imagePending,
-            ImageRecovered: counts.ImageRecovered);
+            ImageRecovered: counts.ImageRecovered,
+            LastSuccessAt: metadata.Get(OcrHealthKeys.LastSuccessAt),
+            LastFailureAt: metadata.Get(OcrHealthKeys.LastFailureAt),
+            ConsecutiveFailures: int.TryParse(
+                metadata.Get(OcrHealthKeys.ConsecutiveFailures),
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out var ocrFails) ? ocrFails : 0,
+            LastFailureKind: NullIfEmpty(metadata.Get(OcrHealthKeys.LastFailureKind)),
+            Retired: counts.Retired,
+            PagesSent: long.TryParse(
+                metadata.Get(OcrHealthKeys.PagesSentTotal),
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out var ocrPages) ? ocrPages : 0,
+            Stalled: IsOcrStalled(
+                metadata.Get(OcrHealthKeys.LastSuccessAt), pdfPending + imagePending, ocrEnabled));
 
         var live = Math.Max(total - deleted, 0);
         var coverage = live == 0 ? 0d : (double)embedded / live;
@@ -354,7 +391,26 @@ public sealed record UpReport(
     UpOllama Ollama,
     UpEmbedder Embedder,
     UpMail Mail,
-    IReadOnlyList<UpServiceLiveness> Services);
+    IReadOnlyList<UpServiceLiveness> Services,
+    // ADDED, never renamed: existing JSONata paths are untouched, so no
+    // monitor breaks. See UpOcr.
+    UpOcr? Ocr = null);
+
+/// <summary>
+/// Whether OCR has stopped producing text while work is waiting — not when it
+/// last succeeded, and not how many pages it has sent.
+/// </summary>
+/// <remarks>
+/// A boolean for the same reason <see cref="UpMail"/> withholds its timestamp:
+/// a last-success time polled every minute builds a log of when the user's mail
+/// is active. The boolean answers the monitoring question without that.
+///
+/// Null when the state is genuinely unknown (OCR has never run, so there is no
+/// success on record). JSONata resolves null to nothing, which leaves a monitor
+/// unmatched rather than falsely red on a fresh deployment — the same
+/// "unknown is not stale" rule the service heartbeats follow.
+/// </remarks>
+public sealed record UpOcr(bool Stalled);
 
 /// <summary>Whether the schema's embedding model disagrees with config — not which model.</summary>
 public sealed record UpEmbeddings(bool ModelMismatch);
@@ -436,7 +492,21 @@ public sealed record OcrHealth(
     long Pending,
     long Recovered,
     long ImagePending,
-    long ImageRecovered);
+    long ImageRecovered,
+    // Outcome, as distinct from liveness (ModelAvailable) and progress
+    // (Pending). Without these, a drained backlog and a pass that silently
+    // fails everything are indistinguishable — see OcrHealthKeys.
+    string? LastSuccessAt = null,
+    string? LastFailureAt = null,
+    int ConsecutiveFailures = 0,
+    string? LastFailureKind = null,
+    long Retired = 0,
+    long PagesSent = 0,
+    // True when work is pending and nothing has committed within
+    // OcrHealthKeys.StalledAfter. Null when unknowable (no record yet), which
+    // is NOT the same as false — same "unknown is not stale" rule the service
+    // heartbeats follow, so a fresh deployment doesn't show a false red.
+    bool? Stalled = null);
 
 /// <summary>
 /// Dynamic "is the embedder making progress" signal — distinct from the

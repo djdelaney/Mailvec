@@ -1010,6 +1010,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             WHERE {OcrIdentityMatch} AND extraction_status = $unsupported;
             """;
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         BindOcrIdentity(cmd, candidate);
         return cmd.ExecuteNonQuery() == 0 ? OcrWriteOutcome.Stale : OcrWriteOutcome.Committed;
@@ -1184,11 +1185,22 @@ public sealed class MessageRepository(ConnectionFactory connections)
                    AND m.deleted_at IS NULL),
               (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
                  WHERE a.extraction_status = $ocr AND COALESCE(({ImageOcrMatch}), 0)
+                   AND m.deleted_at IS NULL),
+              -- Retired: documents nothing will retry. Counted here because it
+              -- was previously invisible everywhere — status, /health and doctor
+              -- all reported pending and recovered only — and DocumentFatal now
+              -- retires on the FIRST provider refusal rather than after five
+              -- attempts, so a systematic fault can retire many documents fast
+              -- and permanently with no other signal.
+              (SELECT COUNT(*) FROM attachments a JOIN messages m ON m.id = a.message_id
+                 WHERE a.extraction_status = $failed
+                   AND ({PdfOcrMatch} OR COALESCE(({ImageOcrMatch}), 0))
                    AND m.deleted_at IS NULL)
             """;
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
+        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
         cmd.Parameters.AddWithValue("$minBytes", imageMinBytes);
         using var reader = cmd.ExecuteReader();
         reader.Read();
@@ -1196,7 +1208,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
             PdfPending: reader.GetInt64(0),
             ImagePending: reader.GetInt64(1),
             PdfRecovered: reader.GetInt64(2),
-            ImageRecovered: reader.GetInt64(3));
+            ImageRecovered: reader.GetInt64(3),
+            Retired: reader.GetInt64(4));
     }
 
     /// <summary>
@@ -1688,7 +1701,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
 public sealed record OcrResetCandidate(
     long AttachmentId, long MessageId, string CurrentStatus, string TargetStatus);
 
-public sealed record OcrStageCounts(long PdfPending, long ImagePending, long PdfRecovered, long ImageRecovered)
+public sealed record OcrStageCounts(
+    long PdfPending, long ImagePending, long PdfRecovered, long ImageRecovered, long Retired = 0)
 {
     public long Pending => PdfPending + ImagePending;
     public long Recovered => PdfRecovered + ImageRecovered;

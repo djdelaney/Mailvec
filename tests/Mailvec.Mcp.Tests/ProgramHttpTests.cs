@@ -65,8 +65,16 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         // An exact allowlist, not a count: the rule for this body is "booleans
         // yes, values no", and a new top-level block should have to be argued
         // for here rather than arriving with a feature.
+        // `ocr` was argued for and admitted: a single boolean (`stalled`),
+        // matching this body's "booleans yes, values no" rule. It carries no
+        // last-success timestamp — deliberately, for the same reason
+        // mail.syncStale withholds one, since a time polled every minute builds
+        // a log of when the user's mail is active — and no page, pending or
+        // retired counts, which would disclose corpus activity and spend.
+        // It exists so a monitor can alert on OCR silently ceasing to produce
+        // text, which no other field on this endpoint can express.
         doc.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n)
-            .ShouldBe(["embedder", "embeddings", "mail", "ollama", "services", "status", "version"]);
+            .ShouldBe(["embedder", "embeddings", "mail", "ocr", "ollama", "services", "status", "version"]);
 
         // Belt and braces on the specific disclosures that motivated the split
         // — a renamed field would slip past a property-name check.
@@ -78,6 +86,9 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         body.ShouldNotContain("chunkCount");     // corpus size
         body.ShouldNotContain("lastFailureKind"); // embedder error detail
         body.ShouldNotContain("lastBeatAt");     // per-service timestamps
+        body.ShouldNotContain("lastSuccessAt");  // OCR activity timing (see mail.syncStale)
+        body.ShouldNotContain("pagesSent");      // OCR volume / spend
+        body.ShouldNotContain("retired");        // count of documents given up on
         body.ShouldNotContain("lastSyncAt");     // when the user's mail arrives
     }
 

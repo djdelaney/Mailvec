@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Globalization;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.DependencyInjection;
@@ -50,13 +51,11 @@ internal static class StatusCommand
         @out.WriteLine();
         @out.WriteLine($"Messages:    {total:N0} total, {deleted:N0} deleted");
         @out.WriteLine($"Embeddings:  {embedded:N0} / {Math.Max(total - deleted, 0):N0} ({Coverage(embedded, total - deleted)})  [{chunkCount:N0} chunks]");
-        if (ocrCounts.Pending > 0)
-        {
-            var parts = new List<string>(2);
-            if (ocrCounts.PdfPending > 0) parts.Add($"{ocrCounts.PdfPending:N0} scanned PDF(s)");
-            if (ocrCounts.ImagePending > 0) parts.Add($"{ocrCounts.ImagePending:N0} image(s)");
-            @out.WriteLine($"OCR pending: {string.Join(" + ", parts)} awaiting text recovery");
-        }
+        // ALWAYS printed, even at zero. Printing only when a backlog exists made
+        // silence mean two opposite things — "all caught up" and "OCR has never
+        // run" — which is exactly the question an operator has on a quiet corpus
+        // and could not answer without waiting for new mail to arrive.
+        WriteOcrLines(@out, ocrCounts, metadata, embedder);
         @out.WriteLine();
         @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={ollama.EmbeddingModel} ({ollama.EmbeddingDimensions}d)");
         if (schemaModel != "(not set)" && schemaModel != ollama.EmbeddingModel)
@@ -79,6 +78,67 @@ internal static class StatusCommand
         using var reader = cmd.ExecuteReader();
         reader.Read();
         return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
+    }
+
+    /// <summary>
+    /// The OCR stage in three lines: backlog, last outcome, and anything
+    /// retired. Deliberately unconditional — see the call site.
+    /// </summary>
+    private static void WriteOcrLines(
+        TextWriter @out, OcrStageCounts counts, MetadataRepository metadata, EmbedderOptions embedder)
+    {
+        if (!embedder.OcrEnabled && !embedder.ImageOcrEnabled)
+        {
+            @out.WriteLine("OCR:         disabled (Embedder:OcrEnabled and :ImageOcrEnabled are both false)");
+            return;
+        }
+
+        var parts = new List<string>(2);
+        if (counts.PdfPending > 0) parts.Add($"{counts.PdfPending:N0} scanned PDF(s)");
+        if (counts.ImagePending > 0) parts.Add($"{counts.ImagePending:N0} image(s)");
+        @out.WriteLine(counts.Pending > 0
+            ? $"OCR pending: {string.Join(" + ", parts)} awaiting text recovery"
+            : "OCR pending: none — backlog drained");
+
+        // The outcome line. "Last success" is the only signal that separates a
+        // drained queue from a pass that is silently failing everything; the
+        // backlog count cannot, because both read zero-and-not-moving.
+        var lastSuccess = metadata.Get(OcrHealthKeys.LastSuccessAt);
+        var lastFailure = metadata.Get(OcrHealthKeys.LastFailureAt);
+        var failKind = metadata.Get(OcrHealthKeys.LastFailureKind);
+        var pages = metadata.Get(OcrHealthKeys.PagesSentTotal);
+
+        var outcome = string.IsNullOrWhiteSpace(lastSuccess)
+            // Unknown, not broken — a fresh deployment has simply never OCR'd.
+            ? "no successful OCR on record yet"
+            : $"last success {Ago(lastSuccess)}";
+        if (!string.IsNullOrWhiteSpace(lastFailure))
+        {
+            var kind = string.IsNullOrWhiteSpace(failKind) ? "failure" : failKind;
+            outcome += $"; last failure {Ago(lastFailure)} ({kind})";
+        }
+        if (!string.IsNullOrWhiteSpace(pages) && pages != "0")
+            outcome += $"; {pages} page(s) sent";
+        @out.WriteLine($"OCR status:  {outcome}");
+
+        // Retired documents are permanent — nothing re-selects a 'failed' row —
+        // so they get their own line rather than hiding inside a total.
+        if (counts.Retired > 0)
+            @out.WriteLine($"OCR failed:  {counts.Retired:N0} document(s) given up on (not retried; see `mailvec reocr --include-failed`)");
+    }
+
+    /// <summary>Render an ISO timestamp as a coarse age, which is what a human reads for.</summary>
+    private static string Ago(string? iso)
+    {
+        if (!DateTimeOffset.TryParse(
+                iso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var when))
+            return "at an unreadable timestamp";
+        var d = DateTimeOffset.UtcNow - when;
+        if (d < TimeSpan.Zero) return "just now";
+        if (d < TimeSpan.FromMinutes(1)) return $"{(int)d.TotalSeconds}s ago";
+        if (d < TimeSpan.FromHours(1)) return $"{(int)d.TotalMinutes}m ago";
+        if (d < TimeSpan.FromDays(1)) return $"{(int)d.TotalHours}h ago";
+        return $"{(int)d.TotalDays}d ago";
     }
 
     private static string Coverage(long covered, long total) =>

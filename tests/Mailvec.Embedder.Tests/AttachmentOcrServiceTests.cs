@@ -58,6 +58,17 @@ public class AttachmentOcrServiceTests : IDisposable
             Options.Create(opts ?? new EmbedderOptions()),
             NullLogger<AttachmentOcrService>.Instance);
 
+    /// <summary>Same service, with the batch-outcome record wired in.</summary>
+    private AttachmentOcrService BuildWithMetadata(IVisionClient vision, EmbedderOptions? opts = null) =>
+        new(_messages,
+            new MaildirAttachmentReader(Options.Create(new IngestOptions { MaildirRoot = _maildirRoot })),
+            vision,
+            Options.Create(opts ?? new EmbedderOptions()),
+            NullLogger<AttachmentOcrService>.Instance,
+            Metadata);
+
+    private MetadataRepository Metadata => field ??= new MetadataRepository(_connections);
+
     // Image tests use a tiny byte gate so a small generated PNG is still selected
     // by the SQL candidate query (the default gate is 50KB).
     private static EmbedderOptions ImageGate => new() { ImageOcrMinBytes = 1 };
@@ -812,6 +823,105 @@ public class AttachmentOcrServiceTests : IDisposable
         }
 
         StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported); // still selectable
+    }
+
+    // ---- Batch-outcome record -------------------------------------------------
+    //
+    // The signal that separates "backlog drained" from "silently failing
+    // everything". Before it, OCR had only provider reachability (liveness) and
+    // a pending count (progress) — and a pending count of zero meant both
+    // healthy-and-idle AND broken-and-skipping, which is precisely the question
+    // an operator has on a quiet corpus.
+
+    [Fact]
+    public async Task A_committed_OCR_records_a_success_timestamp()
+    {
+        StageNoTextPdf("scan@x", MinimalPdf(1));
+
+        (await BuildWithMetadata(new FakeVision(true, _ => "RECOVERED")).ProcessBatchAsync(4, default)).ShouldBe(1);
+
+        Metadata.Get(OcrHealthKeys.LastSuccessAt).ShouldNotBeNullOrWhiteSpace();
+        Metadata.Get(OcrHealthKeys.ConsecutiveFailures).ShouldBe("0");
+    }
+
+    [Fact]
+    public async Task An_idle_cycle_records_no_outcome_at_all()
+    {
+        // THE case the record exists for: nothing pending must not write a
+        // failure, or a drained queue reports as broken -- reintroducing the
+        // very ambiguity being removed.
+        var svc = BuildWithMetadata(new FakeVision(true, _ => "unused"));
+
+        (await svc.ProcessBatchAsync(4, default)).ShouldBe(0);
+
+        Metadata.Get(OcrHealthKeys.LastFailureAt).ShouldBeNull();
+        Metadata.Get(OcrHealthKeys.LastSuccessAt).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_failing_cycle_records_the_failure_KIND()
+    {
+        // The kind is what makes it actionable: AuthFailed means fix the key,
+        // Backpressure means it recovers itself, DocumentFatal means one
+        // document was refused and the pass is otherwise healthy.
+        StageNoTextPdf("scan@x", MinimalPdf(1));
+
+        await BuildWithMetadata(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new VisionException(VisionFailureKind.AuthOrConfig, "401");
+        })).ProcessBatchAsync(4, default);
+
+        Metadata.Get(OcrHealthKeys.LastFailureKind).ShouldBe(nameof(VisionFailureKind.AuthOrConfig));
+        Metadata.Get(OcrHealthKeys.LastFailureAt).ShouldNotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task A_success_clears_the_consecutive_failure_count()
+    {
+        StageNoTextPdf("scan@x", MinimalPdf(1));
+        var fail = true;
+        var svc = BuildWithMetadata(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            return fail ? throw new TaskCanceledException("boom") : "RECOVERED";
+        }));
+
+        await svc.ProcessBatchAsync(4, default);
+        Metadata.Get(OcrHealthKeys.ConsecutiveFailures).ShouldBe("1");
+
+        fail = false;
+        await svc.ProcessBatchAsync(4, default);
+        Metadata.Get(OcrHealthKeys.ConsecutiveFailures).ShouldBe("0");
+    }
+
+    [Fact]
+    public async Task Pages_sent_is_counted_as_a_cost_gauge()
+    {
+        // A hosted provider bills per page, so without this an unintended
+        // re-OCR or a retry loop is invisible until the invoice arrives.
+        StageNoTextPdf("scan@x", MinimalPdf(3));
+
+        await BuildWithMetadata(new FakeVision(true, _ => "PAGE")).ProcessBatchAsync(4, default);
+
+        Metadata.Get(OcrHealthKeys.PagesSentTotal).ShouldBe("3");
+    }
+
+    [Fact]
+    public async Task A_provider_refusal_counts_toward_the_retired_total()
+    {
+        // DocumentFatal retires on the FIRST refusal, so a systematic fault can
+        // burn through documents quickly and permanently. This aggregate is the
+        // only thing that would show it.
+        StageNoTextPdf("toobig@x", MinimalPdf(1));
+
+        await BuildWithMetadata(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new VisionException(VisionFailureKind.DocumentFatal, "413");
+        })).ProcessBatchAsync(4, default);
+
+        Metadata.Get(OcrHealthKeys.RetiredTotal).ShouldBe("1");
     }
 
     private sealed class FakeVision(bool available, Func<byte[], string> ocr) : IVisionClient
