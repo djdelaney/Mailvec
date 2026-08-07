@@ -139,10 +139,15 @@ MBSYNC_BEAT_SECONDS=60
 # bug described below.
 HEARTBEAT="$(dirname "${MBSYNC_MAILDIR}")/.mailvec-mbsync-heartbeat"
 beat() {
-    printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_BEAT_SECONDS}" \
-        > "${HEARTBEAT}.tmp" 2>/dev/null \
-        && mv -f "${HEARTBEAT}.tmp" "${HEARTBEAT}" 2>/dev/null \
-        || true
+    # Nonfatal, but no longer silent. A read-only or full Maildir mount used to
+    # fail here with every error sent to /dev/null, so the beat simply stopped
+    # appearing and the sidecar read as dead while running perfectly. Volume
+    # is bounded by the beat cadence itself.
+    if ! { printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_BEAT_SECONDS}" \
+           > "${HEARTBEAT}.tmp" && mv -f "${HEARTBEAT}.tmp" "${HEARTBEAT}"; }; then
+        echo "mbsync: could not write heartbeat ${HEARTBEAT} (liveness will read as stale)" >&2
+        rm -f "${HEARTBEAT}.tmp" 2>/dev/null || true
+    fi
 }
 
 # Last-SUCCESSFUL-sync marker, read by MbsyncSyncFile. A third signal, and
@@ -165,11 +170,41 @@ beat() {
 # get genuinely is a multiple of how often a sync is attempted.
 SYNCFILE="$(dirname "${MBSYNC_MAILDIR}")/.mailvec-mbsync-sync"
 sync_ok() {
-    printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_INTERVAL_SECONDS}" \
-        > "${SYNCFILE}.tmp" 2>/dev/null \
-        && mv -f "${SYNCFILE}.tmp" "${SYNCFILE}" 2>/dev/null \
-        || true
+    # Same treatment, and the confusion here was worse: a failed write meant
+    # mbsync SUCCEEDED while /health eventually reported sync stale, with
+    # nothing in this log to explain the contradiction.
+    if ! { printf '%s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${MBSYNC_INTERVAL_SECONDS}" \
+           > "${SYNCFILE}.tmp" && mv -f "${SYNCFILE}.tmp" "${SYNCFILE}"; }; then
+        echo "mbsync: sync succeeded but could not write ${SYNCFILE} (health will report sync stale)" >&2
+        rm -f "${SYNCFILE}.tmp" 2>/dev/null || true
+    fi
 }
+
+# --- finding 3: publish the CURRENT cadence without waiting for a success ---
+#
+# The interval line lives in the success marker, written only on exit 0, so
+# after a cadence change the marker kept declaring the OLD interval until the
+# next successful sync. MbsyncSyncFile judges staleness at 4x whatever that line
+# says (min 30 min), so if every sync failed after the change, alerting used the
+# old window -- for a 600->60 change, 40 minutes instead of 30. Precisely when
+# the alert matters most.
+#
+# Rewrite line 2 at startup while preserving line 1: the declared cadence
+# becomes current immediately, and the last-SUCCESS timestamp is untouched
+# (republishing it would fabricate a success that never happened). No marker
+# yet means nothing to correct -- absent is reported as known=false, which is
+# the honest reading for a deployment that has never synced.
+republish_cadence() {
+    [ -f "${SYNCFILE}" ] || return 0
+    last="$(head -n 1 "${SYNCFILE}" 2>/dev/null)" || return 0
+    [ -n "${last}" ] || return 0
+    if ! { printf '%s\n%s\n' "${last}" "${MBSYNC_INTERVAL_SECONDS}" \
+           > "${SYNCFILE}.tmp" && mv -f "${SYNCFILE}.tmp" "${SYNCFILE}"; }; then
+        echo "mbsync: could not republish sync cadence into ${SYNCFILE}" >&2
+        rm -f "${SYNCFILE}.tmp" 2>/dev/null || true
+    fi
+}
+republish_cadence
 
 child=
 beater=
