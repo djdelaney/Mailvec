@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.Versioning;
 using System.Text;
 using Mailvec.Core.Attachments;
@@ -30,7 +31,11 @@ public sealed class AttachmentOcrService(
     MaildirAttachmentReader reader,
     IVisionClient vision,
     IOptions<EmbedderOptions> options,
-    ILogger<AttachmentOcrService> logger)
+    ILogger<AttachmentOcrService> logger,
+    // Batch-outcome record. Optional so the existing tests (which build this
+    // service by hand) keep compiling; null simply means the outcome keys go
+    // unwritten, which reads downstream as "unknown" rather than "broken".
+    MetadataRepository? metadata = null)
 {
     private readonly int _maxPages = Math.Max(1, options.Value.OcrMaxPagesPerPdf);
     private readonly EmbedderOptions _opts = options.Value;
@@ -116,6 +121,11 @@ public sealed class AttachmentOcrService(
     // folder or a partially mounted archive.
     private readonly Dictionary<OcrFailureKey, long> _readBackoffUntilCycle = new();
     private long _cycle;
+
+    // The most recent classified failure, so the end-of-cycle outcome record can
+    // name a CAUSE rather than just "something failed". Unclassified exceptions
+    // stay Transient, matching how the batch loop treats them.
+    private VisionFailureKind _lastFailureKind = VisionFailureKind.Transient;
 
     // Resume points into the id-ordered candidate set, one per pass — the
     // liveness guarantee. Each cycle takes the page strictly after the cursor
@@ -252,6 +262,68 @@ public sealed class AttachmentOcrService(
         }
     }
 
+    /// <summary>
+    /// Record a COMMITTED text write. The distinction is the whole point: a
+    /// stale write-back persisted nothing, so counting it would report progress
+    /// that did not happen — the same reason `done` is only incremented on
+    /// OcrWriteOutcome.Committed.
+    /// </summary>
+    private void RecordOcrSuccess()
+    {
+        if (metadata is null) return;
+        try
+        {
+            metadata.Set(OcrHealthKeys.LastSuccessAt, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            metadata.Set(OcrHealthKeys.ConsecutiveFailures, "0");
+            metadata.Set(OcrHealthKeys.LastFailureKind, "");
+        }
+        catch (Exception ex)
+        {
+            // Best-effort telemetry must never take down the pass that produced it.
+            logger.LogWarning(ex, "Failed to record OCR success marker.");
+        }
+    }
+
+    /// <summary>
+    /// Record a failed vision call, carrying its <see cref="VisionFailureKind"/>
+    /// — the field that turns "OCR isn't working" into something actionable:
+    /// AuthFailed means fix the key, Backpressure means it will recover itself,
+    /// DocumentFatal means one document was refused and the pass is otherwise
+    /// healthy.
+    /// </summary>
+    private void RecordOcrFailure(VisionFailureKind kind)
+    {
+        if (metadata is null) return;
+        try
+        {
+            var prior = metadata.Get(OcrHealthKeys.ConsecutiveFailures);
+            var next = int.TryParse(prior, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n + 1 : 1;
+            metadata.Set(OcrHealthKeys.ConsecutiveFailures, next.ToString(CultureInfo.InvariantCulture));
+            metadata.Set(OcrHealthKeys.LastFailureAt, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            metadata.Set(OcrHealthKeys.LastFailureKind, kind.ToString());
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to record OCR failure marker.");
+        }
+    }
+
+    /// <summary>Bump a cumulative counter (retirements, pages sent). Best-effort.</summary>
+    private void Increment(string key, int by)
+    {
+        if (metadata is null || by <= 0) return;
+        try
+        {
+            var prior = metadata.Get(key);
+            var next = (long.TryParse(prior, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : 0) + by;
+            metadata.Set(key, next.ToString(CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to increment OCR counter {Key}.", key);
+        }
+    }
+
     /// <summary>What the batch loop should do with a classified vision failure.</summary>
     private enum VisionFailureAction
     {
@@ -285,7 +357,13 @@ public sealed class AttachmentOcrService(
     /// </summary>
     private VisionFailureAction ClassifyVisionFailure(Exception ex, OcrCandidate c, string pass)
     {
-        if (ex is not VisionException vision) return VisionFailureAction.CountAsTransient;
+        if (ex is not VisionException vision)
+        {
+            _lastFailureKind = VisionFailureKind.Transient;
+            return VisionFailureAction.CountAsTransient;
+        }
+
+        _lastFailureKind = vision.Kind;
 
         switch (vision.Kind)
         {
@@ -314,6 +392,7 @@ public sealed class AttachmentOcrService(
                     "{Pass}: provider refused attachment {AttachmentId} as unprocessable; marking failed.",
                     pass, c.AttachmentId);
                 messages.MarkAttachmentOcrFailed(c);
+                Increment(OcrHealthKeys.RetiredTotal, 1);
                 return VisionFailureAction.SkipDocument;
 
             default:
@@ -379,6 +458,7 @@ public sealed class AttachmentOcrService(
                 }
                 else
                 {
+                    Increment(OcrHealthKeys.RetiredTotal, 1);
                     logger.LogWarning(
                         "{Pass}: attachment {AttachmentId} failed {Max}x in cycles where other documents OCR'd fine; " +
                         "marked failed to unblock the queue.",
@@ -420,6 +500,15 @@ public sealed class AttachmentOcrService(
         int done = 0;
         int visionSuccesses = 0;
         int consecutiveFailures = 0;
+        int pagesSent = 0;
+        // Any vision failure this cycle, INCLUDING the kinds that abort the
+        // batch. failedThisCycle alone is not enough: AuthOrConfig and
+        // Backpressure break out before a candidate is added to it, so keying
+        // the outcome record off that list would leave a completely broken
+        // provider (bad key) writing no failure at all — the report would show
+        // an ageing last-success and no reason, which is the visibility hole
+        // this record exists to close.
+        bool sawFailure = false;
         var failedThisCycle = new List<OcrCandidate>();
         foreach (var c in candidates)
         {
@@ -504,6 +593,7 @@ public sealed class AttachmentOcrService(
                     // time without ever accruing a retirement strike.
                     visionSuccesses++;
                     consecutiveFailures = 0;
+                    pagesSent++;
                     if (sb.Length > 0) sb.Append("\n\n");
                     sb.Append(pageText);
                 }
@@ -514,6 +604,7 @@ public sealed class AttachmentOcrService(
             }
             catch (Exception ex)
             {
+                sawFailure = true;
                 var outcome = ClassifyVisionFailure(ex, c, "OCR");
                 if (outcome == VisionFailureAction.AbortBatch) break;
                 if (outcome == VisionFailureAction.SkipDocument) continue;
@@ -557,14 +648,23 @@ public sealed class AttachmentOcrService(
 
             _visionFailures.Remove(KeyOf(c));
             done++;
+            RecordOcrSuccess();
             logger.LogInformation(
                 "OCR'd attachment {AttachmentId} ({Pages} page(s), {Chars} chars); re-queued message {MessageId}.",
                 c.AttachmentId, pages, sb.Length, c.MessageId);
         }
 
+        Increment(OcrHealthKeys.PagesSentTotal, pagesSent);
+
         bool visionHealthy = visionSuccesses > 0
             || (failedThisCycle.Count > 0 && await ProbeVisionHealthAsync(ct).ConfigureAwait(false));
         SettleVisionFailures(failedThisCycle, visionHealthy, "OCR");
+
+        // Record an outcome only for a cycle that actually attempted work. An
+        // idle cycle (nothing pending) must not write a failure, or a drained
+        // queue would report as broken — the exact ambiguity these keys exist
+        // to remove.
+        if (sawFailure && done == 0) RecordOcrFailure(_lastFailureKind);
         return done;
     }
 
@@ -602,6 +702,15 @@ public sealed class AttachmentOcrService(
         int done = 0;
         int visionSuccesses = 0;
         int consecutiveFailures = 0;
+        int pagesSent = 0;
+        // Any vision failure this cycle, INCLUDING the kinds that abort the
+        // batch. failedThisCycle alone is not enough: AuthOrConfig and
+        // Backpressure break out before a candidate is added to it, so keying
+        // the outcome record off that list would leave a completely broken
+        // provider (bad key) writing no failure at all — the report would show
+        // an ageing last-success and no reason, which is the visibility hole
+        // this record exists to close.
+        bool sawFailure = false;
         var failedThisCycle = new List<OcrCandidate>();
         foreach (var c in candidates)
         {
@@ -702,6 +811,7 @@ public sealed class AttachmentOcrService(
                 // Classified first, for the same reasons as the PDF pass — and
                 // this pass is the one a hosted provider hits hardest, since the
                 // image backlog is an order of magnitude larger than the PDF one.
+                sawFailure = true;
                 var outcome = ClassifyVisionFailure(ex, c, "Image OCR");
                 if (outcome == VisionFailureAction.AbortBatch) break;
                 if (outcome == VisionFailureAction.SkipDocument) continue;
@@ -720,9 +830,12 @@ public sealed class AttachmentOcrService(
             }
 
             // The vision call succeeded — that's model-health evidence even
-            // when the transcription is empty.
+            // when the transcription is empty. It is also a billed page on a
+            // hosted provider whether or not it yielded text, so it counts here
+            // rather than at the write-back.
             visionSuccesses++;
             consecutiveFailures = 0;
+            pagesSent++;
             _visionFailures.Remove(KeyOf(c));
 
             // Empty transcription (a photo with no legible text) is the common
@@ -752,14 +865,23 @@ public sealed class AttachmentOcrService(
             }
 
             done++;
+            RecordOcrSuccess();
             logger.LogInformation(
                 "OCR'd image attachment {AttachmentId} ({W}x{H}, {Chars} chars); re-queued message {MessageId}.",
                 c.AttachmentId, normalized.Width, normalized.Height, text.Length, c.MessageId);
         }
 
+        Increment(OcrHealthKeys.PagesSentTotal, pagesSent);
+
         bool visionHealthy = visionSuccesses > 0
             || (failedThisCycle.Count > 0 && await ProbeVisionHealthAsync(ct).ConfigureAwait(false));
         SettleVisionFailures(failedThisCycle, visionHealthy, "Image OCR");
+
+        // Record an outcome only for a cycle that actually attempted work. An
+        // idle cycle (nothing pending) must not write a failure, or a drained
+        // queue would report as broken — the exact ambiguity these keys exist
+        // to remove.
+        if (sawFailure && done == 0) RecordOcrFailure(_lastFailureKind);
         return done;
     }
 }

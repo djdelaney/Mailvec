@@ -222,7 +222,10 @@ static async Task RunHttp(string[] args)
             new UpOllama(report.Ollama.Reachable),
             new UpEmbedder(report.Embedder.Stuck),
             new UpMail(report.Mail.Known, report.Mail.SyncStale),
-            [.. report.Services.Select(s => new UpServiceLiveness(s.Service, s.Known, s.Stale))]);
+            [.. report.Services.Select(s => new UpServiceLiveness(s.Service, s.Known, s.Stale))],
+            // Null when unknown (never OCR'd) so a fresh deployment doesn't
+            // read as stalled — JSONata leaves the monitor unmatched instead.
+            report.Ocr.Stalled is bool stalled ? new UpOcr(stalled) : null);
         return report.Status == "ok"
             ? Results.Ok(minimal)
             : Results.Json(minimal, statusCode: StatusCodes.Status503ServiceUnavailable);
