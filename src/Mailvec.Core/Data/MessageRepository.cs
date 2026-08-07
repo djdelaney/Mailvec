@@ -910,20 +910,14 @@ public sealed class MessageRepository(ConnectionFactory connections)
     // backstop that marks any non-image binary 'failed'. GIF stays excluded in
     // both arms. Shared verbatim by the OCR candidate query and the pending-count
     // query so /health and the embedder never disagree.
-    private const string ImageOcrMatch = """
-        (
-          (lower(a.content_type) LIKE 'image/%' AND lower(a.content_type) <> 'image/gif')
-          OR (
-            (a.content_type IS NULL OR lower(a.content_type) IN ('application/octet-stream', ''))
-            AND (
-              lower(a.filename) LIKE '%.png' OR lower(a.filename) LIKE '%.jpg'
-              OR lower(a.filename) LIKE '%.jpeg' OR lower(a.filename) LIKE '%.webp'
-              OR lower(a.filename) LIKE '%.bmp' OR lower(a.filename) LIKE '%.tif'
-              OR lower(a.filename) LIKE '%.tiff'
-            )
-          )
-        )
-        """;
+    /// <summary>
+    /// Defined in <see cref="AttachmentOcrSql"/> so `backfill-ocr-model` decides
+    /// what an image-OCR verdict is with the SAME string. When the two
+    /// disagreed, reocr treated images at 'no_text' as completed verdicts while
+    /// the backfill refused to stamp them, so `--engine unknown` swept up all
+    /// 1,379 of them.
+    /// </summary>
+    private const string ImageOcrMatch = AttachmentOcrSql.ImageMatch;
 
     /// <inheritdoc cref="EnumerateAttachmentsNeedingOcr" select="remarks"/>
     public IReadOnlyList<OcrCandidate> EnumerateImagesNeedingOcr(int batchSize, long minBytes, long afterId)

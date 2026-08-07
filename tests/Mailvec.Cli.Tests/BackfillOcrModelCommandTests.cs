@@ -89,17 +89,38 @@ public class BackfillOcrModelCommandTests
     [Fact]
     public void Never_stamps_a_status_that_was_not_an_OCR_verdict()
     {
-        // 'done' is native extraction and 'no_text' is also what the INDEXER
-        // writes for a scanned PDF it couldn't read — neither is evidence that a
-        // vision engine ever looked at the row, so neither may be back-stamped.
+        // 'done' is native extraction. A PDF at 'no_text' is INDEXER output for a
+        // scanned PDF it couldn't read natively — not evidence any engine looked.
         using var ctx = new TestServiceProvider();
         var native = StageOcr(ctx, "native@x", "2026-08-01T10:00:00Z", status: AttachmentTextExtractor.StatusDone);
-        var noText = StageOcr(ctx, "notext@x", "2026-08-01T10:00:00Z", status: AttachmentTextExtractor.StatusNoText);
+        var pdfNoText = StageOcr(ctx, "pdfnotext@x", "2026-08-01T10:00:00Z",
+            status: AttachmentTextExtractor.StatusNoText, contentType: "application/pdf", filename: "scan.pdf");
 
         BackfillOcrModelCommand.Execute(ctx.Services, new StringWriter(), OldEngine, "2026-08-06", apply: true, overwrite: false);
 
         ModelOf(ctx, native).ShouldBeNull();
-        ModelOf(ctx, noText).ShouldBeNull();
+        ModelOf(ctx, pdfNoText).ShouldBeNull();
+    }
+
+    [Fact]
+    public void Stamps_an_image_at_no_text_because_only_the_OCR_pass_can_produce_one()
+    {
+        // Regression for a real mismatch: reocr counts an image at 'no_text' as a
+        // completed verdict, but this command used to refuse to stamp one — so
+        // `reocr --engine unknown` selected 1,379 images the backfill had left
+        // NULL, which would have re-sent every one to the hosted provider.
+        //
+        // The indexer cannot put an image at 'no_text': ResolveFormat classifies
+        // images as Unsupported, and BuildResult's no_text only fires for document
+        // formats it actually parsed. MarkAttachmentImageNoText is the only writer.
+        using var ctx = new TestServiceProvider();
+        var image = StageOcr(ctx, "img@x", "2026-08-01T10:00:00Z",
+            status: AttachmentTextExtractor.StatusNoText, contentType: "image/jpeg", filename: "photo.jpg");
+
+        BackfillOcrModelCommand.Execute(ctx.Services, new StringWriter(), OldEngine, "2026-08-06", apply: true, overwrite: false)
+            .ShouldBe(0);
+
+        ModelOf(ctx, image).ShouldBe(OldEngine);
     }
 
     [Fact]
@@ -118,7 +139,8 @@ public class BackfillOcrModelCommandTests
 
     private static long StageOcr(
         TestServiceProvider ctx, string messageId, string extractedAt,
-        string? model = null, string? status = null)
+        string? model = null, string? status = null,
+        string contentType = "application/pdf", string filename = "scan.pdf")
     {
         using var conn = ctx.Connections.Open();
         using var m = conn.CreateCommand();
@@ -136,10 +158,12 @@ public class BackfillOcrModelCommandTests
         a.CommandText = """
             INSERT INTO attachments (message_id, part_index, filename, content_type, size_bytes,
                                      extracted_text, extracted_at, extraction_status, ocr_model)
-            VALUES ($msg, 0, 'scan.pdf', 'application/pdf', 100, 'text', $at, $status, $model);
+            VALUES ($msg, 0, $fn, $ct, 100, 'text', $at, $status, $model);
             SELECT last_insert_rowid();
             """;
         a.Parameters.AddWithValue("$msg", msgId);
+        a.Parameters.AddWithValue("$fn", filename);
+        a.Parameters.AddWithValue("$ct", contentType);
         a.Parameters.AddWithValue("$at", extractedAt);
         a.Parameters.AddWithValue("$status", status ?? AttachmentTextExtractor.StatusOcr);
         a.Parameters.AddWithValue("$model", (object?)model ?? DBNull.Value);

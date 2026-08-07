@@ -21,15 +21,18 @@ namespace Mailvec.Cli.Commands;
 /// ("provenance unknown, predates tracking") and an operator who actually knows
 /// their history asserts it here, explicitly, with a date they choose.</para>
 ///
-/// <para><b>Scoped to <c>extraction_status='ocr'</c> only</b>, and that is a real
-/// limitation rather than an oversight. The other two OCR verdicts are
-/// indistinguishable by status from non-OCR ones: <c>no_text</c> is also what the
-/// indexer writes for a scanned PDF it could not read natively, and
-/// <c>failed</c> also covers corrupt <c>.eml</c> files and unopenable PDFs. Only
-/// <c>ocr</c> is unambiguously the product of a vision engine, so only <c>ocr</c>
-/// can be back-stamped without inventing provenance for rows no engine ever
-/// touched. Rows the new code writes from now on are stamped at all three
-/// verdicts.</para>
+/// <para><b>Scoped to statuses that unambiguously record an engine's verdict</b>
+/// — <see cref="AttachmentOcrSql.BackfillableVerdict"/>, shared verbatim with
+/// reocr's candidate query so the two cannot disagree about what a verdict is.
+/// That means <c>'ocr'</c>, plus an IMAGE at <c>'no_text'</c>: the indexer can
+/// never put an image there (<c>ResolveFormat</c> calls images Unsupported, and
+/// <c>BuildResult</c>'s <c>no_text</c> only fires for document formats it
+/// parsed), so <c>MarkAttachmentImageNoText</c> is its only writer.</para>
+///
+/// <para>Deliberately excluded: a PDF at <c>no_text</c>, which IS indexer output
+/// for a scanned PDF it could not read natively, and <c>'failed'</c>, which also
+/// covers corrupt <c>.eml</c> files and unopenable PDFs. Stamping either would
+/// invent provenance for rows no engine ever touched.</para>
 ///
 /// <para>Dry-run by default, matching <c>mailvec reocr</c>: the whole point is
 /// that you check the count against what you expect before asserting anything.</para>
@@ -106,9 +109,14 @@ internal static class BackfillOcrModelCommand
         // so one column holds mixed offsets and a raw string compare puts
         // '...07:13:20-05:00' (12:13Z) below '...11:00:00+00:00' (11:00Z) —
         // exactly inverted. Same rule the date filters and reocr's ordering follow.
-        var predicate = overwrite
-            ? "extraction_status = $ocr AND extracted_at IS NOT NULL AND datetime(extracted_at) < datetime($cutoff)"
-            : "extraction_status = $ocr AND extracted_at IS NOT NULL AND datetime(extracted_at) < datetime($cutoff) AND ocr_model IS NULL";
+        // Shares AttachmentOcrSql.BackfillableVerdict with reocr's candidate
+        // query. When these two disagreed, reocr counted an image at 'no_text'
+        // as a completed verdict while this command refused to stamp one, so
+        // `reocr --engine unknown` selected every image the backfill had
+        // skipped. One string, so they cannot drift apart again.
+        var verdict = AttachmentOcrSql.BackfillableVerdict;
+        var inRange = $"{verdict} AND a.extracted_at IS NOT NULL AND datetime(a.extracted_at) < datetime($cutoff)";
+        var predicate = overwrite ? inRange : $"{inRange} AND a.ocr_model IS NULL";
 
         var cutoffIso = cutoff.ToString("O");
 
@@ -117,13 +125,12 @@ internal static class BackfillOcrModelCommand
         {
             q.CommandText = $"""
                 SELECT
-                  (SELECT COUNT(*) FROM attachments WHERE {predicate}),
-                  (SELECT COUNT(*) FROM attachments WHERE extraction_status = $ocr AND ocr_model IS NOT NULL),
-                  (SELECT COUNT(*) FROM attachments WHERE extraction_status = $ocr
-                     AND ocr_model IS NULL
-                     AND (extracted_at IS NULL OR datetime(extracted_at) >= datetime($cutoff)));
+                  (SELECT COUNT(*) FROM attachments a WHERE {predicate}),
+                  (SELECT COUNT(*) FROM attachments a WHERE {verdict} AND a.ocr_model IS NOT NULL),
+                  (SELECT COUNT(*) FROM attachments a WHERE {verdict}
+                     AND a.ocr_model IS NULL
+                     AND (a.extracted_at IS NULL OR datetime(a.extracted_at) >= datetime($cutoff)));
                 """;
-            q.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
             q.Parameters.AddWithValue("$cutoff", cutoffIso);
             using var r = q.ExecuteReader();
             r.Read();
@@ -134,7 +141,7 @@ internal static class BackfillOcrModelCommand
 
         @out.WriteLine($"Cutoff        : {cutoffIso} (rows strictly before this)");
         @out.WriteLine($"Engine id     : {model}");
-        @out.WriteLine($"Would stamp   : {candidates} attachment(s) at status 'ocr'");
+        @out.WriteLine($"Would stamp   : {candidates} attachment(s) holding an OCR verdict ('ocr', or an image at 'no_text')");
         @out.WriteLine($"Already stamped: {alreadyStamped} (left alone{(overwrite ? " — but --overwrite is set, so in-range ones WILL be rewritten" : "")})");
         // Counts only the UNSTAMPED ones. Once the passes have been stamping for
         // a while most post-cutoff rows carry an observed value, and reporting
@@ -162,9 +169,13 @@ internal static class BackfillOcrModelCommand
         using (var upd = conn.CreateCommand())
         {
             upd.Transaction = tx;
-            upd.CommandText = $"UPDATE attachments SET ocr_model = $model WHERE {predicate};";
+            // UPDATE takes no alias in SQLite, so run it against the ids the
+            // aliased predicate selects rather than retyping the predicate.
+            upd.CommandText = $"""
+                UPDATE attachments SET ocr_model = $model
+                WHERE id IN (SELECT a.id FROM attachments a WHERE {predicate});
+                """;
             upd.Parameters.AddWithValue("$model", model);
-            upd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
             upd.Parameters.AddWithValue("$cutoff", cutoffIso);
             updated = upd.ExecuteNonQuery();
         }
