@@ -82,3 +82,11 @@ runtimes/*/native/
 .claude/worktrees/
 .claude/settings.local.json
 logs/
+
+# Ad-hoc review write-ups dropped in the repo root during a working session.
+# Kept on disk, out of history: they are point-in-time findings about a specific
+# commit range, not documentation. Anything worth keeping gets filed under
+# docs/contributing/ with a dated name (see ocr-bakeoff-2026-08-06.md) rather
+# than left loose here — and ignoring them stops a stray `git add -A` sweeping
+# them in, which is exactly how two of them got committed.
+/*REVIEW*.md
