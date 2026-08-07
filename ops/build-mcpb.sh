@@ -2,8 +2,8 @@
 # Build a Claude Desktop MCP bundle (.mcpb) for the Mailvec stdio server.
 #
 # Output: dist/mailvec-<version>.mcpb — drag onto Claude Desktop or open with it
-# to install. Replaces the old publish-mcp-stdio.sh + ~/.local/bin launcher +
-# claude_desktop_config.json edit dance.
+# to install. Replaces the old publish-script + ~/.local/bin launcher +
+# claude_desktop_config.json edit dance that Claude Desktop used to need.
 #
 # What's in the bundle:
 #   manifest.json

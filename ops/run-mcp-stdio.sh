@@ -7,8 +7,18 @@
 # Stdout MUST stay clean — it's the JSON-RPC channel. Build chatter goes to a
 # log file; only the failure path forwards build output to stderr.
 #
-# Defaults to the test paths at ~/mailvec-test; override the env vars to point
-# at the production archive once you have one.
+# This is the DEV-ITERATION launcher: it builds Debug from the working tree, so
+# it reflects uncommitted changes. For wiring a real client up, use
+# ops/install-stdio-launcher.sh instead — it publishes Release and writes a
+# stable shim at ~/.local/bin/mailvec-mcp-stdio.
+#
+# Config comes from the shared appsettings.Local.json like every other Mailvec
+# binary. It deliberately sets NO Archive__DatabasePath: env vars are the
+# highest-precedence source, so a default here would OVERRIDE the shared file —
+# and it used to default to ~/mailvec-test/archive.sqlite, a path that on most
+# machines doesn't exist, which SchemaMigrator then silently creates as an
+# empty archive. That reads as "my mail vanished". Point it at a throwaway DB
+# by exporting Archive__DatabasePath yourself (docs/dev-walkthrough.md).
 set -euo pipefail
 
 # Claude Desktop spawns children with a minimal PATH that omits
@@ -21,8 +31,6 @@ export PATH="$DOTNET_ROOT:/usr/local/bin:/opt/homebrew/bin:$PATH"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${TMPDIR:-/tmp}"
 BUILD_LOG="$LOG_DIR/mailvec-mcp-stdio-build.log"
-
-export Archive__DatabasePath="${Archive__DatabasePath:-$HOME/mailvec-test/archive.sqlite}"
 
 cd "$REPO_ROOT"
 
