@@ -176,8 +176,16 @@ public sealed class HealthService(
             PagesSent: long.TryParse(
                 metadata.Get(OcrHealthKeys.PagesSentTotal),
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out var ocrPages) ? ocrPages : 0,
+            // Stall detection keys on DECISIONS, not on text recovered. A
+            // backlog of legitimately textless photos drains perfectly while
+            // recovering no text at all, and calling that "stalled" would flag a
+            // working pass — the OcrMinTextChars floor makes it more common
+            // still. Falls back to LastSuccessAt so a deployment upgraded
+            // mid-flight, with a success on record but no decision yet, reads
+            // sensibly rather than as unknown.
             Stalled: IsOcrStalled(
-                metadata.Get(OcrHealthKeys.LastSuccessAt), pdfPending + imagePending, ocrEnabled));
+                metadata.Get(OcrHealthKeys.LastDecisionAt) ?? metadata.Get(OcrHealthKeys.LastSuccessAt),
+                pdfPending + imagePending, ocrEnabled));
 
         var live = Math.Max(total - deleted, 0);
         var coverage = live == 0 ? 0d : (double)embedded / live;

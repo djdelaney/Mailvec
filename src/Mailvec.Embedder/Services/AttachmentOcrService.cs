@@ -248,6 +248,10 @@ public sealed class AttachmentOcrService(
         try
         {
             await vision.OcrImageAsync(HealthProbeJpeg, ct).ConfigureAwait(false);
+            // Counted: a hosted provider bills this like any other page, so
+            // omitting it made PagesSentTotal an understatement rather than the
+            // spending gauge it is documented as.
+            Increment(OcrHealthKeys.PagesSentTotal, 1);
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -270,6 +274,7 @@ public sealed class AttachmentOcrService(
     /// </summary>
     private void RecordOcrSuccess()
     {
+        RecordOcrDecision();
         if (metadata is null) return;
         try
         {
@@ -281,6 +286,27 @@ public sealed class AttachmentOcrService(
         {
             // Best-effort telemetry must never take down the pass that produced it.
             logger.LogWarning(ex, "Failed to record OCR success marker.");
+        }
+    }
+
+    /// <summary>
+    /// Record a committed terminal DECISION — text recovered, or a definitive
+    /// "this document has none". Both are full round trips that removed a
+    /// document from the queue, so both prove the pass is working; only the
+    /// first is a product win. See OcrHealthKeys.LastDecisionAt.
+    /// </summary>
+    private void RecordOcrDecision()
+    {
+        if (metadata is null) return;
+        try
+        {
+            metadata.Set(OcrHealthKeys.LastDecisionAt, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            metadata.Set(OcrHealthKeys.ConsecutiveFailures, "0");
+            metadata.Set(OcrHealthKeys.LastFailureKind, "");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to record OCR decision marker.");
         }
     }
 
@@ -675,7 +701,10 @@ public sealed class AttachmentOcrService(
 
             _visionFailures.Remove(KeyOf(c));
             done++;
-            RecordOcrSuccess();
+            // Blank text is a committed terminal decision but not a text
+            // recovery, so it counts for liveness and not for the product
+            // metric.
+            if (pdfText.Length == 0) RecordOcrDecision(); else RecordOcrSuccess();
             logger.LogInformation(
                 "OCR'd attachment {AttachmentId} ({Pages} page(s), {Chars} chars); re-queued message {MessageId}.",
                 c.AttachmentId, pages, sb.Length, c.MessageId);
@@ -878,6 +907,10 @@ public sealed class AttachmentOcrService(
                 }
                 else
                 {
+                    // A committed "no text here" is a working pass, not a
+                    // non-event: provider called, answer received, document
+                    // removed from the queue.
+                    RecordOcrDecision();
                     logger.LogInformation(
                         "Image OCR: attachment {AttachmentId} produced no usable text ({Chars} chars, floor {Floor}); marked no_text.",
                         c.AttachmentId, text?.Trim().Length ?? 0, _opts.OcrMinTextChars);

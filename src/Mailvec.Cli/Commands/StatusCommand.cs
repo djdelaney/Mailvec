@@ -103,15 +103,22 @@ internal static class StatusCommand
         // The outcome line. "Last success" is the only signal that separates a
         // drained queue from a pass that is silently failing everything; the
         // backlog count cannot, because both read zero-and-not-moving.
+        var lastDecision = metadata.Get(OcrHealthKeys.LastDecisionAt);
         var lastSuccess = metadata.Get(OcrHealthKeys.LastSuccessAt);
         var lastFailure = metadata.Get(OcrHealthKeys.LastFailureAt);
         var failKind = metadata.Get(OcrHealthKeys.LastFailureKind);
         var pages = metadata.Get(OcrHealthKeys.PagesSentTotal);
 
-        var outcome = string.IsNullOrWhiteSpace(lastSuccess)
+        // "Working" and "recovering text" are different questions. A backlog of
+        // textless photos drains perfectly while recovering nothing, so the
+        // liveness line reports the last DECISION and mentions the last text
+        // recovery separately when the two differ.
+        var outcome = string.IsNullOrWhiteSpace(lastDecision) && string.IsNullOrWhiteSpace(lastSuccess)
             // Unknown, not broken — a fresh deployment has simply never OCR'd.
-            ? "no successful OCR on record yet"
-            : $"last success {Ago(lastSuccess)}";
+            ? "no OCR activity on record yet"
+            : $"last processed {Ago(lastDecision ?? lastSuccess)}";
+        if (!string.IsNullOrWhiteSpace(lastSuccess))
+            outcome += $"; last text recovered {Ago(lastSuccess)}";
         if (!string.IsNullOrWhiteSpace(lastFailure))
         {
             var kind = string.IsNullOrWhiteSpace(failKind) ? "failure" : failKind;
