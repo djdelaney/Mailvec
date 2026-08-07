@@ -55,8 +55,11 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   deliberate from-scratch rebuild. `docker exec` bypasses the entrypoint, so
   CLI commands still work against whatever state exists.
 - **mbsync sidecar** (Dockerfile stage `mbsync`): Alpine + isync on a 600 s
-  interval loop, replacing the `com.mailvec.mbsync` launchd job (same cadence,
-  same `.mbsyncstate` flock rationale — see the plist comment). Config is a
+  interval loop, replacing the `com.mailvec.mbsync` launchd job (same default
+  cadence, same `.mbsyncstate` state-file locking rationale — see the plist
+  comment). Upstream uses `fcntl` record locks, not `flock(2)`; the distinction
+  matters because those release when the process dies, so a leftover lock
+  *filename* is not a held lock and should not be deleted by hand. Config is a
   bind-mounted `mbsyncrc` ([ops/mbsyncrc.container.example](../ops/mbsyncrc.container.example));
   the Fastmail app password is a compose file-secret read via `PassCmd`.
   Pull-only sync is enforced structurally: the maildir is mounted read-only

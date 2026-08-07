@@ -245,10 +245,16 @@ internal static class DoctorCommand
         // ---------------------------------------------------------------
         checks.Add(MbsyncToolCheck(ResolveOnPath("mbsync"), InContainer(), OperatingSystem.IsMacOS()));
 
-        // mbsync exits 0 even when its sync fails (channel lock, DNS,
-        // socket errors), so the launchctl-reported exit code above is
-        // not enough on its own. Tail the stderr log and surface anything
-        // recent here — same source the tray's mbsync tile reads from.
+        // Tail the stderr log and surface anything recent — same source the
+        // tray's mbsync tile reads from.
+        //
+        // This used to claim mbsync exits 0 even when its sync fails. It does
+        // not: upstream propagates sync errors through a nonzero return, which
+        // is exactly what the container loop relies on (`if [ "$rc" -eq 0 ]`
+        // gates the success marker). The real reason to read stderr is that a
+        // process exit status is EPHEMERAL — nothing retains it between runs —
+        // while the error detail is what an operator actually needs, and on the
+        // container the outcome question is already answered by the sync marker.
         checks.Add(InspectMbsyncStderr(InContainer()));
 
         // ---------------------------------------------------------------
