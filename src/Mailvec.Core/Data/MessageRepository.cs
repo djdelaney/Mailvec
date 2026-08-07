@@ -1049,8 +1049,29 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// <c>'failed'</c> is opt-in because it also covers non-OCR extraction
     /// failures.
     /// </remarks>
-    public IReadOnlyList<OcrResetCandidate> EnumerateOcrResetCandidates(bool includeFailed, int limit)
+    public IReadOnlyList<OcrResetCandidate> EnumerateOcrResetCandidates(
+        bool includeFailed, int limit, OcrResetOrder order = OcrResetOrder.Newest)
     {
+        // Order by the message's DATE, not by a.id. attachments.id is insertion
+        // order — roughly the Maildir walk order of the initial bulk ingest —
+        // which has almost nothing to do with how recent a message is, and the
+        // column has no AUTOINCREMENT so ids are reused. Asking for "the most
+        // recent scans" and getting whatever landed lowest in the rowid space
+        // is the kind of quiet mismatch that makes a --limit run look broken.
+        //
+        // datetime() is REQUIRED here, not decorative. date_sent is stored as
+        // DateTimeOffset.ToString("O"), which mixes 'Z', '+00:00' and local
+        // offsets in one column, so a lexicographic sort silently interleaves
+        // instants: '...07:13:20-05:00' (12:13Z) sorts BELOW '...11:00:00+00:00'
+        // (11:00Z) as text, exactly inverting them. Same rule the date FILTERS
+        // follow (SearchFilterSql) and for the same reason.
+        //
+        // Undated mail sorts last in BOTH directions — SQLite would otherwise
+        // lead an ascending sweep with every NULL, so "oldest first" would mean
+        // "undated first".
+        var direction = order == OcrResetOrder.Newest ? "DESC" : "ASC";
+        var orderBy = $"(m.date_sent IS NULL), datetime(m.date_sent) {direction}, a.id {direction}";
+
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         // Target status mirrors each pass's own candidate predicate, so a reset
@@ -1069,7 +1090,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
                  OR ({ImageOcrMatch} AND a.extraction_status = $noText)
                  OR ($includeFailed AND a.extraction_status = $failed)
               )
-            ORDER BY a.id
+            ORDER BY {orderBy}
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
@@ -1693,6 +1714,25 @@ public sealed class MessageRepository(ConnectionFactory connections)
 /// are the pipeline totals; the per-source fields let the UI show the split
 /// (scanned PDFs vs image attachments).
 /// </summary>
+/// <summary>
+/// Which end of the corpus <c>mailvec reocr</c> works from. Ordering is by the
+/// MESSAGE DATE (normalised through SQLite's datetime(), since date_sent mixes
+/// UTC and local offsets), never by attachment id.
+/// </summary>
+public enum OcrResetOrder
+{
+    /// <summary>
+    /// Most recently received mail first. The default: after an engine swap the
+    /// documents worth re-reading soonest are the ones the user is most likely
+    /// to search, and a --limit run should cover those rather than whatever the
+    /// initial bulk ingest happened to insert first.
+    /// </summary>
+    Newest,
+
+    /// <summary>Oldest mail first — for draining an archive back-to-front.</summary>
+    Oldest,
+}
+
 /// <summary>
 /// An attachment holding a previous OCR engine's verdict, plus the status it
 /// must return to for the OCR passes to select it again. See

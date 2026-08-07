@@ -43,35 +43,53 @@ internal static class ReocrCommand
             Description = "Cap the number of attachments reset this run, for working through a large backlog in slices. 0 (default) means no cap.",
             DefaultValueFactory = _ => 0,
         };
+        var orderOpt = new Option<string>("--order")
+        {
+            Description = "Which end of the mailbox to work from: 'newest' (default) or 'oldest'. Ordered by the message's DATE, not by insertion order — so --limit covers the most recent scans rather than whatever the initial ingest inserted first.",
+            DefaultValueFactory = _ => "newest",
+        };
+        orderOpt.Validators.Add(r =>
+        {
+            var v = r.GetValue(orderOpt);
+            if (!string.Equals(v, "newest", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(v, "oldest", StringComparison.OrdinalIgnoreCase))
+            {
+                r.AddError($"--order must be 'newest' or 'oldest', got '{v}'.");
+            }
+        });
 
         var cmd = new Command(
             "reocr",
             "Re-queue attachments already OCR'd (or ruled textless) by a previous vision provider, so the configured one reprocesses them.")
         {
-            applyOpt, includeFailedOpt, limitOpt,
+            applyOpt, includeFailedOpt, limitOpt, orderOpt,
         };
 
         cmd.SetAction(parse => Run(
             apply: parse.GetValue(applyOpt),
             includeFailed: parse.GetValue(includeFailedOpt),
-            limit: parse.GetValue(limitOpt)));
+            limit: parse.GetValue(limitOpt),
+            order: string.Equals(parse.GetValue(orderOpt), "oldest", StringComparison.OrdinalIgnoreCase)
+                ? OcrResetOrder.Oldest
+                : OcrResetOrder.Newest));
         return cmd;
     }
 
-    private static int Run(bool apply, bool includeFailed, int limit)
+    private static int Run(bool apply, bool includeFailed, int limit, OcrResetOrder order)
     {
         using var sp = CliServices.Build();
-        return Execute(sp, Console.Out, apply, includeFailed, limit);
+        return Execute(sp, Console.Out, apply, includeFailed, limit, order);
     }
 
     /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
     internal static int Execute(
-        IServiceProvider sp, TextWriter @out, bool apply, bool includeFailed, int limit)
+        IServiceProvider sp, TextWriter @out, bool apply, bool includeFailed, int limit,
+        OcrResetOrder order = OcrResetOrder.Newest)
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var messages = sp.GetRequiredService<MessageRepository>();
 
-        var candidates = messages.EnumerateOcrResetCandidates(includeFailed, limit);
+        var candidates = messages.EnumerateOcrResetCandidates(includeFailed, limit, order);
         if (candidates.Count == 0)
         {
             @out.WriteLine("Nothing to re-OCR: no attachments are holding a previous engine's verdict.");
@@ -79,7 +97,10 @@ internal static class ReocrCommand
         }
 
         var messageCount = candidates.Select(c => c.MessageId).Distinct().Count();
-        @out.WriteLine($"{candidates.Count} attachment(s) across {messageCount} message(s) would be re-OCR'd:");
+        // State the order explicitly. With --limit it decides WHICH documents
+        // get done, so it must not be something the operator has to infer.
+        var orderLabel = order == OcrResetOrder.Newest ? "newest mail first" : "oldest mail first";
+        @out.WriteLine($"{candidates.Count} attachment(s) across {messageCount} message(s) would be re-OCR'd ({orderLabel}):");
         foreach (var g in candidates.GroupBy(c => c.CurrentStatus).OrderByDescending(g => g.Count()))
         {
             var targets = string.Join(", ", g.Select(c => c.TargetStatus).Distinct().OrderBy(t => t));
