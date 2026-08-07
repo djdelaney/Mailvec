@@ -855,6 +855,24 @@ public class AttachmentOcrServiceTests : IDisposable
         StatusOf(c).ShouldBe(AttachmentTextExtractor.StatusNoText);
     }
 
+    [Fact]
+    public async Task Sustained_provider_overload_never_retires_a_document()
+    {
+        // End-to-end companion to the client-level 503 test: repeated overload
+        // must leave every attachment selectable, however long it lasts.
+        long id = StageNoTextPdf("overloaded@x", MinimalPdf(1));
+
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            throw new VisionException(VisionFailureKind.Backpressure, "503 Service Unavailable");
+        }));
+
+        for (var cycle = 0; cycle < 20; cycle++) await svc.ProcessBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
     // ---- Minimum text floor ---------------------------------------------------
 
     [Fact]
