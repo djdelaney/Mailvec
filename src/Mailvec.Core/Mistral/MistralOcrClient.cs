@@ -159,8 +159,7 @@ public sealed class MistralOcrClient(
                     await ThrowClassifiedAsync(response, ct).ConfigureAwait(false);
                 }
 
-                var delay = response.Headers.RetryAfter?.Delta
-                    ?? TimeSpan.FromSeconds(Math.Min(30, 2 * Math.Pow(2, attempt)));
+                var delay = RetryDelay(response, attempt);
                 logger.LogInformation(
                     "mistral-ocr {Status}; retrying in {Delay:0.#}s (attempt {Attempt}/{Max}).",
                     (int)response.StatusCode, delay.TotalSeconds, attempt + 1, _opts.MaxRetries);
@@ -243,6 +242,16 @@ public sealed class MistralOcrClient(
         var kind = response.StatusCode switch
         {
             HttpStatusCode.TooManyRequests => VisionFailureKind.Backpressure,
+            // Overload, not a document verdict. 503 means the service is
+            // unavailable right now, and any 5xx that bothers to send
+            // Retry-After is explicitly asking us to slow down. Left as
+            // Transient these accrued per-document strikes whenever another
+            // page succeeded in the same cycle, so five cycles of provider
+            // overload retired a perfectly good attachment — precisely what the
+            // Backpressure kind was introduced to prevent.
+            HttpStatusCode.ServiceUnavailable => VisionFailureKind.Backpressure,
+            _ when response.Headers.RetryAfter is not null && status >= 500
+                => VisionFailureKind.Backpressure,
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound
                 => VisionFailureKind.AuthOrConfig,
             // Unambiguously about the payload: the request was refused for its
@@ -272,6 +281,39 @@ public sealed class MistralOcrClient(
         var ex = new VisionException(kind, $"mistral-ocr {_opts.Route} failed {status}.");
         ex.Data["body"] = body.Length <= 400 ? body : body[..400] + "…";
         throw ex;
+    }
+
+    /// <summary>Longest we will honour a provider's Retry-After.</summary>
+    /// <remarks>
+    /// The delay blocks the single embedder worker, which also runs the embed
+    /// pass — so an unbounded provider-supplied value is a remote stall switch.
+    /// `Retry-After: 3600` would have parked indexing for an hour. Capping loses
+    /// nothing: the OCR pass re-runs every poll, so waiting out a long window
+    /// inside one call buys no throughput over simply returning and retrying.
+    /// </remarks>
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long to wait before the next attempt: the provider's Retry-After when
+    /// it gives one, else exponential backoff. Both bounded by
+    /// <see cref="MaxRetryAfter"/>.
+    /// </summary>
+    /// <remarks>
+    /// Retry-After has two wire forms and only one was read. `.Delta` is null
+    /// for the absolute-date form ("Retry-After: Wed, 21 Oct 2026 07:28:00
+    /// GMT"), so those responses silently lost their hint and fell back to
+    /// exponential guessing.
+    /// </remarks>
+    internal static TimeSpan RetryDelay(HttpResponseMessage response, int attempt)
+    {
+        var header = response.Headers.RetryAfter;
+        var requested =
+            header?.Delta
+            ?? (header?.Date is { } at ? at - DateTimeOffset.UtcNow : (TimeSpan?)null)
+            ?? TimeSpan.FromSeconds(2 * Math.Pow(2, attempt));
+
+        if (requested < TimeSpan.Zero) requested = TimeSpan.Zero; // a past date
+        return requested > MaxRetryAfter ? MaxRetryAfter : requested;
     }
 
     /// <summary>

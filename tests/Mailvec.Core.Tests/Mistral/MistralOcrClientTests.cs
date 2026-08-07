@@ -249,6 +249,71 @@ public class MistralOcrClientTests
         (await client.OcrAsync([1])).ShouldBe("FIRST\nSECOND\nTHIRD");
     }
 
+    // ---- Backpressure and retry timing ----------------------------------------
+
+    [Fact]
+    public async Task Sustained_503_is_backpressure_not_a_document_strike()
+    {
+        // Only 429 mapped to Backpressure; 503 fell through to Transient and
+        // accrued per-document strikes whenever another page succeeded in the
+        // same cycle. Five cycles of provider overload then retired a perfectly
+        // good attachment -- the exact conversion Backpressure exists to stop.
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            o => o.MaxRetries = 0);
+
+        (await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]))).Kind
+            .ShouldBe(VisionFailureKind.Backpressure);
+    }
+
+    [Fact]
+    public async Task Any_5xx_that_asks_us_to_slow_down_is_backpressure()
+    {
+        var client = ClientWith(_ =>
+        {
+            var r = new HttpResponseMessage(HttpStatusCode.InternalServerError);
+            r.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(1));
+            return r;
+        }, o => o.MaxRetries = 0);
+
+        (await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]))).Kind
+            .ShouldBe(VisionFailureKind.Backpressure);
+    }
+
+    [Fact]
+    public void Retry_after_is_bounded_so_a_provider_cannot_stall_the_worker()
+    {
+        // The delay blocks the single embedder worker, which also runs the embed
+        // pass. Unbounded, `Retry-After: 3600` was a remote stall switch.
+        using var r = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        r.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromHours(1));
+
+        MistralOcrClient.RetryDelay(r, attempt: 0).ShouldBeLessThanOrEqualTo(TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public void Retry_after_honours_the_absolute_date_form()
+    {
+        // Two wire forms; only Delta was read, so an HTTP-date Retry-After
+        // silently lost its hint and fell back to exponential guessing.
+        using var r = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        r.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+            DateTimeOffset.UtcNow.AddSeconds(20));
+
+        var delay = MistralOcrClient.RetryDelay(r, attempt: 0);
+        delay.ShouldBeGreaterThan(TimeSpan.FromSeconds(10));
+        delay.ShouldBeLessThanOrEqualTo(TimeSpan.FromSeconds(25));
+    }
+
+    [Fact]
+    public void A_retry_after_date_in_the_past_does_not_produce_a_negative_delay()
+    {
+        using var r = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        r.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+            DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        MistralOcrClient.RetryDelay(r, attempt: 0).ShouldBeGreaterThanOrEqualTo(TimeSpan.Zero);
+    }
+
     // ---- Availability probe ---------------------------------------------------
 
     [Fact]
