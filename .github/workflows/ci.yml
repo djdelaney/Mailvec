@@ -81,32 +81,40 @@ jobs:
           print(f"Version lockstep OK: {manifest}")
           PY
 
-      # The frozen-corpus warning is duplicated verbatim in CLAUDE.md and
-      # AGENTS.md rather than one pointing at the other: an agent that skips a
-      # file also skips a redirect, which is exactly how the corpus got
-      # destroyed twice. Duplication is the right call here, so the drift it
-      # invites gets a machine watching it — same reasoning as the version
-      # lockstep check above. A symlink was considered and rejected: git
-      # materialises one as a plain file containing the target path on any
-      # checkout without symlink support, which reads as a corrupt file.
-      - name: Verify frozen-corpus warning is identical in CLAUDE.md and AGENTS.md
+      # CLAUDE.md and AGENTS.md duplicate their must-not-miss blocks verbatim
+      # rather than one pointing at the other: an agent that skips a file also
+      # skips a redirect, which is how the eval corpus got destroyed twice.
+      # Duplication is the right call, so the drift it invites gets a machine
+      # watching it — same reasoning as the version lockstep check above. A
+      # symlink was considered and rejected: git materialises one as a plain
+      # file containing the target path on any checkout without symlink
+      # support, which reads as a corrupt file.
+      - name: Verify the shared CLAUDE.md / AGENTS.md blocks are identical
         run: |
           python3 - <<'PY'
           import pathlib, sys
-          B, E = "<!-- BEGIN frozen-corpus -->", "<!-- END frozen-corpus -->"
-          def block(name):
-              t = pathlib.Path(name).read_text()
-              if B not in t or E not in t:
-                  print(f"{name}: missing {B} / {E} markers.", file=sys.stderr); sys.exit(1)
-              return t[t.index(B) + len(B):t.index(E)]
-          a, c = block("AGENTS.md"), block("CLAUDE.md")
-          if a != c:
-              print("The frozen-corpus block has drifted between AGENTS.md and CLAUDE.md.\n"
-                    "Both copies must be byte-identical — edit one and paste it into the other.\n"
-                    "Why duplicated rather than linked: ops/frozen-corpus-guard.sh's header.",
-                    file=sys.stderr)
-              sys.exit(1)
-          print(f"frozen-corpus block in sync ({len(a)} chars)")
+          BLOCKS = ["frozen-corpus", "release-approval"]
+          FILES = ["AGENTS.md", "CLAUDE.md"]
+          text = {f: pathlib.Path(f).read_text() for f in FILES}
+          failed = False
+          for name in BLOCKS:
+              b, e = f"<!-- BEGIN {name} -->", f"<!-- END {name} -->"
+              chunks = {}
+              for f in FILES:
+                  if b not in text[f] or e not in text[f]:
+                      print(f"{f}: missing {b} / {e} markers.", file=sys.stderr)
+                      failed = True
+                      break
+                  chunks[f] = text[f][text[f].index(b) + len(b):text[f].index(e)]
+              else:
+                  if len(set(chunks.values())) != 1:
+                      print(f"The '{name}' block has drifted between {' and '.join(FILES)}.\n"
+                            "Both copies must be byte-identical — edit one and paste it into the other.",
+                            file=sys.stderr)
+                      failed = True
+                  else:
+                      print(f"'{name}' in sync ({len(next(iter(chunks.values())))} chars)")
+          sys.exit(1 if failed else 0)
           PY
 
       - name: Fetch sqlite-vec extension

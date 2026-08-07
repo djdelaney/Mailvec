@@ -183,9 +183,27 @@ Containers removed the answer to "is the indexer running?" — there's no `launc
 
 The MCP tool surface is a **wire contract** — tool names, parameter names, and response field names are locked, and a rename breaks every client at once. The full locked list, plus the `McpSurfaceTests` enforcement mechanism and the transport quirks (stateless HTTP, stdio, Claude Desktop's sandbox), live in [`src/Mailvec.Mcp/CLAUDE.md`](src/Mailvec.Mcp/CLAUDE.md) and load automatically when you work in that project.
 
-Source-of-truth for version: the repo-wide `<Version>` in [Directory.Build.props](Directory.Build.props) — one version stamps all four .NET binaries, kept in lockstep with `manifest.json` by `ops/release.sh`, which is the only sanctioned bump path (`ops/build-mcpb.sh --bump` delegates to it; the non-bump MCPB build fails on drift). Read at runtime via `Assembly.GetEntryAssembly().GetName().Version` in `Program.cs::ConfigureServerInfo`; printed by `mailvec status`. Tag releases `v<version>` after the bump commit (release.sh prints the commands; `publish-images.yml` refuses a `v*` tag that doesn't match `<Version>`). Patch for anything; minor for a tool-surface change or schema migration. `SchemaMigrator.EnsureUpToDate` refuses to run an older binary against a newer DB (downgrade guard) — don't weaken it to a warning; the older binary silently lacks newer invariants (e.g. pre-v7 never bumps `embed_epoch`).
+Version and release mechanics live in [Releases](#releases) — a tool-surface change is a **minor** bump, and the bump is not yours to make unasked.
 
 Before any change that could shift retrieval ranking (chunk size, RRF k, embedding model, tool-shape tweaks), capture an eval baseline (`mailvec eval --json baselines/<date>.json`) — see `baselines/README.md`. Without it, a quality regression that "looked like a refactor" is invisible until the user notices.
+
+## Releases
+
+<!-- BEGIN release-approval -->
+> 🚦 **Never cut a release unless you were asked to, in that turn.**
+>
+> Approval is "ship it", "cut a release", "tag v0.4.1", or an explicit yes to a bump you proposed. It is **not** finishing a feature, a green CI run, a passing eval, or an instruction to commit or push. Committing is not releasing.
+>
+> A release means any of: bumping `<Version>`, pushing a `v*` tag, or running `ops/release.sh --ship`. The tag push is the consequential one — it publishes durable GHCR images (`mailvec`, `mailvec-mbsync`) that the homelab pins by tag, so it is the only routine action here that reaches a running deployment. Tags and published images are not cleanly retractable; a wrong one burns the version number.
+>
+> **`ops/release.sh` is the only sanctioned channel.** It is what keeps `<Version>` and `manifest.json` in lockstep, and `publish-images.yml` refuses a `v*` tag that disagrees with `<Version>`. Never hand-edit a version, never tag without a matching bump commit, and never reach for `--ship` unprompted — it pushes and tags on its own.
+>
+> Propose the release **and** the part to bump, then wait. `--patch` for anything; `--minor` for an MCP tool-surface change or a schema migration, where the version is the "back up first" signal in the tag name.
+<!-- END release-approval -->
+
+Source-of-truth for version: the repo-wide `<Version>` in [Directory.Build.props](Directory.Build.props) — one version stamps all four .NET binaries, kept in lockstep with `manifest.json` by `ops/release.sh`, which is the only sanctioned bump path (`ops/build-mcpb.sh --bump` delegates to it; the non-bump MCPB build fails on drift). Read at runtime via `Assembly.GetEntryAssembly().GetName().Version` in `Program.cs::ConfigureServerInfo`; printed by `mailvec status`. Tag releases `v<version>` after the bump commit (release.sh prints the commands; `publish-images.yml` refuses a `v*` tag that doesn't match `<Version>`). Patch for anything; minor for a tool-surface change or schema migration. `SchemaMigrator.EnsureUpToDate` refuses to run an older binary against a newer DB (downgrade guard) — don't weaken it to a warning; the older binary silently lacks newer invariants (e.g. pre-v7 never bumps `embed_epoch`).
+
+The sequence, once approved: `ops/release.sh --patch|--minor` (bumps both carriers, commits) → push `main` → **wait for green CI** → `git tag -a v<version>` + `git push origin v<version>`, which is what publishes the images. Tagging ahead of CI works and is exactly the mistake the ordering exists to prevent: a `v*` push publishes regardless of whether the suite passed.
 
 ## Operations
 

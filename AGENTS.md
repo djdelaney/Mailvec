@@ -37,6 +37,18 @@ dotnet build                 # TreatWarningsAsErrors=true — a warning fails th
 dotnet test                  # full suite, no Ollama required
 ```
 
+<!-- BEGIN release-approval -->
+> 🚦 **Never cut a release unless you were asked to, in that turn.**
+>
+> Approval is "ship it", "cut a release", "tag v0.4.1", or an explicit yes to a bump you proposed. It is **not** finishing a feature, a green CI run, a passing eval, or an instruction to commit or push. Committing is not releasing.
+>
+> A release means any of: bumping `<Version>`, pushing a `v*` tag, or running `ops/release.sh --ship`. The tag push is the consequential one — it publishes durable GHCR images (`mailvec`, `mailvec-mbsync`) that the homelab pins by tag, so it is the only routine action here that reaches a running deployment. Tags and published images are not cleanly retractable; a wrong one burns the version number.
+>
+> **`ops/release.sh` is the only sanctioned channel.** It is what keeps `<Version>` and `manifest.json` in lockstep, and `publish-images.yml` refuses a `v*` tag that disagrees with `<Version>`. Never hand-edit a version, never tag without a matching bump commit, and never reach for `--ship` unprompted — it pushes and tags on its own.
+>
+> Propose the release **and** the part to bump, then wait. `--patch` for anything; `--minor` for an MCP tool-surface change or a schema migration, where the version is the "back up first" signal in the tag name.
+<!-- END release-approval -->
+
 ## Before you change anything
 
 - **[`CLAUDE.md`](CLAUDE.md)** — read it. Most of this codebase's failure modes
@@ -46,8 +58,6 @@ dotnet test                  # full suite, no Ollama required
   the code.
 - **NuGet versions live in `Directory.Packages.props`** (Central Package
   Management). `csproj` files carry no `Version=` attribute.
-- **Don't bump the version or tag a release** unless you were asked to.
-  `ops/release.sh` is the only sanctioned bump path.
 - **Retrieval-affecting changes need an eval baseline first** (`mailvec eval`)
   — chunk size, RRF k, the embedding model, tool shapes. See `baselines/README.md`.
   This is what the frozen corpus above exists for.
