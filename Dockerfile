@@ -82,6 +82,36 @@ set -u
 : "${MBSYNC_MAILDIR:=/mail/Fastmail}"
 mkdir -p "${MBSYNC_MAILDIR}"
 
+# Validate the interval before it can be used as a sleep duration.
+#
+# This loop runs `set -u` but NOT `set -e`, so a failing `sleep` does not stop
+# it. Without this check, `MBSYNC_INTERVAL_SECONDS=0` (sleep returns instantly)
+# or any malformed value like `60s`, `-5` or a stray character (sleep errors
+# out) turns the sidecar into a tight loop that reconnects to the IMAP provider
+# as fast as it can, floods the log, and invites throttling or a ban. A typo in
+# the deployment's .env is the whole distance between the intended cadence and
+# that, and nothing downstream would flag it: the heartbeat stays fresh and
+# syncs keep succeeding, so it reads as healthy while hammering the provider.
+#
+# The glob rejects empty, negatives (the sign is a non-digit), decimals, and
+# unit suffixes; the -lt 1 test then rejects 0 and 000.
+case "${MBSYNC_INTERVAL_SECONDS}" in
+    ''|*[!0-9]*)
+        echo "mbsync: MBSYNC_INTERVAL_SECONDS must be a whole number of seconds, got '${MBSYNC_INTERVAL_SECONDS}'." >&2
+        exit 1 ;;
+esac
+if [ "${MBSYNC_INTERVAL_SECONDS}" -lt 1 ]; then
+    echo "mbsync: MBSYNC_INTERVAL_SECONDS must be at least 1, got '${MBSYNC_INTERVAL_SECONDS}'." >&2
+    exit 1
+fi
+# Warn rather than refuse below 60. The interval is a load choice against the
+# IMAP provider, not a safety floor — the loop cannot overlap itself at any
+# value — so a hard minimum would block legitimate experimentation that
+# docs/future-ideas.md explicitly contemplates. Loud, but not fatal.
+if [ "${MBSYNC_INTERVAL_SECONDS}" -lt 60 ]; then
+    echo "mbsync: MBSYNC_INTERVAL_SECONDS=${MBSYNC_INTERVAL_SECONDS} is below 60s; this is a load choice against your IMAP provider, watch for throttling." >&2
+fi
+
 # Cadence of the liveness beat below. A constant, not an env var, and
 # deliberately NOT MBSYNC_INTERVAL_SECONDS: it mirrors
 # ServiceHeartbeat.BeatInterval (60s) so every service in the stack is judged
