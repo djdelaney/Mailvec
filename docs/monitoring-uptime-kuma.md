@@ -154,6 +154,18 @@ Fields the monitors use:
 | `mail.syncStale` | mbsync is alive but its syncs keep failing — no successful pull in 4x the sync interval (min 30 min) | `false` |
 | `mail.known` | whether any successful sync is on record (`false` = fresh deploy, or a local install with no sidecar) | `true` in steady state |
 
+> **Pair `mail.known` with `mail.syncStale`, don't check `syncStale` alone.**
+> A deployment that has NEVER synced successfully reports
+> `{ "known": false, "syncStale": false }` — because staleness is measured from
+> the last success, and with no success there is nothing to measure. So a fresh
+> container with an expired app password, a `Patterns` typo or broken DNS
+> passes a `syncStale = false` check indefinitely, which is exactly the
+> deployment most likely to be misconfigured. The `known=false` reading is
+> deliberate (it keeps fresh installs and sidecar-less local dev out of the
+> red), which is precisely why production monitoring has to require
+> `known = true` as well. Give it enough retries or startup grace to let the
+> first sync land.
+
 **`mail.syncStale` vs `services[service='mbsync'].stale` — these answer
 different questions and you want both.** The mbsync beat is written on its own
 timer whether or not `mbsync -a` succeeded, deliberately: a loop retrying
@@ -197,14 +209,14 @@ All at URL `https://mailvec.<domain>/up`, with the header block above, and
 | `mailvec-embedder-stuck` | `embedder.stuck` | `false` |
 | `mailvec-model-mismatch` | `embeddings.modelMismatch` | `false` |
 | `mailvec-ollama` | `ollama.reachable` | `true` |
-| `mailvec-mail-sync` | `mail.syncStale` | `false` |
+| `mailvec-mail-sync` | `mail.syncStale = false and mail.known = true` | `true` |
 
 If you prefer a single monitor over granularity, use this instead (returns a
 boolean; covers degraded status, any stale worker, **and** a sidecar whose
 syncs keep failing):
 
 ```
-status = 'ok' and $count(services[stale = true]) = 0 and mail.syncStale = false
+status = 'ok' and $count(services[stale = true]) = 0 and mail.syncStale = false and mail.known = true
 ```
 Expected value `true`. Downside: the alert just says "Mailvec unhealthy" — you
 curl to find out why.
