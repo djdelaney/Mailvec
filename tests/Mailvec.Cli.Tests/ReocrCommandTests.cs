@@ -301,6 +301,75 @@ public class ReocrCommandTests
         r.GetBoolean(1).ShouldBeTrue("the engine stamp must be cleared with it");
     }
 
+    [Fact]
+    public void The_engine_selector_resets_only_that_engine_s_verdicts()
+    {
+        // The capability ocr_model exists for. Without it a provider switch can
+        // only reset the whole corpus, which is the all-or-nothing behaviour the
+        // column was added to end.
+        using var ctx = new TestServiceProvider();
+        var oldEngine = StageAttachment(ctx, "old@x", "a.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "OLD");
+        var newEngine = StageAttachment(ctx, "new@x", "b.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "NEW");
+        Stamp(ctx, oldEngine, "ollama:qwen2.5vl:7b");
+        Stamp(ctx, newEngine, "mistral:mistral-ocr-2505");
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false,
+            limit: 0, engine: "ollama:qwen2.5vl:7b").ShouldBe(0);
+
+        TextOf(ctx, oldEngine).ShouldBeNull("the selected engine's verdict should be reset");
+        TextOf(ctx, newEngine).ShouldBe("NEW", "the other engine's work must be left alone");
+    }
+
+    [Fact]
+    public void The_unknown_selector_targets_rows_with_no_recorded_provenance()
+    {
+        using var ctx = new TestServiceProvider();
+        var unstamped = StageAttachment(ctx, "pre@x", "a.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "PRE-V10");
+        var stamped = StageAttachment(ctx, "post@x", "b.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "POST");
+        Stamp(ctx, stamped, "ollama:qwen2.5vl:7b");
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false,
+            limit: 0, engine: "unknown").ShouldBe(0);
+
+        TextOf(ctx, unstamped).ShouldBeNull();
+        TextOf(ctx, stamped).ShouldBe("POST");
+    }
+
+    [Fact]
+    public void The_selector_is_applied_before_the_limit_not_after()
+    {
+        // Filtering a slice instead of slicing the filtered set would make
+        // --limit 1 return "nothing to do" whenever the newest row happened to
+        // belong to the engine you did NOT ask for — a silent no-op that reads
+        // as "already done".
+        using var ctx = new TestServiceProvider();
+        var wanted = StageAttachment(ctx, "wanted@x", "a.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "WANTED");
+        var newest = StageAttachment(ctx, "newest@x", "b.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "NEWEST");
+        Stamp(ctx, wanted, "ollama:old");
+        Stamp(ctx, newest, "mistral:new");
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false,
+            limit: 1, engine: "ollama:old").ShouldBe(0);
+
+        TextOf(ctx, wanted).ShouldBeNull("the one matching row should have been found despite --limit 1");
+    }
+
+    private static void Stamp(TestServiceProvider ctx, long attachmentId, string model)
+    {
+        using var conn = ctx.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE attachments SET ocr_model = $m WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$m", model);
+        cmd.Parameters.AddWithValue("$id", attachmentId);
+        cmd.ExecuteNonQuery();
+    }
+
     private static long StageAttachment(
         TestServiceProvider ctx, string messageId, string filename, string contentType,
         string status, string? text, int partIndex = 0)

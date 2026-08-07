@@ -198,9 +198,14 @@ what limits quality, and swapping engines stays an `IVisionClient` change.
 
 **After a switch, `ocr_model` is what makes the old engine's work selectable.**
 Rows written before v10 carry NULL ("provenance unknown"); rows written since
-carry `provider:model`. So `WHERE ocr_model IS NULL` and
-`WHERE ocr_model LIKE 'ollama:%'` are both usable slices for a targeted re-OCR,
-which is the capability that made switching engines a one-way door before.
+carry `provider:model`, except those retired before any provider call, which
+carry `pipeline` (a corrupt `.eml`, an unopenable PDF, an undecodable image —
+outcomes no engine change will alter, so they must not be swept into a
+provider-switch re-run).
+
+`mailvec reocr --engine <id>` selects on it, with `--engine unknown` for the
+pre-v10 rows. That is the capability that made switching engines a one-way door
+before: previously `reocr` could only reset every eligible verdict.
 
 Transcription quality is not the deciding number. Re-embed each engine's text
 into a parallel DB ([`embedding-experiments.md`](embedding-experiments.md)) and
