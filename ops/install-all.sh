@@ -30,6 +30,7 @@ set -euo pipefail
 trap 'echo "install-all.sh: failed at line $LINENO" >&2' ERR
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$REPO_ROOT/ops/frozen-corpus-guard.sh"
 SKIP_FETCH=0
 INSTALL_ARGS=()
 for arg in "$@"; do
@@ -56,6 +57,10 @@ if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
     echo "(macOS is dropping Intel support in its next release; Mailvec targets arm64 only.)" >&2
     exit 1
 fi
+
+# Before anything else, including the fetch: a guarded machine should fail on
+# the first line, not after downloading a dylib. See ops/frozen-corpus-guard.sh.
+require_unfrozen "ops/install-all.sh would install and start the launchd agents"
 
 # 1. sqlite-vec dylib
 if [[ $SKIP_FETCH -eq 0 ]]; then

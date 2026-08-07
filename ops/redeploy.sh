@@ -23,6 +23,10 @@ set -euo pipefail
 trap 'echo "redeploy.sh: failed at line $LINENO" >&2' ERR
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$REPO_ROOT/ops/frozen-corpus-guard.sh"
+# Redeploy kickstarts the agents, so on a frozen-corpus machine it restarts
+# ingest just as surely as a fresh install. See ops/frozen-corpus-guard.sh.
+require_unfrozen "ops/redeploy.sh would republish and restart the launchd agents"
 PREFIX="$HOME/.local/share/mailvec"
 LOG_DIR="$HOME/Library/Logs/Mailvec"
 ALL_SERVICES=(indexer embedder mcp cli)

@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. Stays focused on invariants whose violation is **silent** (silent data corruption, silent contract break, silent quality regression). Loud failures (compile errors, missing files) don't earn a spot.
 
+<!-- BEGIN frozen-corpus -->
+> ⛔ **This machine is a development box with a FROZEN CORPUS — do not install or start the agents.**
+>
+> No launchd agents, no mbsync, nothing on `127.0.0.1:3333` (decommissioned 2026-07-16). The `archive.sqlite` here is frozen for eval / ranking work: the `baselines/` numbers were measured against exactly this corpus.
+>
+> **Do not run `ops/install.sh` / `ops/install-all.sh` / `ops/redeploy.sh` here — not even "just to test that it works."** Installing the agents restarts mbsync and the indexer, the corpus starts moving, and every eval comparison after that drifts silently against a moving target. **The ingest IS the damage** — there is no version of "I'll put it back afterwards" that restores the measurement. This has now happened twice: on 2026-08-04 an agent reinstalled all four agents while testing (~136 messages ingested before it was caught), and again later by an agent that never read these warnings at all.
+>
+> Those three scripts now **refuse to run** while `~/Library/Application Support/Mailvec/.frozen-corpus` exists — see [`ops/frozen-corpus-guard.sh`](ops/frozen-corpus-guard.sh). The guard is the enforcement; this text is only the explanation. `ops/install.sh --uninstall` is deliberately **not** blocked: it is the remedy if agents are ever found running.
+>
+> **To exercise service code here, run it directly — no agents needed:**
+> `dotnet run --project src/Mailvec.<svc>`
+>
+> **Verify before you touch anything:** `launchctl list | grep mailvec` should print nothing, and `~/Library/LaunchAgents/com.mailvec.*.plist` should not exist. If they are back, tear them down with `ops/install.sh --uninstall` (**not** `ops/stop.sh` — that leaves the plists, so they re-bootstrap at login) and say so, because the corpus has moved.
+>
+> Workflow and refresh procedure: [`docs/contributing/local-dev-dataset.md`](docs/contributing/local-dev-dataset.md).
+<!-- END frozen-corpus -->
+
+<sub>The block above is duplicated verbatim in [`AGENTS.md`](AGENTS.md) so agents that don't read this file still get it; CI fails if they drift.</sub>
+
 ## Source of truth
 
 The schema is `schema/001_initial.sql` + migrations under `schema/migrations/` — silent-corruption-prone invariants are captured in this file under "Schema & data invariants". `CHANGELOG.md` is the phase-by-phase build history. Design rationale that didn't make it into code lives in `docs/security.md` (threat model) and `docs/future-ideas.md` (deferred work + still-open questions).
@@ -184,15 +203,7 @@ Before any change that could shift retrieval ranking (chunk size, RRF k, embeddi
 
 End-to-end working. **The author's deployment is the Docker stack on a Proxmox homelab, exposed via Cloudflare Tunnel + Access Managed OAuth** — every Claude surface (Code, Desktop, iOS, claude.ai) uses that one remote connector, and the Claude Desktop MCPB/stdio path is retired as a transport.
 
-**This Mac is a development machine, not a deployment** (decommissioned 2026-07-16): no launchd agents, no mbsync, nothing on `127.0.0.1:3333`. Its `archive.sqlite` is a **frozen corpus** for eval/ranking work — see [`docs/contributing/local-dev-dataset.md`](docs/contributing/local-dev-dataset.md) for the workflow and the refresh procedure.
-
-> ⛔ **Do not reinstall the agents, and do not run `ops/install.sh` / `install-all.sh` / `redeploy.sh` here — not even "just to test that it works."** This has already happened once: on 2026-08-04 all four agents were found installed and three running, having been reinstalled by an agent as part of a test, with mbsync pulling live mail again. **Installing them is what the warning is about — the install IS the damage**, so there is no version of "I'll put it back afterwards" that avoids it.
->
-> What it costs: mbsync resumes and the indexer ingests, so the corpus stops being the one the `baselines/` numbers were measured against and every eval comparison silently drifts against a moving target. The 2026-08-04 incident moved ~136 messages before it was caught.
->
-> **Verify before you touch anything** — `launchctl list | grep mailvec` should print nothing, and `~/Library/LaunchAgents/com.mailvec.*.plist` should not exist. **If they are back, tear them down with `ops/install.sh --uninstall`** (not `ops/stop.sh` — that leaves the plists, so they re-bootstrap at login) and say so, because the corpus has moved.
->
-> To exercise service code here, run it directly against the archive: `dotnet run --project src/Mailvec.<svc>`. That is the supported path and it needs no agents.
+**This Mac is a development machine, not a deployment** (decommissioned 2026-07-16), and its `archive.sqlite` is a **frozen corpus** for eval/ranking work. The full warning — and the guard that now enforces it — is at the [top of this file](#claudemd). Workflow and refresh procedure: [`docs/contributing/local-dev-dataset.md`](docs/contributing/local-dev-dataset.md).
 
 The macOS launchd install and the MCPB bundle both still build and are supported for anyone wanting a local single-machine setup — that support is what the paragraph above is protecting, not contradicting; it just isn't exercised by installing them *on this machine*.
 
