@@ -599,7 +599,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
+                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
                 continue;
             }
 
@@ -613,7 +613,7 @@ public sealed class AttachmentOcrService(
                 // PDFium can't open it -> permanently unreadable. Mark failed so
                 // we don't re-select a poison PDF every cycle.
                 logger.LogWarning(ex, "OCR: cannot open PDF for attachment {AttachmentId}; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
+                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
                 continue;
             }
 
@@ -817,7 +817,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "Image OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
+                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
                 continue;
             }
 
@@ -828,7 +828,7 @@ public sealed class AttachmentOcrService(
             {
                 logger.LogInformation(
                     "Image OCR: attachment {AttachmentId} did not decode as an image; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
+                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
                 continue;
             }
 
@@ -843,7 +843,7 @@ public sealed class AttachmentOcrService(
                 logger.LogInformation(
                     "Image OCR gate: attachment {AttachmentId} {W}x{H} (short {Short}px, aspect {Aspect:F1}) — skipping as non-content.",
                     c.AttachmentId, normalized.Width, normalized.Height, shortEdge, aspect);
-                messages.MarkAttachmentImageNoText(c, vision.ModelId);
+                messages.MarkAttachmentImageNoText(c, OcrProvenance.PreProvider);
                 continue;
             }
 

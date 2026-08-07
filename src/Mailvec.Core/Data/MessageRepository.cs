@@ -1054,8 +1054,17 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// <c>'failed'</c> is opt-in because it also covers non-OCR extraction
     /// failures.
     /// </remarks>
+    /// <param name="engine">
+    /// Optional <c>ocr_model</c> selector, applied BEFORE ordering and limiting so
+    /// <c>--limit</c> slices the filtered set rather than filtering a slice.
+    /// <c>null</c> = every eligible verdict (the historical behaviour).
+    /// <see cref="OcrEngineFilter.Unknown"/> matches rows with no recorded
+    /// provenance — pre-v10 output. An engine id matches exactly, which is what
+    /// makes "re-run only what the previous provider produced" expressible;
+    /// without it a provider switch could only reset the whole corpus.
+    /// </param>
     public IReadOnlyList<OcrResetCandidate> EnumerateOcrResetCandidates(
-        bool includeFailed, int limit, OcrResetOrder order = OcrResetOrder.Newest)
+        bool includeFailed, int limit, OcrResetOrder order = OcrResetOrder.Newest, string? engine = null)
     {
         // Order by the message's DATE, not by a.id. attachments.id is insertion
         // order — roughly the Maildir walk order of the initial bulk ingest —
@@ -1074,6 +1083,14 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // Undated mail sorts last in BOTH directions — SQLite would otherwise
         // lead an ascending sweep with every NULL, so "oldest first" would mean
         // "undated first".
+        // Applied inside the WHERE, so ORDER BY and LIMIT see the filtered set.
+        var engineClause = engine switch
+        {
+            null => "",
+            _ when OcrEngineFilter.IsUnknown(engine) => "AND a.ocr_model IS NULL",
+            _ => "AND a.ocr_model = $engine",
+        };
+
         var direction = order == OcrResetOrder.Newest ? "DESC" : "ASC";
         var orderBy = $"(m.date_sent IS NULL), datetime(m.date_sent) {direction}, a.id {direction}";
 
@@ -1095,6 +1112,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
                  OR ({ImageOcrMatch} AND a.extraction_status = $noText)
                  OR ($includeFailed AND a.extraction_status = $failed)
               )
+              {engineClause}
             ORDER BY {orderBy}
             LIMIT $limit;
             """;
@@ -1102,6 +1120,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
         cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
+        if (engine is not null && !OcrEngineFilter.IsUnknown(engine))
+            cmd.Parameters.AddWithValue("$engine", engine);
         cmd.Parameters.AddWithValue("$includeFailed", includeFailed ? 1 : 0);
         cmd.Parameters.AddWithValue("$limit", limit <= 0 ? int.MaxValue : limit);
 

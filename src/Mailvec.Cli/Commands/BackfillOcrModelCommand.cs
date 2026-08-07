@@ -120,6 +120,7 @@ internal static class BackfillOcrModelCommand
                   (SELECT COUNT(*) FROM attachments WHERE {predicate}),
                   (SELECT COUNT(*) FROM attachments WHERE extraction_status = $ocr AND ocr_model IS NOT NULL),
                   (SELECT COUNT(*) FROM attachments WHERE extraction_status = $ocr
+                     AND ocr_model IS NULL
                      AND (extracted_at IS NULL OR datetime(extracted_at) >= datetime($cutoff)));
                 """;
             q.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
@@ -135,7 +136,11 @@ internal static class BackfillOcrModelCommand
         @out.WriteLine($"Engine id     : {model}");
         @out.WriteLine($"Would stamp   : {candidates} attachment(s) at status 'ocr'");
         @out.WriteLine($"Already stamped: {alreadyStamped} (left alone{(overwrite ? " — but --overwrite is set, so in-range ones WILL be rewritten" : "")})");
-        @out.WriteLine($"At/after cutoff: {afterCutoff} left NULL — re-OCR these to have the passes stamp them for real");
+        // Counts only the UNSTAMPED ones. Once the passes have been stamping for
+        // a while most post-cutoff rows carry an observed value, and reporting
+        // those as "left NULL, re-OCR these" would turn a dry run whose whole
+        // job is to be checkable into a misleading one.
+        @out.WriteLine($"After cutoff, still unstamped: {afterCutoff} — re-OCR these so the passes stamp them from observation");
 
         if (candidates == 0)
         {

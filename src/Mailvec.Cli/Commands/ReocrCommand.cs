@@ -43,6 +43,11 @@ internal static class ReocrCommand
             Description = "Cap the number of attachments reset this run, for working through a large backlog in slices. 0 (default) means no cap.",
             DefaultValueFactory = _ => 0,
         };
+        var engineOpt = new Option<string?>("--engine")
+        {
+            Description = "Only reset verdicts produced by this engine id (as recorded in attachments.ocr_model, e.g. 'ollama:qwen2.5vl:7b'), or 'unknown' for rows with no recorded provenance (pre-v10 output). Omit to reset every eligible verdict. This is what makes a provider switch re-run only the old engine's work instead of the whole corpus.",
+        };
+
         var orderOpt = new Option<string>("--order")
         {
             Description = "Which end of the mailbox to work from: 'newest' (default) or 'oldest'. Ordered by the message's DATE, not by insertion order — so --limit covers the most recent scans rather than whatever the initial ingest inserted first.",
@@ -62,7 +67,7 @@ internal static class ReocrCommand
             "reocr",
             "Re-queue attachments already OCR'd (or ruled textless) by a previous vision provider, so the configured one reprocesses them.")
         {
-            applyOpt, includeFailedOpt, limitOpt, orderOpt,
+            applyOpt, includeFailedOpt, limitOpt, orderOpt, engineOpt,
         };
 
         cmd.SetAction(parse => Run(
@@ -71,28 +76,31 @@ internal static class ReocrCommand
             limit: parse.GetValue(limitOpt),
             order: string.Equals(parse.GetValue(orderOpt), "oldest", StringComparison.OrdinalIgnoreCase)
                 ? OcrResetOrder.Oldest
-                : OcrResetOrder.Newest));
+                : OcrResetOrder.Newest,
+            engine: parse.GetValue(engineOpt)));
         return cmd;
     }
 
-    private static int Run(bool apply, bool includeFailed, int limit, OcrResetOrder order)
+    private static int Run(bool apply, bool includeFailed, int limit, OcrResetOrder order, string? engine)
     {
         using var sp = CliServices.Build();
-        return Execute(sp, Console.Out, apply, includeFailed, limit, order);
+        return Execute(sp, Console.Out, apply, includeFailed, limit, order, engine);
     }
 
     /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
     internal static int Execute(
         IServiceProvider sp, TextWriter @out, bool apply, bool includeFailed, int limit,
-        OcrResetOrder order = OcrResetOrder.Newest)
+        OcrResetOrder order = OcrResetOrder.Newest, string? engine = null)
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var messages = sp.GetRequiredService<MessageRepository>();
 
-        var candidates = messages.EnumerateOcrResetCandidates(includeFailed, limit, order);
+        var candidates = messages.EnumerateOcrResetCandidates(includeFailed, limit, order, engine);
         if (candidates.Count == 0)
         {
-            @out.WriteLine("Nothing to re-OCR: no attachments are holding a previous engine's verdict.");
+            @out.WriteLine(engine is null
+                ? "Nothing to re-OCR: no attachments are holding a previous engine's verdict."
+                : $"Nothing to re-OCR matching --engine {engine}.");
             return 0;
         }
 

@@ -1103,8 +1103,55 @@ public class AttachmentOcrServiceTests : IDisposable
         Metadata.Get(OcrHealthKeys.RetiredTotal).ShouldBe("1");
     }
 
+    [Fact]
+    public async Task A_pre_provider_failure_is_not_attributed_to_the_vision_engine()
+    {
+        // Regression. Every retirement used to stamp the configured engine id,
+        // including ones that fail BEFORE any provider call — an unreadable
+        // .eml, a PDF PDFium cannot open, bytes that aren't a decodable image.
+        // That attributes a verdict to an engine that never saw the document,
+        // and it poisons the one query the column exists for: "re-OCR
+        // everything engine X produced" would sweep up corrupt files no
+        // provider switch can fix, and would keep doing so, because every
+        // retry fails at the same pre-provider step.
+        long id = StageNoTextPdf("notapdf@x", "this is not a PDF at all"u8.ToArray());
+        var vision = new FakeVision(true, _ => "SHOULD NEVER BE CALLED");
+
+        await Build(vision).ProcessBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed, "PDFium cannot open it");
+        ModelOf(id).ShouldBe(OcrProvenance.PreProvider);
+        ModelOf(id).ShouldNotBe(vision.ModelId);
+    }
+
+    [Fact]
+    public async Task A_provider_produced_verdict_still_names_the_engine()
+    {
+        // The other half of the same rule: once the provider has actually
+        // spoken, its id is exactly what must be recorded.
+        long id = StageNoTextPdf("good@x", MinimalPdf(1));
+        var vision = new FakeVision(true, _ => "REAL SCANNED TEXT FROM THE PAGE");
+
+        await Build(vision).ProcessBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        ModelOf(id).ShouldBe(vision.ModelId);
+    }
+
+    private string? ModelOf(long messageId)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT ocr_model FROM attachments WHERE message_id = $id AND part_index = 0;";
+        cmd.Parameters.AddWithValue("$id", messageId);
+        return cmd.ExecuteScalar() as string;
+    }
+
     private sealed class FakeVision(bool available, Func<byte[], string> ocr) : IVisionClient
     {
+        /// <summary>Distinct from OcrProvenance.PreProvider so provenance assertions mean something.</summary>
+        public string ModelId => "fake:test-vision";
+
         public Task<string> OcrAsync(byte[] image, CancellationToken ct = default) => Task.FromResult(ocr(image));
         public Task<string> OcrImageAsync(byte[] image, CancellationToken ct = default) => Task.FromResult(ocr(image));
         public Task<bool> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult(available);
