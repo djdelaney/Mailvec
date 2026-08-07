@@ -153,6 +153,7 @@ Fields the monitors use:
 | `ollama.reachable` | the embedding model server answers | `true` |
 | `mail.syncStale` | mbsync is alive but its syncs keep failing — no successful pull in 4x the sync interval (min 30 min) | `false` |
 | `mail.known` | whether any successful sync is on record (`false` = fresh deploy, or a local install with no sidecar) | `true` in steady state |
+| `ocr.stalled` | OCR has work waiting but has committed no terminal decision in 30 min | `false` (absent = never OCR'd) |
 
 > **Pair `mail.known` with `mail.syncStale`, don't check `syncStale` alone.**
 > A deployment that has NEVER synced successfully reports
@@ -165,6 +166,19 @@ Fields the monitors use:
 > red), which is precisely why production monitoring has to require
 > `known = true` as well. Give it enough retries or startup grace to let the
 > first sync land.
+
+**`ocr.stalled` is absent, not false, when OCR has never run.** The field is
+omitted entirely rather than reported `false`, so JSONata resolves it to nothing
+and the monitor sits unmatched instead of green — deliberate, so a fresh
+deployment isn't asserted healthy on a pass that has never executed. Give it
+startup grace rather than treating "unmatched" as an incident.
+
+It keys on a committed terminal *decision* (text recovered **or** a definitive
+"this document has none"), not on text recovered, because a backlog of ordinary
+photographs drains perfectly while recovering nothing — keying on text would
+flag a working pass. This monitor matters more with a hosted vision provider
+than a local one: throttling, an expired key or a schema change stops OCR while
+every other signal here stays green.
 
 **`mail.syncStale` vs `services[service='mbsync'].stale` — these answer
 different questions and you want both.** The mbsync beat is written on its own
@@ -210,6 +224,7 @@ All at URL `https://mailvec.<domain>/up`, with the header block above, and
 | `mailvec-model-mismatch` | `embeddings.modelMismatch` | `false` |
 | `mailvec-ollama` | `ollama.reachable` | `true` |
 | `mailvec-mail-sync` | `mail.syncStale = false and mail.known = true` | `true` |
+| `mailvec-ocr` | `ocr.stalled` | `false` |
 
 If you prefer a single monitor over granularity, use this instead (returns a
 boolean; covers degraded status, any stale worker, **and** a sidecar whose
@@ -225,7 +240,7 @@ curl to find out why.
 exclusive, and the combination is usually what you want: create all the
 granular monitors with **notifications off**, so the dashboard still names
 which thing broke, plus one monitor on the compound expression above with
-notifications **on**. That's one notification per incident instead of eight,
+notifications **on**. That's one notification per incident instead of nine,
 and you keep the diagnosis. Uptime Kuma has no parent/child alert suppression —
 its Monitor Group type is organizational only, and children alert
 independently — so per-monitor notification checkboxes are the lever.
@@ -287,7 +302,7 @@ incident history will show them going down in lockstep.
 Accepting `503` makes each monitor's JSONata the sole decider, so they stay
 independent and each reports only its own failure.
 
-**Add an eighth monitor at the same time**, on overall status:
+**Add a ninth monitor at the same time**, on overall status:
 
 | Monitor name | JSON Query (JSONata) | Expected value |
 |---|---|---|
@@ -306,7 +321,7 @@ produce a 503 are exactly the three the dedicated monitors cover:
 
 But that correspondence is a coincidence of the current code, not an invariant.
 Broaden the degraded set in `HealthService` and the new condition becomes
-**invisible** — 503 accepted, no query covering it, seven green monitors and a
+**invisible** — 503 accepted, no query covering it, eight green monitors and a
 degraded server. `mailvec-status` closes that permanently: it goes red on any
 degraded status, covered or not.
 
