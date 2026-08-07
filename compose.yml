@@ -336,9 +336,9 @@ services:
     command: ["dotnet", "/app/embedder/Mailvec.Embedder.dll"]
     environment:
       <<: *mailvec-env
-      # OCR knobs, parameterised because the right values depend on whether
-      # Ollama is on a GPU. The defaults below reproduce the in-binary
-      # defaults exactly, so leaving all four unset in .env changes nothing.
+      # OCR knobs, parameterised because the right values depend on the corpus
+      # and on whether Ollama is on a GPU. The defaults below reproduce the
+      # in-binary defaults exactly, so leaving all five unset changes nothing.
       #
       # These are the ONLY service that needs them: OCR runs in the embedder
       # (the indexer never calls Ollama, and the MCP server doesn't OCR).
@@ -349,6 +349,14 @@ services:
       Embedder__ImageOcrEnabled: ${MAILVEC_IMAGE_OCR_ENABLED:-true}
       Ollama__VisionRequestTimeoutSeconds: ${MAILVEC_VISION_TIMEOUT_SECONDS:-120}
       Ollama__VisionMaxTokens: ${MAILVEC_VISION_MAX_TOKENS:-2048}
+      # Minimum characters an OCR result must have to be stored as text; below
+      # it the document is marked as having none. Exposed because the right
+      # value is a judgement about YOUR mail, not a property of the code: too
+      # low and photographs of physical objects index under a stray glyph
+      # (observed: a phone photo of children's placemats stored as "1.1"), too
+      # high and genuine short results — a door number, a total — are thrown
+      # away. Retune after watching a `mailvec reocr` slice; 0 stores anything.
+      Embedder__OcrMinTextChars: ${MAILVEC_OCR_MIN_TEXT_CHARS:-10}
       #
       # The API key, and ONLY here — OCR runs in this container. The provider
       # identity comes from the shared anchor above so every service agrees on
