@@ -36,6 +36,17 @@ namespace Mailvec.Cli.Commands;
 /// </summary>
 internal static class DoctorCommand
 {
+    /// <summary>
+    /// How recently the embedder must have committed a batch for a failed
+    /// Ollama probe to read as contention rather than breakage.
+    ///
+    /// Generous on purpose: the embedder polls every 30s and one batch can run
+    /// for minutes, so a tighter window would call a working pipeline broken.
+    /// Looser would delay a genuine outage — bounded anyway, because a real
+    /// outage stops the embedder committing and this lapses within the window.
+    /// </summary>
+    private static readonly TimeSpan EmbedderRecentSuccessWindow = TimeSpan.FromMinutes(5);
+
     public static Command Build()
     {
         var jsonOpt = new Option<bool>("--json") { Description = "Emit a machine-readable JSON report instead of the human checklist. Each check has status='ok'|'warn'|'fail' plus a detail string." };
@@ -465,15 +476,50 @@ internal static class DoctorCommand
         }
         else if (report.Ollama.EmbeddingModelAvailable == true)
         {
-            // Server up, model listed as pulled, yet the embed probe failed —
-            // the model can't actually load. The known cause is the incomplete
-            // Homebrew *formula* build (no llama-server, GGML models never
-            // load); GPU/memory pressure is the other candidate.
-            checks.Add(DoctorCheck.Warn("Ollama",
-                $"reachable at {report.Ollama.BaseUrl} and {report.Ollama.ConfiguredModel} is pulled, but the embed probe failed — " +
-                "the model can't load. If Ollama came from the Homebrew formula, switch to the cask (`brew install --cask ollama-app`) — " +
-                "see the README's Ollama note; otherwise check the host's free memory and the Ollama server log.",
-                "pipeline"));
+            // Server up, model listed as pulled, embed probe failed. That has
+            // two very different causes, and the message used to assert the
+            // scarier one.
+            //
+            // The probe is bounded at 5s (OllamaClient.PingAsync — deliberately
+            // tight, because the tray polls /health every 5s, so it must not be
+            // raised). On a CPU-only host behind a busy embedder, requests queue
+            // and that budget is easy to blow even though every individual embed
+            // returns in milliseconds. Observed exactly that: a 0.1s embed by
+            // hand while doctor reported "the model can't load".
+            //
+            // So ask for EVIDENCE rather than waiting longer. If the embedder
+            // has committed a batch recently, Ollama provably loads and serves
+            // the model, and a timed-out probe is contention — not breakage.
+            // Same reasoning as the OCR pass's health probe: same-cycle success
+            // distinguishes a busy provider from a broken one.
+            var embedderWorkedRecently = report.Embedder.LastSuccessAt is { } lastEmbed
+                && DateTimeOffset.UtcNow - lastEmbed < EmbedderRecentSuccessWindow;
+
+            if (embedderWorkedRecently)
+            {
+                checks.Add(DoctorCheck.Ok("Ollama",
+                    $"reachable at {report.Ollama.BaseUrl} ({report.Ollama.ConfiguredModel}); " +
+                    "the 5s health probe timed out, but the embedder committed a batch within the last " +
+                    $"{EmbedderRecentSuccessWindow.TotalMinutes:0} minutes — so the model loads and serves, and this is " +
+                    "queueing under load (expected during a large re-embed or `mailvec reocr`).",
+                    "pipeline"));
+            }
+            else
+            {
+                // No recent evidence the model can serve. Now the alarming
+                // reading is the right one. The Homebrew formula build (no
+                // llama-server, GGML models never load) is a real cause but a
+                // macOS-only one — offering it on a Linux host sends the
+                // operator somewhere with nothing to fix.
+                var hostHint = OperatingSystem.IsMacOS()
+                    ? "If Ollama came from the Homebrew formula, switch to the cask (`brew install --cask ollama-app`) — see the README's Ollama note. Otherwise check "
+                    : "Check ";
+                checks.Add(DoctorCheck.Warn("Ollama",
+                    $"reachable at {report.Ollama.BaseUrl} and {report.Ollama.ConfiguredModel} is pulled, but the embed probe " +
+                    "timed out and the embedder has committed nothing recently — the model may not be able to load. " +
+                    hostHint + "the host's free memory and the Ollama server log.",
+                    "pipeline"));
+            }
         }
         else
         {
