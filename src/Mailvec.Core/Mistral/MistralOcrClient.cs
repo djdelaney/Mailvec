@@ -32,6 +32,10 @@ public sealed class MistralOcrClient(
     HttpClient http, IOptions<VisionOptions> options, ILogger<MistralOcrClient> logger) : IVisionClient
 {
     private readonly MistralVisionOptions _opts = options.Value.Mistral;
+
+    /// <inheritdoc />
+    /// <remarks>The endpoint is deliberately excluded — see IVisionClient.ModelId.</remarks>
+    public string ModelId => $"mistral:{_opts.Model}";
     private DateTimeOffset _nextCallAt = DateTimeOffset.MinValue;
 
     /// <summary>

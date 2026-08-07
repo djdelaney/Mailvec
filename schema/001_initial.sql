@@ -118,10 +118,17 @@ CREATE TABLE attachments (
     extracted_text     TEXT,
     extracted_at       TEXT,
     extraction_status  TEXT,
+    -- Which OCR engine produced this row's verdict ('ollama:<model>' /
+    -- 'mistral:<model>'), or NULL for natively-extracted rows and anything
+    -- predating provenance tracking. See schema/migrations/010 for why NULL is
+    -- never backfilled by inference.
+    ocr_model          TEXT,
     UNIQUE(message_id, part_index)
 );
 
 CREATE INDEX idx_attachments_message ON attachments(message_id);
+CREATE INDEX idx_attachments_ocr_model
+    ON attachments(ocr_model) WHERE ocr_model IS NOT NULL;
 
 -- Per-message text chunks fed to the embedder. `source` is 'body' or
 -- 'attachment'; for 'attachment' rows, attachment_id points at the source
@@ -195,6 +202,6 @@ CREATE TABLE metadata (
 );
 
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '9'),
+    ('schema_version',       '10'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024');

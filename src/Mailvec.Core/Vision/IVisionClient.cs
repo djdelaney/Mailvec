@@ -50,4 +50,29 @@ public interface IVisionClient
         await IsModelAvailableAsync(ct).ConfigureAwait(false)
             ? new VisionProbe(VisionProbeStatus.Available, null)
             : new VisionProbe(VisionProbeStatus.Unreachable, null);
+
+    /// <summary>
+    /// Compact, stable identity of the engine behind this client, recorded on
+    /// every row it OCRs (<c>attachments.ocr_model</c>) so a later provider
+    /// switch can tell which documents came from which engine — the thing
+    /// <c>mailvec reocr</c> could not previously select on.
+    ///
+    /// <para><b>Asked of the client, not derived from config, on purpose.</b>
+    /// The value has to describe the engine that actually produced the text. A
+    /// second read of <c>Vision:Provider</c> at write time is a different fact
+    /// from "what the object I just called is", and the two diverge exactly
+    /// when it matters — a config reload, or a process holding a client built
+    /// before the change.</para>
+    ///
+    /// <para><b>Shape is <c>provider:model</c>, deliberately NOT
+    /// <see cref="VisionRegistration.Describe"/></b>, which appends the hosted
+    /// endpoint URL. This string is written to thousands of rows and is a
+    /// candidate for the MCP surface; an endpoint is deployment state rather
+    /// than engine identity, and baking it into the corpus would both bloat it
+    /// and leak an internal address anywhere the column is surfaced.</para>
+    ///
+    /// <para>The default keeps hand-built test fakes compiling and is honest
+    /// about what it knows; both real clients override it.</para>
+    /// </summary>
+    string ModelId => "unknown";
 }

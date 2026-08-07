@@ -270,6 +270,37 @@ public class ReocrCommandTests
 
     // ---- helpers --------------------------------------------------------------
 
+    [Fact]
+    public void Resetting_clears_the_engine_stamp_along_with_the_text_it_described()
+    {
+        // ocr_model describes extracted_text. reocr nulls the text immediately
+        // while replacement only arrives as the passes drain — so a stamp left
+        // behind is a provenance claim about text that no longer exists, and if
+        // the re-OCR then retires the document it never gets corrected.
+        using var ctx = new TestServiceProvider();
+        var attId = StageAttachment(ctx, "s@x", "scan.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "OLD OCR TEXT");
+        using (var conn = ctx.Connections.Open())
+        using (var stamp = conn.CreateCommand())
+        {
+            stamp.CommandText = "UPDATE attachments SET ocr_model = 'ollama:old-engine' WHERE id = $id;";
+            stamp.Parameters.AddWithValue("$id", attId);
+            stamp.ExecuteNonQuery();
+        }
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false, limit: 0)
+            .ShouldBe(0);
+
+        using var check = ctx.Connections.Open();
+        using var q = check.CreateCommand();
+        q.CommandText = "SELECT extracted_text IS NULL, ocr_model IS NULL FROM attachments WHERE id = $id;";
+        q.Parameters.AddWithValue("$id", attId);
+        using var r = q.ExecuteReader();
+        r.Read();
+        r.GetBoolean(0).ShouldBeTrue("text should be cleared");
+        r.GetBoolean(1).ShouldBeTrue("the engine stamp must be cleared with it");
+    }
+
     private static long StageAttachment(
         TestServiceProvider ctx, string messageId, string filename, string contentType,
         string status, string? text, int partIndex = 0)

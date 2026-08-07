@@ -260,6 +260,23 @@ public class SchemaMigratorTests
     }
 
     /// <summary>Reads the real embedded 001_initial.sql resource out of Mailvec.Core.</summary>
+    [Fact]
+    public void The_baseline_schema_stamps_the_version_its_columns_actually_represent()
+    {
+        // 001_initial.sql carries its own schema_version literal and the
+        // fresh-database path applies it verbatim, so this pair must move
+        // together with every migration. When they drifted, a fresh database was
+        // created WITH the newest columns but stamped one version low, and the
+        // next startup replayed the migration that adds them — surfacing as
+        // "SQLite Error 1: duplicate column name", an error that names the
+        // column and nothing about the stamp that caused it.
+        var m = System.Text.RegularExpressions.Regex.Match(
+            LoadInitialSchemaSql(), @"\('schema_version',\s*'(\d+)'\)");
+
+        m.Success.ShouldBeTrue("001_initial.sql must stamp a schema_version");
+        int.Parse(m.Groups[1].Value).ShouldBe(SchemaMigrator.LatestSchemaVersion);
+    }
+
     private static string LoadInitialSchemaSql()
     {
         var asm = typeof(SchemaMigrator).Assembly;

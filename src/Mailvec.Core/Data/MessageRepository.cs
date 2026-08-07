@@ -997,7 +997,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// re-decoded every cycle. (Decode *failures* go through
     /// <see cref="MarkAttachmentOcrFailed"/> instead.)
     /// </summary>
-    public OcrWriteOutcome MarkAttachmentImageNoText(OcrCandidate candidate)
+    public OcrWriteOutcome MarkAttachmentImageNoText(OcrCandidate candidate, string? ocrModel)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         using var conn = connections.Open();
@@ -1006,9 +1006,14 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // retiring a row that moved underneath us would strand a different
         // image as permanently unsearchable, with nothing left to re-select it.
         cmd.CommandText = $"""
-            UPDATE attachments SET extraction_status = $noText
+            UPDATE attachments SET extraction_status = $noText, ocr_model = $model
             WHERE {OcrIdentityMatch} AND extraction_status = $unsupported;
             """;
+        // "This engine looked and found nothing" is an engine-specific verdict
+        // (mistral reaches it via StripPlaceholders, Ollama via a NO_TEXT_FOUND
+        // sentinel), so it is stamped like a transcription. Without it, a
+        // provider switch cannot re-examine the images the old engine passed on.
+        cmd.Parameters.AddWithValue("$model", (object?)ocrModel ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
@@ -1153,7 +1158,8 @@ public sealed class MessageRepository(ConnectionFactory connections)
             // a status we never inspected would discard work we didn't mean to.
             cmd.CommandText = """
                 UPDATE attachments
-                SET extracted_text = NULL, extracted_at = NULL, extraction_status = $target
+                SET extracted_text = NULL, extracted_at = NULL, extraction_status = $target,
+                    ocr_model = NULL
                 WHERE id = $id AND message_id = $mid AND extraction_status = $from;
                 """;
             cmd.Parameters.AddWithValue("$target", a.TargetStatus);
@@ -1248,7 +1254,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// the worker (which then polled again immediately, believing OCR had
     /// produced work). The metrics lied and the extra cycle was pure waste.</para>
     /// </summary>
-    public OcrWriteOutcome SaveOcrText(OcrCandidate candidate, string text)
+    public OcrWriteOutcome SaveOcrText(OcrCandidate candidate, string text, string? ocrModel)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         var messageId = candidate.MessageId;
@@ -1268,10 +1274,16 @@ public sealed class MessageRepository(ConnectionFactory connections)
             // with no path left to correct it. If anything moved, write nothing.
             cmd.CommandText = $"""
                 UPDATE attachments
-                SET extracted_text = $text, extraction_status = $ocr, extracted_at = $now
+                SET extracted_text = $text, extraction_status = $ocr, extracted_at = $now,
+                    ocr_model = $model
                 WHERE {OcrIdentityMatch} AND extraction_status IN ($noText, $unsupported);
                 """;
             cmd.Parameters.AddWithValue("$text", text);
+            // Stamped in the SAME guarded UPDATE as the verdict, never a
+            // follow-up write: a second statement could land on a row the first
+            // one didn't, which is the whole failure mode OcrIdentityMatch
+            // exists to prevent.
+            cmd.Parameters.AddWithValue("$model", (object?)ocrModel ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
             cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
             cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
@@ -1457,7 +1469,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// Mark an attachment 'failed' so the OCR pass stops re-selecting a PDF that
     /// PDFium can't even open (a poison doc would otherwise be retried forever).
     /// </summary>
-    public OcrWriteOutcome MarkAttachmentOcrFailed(OcrCandidate candidate)
+    public OcrWriteOutcome MarkAttachmentOcrFailed(OcrCandidate candidate, string? ocrModel)
     {
         ArgumentNullException.ThrowIfNull(candidate);
         using var conn = connections.Open();
@@ -1468,9 +1480,13 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // cycle against its own snapshot, so a genuinely poison document still
         // retires (one cycle later) instead of head-of-line blocking forever.
         cmd.CommandText = $"""
-            UPDATE attachments SET extraction_status = $failed
+            UPDATE attachments SET extraction_status = $failed, ocr_model = $model
             WHERE {OcrIdentityMatch} AND extraction_status IN ($noText, $unsupported);
             """;
+        // Retirement is engine-specific too: a DocumentFatal from one provider
+        // can be a clean read on another. Stamping it is what makes "re-try
+        // everything the old engine gave up on" expressible.
+        cmd.Parameters.AddWithValue("$model", (object?)ocrModel ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
         cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
         cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);

@@ -1,0 +1,42 @@
+-- v10: attachments.ocr_model — which OCR engine produced this row's verdict.
+--
+-- Why. `Vision:Provider` selects between a local Ollama vision model and the
+-- hosted mistral-ocr API, and switching it re-OCRs nothing: the PDF pass
+-- selects `no_text` and the image pass `unsupported`, so every document the
+-- PREVIOUS engine finished is matched by neither query and keeps that engine's
+-- output permanently, mistakes included. Until now nothing recorded which
+-- engine that was, so after a switch there was no way to re-run only the old
+-- engine's work — `mailvec reocr` selects on status alone, making it all or
+-- nothing across the whole corpus.
+--
+-- The column is written by the three OCR write-back paths (SaveOcrText,
+-- MarkAttachmentImageNoText, MarkAttachmentOcrFailed) inside the same
+-- identity-guarded UPDATE that writes the verdict, so the stamp cannot land on
+-- a row the verdict didn't.
+--
+-- NULL is meaningful and is NOT backfilled here. It means "produced before
+-- provenance tracking existed", which is a different fact from any engine name
+-- and the only honest one this migration can state:
+--
+--   * The cutover date is deployment state (`Vision__Provider` in the compose
+--     environment), which this repository cannot see. A migration that
+--     date-inferred a value would be encoding an assumption about unversioned
+--     operator state as a recorded fact.
+--   * A WRONG stamp is worse than none. Stamp a mistral row as the local model
+--     and a later "re-OCR everything the local model produced" silently skips
+--     the real local rows and re-runs the mistral ones — the column that was
+--     supposed to give you confidence becomes the thing that misleads you.
+--   * NULL is already actionable: `WHERE ocr_model IS NULL` reads as "unknown
+--     provenance, treat as suspect" and is a perfectly good reocr selector.
+--
+-- An operator who KNOWS their deployment's history can assert it explicitly
+-- with `mailvec backfill-ocr-model --model <id> --before <date> --apply`.
+-- Operator asserts; the migration does not assume.
+ALTER TABLE attachments ADD COLUMN ocr_model TEXT;
+
+-- Partial index: the selective queries are "which rows did engine X produce"
+-- and "which rows have unknown provenance", both over the OCR-touched subset,
+-- which is a minority of the table (2.5k of ~12.5k on the author's corpus).
+-- Indexing only non-NULL keeps it off the majority of rows that never saw OCR.
+CREATE INDEX idx_attachments_ocr_model
+    ON attachments(ocr_model) WHERE ocr_model IS NOT NULL;

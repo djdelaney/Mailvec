@@ -19,6 +19,9 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
 {
     private readonly OllamaOptions _opts = options.Value;
 
+    /// <inheritdoc />
+    public string ModelId => $"ollama:{_opts.VisionModel}";
+
     // Prompt validated in the OCR spike (qwen2.5vl): verbatim transcription,
     // structure preserved, no commentary. Assumes the image is a document page
     // that contains text.
