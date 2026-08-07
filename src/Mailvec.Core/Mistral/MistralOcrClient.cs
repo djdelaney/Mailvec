@@ -167,12 +167,40 @@ public sealed class MistralOcrClient(
                 await Task.Delay(delay, ct).ConfigureAwait(false);
             }
 
-            var parsed = await response!.Content.ReadFromJsonAsync<OcrResponse>(ct).ConfigureAwait(false)
-                ?? throw new VisionException(VisionFailureKind.Transient, "mistral-ocr returned an empty body.");
+            OcrResponse? parsed;
+            try
+            {
+                parsed = await response!.Content.ReadFromJsonAsync<OcrResponse>(ct).ConfigureAwait(false);
+            }
+            catch (JsonException ex)
+            {
+                // A 2xx carrying something that isn't our schema at all — a
+                // gateway interstitial, an HTML error page. Protocol failure,
+                // never a verdict on the document.
+                throw new VisionException(
+                    VisionFailureKind.Transient, "mistral-ocr returned a body that could not be parsed.", ex);
+            }
 
-            return parsed.Pages is null
-                ? []
-                : [.. parsed.Pages.OrderBy(p => p.Index).Select(p => p.Markdown ?? string.Empty)];
+            // A well-formed response MUST carry pages. Treating a missing or
+            // empty `pages` as "no text" is the quiet way to lose an archive:
+            // the caller reads empty as a legitimate blank result and commits a
+            // TERMINAL state (status='ocr' with no text for a PDF, 'no_text' for
+            // an image), so the attachment leaves the candidate set with neither
+            // text recovered nor any failure recorded. A gateway returning an
+            // unexpected 2xx, or a provider schema change, would drain the whole
+            // queue that way with nothing in the logs to show for it.
+            //
+            // An empty `markdown` INSIDE a valid page stays legitimate — that is
+            // the genuine blank-page/textless-photo case this pass exists to
+            // record.
+            if (parsed?.Pages is null || parsed.Pages.Count == 0)
+            {
+                throw new VisionException(
+                    VisionFailureKind.Transient,
+                    "mistral-ocr returned a 2xx with no pages — treating as a protocol failure, not as blank text.");
+            }
+
+            return [.. parsed.Pages.OrderBy(p => p.Index).Select(p => p.Markdown ?? string.Empty)];
         }
         finally
         {
