@@ -171,6 +171,103 @@ public class ReocrCommandTests
             .ShouldBe(1);
     }
 
+    // ---- selection order ------------------------------------------------------
+
+    [Fact]
+    public void Defaults_to_newest_mail_first()
+    {
+        // After an engine swap the documents worth re-reading soonest are the
+        // ones most likely to be searched. Ordering by attachment id instead
+        // would hand back whatever the initial bulk ingest inserted first,
+        // which has nothing to do with recency.
+        using var ctx = new TestServiceProvider();
+        var old = StageDatedPdf(ctx, "old@x", "2019-01-01T00:00:00.0000000+00:00");
+        var recent = StageDatedPdf(ctx, "recent@x", "2026-05-01T00:00:00.0000000+00:00");
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false, limit: 1);
+
+        StatusOf(ctx, recent).ShouldBe(AttachmentTextExtractor.StatusNoText); // reset
+        StatusOf(ctx, old).ShouldBe(AttachmentTextExtractor.StatusOcr);       // untouched
+    }
+
+    [Fact]
+    public void Oldest_order_works_from_the_other_end()
+    {
+        using var ctx = new TestServiceProvider();
+        var old = StageDatedPdf(ctx, "old@x", "2019-01-01T00:00:00.0000000+00:00");
+        var recent = StageDatedPdf(ctx, "recent@x", "2026-05-01T00:00:00.0000000+00:00");
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false,
+            limit: 1, order: OcrResetOrder.Oldest);
+
+        StatusOf(ctx, old).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        StatusOf(ctx, recent).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
+    public void Ordering_compares_instants_not_ISO_strings()
+    {
+        // date_sent is DateTimeOffset.ToString("O"), so ONE column holds mixed
+        // offsets. Sorted as text, '...07:13:20-05:00' (12:13Z) lands BELOW
+        // '...11:00:00+00:00' (11:00Z) — exactly inverted. Only datetime()
+        // normalisation gets this right, and nothing else in the run would
+        // reveal the mistake: you would simply re-OCR the wrong documents.
+        using var ctx = new TestServiceProvider();
+        var laterInstant = StageDatedPdf(ctx, "later@x", "2026-06-28T07:13:20.0000000-05:00");  // 12:13Z
+        var earlierInstant = StageDatedPdf(ctx, "earlier@x", "2026-06-28T11:00:00.0000000+00:00"); // 11:00Z
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false, limit: 1);
+
+        StatusOf(ctx, laterInstant).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        StatusOf(ctx, earlierInstant).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
+    public void Undated_mail_sorts_last_in_both_directions()
+    {
+        // SQLite puts NULLs first on an ascending sort, so without the explicit
+        // IS NULL key "oldest first" would really mean "undated first" — and a
+        // --limit run would spend itself on messages with no date at all.
+        using var ctx = new TestServiceProvider();
+        var undated = StageDatedPdf(ctx, "undated@x", null);
+        var dated = StageDatedPdf(ctx, "dated@x", "2019-01-01T00:00:00.0000000+00:00");
+
+        ReocrCommand.Execute(ctx.Services, new StringWriter(), apply: true, includeFailed: false,
+            limit: 1, order: OcrResetOrder.Oldest);
+
+        StatusOf(ctx, dated).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        StatusOf(ctx, undated).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
+    public void The_report_names_the_order_it_used()
+    {
+        // With --limit the order decides WHICH documents get done, so it must
+        // not be something the operator has to infer.
+        using var ctx = new TestServiceProvider();
+        StageDatedPdf(ctx, "a@x", "2026-01-01T00:00:00.0000000+00:00");
+
+        var writer = new StringWriter();
+        ReocrCommand.Execute(ctx.Services, writer, apply: false, includeFailed: false, limit: 0);
+
+        writer.ToString().ShouldContain("newest mail first");
+    }
+
+    /// <summary>An 'ocr' PDF attachment on a message with the given date_sent (null allowed).</summary>
+    private static long StageDatedPdf(TestServiceProvider ctx, string messageId, string? dateSentIso)
+    {
+        var id = StageAttachment(ctx, messageId, "scan.pdf", "application/pdf",
+            AttachmentTextExtractor.StatusOcr, "OLD TEXT");
+        var mid = MessageIdOf(ctx, id);
+        using var conn = ctx.Services.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE messages SET date_sent = $d WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$d", (object?)dateSentIso ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$id", mid);
+        cmd.ExecuteNonQuery();
+        return id;
+    }
+
     // ---- helpers --------------------------------------------------------------
 
     private static long StageAttachment(
