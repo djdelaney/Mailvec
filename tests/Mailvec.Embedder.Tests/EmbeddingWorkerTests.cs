@@ -510,15 +510,16 @@ public class EmbeddingWorkerTests : IDisposable
     [Fact]
     public async Task ProcessOneBatchAsync_throws_when_client_returns_fewer_vectors_than_chunks()
     {
-        // The worker's own vector-count guard, defense-in-depth behind
-        // OllamaClient's identical check. A fake client that under-returns trips
-        // it directly; without the guard, ChunkRepository would pair chunks with
-        // the wrong vectors (silent vector-space corruption).
+        // An under-returning transport now trips EmbeddingService's count
+        // validation (the mathematical contract moved up at the boundary
+        // extraction) before the worker's own defense-in-depth guard; either
+        // way, ChunkRepository must never pair chunks with wrong vectors.
         InsertMessage("undercount@x", subject: "S", body: new string('a', 400));
         var worker = BuildWorker(new FakeEmbeddingClient(_ => [])); // 0 vectors for 1 chunk
 
-        var ex = await Should.ThrowAsync<InvalidOperationException>(
+        var ex = await Should.ThrowAsync<EmbeddingException>(
             () => worker.ProcessOneBatchAsync(batchSize: 16, ct: default));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
         ex.Message.ShouldContain("0 vectors");
     }
 

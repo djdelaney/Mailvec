@@ -226,23 +226,12 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
 
         if (parsed.Embeddings is null || parsed.Embeddings.Length != inputs.Count)
         {
+            // Count is protocol framing, so it stays in the transport; the
+            // MATHEMATICAL contract (dimension width, finiteness, L2
+            // normalization) moved up into EmbeddingService, which owns it
+            // once for every transport — don't reintroduce it here.
             throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
                 $"Ollama returned {parsed.Embeddings?.Length ?? 0} embeddings for {inputs.Count} inputs.");
-        }
-
-        var expected = _opts.EmbeddingDimensions;
-        for (int i = 0; i < parsed.Embeddings.Length; i++)
-        {
-            var vec = parsed.Embeddings[i];
-            if (vec.Length != expected)
-            {
-                throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
-                    $"Embedding {i} has {vec.Length} dimensions; expected {expected} for model {_opts.EmbeddingModel}.");
-            }
-            // IEmbeddingClient contract: vectors are L2-normalized so vec0's
-            // L2 KNN ranks cosine-equivalently regardless of model. No-op
-            // (bit-for-bit) for models that already normalize, like mxbai.
-            VectorMath.NormalizeInPlaceIfNeeded(vec);
         }
 
         return (parsed.Embeddings, null);

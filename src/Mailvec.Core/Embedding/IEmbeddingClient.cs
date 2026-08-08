@@ -4,17 +4,19 @@ namespace Mailvec.Core.Embedding;
 /// Provider-neutral embedding seam. OllamaClient is the only implementation
 /// today; a hosted API (OpenAI, Voyage) would slot in here without touching
 /// consumers. Contract: <see cref="EmbedAsync"/> returns one float[] per
-/// input, in the same order, and every vector is L2-normalized — vec0 KNN
-/// uses L2 distance, so normalization is what makes ranking
-/// cosine-equivalent across models. Implementations must validate vector
-/// length against the configured dimension count before returning.
+/// input, in the same order, RAW — the mathematical contract (dimension
+/// width, finiteness, L2 normalization for vec0's L2 KNN) is enforced once
+/// by EmbeddingService for every transport. This interface is the protocol
+/// transport seam; consumers go through IEmbeddingService.
 /// </summary>
 public interface IEmbeddingClient
 {
     /// <summary>
-    /// Embed each input string. Returns one L2-normalized float[] per input,
-    /// same order. May truncate over-long inputs rather than fail; throws on
-    /// non-recoverable provider errors.
+    /// Embed each input string. Returns one RAW float[] per input, same
+    /// order — dimension validation, finiteness checks and L2 normalization
+    /// are owned by EmbeddingService (once, for every transport), not here.
+    /// May truncate over-long inputs rather than fail; throws a classified
+    /// EmbeddingException on non-recoverable provider errors.
     /// </summary>
     Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default);
 
