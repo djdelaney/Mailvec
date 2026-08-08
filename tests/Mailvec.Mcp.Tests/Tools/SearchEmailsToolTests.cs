@@ -10,20 +10,24 @@ namespace Mailvec.Mcp.Tests.Tools;
 
 public class SearchEmailsToolTests
 {
+    private static readonly Mailvec.Core.Embedding.ResolvedEmbeddingProfile LegacyProfile = new(
+        "ollama-legacy", "ollama", "ollama", "http://localhost:11434",
+        "mxbai-embed-large", 1024, "ollama:mxbai-embed-large:1024", "", "", "", "", 16, 60);
+
     private static SearchEmailsTool Build(
         TempDatabase db,
         Mailvec.Core.Ollama.OllamaClient? ollama = null,
         McpOptions? mcpOpts = null,
         FastmailOptions? fastmailOpts = null,
-        OllamaOptions? ollamaOpts = null)
+        OllamaOptions? ollamaOpts = null,
+        Mailvec.Core.Embedding.ResolvedEmbeddingProfile? profile = null)
     {
+        profile ??= LegacyProfile;
         var messages = new MessageRepository(db.Connections);
         var keyword = new KeywordSearchService(db.Connections);
         var vector = new VectorSearchService(db.Connections, ollama is null
             ? null!
-            : new Mailvec.Core.Embedding.EmbeddingService(ollama, new Mailvec.Core.Embedding.ResolvedEmbeddingProfile(
-                "ollama-legacy", "ollama", "ollama", "http://localhost:11434",
-                "mxbai-embed-large", 1024, "ollama:mxbai-embed-large:1024", "", "", "", "", 16, 60)));
+            : new Mailvec.Core.Embedding.EmbeddingService(ollama, LegacyProfile));
         var hybrid = new HybridSearchService(keyword, vector);
         return new SearchEmailsTool(
             keyword, vector, hybrid, messages,
@@ -32,7 +36,8 @@ public class SearchEmailsToolTests
             Helpers.Ollama(ollamaOpts),
             Helpers.Archive(),
             Helpers.NoopLogger(),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance,
+            profile);
     }
 
     // ---------- Browse path (no query) ----------
@@ -340,5 +345,33 @@ public class SearchEmailsToolTests
         ex.Message.ShouldNotContain("MARKER-SECRET-SUBJECT");
         // Still actionable: the recovery path and the public model name remain.
         ex.Message.ShouldContain("mode=keyword");
+    }
+
+    [Fact]
+    public async Task Hosted_profile_failures_get_provider_remediation_never_ollama_pull()
+    {
+        // Phase 4: a Fireworks user must not be told to `ollama pull`. The
+        // message names the provider's diagnostic id only — no endpoint, no
+        // upstream body — and still recommends keyword mode.
+        using var db = new TempDatabase();
+        const string lanUrl = "http://192.168.7.42:11434";
+        var tool = Build(
+            db,
+            ollama: Helpers.FailingOllama(lanUrl, "{\"error\":\"boom\"}"),
+            ollamaOpts: new OllamaOptions { BaseUrl = lanUrl },
+            profile: new Mailvec.Core.Embedding.ResolvedEmbeddingProfile(
+                "fireworks-qwen", "openai-compatible", "fireworks",
+                "https://api.fireworks.ai/inference/v1/embeddings",
+                "accounts/fireworks/models/qwen3-embedding-8b", 1024,
+                "fireworks:qwen3-embedding-8b:1024:test", "", "", "", "", 16, 60,
+                SendWireModel: true, SendDimensions: true, EncodingFormat: "float"));
+
+        var ex = await Should.ThrowAsync<McpException>(
+            async () => await tool.SearchEmails(query: "anything", mode: "semantic"));
+
+        ex.Message.ShouldContain("fireworks");
+        ex.Message.ShouldContain("mode=keyword");
+        ex.Message.ShouldNotContain("ollama pull");
+        ex.Message.ShouldNotContain("api.fireworks.ai");   // no endpoint disclosure
     }
 }

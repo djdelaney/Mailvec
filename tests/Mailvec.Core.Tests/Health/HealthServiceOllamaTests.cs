@@ -99,6 +99,23 @@ public class HealthServiceOllamaTests
         r.Status.ShouldBe("degraded");
     }
 
+    [Fact]
+    public async Task The_report_carries_the_resolved_profile_identity_without_secrets()
+    {
+        using var db = new TempDatabase();
+        var r = await Build(db, new FakeEmbedding(ping: true, modelAvailable: null)).CheckAsync();
+
+        r.Profile.ShouldNotBeNull();
+        r.Profile!.Name.ShouldBe("ollama-legacy");
+        r.Profile.Protocol.ShouldBe("ollama");
+        r.Profile.ProviderId.ShouldBe("ollama");
+        r.Profile.EndpointHost.ShouldBe("localhost");   // host only, never the full URL
+        r.Profile.WireModel.ShouldBe("mxbai-embed-large");
+        r.Profile.Dimensions.ShouldBe(1024);
+        r.Profile.SpaceId.ShouldBe("ollama:mxbai-embed-large:1024");
+        r.Profile.ProbeStatus.ShouldBe("Available");
+    }
+
     private sealed class HangingProbeEmbedding : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>

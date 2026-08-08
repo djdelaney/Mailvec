@@ -849,6 +849,17 @@ The additive `/up` `embeddingProvider.ready` field with the documented
 `status` reporting; provider-neutral MCP `search_emails` error translation;
 the Uptime Kuma runbook update (dated as observed, per the ops-doc rule).
 
+**Complete (2026-08-08):** `embeddingProvider.ready` rides `/up` beside the
+alias (same value; the allowlist test admits and pins it); `/health` carries
+an additive `profile` block (name, protocol, provider id, endpoint HOST only,
+wire model, dimensions, space id, probe classification — never credentials);
+doctor prints the resolved profile as a config check; MCP `search_emails`
+gives hosted profiles kind-specific provider remediation (never
+`ollama pull`; the remaining Ollama-named doctor advice paths are provably
+unreachable under hosted profiles, since only the Ollama transport can
+report a definite missing model). Live Kuma monitor migration is a
+post-release operator step recorded in the runbook.
+
 ### Phase 5 — credentials and deployment wiring
 
 `ApiKeyFile` support, the Docker secret mount for MCP + embedder (never
