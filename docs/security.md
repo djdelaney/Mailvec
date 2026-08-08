@@ -293,6 +293,44 @@ Turning it off is `Vision:Provider=ollama` (or `Embedder:OcrEnabled=false` /
 un-sends anything already transmitted, and neither removes text already stored —
 use `mailvec reocr` for that.
 
+## Hosted embedding (`Embedding:ActiveProfile`)
+
+**Default is Ollama, and the section applies only when a hosted profile is
+activated** — a threat-model decision with a substantially larger boundary
+change than hosted OCR, because embedding touches everything:
+
+- **What leaves the network.** The embedder sends EVERY indexed body and
+  extracted-attachment chunk; MCP and the CLI send every semantic/hybrid
+  search query; a `switch-model` re-embed sends the historical corpus in bulk
+  with no user present per request. Four fixed non-mail sentinel texts are
+  also embedded periodically (the drift check) — deliberately non-mail, so
+  the integrity mechanism itself discloses nothing.
+- **Retention/training/residency are the provider's terms.** Fireworks'
+  documented serverless terms were reviewed for the first experiment; any
+  OTHER provider or deployment mode needs its own review before activation —
+  a profile edit is one line, and the line moves the mailbox.
+- **The key** lives in `secrets/embedding_api_key` (the `fastmail_password`
+  pattern: owner-only file beside `compose.yml`, mounted read-only at
+  `/run/secrets/embedding_api_key`), and is mounted into **mcp and embedder
+  only** — unlike the OCR key, MCP needs it, because query embedding is what
+  makes semantic search work. The indexer and mbsync never see it; the
+  indexer's embedding registration is identity-only and cannot read key
+  material by construction. It is never placed in the shared env anchor, the
+  shared `appsettings.Local.json` (world-readable by design), or the profile
+  object that health/doctor display.
+- **Blast radius of a compromised mcp container** therefore now includes a
+  reusable hosted-inference credential in addition to mail-search access. Use
+  a dedicated provider account/key with a conservative monthly spend limit,
+  and rotate on any doubt — the file's contents are the only thing to change.
+- **Bearer-only, HTTPS-only, no redirects** are enforced in code (registration
+  validation and the transport's handler), not convention.
+- **Egress**: mcp and embedder need outbound 443 to the configured endpoint.
+
+Deactivation is `MAILVEC_EMBEDDING_PROFILE=` (empty → Ollama) — but note the
+vectors already built under the hosted space stay, and the space-identity
+guards will (correctly) refuse mixed use until `mailvec switch-model`
+rebuilds; and as with OCR, nothing un-sends what was transmitted.
+
 ## The other shape: a loopback-only local install
 
 `ops/install-all.sh` still produces the original single-Mac deployment — launchd services, MCP bound to `127.0.0.1:3333`, the MCPB bundle for Claude Desktop. It remains supported and is what [`docs/clients/`](clients/README.md) documents. Its model is the one this page used to describe in full:

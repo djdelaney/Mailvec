@@ -439,6 +439,11 @@ done
 # overwritten with the just-prompted values.
 SHARED_CONFIG="$HOME/Library/Application Support/Mailvec/appsettings.Local.json"
 mkdir -p "$(dirname "$SHARED_CONFIG")"
+# Owner-only home for hosted API keys (decision 4 of the embedding-providers
+# proposal). The DIRECTORY only — never a key file: keys are the operator's
+# to place, and an installer-created placeholder invites world-readable
+# copy-paste. The shared config stays key-free by design (it is 0644).
+install -d -m 700 "$HOME/Library/Application Support/Mailvec/secrets"
 # python3 produces correctly-escaped JSON — safer than building the file
 # with shell quoting when paths might contain spaces or special chars.
 python3 - "$SHARED_CONFIG" "$DB_PATH" "$MAILDIR_ROOT" "$OLLAMA_URL" "$FASTMAIL_ACCOUNT_ID" <<'PY'
