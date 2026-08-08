@@ -40,6 +40,16 @@ public sealed class ChunkRepository(ConnectionFactory connections)
     /// space is silently mixed. The startup check alone can't catch this;
     /// only a check inside the write transaction can.
     /// </para>
+    /// <para>
+    /// <paramref name="expectedSpaceId"/> and <paramref name="expectedConfigHash"/>
+    /// (v11) extend the same mid-run guard to the embedding-space identity: a
+    /// space or config-hash change that lands during the HTTP embed call must
+    /// not commit stale-space vectors after the migration transaction. They
+    /// compare against <c>metadata.embedding_space_id</c> /
+    /// <c>embedding_config_hash</c> exactly like the model check; a stored
+    /// NULL against a non-null expectation skips (the identity is not yet
+    /// established, so this writer cannot prove it matches).
+    /// </para>
     public bool ReplaceChunksForMessage(
         long messageId,
         IReadOnlyList<TextChunk> chunks,
@@ -48,7 +58,9 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         string? expectedContentHash = null,
         bool checkContentHash = false,
         long? expectedEmbedEpoch = null,
-        string? expectedEmbeddingModel = null)
+        string? expectedEmbeddingModel = null,
+        string? expectedSpaceId = null,
+        string? expectedConfigHash = null)
     {
         if (chunks.Count != vectors.Count)
             throw new ArgumentException($"Chunk/vector count mismatch: {chunks.Count} vs {vectors.Count}");
@@ -59,7 +71,9 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         if (checkContentHash && !SnapshotStillCurrent(conn, tx, messageId, expectedContentHash, expectedEmbedEpoch))
             return false;
 
-        if (expectedEmbeddingModel is not null && !EmbeddingModelMatches(conn, tx, expectedEmbeddingModel))
+        if (!MetadataMatches(conn, tx, "embedding_model", expectedEmbeddingModel)
+            || !MetadataMatches(conn, tx, Embedding.EmbeddingSpace.SpaceIdKey, expectedSpaceId)
+            || !MetadataMatches(conn, tx, Embedding.EmbeddingSpace.ConfigHashKey, expectedConfigHash))
             return false;
 
         DeleteChunks(conn, tx, messageId);
@@ -97,13 +111,21 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         return expectedEmbedEpoch is null || reader.GetInt64(1) == expectedEmbedEpoch.Value;
     }
 
-    private static bool EmbeddingModelMatches(SqliteConnection conn, SqliteTransaction tx, string expectedModel)
+    /// <summary>
+    /// True when the caller passed no expectation for this key, or the stored
+    /// value ordinally equals it. A stored NULL against a non-null
+    /// expectation is a mismatch — "identity unknown" must not read as
+    /// "identity confirmed".
+    /// </summary>
+    private static bool MetadataMatches(SqliteConnection conn, SqliteTransaction tx, string key, string? expected)
     {
+        if (expected is null) return true;
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = "SELECT value FROM metadata WHERE key = 'embedding_model'";
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = $k";
+        cmd.Parameters.AddWithValue("$k", key);
         var current = cmd.ExecuteScalar() as string;
-        return string.Equals(current, expectedModel, StringComparison.Ordinal);
+        return string.Equals(current, expected, StringComparison.Ordinal);
     }
 
     public int CountForMessage(long messageId)

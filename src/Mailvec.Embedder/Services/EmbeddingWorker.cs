@@ -261,9 +261,11 @@ public sealed class EmbeddingWorker(
                 var vecs = texts.Count == 0
                     ? Array.Empty<float[]>()
                     : await EmbedInBatchesAsync(texts, batchSize, ct).ConfigureAwait(false);
+                var (isoSpaceId, isoConfigHash) = EmbeddingSpace.FromOllamaOptions(ollamaOptions.Value);
                 var committed = chunks.ReplaceChunksForMessage(m.Id, msgChunks, vecs, embeddedAt, m.ContentHash,
                     checkContentHash: true, expectedEmbedEpoch: m.EmbedEpoch,
-                    expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel);
+                    expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel,
+                    expectedSpaceId: isoSpaceId, expectedConfigHash: isoConfigHash);
                 // The embed call succeeded either way — that's the Ollama-
                 // health evidence the strike accounting below keys off, so
                 // `successes` counts regardless. A guard-skipped write
@@ -421,6 +423,7 @@ public sealed class EmbeddingWorker(
         var attachmentChunkCount = 0;
         var nonEmptyMessageCount = 0;
         var skipped = 0;
+        var (expectedSpaceId, expectedConfigHash) = EmbeddingSpace.FromOllamaOptions(ollamaOptions.Value);
         foreach (var (id, contentHash, embedEpoch, msgChunks) in perMessageChunks)
         {
             if (msgChunks.Count == 0)
@@ -430,7 +433,8 @@ public sealed class EmbeddingWorker(
                 // Guarded like the non-empty path: if the body grew (content
                 // changed) mid-batch, don't stamp it embedded-with-no-chunks.
                 if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true,
-                        expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel))
+                        expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel,
+                        expectedSpaceId: expectedSpaceId, expectedConfigHash: expectedConfigHash))
                     skipped++;
                 continue;
             }
@@ -439,7 +443,8 @@ public sealed class EmbeddingWorker(
             // message whether or not the guarded write commits.
             cursor += msgChunks.Count;
             if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true,
-                    expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel))
+                    expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel,
+                    expectedSpaceId: expectedSpaceId, expectedConfigHash: expectedConfigHash))
             {
                 // This message was re-queued during the embed call (body
                 // change or attachment-text change); leave embedded_at = NULL
@@ -642,6 +647,45 @@ public sealed class EmbeddingWorker(
                 $"Embedding model mismatch. Database was built with {existingModel} ({existingDim} dims); " +
                 $"config requests {configuredModel} ({configuredDim} dims). " +
                 $"Run `mailvec switch-model` to migrate the DB to the new model (reindex alone won't update the stamped metadata).");
+        }
+
+        // v11 space identity: with model + dims already verified equal, the
+        // derived space id can only disagree if the stored one was asserted by
+        // something this Ollama config can't reproduce (a future hosted
+        // profile, or a hand edit) — never silently write into that space. A
+        // config-hash mismatch with everything else equal means a
+        // vector-affecting text transform changed (Ollama:QueryInstructionPrefix
+        // today): query vectors would leave the space the stored document
+        // vectors live in while every name still matches, which no other
+        // check can see. Absent values self-heal — this worker is about to
+        // produce vectors under exactly this identity, so stamping it is a
+        // statement of fact, mirroring the model/dims initialisation above.
+        var (spaceId, configHash) = EmbeddingSpace.FromOllamaOptions(ollamaOptions.Value);
+        var existingSpace = metadata.Get(EmbeddingSpace.SpaceIdKey);
+        if (existingSpace is null)
+        {
+            metadata.Set(EmbeddingSpace.SpaceIdKey, spaceId);
+        }
+        else if (!string.Equals(existingSpace, spaceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Embedding-space mismatch. Database vectors belong to space '{existingSpace}'; this " +
+                $"configuration describes '{spaceId}'. Run `mailvec switch-model` to rebuild the vectors, " +
+                "or fix the configuration — never mix spaces.");
+        }
+
+        var existingHash = metadata.Get(EmbeddingSpace.ConfigHashKey);
+        if (existingHash is null)
+        {
+            metadata.Set(EmbeddingSpace.ConfigHashKey, configHash);
+        }
+        else if (!string.Equals(existingHash, configHash, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Embedding config-hash mismatch for space '{spaceId}': a vector-affecting setting " +
+                "(e.g. Ollama:QueryInstructionPrefix) differs from the one the stored vectors were " +
+                "produced with. Revert the setting, or run `mailvec switch-model` to re-embed everything " +
+                "under the new configuration.");
         }
     }
 }

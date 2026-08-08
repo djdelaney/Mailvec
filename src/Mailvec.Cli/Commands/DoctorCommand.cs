@@ -397,7 +397,7 @@ internal static class DoctorCommand
         if (report.Embeddings.ModelMismatch)
         {
             checks.Add(DoctorCheck.Fail("Embedding model",
-                $"schema={report.Embeddings.SchemaModel} ({report.Embeddings.SchemaDimensions}d) vs config={report.Embeddings.ConfigModel} ({report.Embeddings.ConfigDimensions}d). The embedder will refuse to start. Run `mailvec switch-model` to migrate the DB to the configured model (rebuilds the vector table and re-queues every message).",
+                $"schema={report.Embeddings.SchemaModel} ({report.Embeddings.SchemaDimensions}d) vs config={report.Embeddings.ConfigModel} ({report.Embeddings.ConfigDimensions}d). If those look identical, the embedding-space id or config hash moved instead (a vector-affecting setting like Ollama:QueryInstructionPrefix changed — compare `mailvec status`). The embedder will refuse to start. Run `mailvec switch-model` to migrate the DB to the configured model/space (rebuilds the vector table and re-queues every message), or revert the setting.",
                 "pipeline"));
         }
         else if (report.Embeddings.SchemaModel is null)
@@ -593,7 +593,16 @@ internal static class DoctorCommand
 
         var schemaModel = metadata.Get("embedding_model");
         _ = int.TryParse(metadata.Get("embedding_dimensions"), out var schemaDim);
-        bool mismatch = schemaModel is not null && (schemaModel != ollama.EmbeddingModel || (schemaDim != 0 && schemaDim != ollama.EmbeddingDimensions));
+        // Same widened rule as HealthService (v11): a stored space id or
+        // config hash that disagrees with config is a mismatch too; absent
+        // metadata is unknown, never a mismatch.
+        var (cfgSpaceId, cfgConfigHash) = Mailvec.Core.Embedding.EmbeddingSpace.FromOllamaOptions(ollama);
+        var storedSpaceId = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey);
+        var storedConfigHash = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.ConfigHashKey);
+        bool mismatch =
+            (schemaModel is not null && (schemaModel != ollama.EmbeddingModel || (schemaDim != 0 && schemaDim != ollama.EmbeddingDimensions)))
+            || (storedSpaceId is not null && storedSpaceId != cfgSpaceId)
+            || (storedConfigHash is not null && storedConfigHash != cfgConfigHash);
 
         var live = Math.Max(total - deleted, 0);
         var coverage = live == 0 ? 0d : (double)embedded / live;

@@ -43,7 +43,11 @@ public sealed class SchemaMigrator(
     // against scan time that let a content change with a preserved/backdated
     // mtime be skipped on every future scan. No backfill; NULL means "no
     // recorded identity" and the scanner records it on the next pass.
-    public const int LatestSchemaVersion = 10;
+    // v11 adds metadata.embedding_space_id (stamped in SQL from the DB's own
+    // stored model/dimensions) and metadata.embedding_config_hash (stamped in
+    // code by StampConfigHashIfMissing — it covers config-side text
+    // transforms SQL cannot see). Identity only; vectors are untouched.
+    public const int LatestSchemaVersion = 11;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying
@@ -81,6 +85,7 @@ public sealed class SchemaMigrator(
         if (current == LatestSchemaVersion)
         {
             logger.LogDebug("Schema already at version {Version}", current);
+            StampConfigHashIfMissing(conn);
             return;
         }
 
@@ -95,6 +100,7 @@ public sealed class SchemaMigrator(
             ExecuteScript(conn, SubstituteEmbeddingConfig(
                 initialSql, opts.EmbeddingModel, opts.EmbeddingDimensions),
                 guardAtLeast: 1); // skip if another starter already initialized the schema
+            StampConfigHashIfMissing(conn);
             return;
         }
 
@@ -104,6 +110,57 @@ public sealed class SchemaMigrator(
             logger.LogInformation("Applying migration {File} ({From} -> {To})", fileName, v - 1, v);
             ExecuteScript(conn, sql, stampVersion: v, guardAtLeast: v);
         }
+
+        StampConfigHashIfMissing(conn);
+    }
+
+    /// <summary>
+    /// Stamps <c>metadata.embedding_config_hash</c> when absent — and ONLY
+    /// when this binary's configured model + dimensions agree with what the
+    /// database already stores. The hash is a provenance claim ("this is how
+    /// the stored vectors were produced"), and config that disagrees with the
+    /// stored identity is exactly the situation in which that claim would be
+    /// false — those databases stay unstamped until the mismatch is resolved
+    /// (the embedder refuses to run against them anyway). Never overwrites:
+    /// an existing hash is an observation this method has no authority over.
+    /// Runs on every EnsureUpToDate, so a database migrated by a binary with
+    /// mismatched config self-heals the first time a correctly-configured
+    /// binary opens it.
+    /// </summary>
+    private void StampConfigHashIfMissing(Microsoft.Data.Sqlite.SqliteConnection conn)
+    {
+        string? Read(string key)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT value FROM metadata WHERE key = $k";
+            cmd.Parameters.AddWithValue("$k", key);
+            return cmd.ExecuteScalar() as string;
+        }
+
+        if (Read(Embedding.EmbeddingSpace.ConfigHashKey) is not null) return;
+
+        var opts = ollamaOptions?.Value ?? new OllamaOptions();
+        var storedModel = Read("embedding_model");
+        var storedDims = Read("embedding_dimensions");
+        var storedSpaceId = Read(Embedding.EmbeddingSpace.SpaceIdKey);
+        if (storedModel is null || storedDims is null || storedSpaceId is null) return;
+        if (!string.Equals(storedModel, opts.EmbeddingModel, StringComparison.Ordinal)) return;
+        if (storedDims != opts.EmbeddingDimensions.ToString(CultureInfo.InvariantCulture)) return;
+
+        var (derivedSpaceId, hash) = Embedding.EmbeddingSpace.FromOllamaOptions(opts);
+        // A space id this config can't reproduce (a future hosted profile's
+        // asserted id, or a hand-edited value) is not ours to describe.
+        if (!string.Equals(storedSpaceId, derivedSpaceId, StringComparison.Ordinal)) return;
+
+        using var stamp = conn.CreateCommand();
+        stamp.CommandText = """
+            INSERT INTO metadata(key, value) VALUES($k, $v)
+            ON CONFLICT(key) DO NOTHING
+            """;
+        stamp.Parameters.AddWithValue("$k", Embedding.EmbeddingSpace.ConfigHashKey);
+        stamp.Parameters.AddWithValue("$v", hash);
+        stamp.ExecuteNonQuery();
+        logger.LogInformation("Stamped embedding_config_hash for space {SpaceId}", storedSpaceId);
     }
 
     /// <summary>
@@ -250,7 +307,12 @@ public sealed class SchemaMigrator(
         // Order matters: FLOAT[1024] must be rewritten before the
         // ('embedding_dimensions', '1024') seed so the two '1024' tokens
         // can't be confused; the model token is matched in its quoted form
-        // because the schema comments mention mxbai-embed-large unquoted.
+        // because the schema comments mention mxbai-embed-large unquoted (and
+        // the space-id seed embeds the name without its own quotes, so the
+        // quoted token still appears exactly once). The space-id seed is
+        // rewritten first, while its default literal is still intact.
+        sql = ReplaceExactlyOnce(sql, "'ollama:mxbai-embed-large:1024'",
+            $"'{Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions)}'");
         sql = ReplaceExactlyOnce(sql, "FLOAT[1024]", $"FLOAT[{dims}]");
         sql = ReplaceExactlyOnce(sql, "'mxbai-embed-large'", $"'{model}'");
         sql = ReplaceExactlyOnce(sql, "('embedding_dimensions', '1024')", $"('embedding_dimensions', '{dims}')");
@@ -350,15 +412,32 @@ public sealed class SchemaMigrator(
         var chunksDeleted = Exec("DELETE FROM chunks");
         var messagesReset = Exec("UPDATE messages SET embedded_at = NULL, embed_epoch = embed_epoch + 1");
 
+        // Space id + config hash are stamped in the SAME transaction as the
+        // model/dimension rewrite — a crash between them would leave the new
+        // model carrying the old space's identity, which is precisely the
+        // false-compatibility claim the v11 columns exist to prevent. The
+        // hash is computed from the CLI's resolved config (the
+        // embedding-experiments flow sets Ollama__* env overrides for the
+        // switch invocation too, so the query prefix here matches the one the
+        // embedder will run with).
+        var spaceId = Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions);
+        var prefix = ollamaOptions?.Value.QueryInstructionPrefix ?? "";
+        var configHash = Embedding.EmbeddingSpace.ComputeConfigHash(
+            spaceId, model, dimensions, prefix, documentPrefix: "");
+
         using (var cmd = conn.CreateCommand())
         {
             cmd.Transaction = tx;
             cmd.CommandText = """
-                INSERT INTO metadata(key, value) VALUES('embedding_model', $m), ('embedding_dimensions', $d)
+                INSERT INTO metadata(key, value) VALUES
+                    ('embedding_model', $m), ('embedding_dimensions', $d),
+                    ('embedding_space_id', $s), ('embedding_config_hash', $h)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
                 """;
             cmd.Parameters.AddWithValue("$m", model);
             cmd.Parameters.AddWithValue("$d", dimensions.ToString(CultureInfo.InvariantCulture));
+            cmd.Parameters.AddWithValue("$s", spaceId);
+            cmd.Parameters.AddWithValue("$h", configHash);
             cmd.ExecuteNonQuery();
         }
 
