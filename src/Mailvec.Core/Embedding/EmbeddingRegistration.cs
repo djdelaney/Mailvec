@@ -47,7 +47,15 @@ public sealed record ResolvedEmbeddingProfile(
     string DocumentPrefix,
     string DocumentSuffix,
     int MaxBatchSize,
-    int RequestTimeoutSeconds);
+    int RequestTimeoutSeconds,
+    // Hosted-protocol capability policy (defaults describe the Ollama
+    // protocol, which composes its own request): whether the wire `model`
+    // field is sent, whether `dimensions` is requested, and the encoding
+    // format to assert. Never auth material — the key stays out of this
+    // displayable record by construction.
+    bool SendWireModel = true,
+    bool SendDimensions = false,
+    string? EncodingFormat = null);
 
 /// <summary>
 /// One place that decides which embedding provider a process gets — the
@@ -67,59 +75,93 @@ public static class EmbeddingRegistration
         var resolved = Resolve(configuration);
         services.AddSingleton(resolved);
 
-        // Phase-2a bridge: consumers that still read Ollama:* directly
-        // (EmbeddingWorker's verify, HealthService, VectorSearchService's
-        // query prefix, EmbeddingSpace.FromOllamaOptions) see the profile's
-        // resolved values, so a profile override cannot split-brain against
-        // a direct read. Identity when no profile overrides anything.
-        services.PostConfigure<OllamaOptions>(o =>
-        {
-            o.EmbeddingModel = resolved.WireModel;
-            o.EmbeddingDimensions = resolved.OutputDimensions;
-            o.QueryInstructionPrefix = resolved.QueryPrefix;
-            o.MaxBatchSize = resolved.MaxBatchSize;
-            o.RequestTimeoutSeconds = resolved.RequestTimeoutSeconds;
-        });
+        // (The phase-2a PostConfigure bridge is retired: every consumer now
+        // reads the resolved profile directly, so there is nothing left for
+        // profile overrides to split-brain against.)
 
-        var http = services.AddHttpClient<OllamaClient>((sp, client) =>
+        if (resolved.Protocol == OpenAiCompatibleProtocol)
         {
-            var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-            client.BaseAddress = new Uri(opts.BaseUrl);
-            client.Timeout = role == EmbeddingClientRole.BackgroundIngestion
-                // The resilience handler below owns the per-attempt/total
-                // timeouts. HttpClient.Timeout wraps the entire handler chain
-                // — retries included — so it must sit ABOVE
-                // TotalRequestTimeout or it silently caps the pipeline (the
-                // old 60s default made the widened 120s/300s resilience
-                // timeouts dead config). But not infinite: the resilience
-                // timeouts cover up to response HEADERS, while the buffered
-                // body read happens under HttpClient.Timeout alone — an
-                // Ollama that returns 200 then stalls mid-body would hang
-                // the worker until SIGTERM. 330s = 300s total + body slack.
-                // (PingAsync stays bounded by its own 5s linked CTS.)
-                ? TimeSpan.FromSeconds(330)
-                : TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
-        });
+            // The key is resolved ONCE here and captured by the HttpClient
+            // configuration closure — it never touches the displayable
+            // profile, descriptions, or health output. Missing key material
+            // is fatal in EVERY process: unlike the OCR credential (scoped to
+            // the embedder), query embedding needs it in MCP and the CLI too,
+            // and a process that starts cleanly but can't embed queries is a
+            // search outage wearing a green healthcheck.
+            var bearerToken = ResolveBearerToken(configuration, resolved.Name);
 
-        if (role == EmbeddingClientRole.BackgroundIngestion)
-        {
-            http.AddStandardResilienceHandler(o =>
+            var hostedHttp = services.AddHttpClient<OpenAiCompatibleTransport>((sp, client) =>
             {
-                // Embedding a batch can be slow on first model load; widen
-                // the per-attempt timeout.
-                o.AttemptTimeout.Timeout = TimeSpan.FromSeconds(120);
-                o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(300);
-                o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
-            });
-        }
+                client.BaseAddress = new Uri(resolved.Endpoint);
+                if (bearerToken is not null)
+                    client.DefaultRequestHeaders.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearerToken);
+                // Same role split as Ollama: interactive queries get the tight
+                // budget, ingestion the wide one (429/503 retries live in the
+                // resilience handler, which honors Retry-After).
+                client.Timeout = role == EmbeddingClientRole.BackgroundIngestion
+                    ? TimeSpan.FromSeconds(330)
+                    : TimeSpan.FromSeconds(Math.Max(5, resolved.RequestTimeoutSeconds));
+            })
+            // No legitimate inference call redirects, and a redirect must not
+            // receive the bearer credential or a mail payload. Same rule as
+            // the hosted OCR client.
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
-        services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+            if (role == EmbeddingClientRole.BackgroundIngestion)
+            {
+                hostedHttp.AddStandardResilienceHandler(o =>
+                {
+                    o.AttemptTimeout.Timeout = TimeSpan.FromSeconds(120);
+                    o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(300);
+                    o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
+                });
+            }
+
+            services.AddTransient<IEmbeddingTransport>(sp => sp.GetRequiredService<OpenAiCompatibleTransport>());
+        }
+        else
+        {
+            var http = services.AddHttpClient<OllamaClient>((sp, client) =>
+            {
+                var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
+                client.BaseAddress = new Uri(opts.BaseUrl);
+                client.Timeout = role == EmbeddingClientRole.BackgroundIngestion
+                    // The resilience handler below owns the per-attempt/total
+                    // timeouts. HttpClient.Timeout wraps the entire handler
+                    // chain — retries included — so it must sit ABOVE
+                    // TotalRequestTimeout or it silently caps the pipeline
+                    // (the old 60s default made the widened 120s/300s
+                    // resilience timeouts dead config). But not infinite: the
+                    // resilience timeouts cover up to response HEADERS, while
+                    // the buffered body read happens under HttpClient.Timeout
+                    // alone — an Ollama that returns 200 then stalls mid-body
+                    // would hang the worker until SIGTERM. 330s = 300s total
+                    // + body slack.
+                    ? TimeSpan.FromSeconds(330)
+                    : TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
+            });
+
+            if (role == EmbeddingClientRole.BackgroundIngestion)
+            {
+                http.AddStandardResilienceHandler(o =>
+                {
+                    // Embedding a batch can be slow on first model load; widen
+                    // the per-attempt timeout.
+                    o.AttemptTimeout.Timeout = TimeSpan.FromSeconds(120);
+                    o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(300);
+                    o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
+                });
+            }
+
+            services.AddTransient<IEmbeddingTransport>(sp => sp.GetRequiredService<OllamaClient>());
+        }
         // The purpose-aware seam consumers actually use. Same resolved
         // profile object in every executable, so the query transform applied
         // at search time and the document transform applied at embed time
         // can never be two divergent config reads.
         services.AddTransient<IEmbeddingService>(sp =>
-            new EmbeddingService(sp.GetRequiredService<IEmbeddingClient>(), resolved));
+            new EmbeddingService(sp.GetRequiredService<IEmbeddingTransport>(), resolved));
         // Read-side identity enforcement for the semantic search path.
         services.AddTransient<EmbeddingSpaceGuard>();
         return services;
@@ -152,15 +194,131 @@ public static class EmbeddingRegistration
         return profile.Protocol switch
         {
             OllamaProtocol => ResolveOllamaProfile(embedding.ActiveProfile, profile, ollama),
-            OpenAiCompatibleProtocol => throw new NotSupportedException(
-                $"Embedding profile '{embedding.ActiveProfile}' uses protocol '{OpenAiCompatibleProtocol}', " +
-                "which arrives with the hosted transport (phase 3 of docs/proposals/embedding-providers.md). " +
-                "Until then only 'ollama' profiles can be activated."),
+            OpenAiCompatibleProtocol => ResolveOpenAiCompatibleProfile(embedding.ActiveProfile, profile),
             _ => throw new InvalidOperationException(
                 $"Embedding profile '{embedding.ActiveProfile}' declares unknown protocol " +
                 $"'{profile.Protocol}'. Known protocols: '{OllamaProtocol}', '{OpenAiCompatibleProtocol}'. " +
                 "An unknown protocol never falls back to Ollama — fix the profile."),
         };
+    }
+
+    private static ResolvedEmbeddingProfile ResolveOpenAiCompatibleProfile(string name, EmbeddingProfileOptions profile)
+    {
+        // Endpoint: the complete embeddings URL, validated — no fragile
+        // base-address path composition. HTTPS required except loopback (the
+        // stub-test escape hatch); a bearer credential and mail content must
+        // never travel plaintext.
+        if (string.IsNullOrWhiteSpace(profile.Endpoint)
+            || !Uri.TryCreate(profile.Endpoint, UriKind.Absolute, out var endpoint))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Endpoint must be the complete absolute embeddings URL.");
+        if (endpoint.Scheme != Uri.UriSchemeHttps && !endpoint.IsLoopback)
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Endpoint must be HTTPS (plain HTTP is allowed only for loopback test servers).");
+
+        // Decision 3: hosted profiles MUST assert their space id. No provider
+        // exposes anything trustworthy to derive it from — the wire model is
+        // an alias (Fireworks serverless may move it; Baseten may take a
+        // 'not-required' placeholder), and deriving would launder the alias
+        // into looking like an identity.
+        if (string.IsNullOrWhiteSpace(profile.SpaceId))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': hosted profiles must assert an explicit SpaceId " +
+                "(e.g. 'fireworks:qwen3-embedding-8b:1024:adopted-2026-08'). A wire model string is not " +
+                "proof of vector compatibility — see docs/proposals/embedding-providers.md, decision 3.");
+
+        var modelPolicy = profile.Request.ModelParameter.ToLowerInvariant();
+        if (modelPolicy is not ("required" or "placeholder" or "omit"))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Request:ModelParameter must be 'required', 'placeholder', or 'omit'.");
+        var sendModel = modelPolicy != "omit";
+        var wireModel = profile.Request.Model;
+        if (sendModel && string.IsNullOrWhiteSpace(wireModel))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Request:Model is required when ModelParameter is '{modelPolicy}'.");
+
+        var dimsPolicy = profile.Request.DimensionsParameter.ToLowerInvariant();
+        if (dimsPolicy is not ("send" or "omit"))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Request:DimensionsParameter must be 'send' or 'omit'.");
+
+        // Always required and always validated even when it cannot be
+        // requested — the returned width is checked against this either way.
+        if (profile.OutputDimensions is not { } dims)
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': OutputDimensions is required for hosted profiles.");
+        ArgumentOutOfRangeException.ThrowIfLessThan(dims, 1, nameof(profile.OutputDimensions));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(dims, 8192, nameof(profile.OutputDimensions));
+
+        if (profile.Request.EncodingFormat is { } enc && !string.Equals(enc, "float", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': EncodingFormat '{enc}' is unsupported — only 'float' " +
+                "(a second vector-decoding path must be a deliberate change, not a config accident).");
+
+        var scheme = profile.Auth.Scheme.ToLowerInvariant();
+        if (scheme is not ("none" or "bearer"))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Auth:Scheme must be 'none' or 'bearer' — new auth behavior is code, not configuration.");
+
+        return new ResolvedEmbeddingProfile(
+            Name: name,
+            Protocol: OpenAiCompatibleProtocol,
+            ProviderId: profile.ProviderId ?? "custom",
+            Endpoint: profile.Endpoint,
+            WireModel: wireModel ?? "",
+            OutputDimensions: dims,
+            SpaceId: profile.SpaceId,
+            // Hosted transforms default to EMPTY, never to the legacy
+            // Ollama:QueryInstructionPrefix — that setting describes the
+            // local model and inheriting it across providers would be a
+            // silent space-affecting surprise.
+            QueryPrefix: profile.Text.QueryPrefix ?? "",
+            QuerySuffix: profile.Text.QuerySuffix ?? "",
+            DocumentPrefix: profile.Text.DocumentPrefix ?? "",
+            DocumentSuffix: profile.Text.DocumentSuffix ?? "",
+            MaxBatchSize: Positive(profile.MaxBatchSize, 16, name, "MaxBatchSize"),
+            RequestTimeoutSeconds: Positive(profile.RequestTimeoutSeconds, 60, name, "RequestTimeoutSeconds"),
+            SendWireModel: sendModel,
+            SendDimensions: dimsPolicy == "send",
+            EncodingFormat: profile.Request.EncodingFormat?.ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// Resolve bearer key material at registration time — fatal when the
+    /// scheme demands it and none exists. ApiKey (inline/env, for CI stubs
+    /// and shell runs) wins over ApiKeyFile (owner-only file, the posture
+    /// for long-running services). The value is returned to the HttpClient
+    /// closure and stored nowhere else.
+    /// </summary>
+    internal static string? ResolveBearerToken(IConfiguration configuration, string profileName)
+    {
+        var embedding = new EmbeddingOptions();
+        configuration.GetSection(EmbeddingOptions.SectionName).Bind(embedding);
+        if (!embedding.Profiles.TryGetValue(profileName, out var profile)) return null;
+
+        if (!string.Equals(profile.Auth.Scheme, "bearer", StringComparison.OrdinalIgnoreCase)) return null;
+
+        if (!string.IsNullOrWhiteSpace(profile.Auth.ApiKey)) return profile.Auth.ApiKey.Trim();
+
+        if (!string.IsNullOrWhiteSpace(profile.Auth.ApiKeyFile))
+        {
+            var path = PathExpansion.Expand(profile.Auth.ApiKeyFile);
+            if (!File.Exists(path))
+                throw new InvalidOperationException(
+                    $"Embedding profile '{profileName}': Auth:ApiKeyFile '{path}' does not exist. " +
+                    "Query embedding needs the key in every process (embedder, MCP, CLI) — a service that " +
+                    "starts without it is a search outage wearing a green healthcheck.");
+            var key = File.ReadAllText(path).Trim();
+            if (key.Length == 0)
+                throw new InvalidOperationException(
+                    $"Embedding profile '{profileName}': Auth:ApiKeyFile '{path}' is empty.");
+            return key;
+        }
+
+        throw new InvalidOperationException(
+            $"Embedding profile '{profileName}': Auth:Scheme is 'bearer' but neither ApiKey nor ApiKeyFile " +
+            "is configured. Secrets must not live in the shared appsettings.Local.json — use an owner-only " +
+            "key file (ApiKeyFile) or an environment variable override for ApiKey.");
     }
 
     private static ResolvedEmbeddingProfile LegacyProfile(OllamaOptions ollama) => new(

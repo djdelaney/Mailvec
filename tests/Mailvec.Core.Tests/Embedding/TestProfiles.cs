@@ -4,7 +4,7 @@ namespace Mailvec.Core.Tests.Embedding;
 
 /// <summary>
 /// Shared resolved-profile fixtures for tests that wrap an
-/// <see cref="IEmbeddingClient"/> fake in the real <see cref="EmbeddingService"/> —
+/// <see cref="IEmbeddingTransport"/> fake in the real <see cref="EmbeddingService"/> —
 /// which is the point: the purpose-aware layer (text policy, probe
 /// classification) is production code under test, not something each fake
 /// re-implements.

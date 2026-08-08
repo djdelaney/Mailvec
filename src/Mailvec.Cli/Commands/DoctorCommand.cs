@@ -596,11 +596,12 @@ internal static class DoctorCommand
         // Same widened rule as HealthService (v11): a stored space id or
         // config hash that disagrees with config is a mismatch too; absent
         // metadata is unknown, never a mismatch.
-        var (cfgSpaceId, cfgConfigHash) = Mailvec.Core.Embedding.EmbeddingSpace.FromOllamaOptions(ollama);
+        var profile = sp.GetRequiredService<Mailvec.Core.Embedding.ResolvedEmbeddingProfile>();
+        var (cfgSpaceId, cfgConfigHash) = Mailvec.Core.Embedding.EmbeddingSpace.ForProfile(profile);
         var storedSpaceId = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey);
         var storedConfigHash = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.ConfigHashKey);
         bool mismatch =
-            (schemaModel is not null && (schemaModel != ollama.EmbeddingModel || (schemaDim != 0 && schemaDim != ollama.EmbeddingDimensions)))
+            (schemaModel is not null && (schemaModel != profile.WireModel || (schemaDim != 0 && schemaDim != profile.OutputDimensions)))
             || (storedSpaceId is not null && storedSpaceId != cfgSpaceId)
             || (storedConfigHash is not null && storedConfigHash != cfgConfigHash);
 
@@ -618,8 +619,8 @@ internal static class DoctorCommand
             Embeddings: new EmbeddingHealth(
                 SchemaModel: schemaModel,
                 SchemaDimensions: schemaDim == 0 ? null : schemaDim,
-                ConfigModel: ollama.EmbeddingModel,
-                ConfigDimensions: ollama.EmbeddingDimensions,
+                ConfigModel: profile.WireModel,
+                ConfigDimensions: profile.OutputDimensions,
                 ModelMismatch: mismatch,
                 MessagesEmbedded: embedded,
                 CoveragePct: Math.Round(coverage * 100d, 1),
@@ -627,7 +628,7 @@ internal static class DoctorCommand
             Ollama: new OllamaHealth(
                 BaseUrl: ollama.BaseUrl,
                 Reachable: false,         // honest sentinel; rendered as "skipped"
-                ConfiguredModel: ollama.EmbeddingModel),
+                ConfiguredModel: profile.WireModel),
             // OCR is surfaced by doctor's own dedicated vision-model check, not
             // through this offline report — so a zero/skipped placeholder here.
             Ocr: new OcrHealth(

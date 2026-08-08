@@ -15,63 +15,32 @@ namespace Mailvec.Core.Ollama;
 /// underlying HttpClient (BaseAddress, timeout, resilience) via DI; this class
 /// does not own the HttpClient lifetime.
 /// </summary>
-public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> options, ILogger<OllamaClient> logger) : IEmbeddingClient
+public sealed class OllamaClient(
+    HttpClient http,
+    IOptions<OllamaOptions> options,
+    ILogger<OllamaClient> logger,
+    // The wire model comes from the resolved profile — the single source of
+    // truth since the PostConfigure bridge retired. Ollama-specific knobs
+    // (KeepAlive) stay on OllamaOptions. Optional so legacy test
+    // constructions fall back to options-derived values.
+    ResolvedEmbeddingProfile? profile = null) : IEmbeddingTransport
 {
     private readonly OllamaOptions _opts = options.Value;
+    private string WireModel => profile?.WireModel ?? _opts.EmbeddingModel;
 
     // Hard floor on truncation. If a single input still 400s when this small,
     // something else is wrong (model not loaded, GPU OOM) and we surface the error.
     private const int MinTruncatedChars = 64;
 
     /// <summary>
-    /// Readiness check — sends a minimal /api/embed against the *configured*
-    /// model and confirms a non-empty vector comes back. This is deliberately
-    /// stronger than a GET /api/tags liveness ping: Ollama answers /api/tags
-    /// with 200 even when the model can't actually load (incomplete/wrong
-    /// build, missing runner, GPU OOM), and that exact "reachable but can't
-    /// embed" state silently wedges the embedder while leaving /health green.
-    /// A real embed is the only signal that "reachable" also means "ready".
-    ///
-    /// Bounded by a short internal timeout so the MCP health endpoint can't
-    /// hang on the shared embedder HttpClient's 60s timeout — 5s allows for a
-    /// cold model load on the first probe (subsequent probes hit a warm model
-    /// kept resident by KeepAlive). Don't raise it: /health is the mcp
-    /// container's compose healthcheck, which times out at 10s, and this probe
-    /// plus the 2s /api/tags follow-up already spend most of that. Returns
-    /// false on any error; does not surface detail.
-    /// </summary>
-    public async Task<bool> PingAsync(CancellationToken ct = default)
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            var request = new EmbedRequest
-            {
-                Model = _opts.EmbeddingModel,
-                Input = ["ping"],
-                KeepAlive = _opts.KeepAlive,
-                Truncate = true,
-            };
-            using var response = await http.PostAsJsonAsync("/api/embed", request, cts.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return false;
-            var parsed = await response.Content.ReadFromJsonAsync<EmbedResponse>(cts.Token).ConfigureAwait(false);
-            return parsed?.Embeddings is { Length: > 0 } embeddings && embeddings[0].Length > 0;
-        }
-        catch (HttpRequestException) { return false; }
-        catch (System.Text.Json.JsonException) { return false; }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
-    }
-
-    /// <summary>
     /// Tri-state /api/tags probe for the configured embedding model. Weaker
-    /// than <see cref="PingAsync"/> (a listed model can still fail to load),
+    /// than a real embed (a listed model can still fail to load),
     /// but it's what distinguishes "server down" (null) from "server up, model
     /// not pulled" (false) when the ping fails — the two states need opposite
     /// remediation, and conflating them sends users restarting a healthy Ollama.
     /// </summary>
     public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) =>
-        OllamaModelProbe.IsModelAvailableAsync(http, _opts.EmbeddingModel, ct);
+        OllamaModelProbe.IsModelAvailableAsync(http, WireModel, ct);
 
     /// <summary>
     /// Ollama exposes each tag's content-addressed manifest digest via
@@ -79,7 +48,7 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
     /// when unreachable or unlisted (unknown, never drift).
     /// </summary>
     public Task<string?> GetModelArtifactDigestAsync(CancellationToken ct = default) =>
-        OllamaModelProbe.GetModelDigestAsync(http, _opts.EmbeddingModel, ct);
+        OllamaModelProbe.GetModelDigestAsync(http, WireModel, ct);
 
     /// <summary>
     /// Returns one float[] per input string, in the same order. May silently
@@ -192,7 +161,7 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
     {
         var request = new EmbedRequest
         {
-            Model = _opts.EmbeddingModel,
+            Model = WireModel,
             Input = inputs,
             KeepAlive = _opts.KeepAlive,
             // Server-side truncation: works for batched /api/embed as of

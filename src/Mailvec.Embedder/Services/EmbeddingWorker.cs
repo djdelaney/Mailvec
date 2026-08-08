@@ -18,7 +18,6 @@ public sealed class EmbeddingWorker(
     IEmbeddingService embeddings,
     ResolvedEmbeddingProfile embeddingProfile,
     IOptions<EmbedderOptions> embedderOptions,
-    IOptions<OllamaOptions> ollamaOptions,
     ILogger<EmbeddingWorker> logger,
     AttachmentOcrService? ocr = null)
     : BackgroundService
@@ -102,12 +101,12 @@ public sealed class EmbeddingWorker(
         await VerifyModelArtifactDigestAsync(stoppingToken).ConfigureAwait(false);
 
         var pollInterval = TimeSpan.FromSeconds(Math.Max(1, embedderOptions.Value.PollIntervalSeconds));
-        var batchSize = Math.Max(1, ollamaOptions.Value.MaxBatchSize);
+        var batchSize = Math.Max(1, embeddingProfile.MaxBatchSize);
 
         logger.LogInformation(
             "EmbeddingWorker starting. Model={Model} Dim={Dim} BatchSize={Batch} Poll={Poll}s Remaining={Remaining}",
-            ollamaOptions.Value.EmbeddingModel,
-            ollamaOptions.Value.EmbeddingDimensions,
+            embeddingProfile.WireModel,
+            embeddingProfile.OutputDimensions,
             batchSize,
             pollInterval.TotalSeconds,
             messages.CountUnembedded());
@@ -275,7 +274,7 @@ public sealed class EmbeddingWorker(
                 var (isoSpaceId, isoConfigHash) = EmbeddingSpace.ForProfile(embeddingProfile);
                 var committed = chunks.ReplaceChunksForMessage(m.Id, msgChunks, vecs, embeddedAt, m.ContentHash,
                     checkContentHash: true, expectedEmbedEpoch: m.EmbedEpoch,
-                    expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel,
+                    expectedEmbeddingModel: embeddingProfile.WireModel,
                     expectedSpaceId: isoSpaceId, expectedConfigHash: isoConfigHash);
                 // The embed call succeeded either way — that's the Ollama-
                 // health evidence the strike accounting below keys off, so
@@ -460,7 +459,7 @@ public sealed class EmbeddingWorker(
                 // Guarded like the non-empty path: if the body grew (content
                 // changed) mid-batch, don't stamp it embedded-with-no-chunks.
                 if (!chunks.ReplaceChunksForMessage(id, [], [], embeddedAt, contentHash, checkContentHash: true,
-                        expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel,
+                        expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: embeddingProfile.WireModel,
                         expectedSpaceId: expectedSpaceId, expectedConfigHash: expectedConfigHash))
                     skipped++;
                 continue;
@@ -470,7 +469,7 @@ public sealed class EmbeddingWorker(
             // message whether or not the guarded write commits.
             cursor += msgChunks.Count;
             if (!chunks.ReplaceChunksForMessage(id, msgChunks, vecs, embeddedAt, contentHash, checkContentHash: true,
-                    expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel,
+                    expectedEmbedEpoch: embedEpoch, expectedEmbeddingModel: embeddingProfile.WireModel,
                     expectedSpaceId: expectedSpaceId, expectedConfigHash: expectedConfigHash))
             {
                 // This message was re-queued during the embed call (body
@@ -653,8 +652,8 @@ public sealed class EmbeddingWorker(
     /// </summary>
     internal void VerifyEmbeddingModelMatchesSchema()
     {
-        var configuredModel = ollamaOptions.Value.EmbeddingModel;
-        var configuredDim = ollamaOptions.Value.EmbeddingDimensions;
+        var configuredModel = embeddingProfile.WireModel;
+        var configuredDim = embeddingProfile.OutputDimensions;
 
         var existingModel = metadata.Get("embedding_model");
         var existingDim = metadata.Get("embedding_dimensions");
@@ -746,7 +745,7 @@ public sealed class EmbeddingWorker(
             throw new InvalidOperationException(
                 $"Embedding model artifact changed under its name: stored vectors were produced by " +
                 $"digest {stored}, but the server now serves {digest} for " +
-                $"'{ollamaOptions.Value.EmbeddingModel}' (the tag was re-pulled with different weights). " +
+                $"'{embeddingProfile.WireModel}' (the tag was re-pulled with different weights). " +
                 "Run `mailvec switch-model --force` to rebuild all vectors under the new artifact, or " +
                 "restore the original model version.");
         }

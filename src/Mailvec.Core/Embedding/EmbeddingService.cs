@@ -3,13 +3,13 @@ namespace Mailvec.Core.Embedding;
 /// <summary>
 /// The one implementation of <see cref="IEmbeddingService"/>: applies the
 /// resolved profile's text policy, delegates the wire work to the
-/// registered <see cref="IEmbeddingClient"/> transport, and classifies
+/// registered <see cref="IEmbeddingTransport"/> transport, and classifies
 /// readiness. Constructed by <see cref="EmbeddingRegistration"/> with the
 /// same resolved profile in every executable — the text policy applied to
 /// queries here and to documents in the embedder is one object, not two
 /// config reads.
 /// </summary>
-public sealed class EmbeddingService(IEmbeddingClient client, ResolvedEmbeddingProfile profile) : IEmbeddingService
+public sealed class EmbeddingService(IEmbeddingTransport client, ResolvedEmbeddingProfile profile) : IEmbeddingService
 {
     /// <summary>
     /// Mirrors the old OllamaClient.PingAsync bound: 5s allows a cold model

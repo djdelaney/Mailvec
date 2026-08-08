@@ -80,11 +80,13 @@ public class EmbeddingRegistrationTests
     }
 
     [Fact]
-    public void Profile_overrides_are_written_back_onto_OllamaOptions()
+    public void The_resolved_profile_is_the_single_identity_source_and_options_stay_untouched()
     {
-        // The phase-2a bridge: consumers still reading Ollama:* directly
-        // (worker verify, health, search prefix) must see the profile's
-        // values, or the profile would split-brain inside one process.
+        // The phase-2a PostConfigure bridge is retired: consumers read the
+        // registered ResolvedEmbeddingProfile, and OllamaOptions keeps its
+        // own (legacy) values — nothing rewrites it behind the operator's
+        // back. A consumer still deriving identity from options would
+        // disagree with the profile here, which is what this pins.
         var sp = BuildProvider(Config(
             ("Ollama:EmbeddingModel", "mxbai-embed-large"),
             ("Ollama:EmbeddingDimensions", "1024"),
@@ -94,10 +96,14 @@ public class EmbeddingRegistrationTests
             ("Embedding:Profiles:qwen-local:OutputDimensions", "2560")),
             EmbeddingClientRole.Interactive);
 
+        var profile = sp.GetRequiredService<ResolvedEmbeddingProfile>();
+        profile.WireModel.ShouldBe("qwen3-embedding:4b");
+        profile.OutputDimensions.ShouldBe(2560);
+        EmbeddingSpace.ForProfile(profile).SpaceId.ShouldBe("ollama:qwen3-embedding:4b:2560");
+
         var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-        opts.EmbeddingModel.ShouldBe("qwen3-embedding:4b");
-        opts.EmbeddingDimensions.ShouldBe(2560);
-        EmbeddingSpace.FromOllamaOptions(opts).SpaceId.ShouldBe("ollama:qwen3-embedding:4b:2560");
+        opts.EmbeddingModel.ShouldBe("mxbai-embed-large");
+        opts.EmbeddingDimensions.ShouldBe(1024);
     }
 
     [Fact]
@@ -124,13 +130,122 @@ public class EmbeddingRegistrationTests
         ex.Message.ShouldContain("never falls back");
     }
 
-    [Fact]
-    public void OpenAi_compatible_protocol_is_recognised_but_not_yet_activatable()
+    // ---------- hosted (openai-compatible) profiles ----------
+
+    private static (string, string?)[] FireworksConfig(params (string, string?)[] overrides)
     {
-        var ex = Should.Throw<NotSupportedException>(() => EmbeddingRegistration.Resolve(Config(
+        var baseline = new (string, string?)[]
+        {
             ("Embedding:ActiveProfile", "fw"),
-            ("Embedding:Profiles:fw:Protocol", "openai-compatible"))));
-        ex.Message.ShouldContain("phase 3");
+            ("Embedding:Profiles:fw:Protocol", "openai-compatible"),
+            ("Embedding:Profiles:fw:ProviderId", "fireworks"),
+            ("Embedding:Profiles:fw:Endpoint", "https://api.fireworks.ai/inference/v1/embeddings"),
+            ("Embedding:Profiles:fw:Request:Model", "accounts/fireworks/models/qwen3-embedding-8b"),
+            ("Embedding:Profiles:fw:Request:EncodingFormat", "float"),
+            ("Embedding:Profiles:fw:OutputDimensions", "1024"),
+            ("Embedding:Profiles:fw:SpaceId", "fireworks:qwen3-embedding-8b:1024:adopted-2026-08"),
+            ("Embedding:Profiles:fw:Auth:Scheme", "bearer"),
+            ("Embedding:Profiles:fw:Auth:ApiKey", "fw_test_key"),
+        };
+        var merged = baseline.ToDictionary(p => p.Item1, p => p.Item2);
+        foreach (var (key, value) in overrides) merged[key] = value;   // override wins
+        return merged.Select(kv => (kv.Key, kv.Value)).ToArray();
+    }
+
+    [Fact]
+    public void A_fireworks_profile_resolves_with_its_capability_policy()
+    {
+        var resolved = EmbeddingRegistration.Resolve(Config(FireworksConfig()));
+
+        resolved.Protocol.ShouldBe("openai-compatible");
+        resolved.ProviderId.ShouldBe("fireworks");
+        resolved.WireModel.ShouldBe("accounts/fireworks/models/qwen3-embedding-8b");
+        resolved.OutputDimensions.ShouldBe(1024);
+        resolved.SpaceId.ShouldBe("fireworks:qwen3-embedding-8b:1024:adopted-2026-08");
+        resolved.SendWireModel.ShouldBeTrue();
+        resolved.SendDimensions.ShouldBeTrue();
+        resolved.EncodingFormat.ShouldBe("float");
+        // Hosted transforms default EMPTY — never inherited from the
+        // Ollama-specific legacy prefix.
+        resolved.QueryPrefix.ShouldBe("");
+    }
+
+    [Fact]
+    public void A_baseten_style_placeholder_profile_omits_dimensions_and_keeps_the_placeholder_model()
+    {
+        var resolved = EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Request:Model", "not-required"),
+            ("Embedding:Profiles:fw:Request:ModelParameter", "placeholder"),
+            ("Embedding:Profiles:fw:Request:DimensionsParameter", "omit"))));
+
+        resolved.WireModel.ShouldBe("not-required");
+        resolved.SendWireModel.ShouldBeTrue();
+        resolved.SendDimensions.ShouldBeFalse();
+        resolved.OutputDimensions.ShouldBe(1024); // still validated against returns
+    }
+
+    [Fact]
+    public void The_hosted_transport_is_registered_for_an_active_hosted_profile()
+    {
+        var sp = BuildProvider(Config(FireworksConfig()), EmbeddingClientRole.Interactive);
+        sp.GetRequiredService<IEmbeddingTransport>().ShouldBeOfType<OpenAiCompatibleTransport>();
+    }
+
+    [Fact]
+    public void Hosted_profiles_fail_startup_on_each_missing_precondition()
+    {
+        // SpaceId (decision 3), HTTPS, endpoint, model-when-sent, dimensions,
+        // encoding, auth scheme — every one is fatal, never a fallback.
+        foreach (var (broken, mustMention) in new (string, string)[]
+        {
+            ("Embedding:Profiles:fw:SpaceId", "SpaceId"),
+            ("Embedding:Profiles:fw:Endpoint", "Endpoint"),
+            ("Embedding:Profiles:fw:Request:Model", "Request:Model"),
+            ("Embedding:Profiles:fw:OutputDimensions", "OutputDimensions"),
+        })
+        {
+            var config = Config(FireworksConfig().Where(p => p.Item1 != broken).ToArray());
+            Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(config))
+                .Message.ShouldContain(mustMention, customMessage: broken);
+        }
+
+        Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Endpoint", "http://api.fireworks.ai/v1/embeddings")))))
+            .Message.ShouldContain("HTTPS");
+        Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Request:EncodingFormat", "base64")))))
+            .Message.ShouldContain("base64");
+        Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Auth:Scheme", "custom-header")))))
+            .Message.ShouldContain("bearer");
+    }
+
+    [Fact]
+    public void A_loopback_http_endpoint_is_allowed_for_stub_tests()
+    {
+        var resolved = EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Endpoint", "http://127.0.0.1:9999/v1/embeddings"))));
+        resolved.Endpoint.ShouldBe("http://127.0.0.1:9999/v1/embeddings");
+    }
+
+    [Fact]
+    public void Bearer_scheme_without_key_material_is_fatal_and_a_key_file_is_read()
+    {
+        Should.Throw<InvalidOperationException>(() =>
+            EmbeddingRegistration.ResolveBearerToken(Config(FireworksConfig(
+                ("Embedding:Profiles:fw:Auth:ApiKey", null))), "fw"))
+            .Message.ShouldContain("bearer");
+
+        var keyFile = Path.Combine(Path.GetTempPath(), "mailvec-test-key-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(keyFile, "fw_from_file\n");
+        try
+        {
+            EmbeddingRegistration.ResolveBearerToken(Config(FireworksConfig(
+                ("Embedding:Profiles:fw:Auth:ApiKey", null),
+                ("Embedding:Profiles:fw:Auth:ApiKeyFile", keyFile))), "fw")
+                .ShouldBe("fw_from_file");
+        }
+        finally { File.Delete(keyFile); }
     }
 
     [Fact]
@@ -207,7 +322,7 @@ public class EmbeddingRegistrationTests
             var sp = BuildProvider(Config(
                 ("Ollama:EmbeddingModel", "mxbai-embed-large"),
                 ("Ollama:EmbeddingDimensions", "1024")), role);
-            sp.GetRequiredService<IEmbeddingClient>().ShouldBeOfType<OllamaClient>();
+            sp.GetRequiredService<IEmbeddingTransport>().ShouldBeOfType<OllamaClient>();
             sp.GetRequiredService<ResolvedEmbeddingProfile>().Name.ShouldBe("ollama-legacy");
         }
     }

@@ -102,15 +102,14 @@ public class EmbeddingServiceTests
         }
     }
 
-    private sealed class RawClient(float[][] vectors) : IEmbeddingClient
+    private sealed class RawClient(float[][] vectors) : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
             Task.FromResult(vectors);
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 
-    private sealed class CapturingClient : IEmbeddingClient
+    private sealed class CapturingClient : IEmbeddingTransport
     {
         public IReadOnlyList<string>? LastInputs;
 
@@ -120,14 +119,12 @@ public class EmbeddingServiceTests
             return Task.FromResult(inputs.Select(_ => new[] { 1f }).ToArray());
         }
 
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 
-    private sealed class ThrowingClient(EmbeddingException ex) : IEmbeddingClient
+    private sealed class ThrowingClient(EmbeddingException ex) : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) => throw ex;
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(false);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 }

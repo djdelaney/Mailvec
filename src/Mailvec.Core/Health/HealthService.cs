@@ -81,8 +81,8 @@ public sealed class HealthService(
         var schemaDimRaw = metadata.Get("embedding_dimensions");
         _ = int.TryParse(schemaDimRaw, out var schemaDim);
 
-        var configModel = ollamaOpts.Value.EmbeddingModel;
-        var configDim = ollamaOpts.Value.EmbeddingDimensions;
+        var configModel = embeddingProfile.WireModel;
+        var configDim = embeddingProfile.OutputDimensions;
 
         // v11 widened this beyond the model/dimension names: a stored space id
         // or config hash that disagrees with the current configuration means

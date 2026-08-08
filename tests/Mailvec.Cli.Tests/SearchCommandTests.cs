@@ -219,10 +219,10 @@ public class SearchCommandTests
             var client = sp.GetRequiredService<HotEmbeddingClient>().Build();
             return new OllamaClient(client, sp.GetRequiredService<IOptions<OllamaOptions>>(), NullLogger<OllamaClient>.Instance);
         });
-        services.AddSingleton<Mailvec.Core.Embedding.IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+        services.AddSingleton<Mailvec.Core.Embedding.IEmbeddingTransport>(sp => sp.GetRequiredService<OllamaClient>());
         services.AddSingleton<Mailvec.Core.Embedding.IEmbeddingService>(sp =>
             new Mailvec.Core.Embedding.EmbeddingService(
-                sp.GetRequiredService<Mailvec.Core.Embedding.IEmbeddingClient>(),
+                sp.GetRequiredService<Mailvec.Core.Embedding.IEmbeddingTransport>(),
                 new Mailvec.Core.Embedding.ResolvedEmbeddingProfile(
                     "ollama-legacy", "ollama", "ollama", "http://localhost:11434",
                     "mxbai-embed-large", 1024, "ollama:mxbai-embed-large:1024", "", "", "", "", 16, 60)));

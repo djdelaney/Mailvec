@@ -4,7 +4,7 @@ namespace Mailvec.Core.Vision;
 /// Provider-neutral seam for vision OCR. <see cref="Ollama.OllamaVisionClient"/>
 /// is the only implementation today. Used by the embedder's scanned-PDF OCR
 /// pass to turn a rendered page image into searchable text. Separate from
-/// <c>IEmbeddingClient</c> — OCR is a generate call, not an embed.
+/// <c>IEmbeddingTransport</c> — OCR is a generate call, not an embed.
 /// </summary>
 public interface IVisionClient
 {
