@@ -1,0 +1,3299 @@
+{
+  "version": 1,
+  "ranAt": "2026-08-08T01:29:31.522888+00:00",
+  "querySetPath": "~/Library/Application Support/Mailvec/eval/queries.json",
+  "topK": 10,
+  "runs": [
+    {
+      "mode": "keyword",
+      "aggregate": {
+        "ndcg": 0.8767735509536881,
+        "mrr": 0.8710144927536232,
+        "recall": 0.9394027659372929,
+        "queryCount": 70,
+        "negativeQueryCount": 1,
+        "meanSpecificity": 0,
+        "meanLatencyMs": 4.0812471428571415,
+        "p50LatencyMs": 2.22325,
+        "p95LatencyMs": 13.691934999999994
+      },
+      "queries": [
+        {
+          "id": "q001",
+          "relevantCount": 9,
+          "ndcg": 0.9937947856332161,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            6,
+            7,
+            5,
+            2,
+            4,
+            9,
+            10,
+            1
+          ],
+          "latencyMs": 9.9539,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q002",
+          "relevantCount": 6,
+          "ndcg": 0.7236474811245707,
+          "mrr": 1,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            4,
+            1,
+            6,
+            8,
+            0,
+            10
+          ],
+          "latencyMs": 5.6344,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q003",
+          "relevantCount": 7,
+          "ndcg": 0.9848330959553522,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            9,
+            4,
+            5,
+            7,
+            3,
+            1
+          ],
+          "latencyMs": 4.5625,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q004",
+          "relevantCount": 6,
+          "ndcg": 0.8626199664389336,
+          "mrr": 1,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            4,
+            2,
+            1,
+            3,
+            0,
+            10
+          ],
+          "latencyMs": 2.111,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q005",
+          "relevantCount": 4,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "latencyMs": 2.1141,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q006",
+          "relevantCount": 5,
+          "ndcg": 0.6913963730438445,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            2,
+            5,
+            9,
+            10
+          ],
+          "latencyMs": 0.6927,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q007",
+          "relevantCount": 8,
+          "ndcg": 0.9830168297915423,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4,
+            3,
+            2,
+            7,
+            5,
+            8,
+            10
+          ],
+          "latencyMs": 1.4361,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q008",
+          "relevantCount": 8,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            1,
+            2,
+            3,
+            5,
+            8,
+            7,
+            6
+          ],
+          "latencyMs": 1.2982,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q009",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3
+          ],
+          "latencyMs": 2.1912,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q011",
+          "relevantCount": 8,
+          "ndcg": 0.9156857657441143,
+          "mrr": 1,
+          "recall": 0.875,
+          "ranksOfExpected": [
+            2,
+            1,
+            5,
+            6,
+            4,
+            8,
+            3,
+            0
+          ],
+          "latencyMs": 1.5519,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q012",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 2.5693,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q014",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 3.7687,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q015",
+          "relevantCount": 9,
+          "ndcg": 0.9292442392789194,
+          "mrr": 1,
+          "recall": 0.8888888888888888,
+          "ranksOfExpected": [
+            1,
+            3,
+            2,
+            6,
+            7,
+            4,
+            8,
+            5,
+            0
+          ],
+          "latencyMs": 3.2582,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q016",
+          "relevantCount": 2,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0,
+            0
+          ],
+          "latencyMs": 0.6593,
+          "expectEmpty": false,
+          "returnedCount": 0
+        },
+        {
+          "id": "q017",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            4,
+            3,
+            7,
+            6,
+            5
+          ],
+          "latencyMs": 0.5285,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q018",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 0.5477,
+          "expectEmpty": false,
+          "returnedCount": 2
+        },
+        {
+          "id": "q019",
+          "relevantCount": 8,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            3,
+            1,
+            5,
+            6,
+            4,
+            8,
+            7
+          ],
+          "latencyMs": 0.8206,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q020",
+          "relevantCount": 7,
+          "ndcg": 0.9136388903869315,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            5,
+            6,
+            9,
+            8,
+            7
+          ],
+          "latencyMs": 0.6026,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q021",
+          "relevantCount": 10,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            3,
+            2,
+            1,
+            5,
+            6,
+            9,
+            10,
+            8,
+            7
+          ],
+          "latencyMs": 0.7207,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q022",
+          "relevantCount": 4,
+          "ndcg": 0.9619991470595832,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            2,
+            7
+          ],
+          "latencyMs": 0.7292,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q023",
+          "relevantCount": 17,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 0.5882352941176471,
+          "ranksOfExpected": [
+            4,
+            3,
+            5,
+            8,
+            6,
+            7,
+            2,
+            10,
+            0,
+            0,
+            0,
+            0,
+            9,
+            0,
+            0,
+            1,
+            0
+          ],
+          "latencyMs": 2.2122,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q024",
+          "relevantCount": 5,
+          "ndcg": 0.9103075074400794,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            4,
+            10,
+            7
+          ],
+          "latencyMs": 2.2935,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q025",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 0.8289,
+          "expectEmpty": false,
+          "returnedCount": 5
+        },
+        {
+          "id": "q026",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 2.5337,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q027",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 0.5422,
+          "expectEmpty": false,
+          "returnedCount": 2
+        },
+        {
+          "id": "q028",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 0.2189,
+          "expectEmpty": false,
+          "returnedCount": 2
+        },
+        {
+          "id": "q029",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 1.905,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q030",
+          "relevantCount": 4,
+          "ndcg": 0.7606395682357036,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            5,
+            4,
+            3,
+            2
+          ],
+          "latencyMs": 0.709,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q031",
+          "relevantCount": 5,
+          "ndcg": 0.8687949224876582,
+          "mrr": 1,
+          "recall": 0.8,
+          "ranksOfExpected": [
+            4,
+            0,
+            1,
+            3,
+            2
+          ],
+          "latencyMs": 0.8397,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q032",
+          "relevantCount": 6,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4,
+            6,
+            2,
+            3,
+            5
+          ],
+          "latencyMs": 0.6072,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q033",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "latencyMs": 2.9419,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q034",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 1.3957,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q035",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 2.2343,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q036",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 3.4081,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q037",
+          "relevantCount": 5,
+          "ndcg": 0.8325847248531595,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            7,
+            1,
+            3,
+            2,
+            4
+          ],
+          "latencyMs": 1.1819,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q038",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            2,
+            1,
+            4,
+            5
+          ],
+          "latencyMs": 1.2085,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q039",
+          "relevantCount": 5,
+          "ndcg": 0.9228632535992205,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            9,
+            2,
+            10,
+            3
+          ],
+          "latencyMs": 1.5374,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q040",
+          "relevantCount": 6,
+          "ndcg": 0.9930783166417602,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4,
+            3,
+            5,
+            2,
+            7
+          ],
+          "latencyMs": 0.6544,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q041",
+          "relevantCount": 0,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [],
+          "latencyMs": 1.1202,
+          "expectEmpty": true,
+          "returnedCount": 10,
+          "specificity": 0
+        },
+        {
+          "id": "q042",
+          "relevantCount": 4,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            4,
+            2
+          ],
+          "latencyMs": 0.7387,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q043",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            5,
+            1,
+            2,
+            3,
+            4
+          ],
+          "latencyMs": 0.6343,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q044",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 1.5228,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q045",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 3.534,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q046",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 2.7051,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q047",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 14.6152,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q048",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 7.3294,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q049",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 21.5386,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q050",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 12.5635,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q051",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 2.3684,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q052",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 6.0656,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q053",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 23.3885,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q054",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 10.7202,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q055",
+          "relevantCount": 1,
+          "ndcg": 0.2890648263178879,
+          "mrr": 0.1,
+          "recall": 1,
+          "ranksOfExpected": [
+            10
+          ],
+          "latencyMs": 6.8586,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q056",
+          "relevantCount": 2,
+          "ndcg": 0.8772153153380493,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            1
+          ],
+          "latencyMs": 3.1387,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q057",
+          "relevantCount": 5,
+          "ndcg": 0.9896062251871525,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            2,
+            6,
+            4
+          ],
+          "latencyMs": 1.4692,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q058",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 10.5254,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q059",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            2
+          ],
+          "latencyMs": 12.5194,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q060",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 7.4796,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q061",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 1.219,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q062",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 21.4154,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q063",
+          "relevantCount": 2,
+          "ndcg": 0.6509209298071326,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            2
+          ],
+          "latencyMs": 3.6923,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q064",
+          "relevantCount": 2,
+          "ndcg": 0.6934264036172708,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            3
+          ],
+          "latencyMs": 2.4024,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q065",
+          "relevantCount": 1,
+          "ndcg": 0.3562071871080222,
+          "mrr": 0.16666666666666666,
+          "recall": 1,
+          "ranksOfExpected": [
+            6
+          ],
+          "latencyMs": 1.384,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q066",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 2.4558,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q067",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 5.5053,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q068",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 8.7912,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q069",
+          "relevantCount": 1,
+          "ndcg": 0.5,
+          "mrr": 0.3333333333333333,
+          "recall": 1,
+          "ranksOfExpected": [
+            3
+          ],
+          "latencyMs": 2.4858,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q070",
+          "relevantCount": 1,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0
+          ],
+          "latencyMs": 1.2227,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q071",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 9.0222,
+          "expectEmpty": false,
+          "returnedCount": 9
+        },
+        {
+          "id": "q072",
+          "relevantCount": 1,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0
+          ],
+          "latencyMs": 2.2525,
+          "expectEmpty": false,
+          "returnedCount": 10
+        }
+      ]
+    },
+    {
+      "mode": "semantic",
+      "aggregate": {
+        "ndcg": 0.8291085034699099,
+        "mrr": 0.8255003450655627,
+        "recall": 0.9205679373198555,
+        "queryCount": 70,
+        "negativeQueryCount": 1,
+        "meanSpecificity": 0,
+        "meanLatencyMs": 31.80990857142858,
+        "p50LatencyMs": 29.714799999999997,
+        "p95LatencyMs": 51.02305
+      },
+      "queries": [
+        {
+          "id": "q001",
+          "relevantCount": 9,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            4,
+            5,
+            6,
+            9,
+            7,
+            8,
+            2
+          ],
+          "latencyMs": 84.0274,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q002",
+          "relevantCount": 6,
+          "ndcg": 0.6105858728157117,
+          "mrr": 1,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            2,
+            1,
+            5,
+            0,
+            0,
+            0
+          ],
+          "latencyMs": 39.0293,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q003",
+          "relevantCount": 7,
+          "ndcg": 0.8104616303452685,
+          "mrr": 1,
+          "recall": 0.7142857142857143,
+          "ranksOfExpected": [
+            1,
+            4,
+            5,
+            0,
+            0,
+            3,
+            2
+          ],
+          "latencyMs": 33.2807,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q004",
+          "relevantCount": 6,
+          "ndcg": 0.5515034178285835,
+          "mrr": 0.25,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            4,
+            8,
+            7,
+            6,
+            5,
+            0
+          ],
+          "latencyMs": 32.4871,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q005",
+          "relevantCount": 4,
+          "ndcg": 0.9493885684853097,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            9
+          ],
+          "latencyMs": 26.9967,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q006",
+          "relevantCount": 5,
+          "ndcg": 0.8738100898801323,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            5,
+            7,
+            6
+          ],
+          "latencyMs": 25.3019,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q007",
+          "relevantCount": 8,
+          "ndcg": 0.9860433320650158,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            5,
+            2,
+            4,
+            8,
+            9,
+            7
+          ],
+          "latencyMs": 24.4711,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q008",
+          "relevantCount": 8,
+          "ndcg": 0.9156857657441143,
+          "mrr": 1,
+          "recall": 0.875,
+          "ranksOfExpected": [
+            1,
+            2,
+            4,
+            3,
+            6,
+            5,
+            8,
+            0
+          ],
+          "latencyMs": 25.0769,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q009",
+          "relevantCount": 3,
+          "ndcg": 0.9066276098484507,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            9
+          ],
+          "latencyMs": 25.4562,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q011",
+          "relevantCount": 8,
+          "ndcg": 0.510383374527714,
+          "mrr": 1,
+          "recall": 0.375,
+          "ranksOfExpected": [
+            1,
+            5,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0
+          ],
+          "latencyMs": 27.155,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q012",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 27.7393,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q014",
+          "relevantCount": 2,
+          "ndcg": 0.9197207891481876,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1
+          ],
+          "latencyMs": 26.646,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q015",
+          "relevantCount": 9,
+          "ndcg": 0.9937947856332161,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            6,
+            4,
+            3,
+            10,
+            5,
+            9,
+            7
+          ],
+          "latencyMs": 29.13,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q016",
+          "relevantCount": 2,
+          "ndcg": 0.8772153153380493,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4
+          ],
+          "latencyMs": 26.6812,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q017",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4,
+            2,
+            6,
+            3,
+            5,
+            7
+          ],
+          "latencyMs": 60.6372,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q018",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 64.1931,
+          "expectEmpty": false,
+          "returnedCount": 6
+        },
+        {
+          "id": "q019",
+          "relevantCount": 8,
+          "ndcg": 0.9918291064614978,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            5,
+            4,
+            6,
+            8,
+            9
+          ],
+          "latencyMs": 29.5345,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q020",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            7,
+            3,
+            4,
+            2,
+            5,
+            6
+          ],
+          "latencyMs": 28.7267,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q021",
+          "relevantCount": 10,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            6,
+            4,
+            3,
+            5,
+            8,
+            7,
+            10,
+            9
+          ],
+          "latencyMs": 28.2883,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q022",
+          "relevantCount": 4,
+          "ndcg": 0.9709286432396583,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            3,
+            6
+          ],
+          "latencyMs": 27.0685,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q023",
+          "relevantCount": 17,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 0.5882352941176471,
+          "ranksOfExpected": [
+            4,
+            6,
+            2,
+            1,
+            7,
+            5,
+            0,
+            10,
+            3,
+            9,
+            0,
+            0,
+            0,
+            0,
+            8,
+            0,
+            0
+          ],
+          "latencyMs": 24.2495,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q024",
+          "relevantCount": 5,
+          "ndcg": 0.8628540832451719,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            5,
+            6,
+            9,
+            3
+          ],
+          "latencyMs": 27.0497,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q025",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 50.9004,
+          "expectEmpty": false,
+          "returnedCount": 5
+        },
+        {
+          "id": "q026",
+          "relevantCount": 2,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0,
+            0
+          ],
+          "latencyMs": 37.5549,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q027",
+          "relevantCount": 2,
+          "ndcg": 0.6240505200038379,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            5
+          ],
+          "latencyMs": 35.6348,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q028",
+          "relevantCount": 1,
+          "ndcg": 0.38685280723454163,
+          "mrr": 0.2,
+          "recall": 1,
+          "ranksOfExpected": [
+            5
+          ],
+          "latencyMs": 31.6101,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q029",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 32.3517,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q030",
+          "relevantCount": 4,
+          "ndcg": 0.7606395682357036,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            5,
+            2,
+            4
+          ],
+          "latencyMs": 37.7932,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q031",
+          "relevantCount": 5,
+          "ndcg": 0.9318171001351273,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            8,
+            9,
+            2,
+            3,
+            1
+          ],
+          "latencyMs": 25.6005,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q032",
+          "relevantCount": 6,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            3,
+            6,
+            1,
+            4,
+            5
+          ],
+          "latencyMs": 51.1234,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q033",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "latencyMs": 0.765,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q034",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 29.0437,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q035",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 29.4173,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q036",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 29.653,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q037",
+          "relevantCount": 5,
+          "ndcg": 0.8949488349483146,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            1,
+            2,
+            5,
+            3
+          ],
+          "latencyMs": 25.3938,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q038",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            2,
+            1,
+            4,
+            5
+          ],
+          "latencyMs": 25.2488,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q039",
+          "relevantCount": 5,
+          "ndcg": 0.7581788882067646,
+          "mrr": 1,
+          "recall": 0.8,
+          "ranksOfExpected": [
+            1,
+            8,
+            2,
+            10,
+            0
+          ],
+          "latencyMs": 29.8174,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q040",
+          "relevantCount": 6,
+          "ndcg": 0.892210845475489,
+          "mrr": 1,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            1,
+            3,
+            0,
+            4,
+            2,
+            5
+          ],
+          "latencyMs": 41.9495,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q041",
+          "relevantCount": 0,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [],
+          "latencyMs": 31.3738,
+          "expectEmpty": true,
+          "returnedCount": 10,
+          "specificity": 0
+        },
+        {
+          "id": "q042",
+          "relevantCount": 4,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4,
+            3,
+            2
+          ],
+          "latencyMs": 31.2716,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q043",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            2,
+            5,
+            4
+          ],
+          "latencyMs": 26.2934,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q044",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 42.0155,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q045",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 38.7571,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q046",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 36.1626,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q047",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 30.4841,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q048",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 30.1707,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q049",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 31.545,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q050",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 31.18,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q051",
+          "relevantCount": 1,
+          "ndcg": 0.3333333333333333,
+          "mrr": 0.14285714285714285,
+          "recall": 1,
+          "ranksOfExpected": [
+            7
+          ],
+          "latencyMs": 31.6782,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q052",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 30.6435,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q053",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 30.9017,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q054",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 29.0902,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q055",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 29.0432,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q056",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 29.9436,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q057",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            2,
+            1,
+            5,
+            3
+          ],
+          "latencyMs": 25.0913,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q058",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 24.8004,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q059",
+          "relevantCount": 3,
+          "ndcg": 0.7328286204777911,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            4,
+            2
+          ],
+          "latencyMs": 24.9647,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q060",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 29.8732,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q061",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 26.5435,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q062",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 30.2887,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q063",
+          "relevantCount": 2,
+          "ndcg": 0.9197207891481876,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3
+          ],
+          "latencyMs": 31.4016,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q064",
+          "relevantCount": 2,
+          "ndcg": 0.5706417189553201,
+          "mrr": 0.3333333333333333,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            3
+          ],
+          "latencyMs": 27.712,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q065",
+          "relevantCount": 1,
+          "ndcg": 0.5,
+          "mrr": 0.3333333333333333,
+          "recall": 1,
+          "ranksOfExpected": [
+            3
+          ],
+          "latencyMs": 22.9433,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q066",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 28.1385,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q067",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 29.7766,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q068",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 29.5855,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q069",
+          "relevantCount": 1,
+          "ndcg": 0.38685280723454163,
+          "mrr": 0.2,
+          "recall": 1,
+          "ranksOfExpected": [
+            5
+          ],
+          "latencyMs": 30.7039,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q070",
+          "relevantCount": 1,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0
+          ],
+          "latencyMs": 30.6425,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q071",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 42.2137,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q072",
+          "relevantCount": 1,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0
+          ],
+          "latencyMs": 24.3762,
+          "expectEmpty": false,
+          "returnedCount": 10
+        }
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "aggregate": {
+        "ndcg": 0.8837402505010351,
+        "mrr": 0.8913043478260868,
+        "recall": 0.9326797385620915,
+        "queryCount": 70,
+        "negativeQueryCount": 1,
+        "meanSpecificity": 0,
+        "meanLatencyMs": 78.60008285714288,
+        "p50LatencyMs": 50.10245,
+        "p95LatencyMs": 156.9293599999999
+      },
+      "queries": [
+        {
+          "id": "q001",
+          "relevantCount": 9,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            4,
+            6,
+            5,
+            3,
+            7,
+            8,
+            9,
+            1
+          ],
+          "latencyMs": 44.1311,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q002",
+          "relevantCount": 6,
+          "ndcg": 0.5842273861585908,
+          "mrr": 1,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            3,
+            1,
+            4,
+            0,
+            0,
+            0
+          ],
+          "latencyMs": 44.0774,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q003",
+          "relevantCount": 7,
+          "ndcg": 0.9815441540827996,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            5,
+            4,
+            7,
+            10,
+            3,
+            1
+          ],
+          "latencyMs": 45.194,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q004",
+          "relevantCount": 6,
+          "ndcg": 0.7698477711341528,
+          "mrr": 1,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            3,
+            6,
+            1,
+            5,
+            9,
+            0
+          ],
+          "latencyMs": 59.422,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q005",
+          "relevantCount": 4,
+          "ndcg": 0.9828920819566879,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "latencyMs": 37.6257,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q006",
+          "relevantCount": 5,
+          "ndcg": 0.7113062262147116,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            2,
+            5,
+            8,
+            7
+          ],
+          "latencyMs": 32.6242,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q007",
+          "relevantCount": 8,
+          "ndcg": 0.9918291064614978,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            4,
+            2,
+            5,
+            6,
+            9,
+            8
+          ],
+          "latencyMs": 39.7472,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q008",
+          "relevantCount": 8,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          "latencyMs": 35.0401,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q009",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3
+          ],
+          "latencyMs": 39.2123,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q011",
+          "relevantCount": 8,
+          "ndcg": 0.6368547259115425,
+          "mrr": 1,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            1,
+            2,
+            0,
+            0,
+            5,
+            3,
+            0,
+            0
+          ],
+          "latencyMs": 43.7117,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q012",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 49.5434,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q014",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 43.4027,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q015",
+          "relevantCount": 9,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            5,
+            4,
+            7,
+            6,
+            8,
+            9
+          ],
+          "latencyMs": 54.1979,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q016",
+          "relevantCount": 2,
+          "ndcg": 0.8772153153380493,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4
+          ],
+          "latencyMs": 38.0483,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q017",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "latencyMs": 49.8873,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q018",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 52.068,
+          "expectEmpty": false,
+          "returnedCount": 6
+        },
+        {
+          "id": "q019",
+          "relevantCount": 8,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            2,
+            6,
+            5,
+            4,
+            8,
+            7
+          ],
+          "latencyMs": 50.0389,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q020",
+          "relevantCount": 7,
+          "ndcg": 0.9888009031441519,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            2,
+            4,
+            5,
+            7,
+            8
+          ],
+          "latencyMs": 50.1615,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q021",
+          "relevantCount": 10,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            3,
+            4,
+            1,
+            5,
+            6,
+            9,
+            8,
+            10,
+            7
+          ],
+          "latencyMs": 41.2012,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q022",
+          "relevantCount": 4,
+          "ndcg": 0.9619991470595832,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            7
+          ],
+          "latencyMs": 37.8082,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q023",
+          "relevantCount": 17,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 0.5882352941176471,
+          "ranksOfExpected": [
+            2,
+            4,
+            1,
+            3,
+            6,
+            5,
+            8,
+            9,
+            7,
+            10,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "latencyMs": 35.7392,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q024",
+          "relevantCount": 5,
+          "ndcg": 0.8587959739536173,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            6,
+            10,
+            5
+          ],
+          "latencyMs": 44.3364,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q025",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 50.8859,
+          "expectEmpty": false,
+          "returnedCount": 5
+        },
+        {
+          "id": "q026",
+          "relevantCount": 2,
+          "ndcg": 0.3065735963827292,
+          "mrr": 0.3333333333333333,
+          "recall": 0.5,
+          "ranksOfExpected": [
+            3,
+            0
+          ],
+          "latencyMs": 53.057,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q027",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 45.1399,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q028",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 42.6481,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q029",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 51.7802,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q030",
+          "relevantCount": 4,
+          "ndcg": 0.7606395682357036,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            5,
+            2,
+            3
+          ],
+          "latencyMs": 51.6648,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q031",
+          "relevantCount": 5,
+          "ndcg": 0.8687949224876582,
+          "mrr": 1,
+          "recall": 0.8,
+          "ranksOfExpected": [
+            4,
+            0,
+            1,
+            3,
+            2
+          ],
+          "latencyMs": 50.0434,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q032",
+          "relevantCount": 6,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            4,
+            6,
+            2,
+            3,
+            5
+          ],
+          "latencyMs": 50.758,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q033",
+          "relevantCount": 7,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "latencyMs": 0.7075,
+          "expectEmpty": false,
+          "returnedCount": 7
+        },
+        {
+          "id": "q034",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 58.2671,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q035",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 57.4227,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q036",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 59.6929,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q037",
+          "relevantCount": 5,
+          "ndcg": 0.8805316783036914,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            5,
+            1,
+            2,
+            3,
+            4
+          ],
+          "latencyMs": 47.4632,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q038",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            2,
+            1,
+            4,
+            5
+          ],
+          "latencyMs": 50.0237,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q039",
+          "relevantCount": 5,
+          "ndcg": 0.7622369974983191,
+          "mrr": 1,
+          "recall": 0.8,
+          "ranksOfExpected": [
+            1,
+            8,
+            2,
+            9,
+            0
+          ],
+          "latencyMs": 56.2437,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q040",
+          "relevantCount": 6,
+          "ndcg": 0.892210845475489,
+          "mrr": 1,
+          "recall": 0.8333333333333334,
+          "ranksOfExpected": [
+            1,
+            3,
+            0,
+            4,
+            2,
+            5
+          ],
+          "latencyMs": 54.8245,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q041",
+          "relevantCount": 0,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [],
+          "latencyMs": 51.963,
+          "expectEmpty": true,
+          "returnedCount": 10,
+          "specificity": 0
+        },
+        {
+          "id": "q042",
+          "relevantCount": 4,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            3,
+            4,
+            2
+          ],
+          "latencyMs": 56.3614,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q043",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            4,
+            1,
+            2,
+            3,
+            5
+          ],
+          "latencyMs": 53.0137,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q044",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 57.25,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q045",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 64.7731,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q046",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 60.7312,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q047",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 102.6666,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q048",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 136.3455,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q049",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 97.92,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q050",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 202.7526,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q051",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 61.87,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q052",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 70.5502,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q053",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 1394.7924,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q054",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 78.7828,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q055",
+          "relevantCount": 1,
+          "ndcg": 0.3562071871080222,
+          "mrr": 0.16666666666666666,
+          "recall": 1,
+          "ranksOfExpected": [
+            6
+          ],
+          "latencyMs": 63.6207,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q056",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            1
+          ],
+          "latencyMs": 39.2767,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q057",
+          "relevantCount": 5,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            1,
+            2,
+            5,
+            4
+          ],
+          "latencyMs": 48.0384,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q058",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 43.2447,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q059",
+          "relevantCount": 3,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            3,
+            2,
+            1
+          ],
+          "latencyMs": 45.7025,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q060",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 47.2977,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q061",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 33.802,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q062",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 272.6169,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q063",
+          "relevantCount": 2,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1,
+            2
+          ],
+          "latencyMs": 38.1917,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q064",
+          "relevantCount": 2,
+          "ndcg": 0.6509209298071326,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2,
+            4
+          ],
+          "latencyMs": 173.7707,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q065",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 45.1169,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q066",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 53.9297,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q067",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 97.9098,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q068",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 60.8667,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q069",
+          "relevantCount": 1,
+          "ndcg": 0.6309297535714575,
+          "mrr": 0.5,
+          "recall": 1,
+          "ranksOfExpected": [
+            2
+          ],
+          "latencyMs": 41.0923,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q070",
+          "relevantCount": 1,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0
+          ],
+          "latencyMs": 49.7685,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q071",
+          "relevantCount": 1,
+          "ndcg": 1,
+          "mrr": 1,
+          "recall": 1,
+          "ranksOfExpected": [
+            1
+          ],
+          "latencyMs": 66.9537,
+          "expectEmpty": false,
+          "returnedCount": 10
+        },
+        {
+          "id": "q072",
+          "relevantCount": 1,
+          "ndcg": 0,
+          "mrr": 0,
+          "recall": 0,
+          "ranksOfExpected": [
+            0
+          ],
+          "latencyMs": 43.1924,
+          "expectEmpty": false,
+          "returnedCount": 10
+        }
+      ]
+    }
+  ]
+}
