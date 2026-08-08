@@ -889,8 +889,10 @@ the archive stays on local mxbai.** Full numbers in
 `baselines/subset-ocr/README.md`. Semantic alone improved (+0.026 NDCG,
 clearing its bar) but hybrid — what production serves — regressed −0.006
 against a required +0.01, and 4 queries against an allowed 3 dropped
-NDCG > 0.2 under fusion. Cost/reliability were fine (~$0.12, zero
-throttling, ~4-minute drain); latency roughly tripled on the query path
+NDCG > 0.2 under fusion. Cost/reliability were fine (~$0.12, ~4-minute drain; the captured drain
+log shows 493/493 attempts answered 200 — provider-dashboard rate
+limiting most plausibly maps to the uncaptured eval phase, where the
+interactive retry policy absorbs isolated 429s by design); latency roughly tripled on the query path
 (hybrid 84→230 ms mean), acceptable but not free. The infrastructure
 verdict is separate from the model verdict: the entire hosted lifecycle —
 switch-model stamping the asserted space, sentinel stamping, guarded

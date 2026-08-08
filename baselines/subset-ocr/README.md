@@ -55,7 +55,13 @@ The interesting shape: the vector leg alone genuinely improved (semantic
 overlap keyword's wins, so fusion gains little where it agrees and loses on
 the tail where it disagrees (q060 −0.50, q066/q072 −0.37, q065 −0.20; only
 2 queries gained > 0.2). Production serves hybrid, so hybrid decides.
-Operationals for the record: 493 requests, ~1.2M heuristic tokens (~$0.12),
-zero 429/503s, drain ~4 minutes; mean query latency semantic 32→193 ms,
-hybrid 84→230 ms. Do not diff future work against this file — it is a
+Operationals for the record: the DRAIN made 493 requests (~1.2M heuristic
+tokens, ~$0.12) in ~4 minutes and its captured log shows all 493 attempts
+answered 200 with zero retries — no throttling on the fill. The EVAL
+phase's ~140 rapid query embeds were not log-captured; the provider
+dashboard indicates some rate limiting occurred somewhere in the session,
+most plausibly there, where the interactive retry policy (one retry,
+Retry-After honored) absorbs isolated 429s invisibly — all 70 queries
+returned results at 193/230 ms mean latency (semantic/hybrid; local was
+32/84 ms). Lesson recorded: capture eval logs too next time. Do not diff future work against this file — it is a
 different vector space; the standing baseline remains `2026-08-07.json`.
