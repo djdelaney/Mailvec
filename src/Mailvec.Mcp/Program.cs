@@ -223,7 +223,11 @@ static async Task RunHttp(string[] args)
             [.. report.Services.Select(s => new UpServiceLiveness(s.Service, s.Known, s.Stale))],
             // Null when unknown (never OCR'd) so a fresh deployment doesn't
             // read as stalled — JSONata leaves the monitor unmatched instead.
-            report.Ocr.Stalled is bool stalled ? new UpOcr(stalled) : null);
+            report.Ocr.Stalled is bool stalled ? new UpOcr(stalled) : null,
+            // Provider-neutral readiness (phase 4). Same value as the
+            // ollama.reachable alias — see UpReport's doc for the migration
+            // story; the alias is removed only via proposal decision 6.
+            new UpEmbeddingProvider(report.Ollama.Reachable));
         return report.Status == "ok"
             ? Results.Ok(minimal)
             : Results.Json(minimal, statusCode: StatusCodes.Status503ServiceUnavailable);

@@ -262,7 +262,16 @@ public sealed class HealthService(
             Embedder: embedder,
             Ocr: ocr,
             Mail: mail,
-            Services: services);
+            Services: services,
+            Profile: new EmbeddingProfileHealth(
+                Name: embeddingProfile.Name,
+                Protocol: embeddingProfile.Protocol,
+                ProviderId: embeddingProfile.ProviderId,
+                EndpointHost: Uri.TryCreate(embeddingProfile.Endpoint, UriKind.Absolute, out var ep) ? ep.Host : "",
+                WireModel: embeddingProfile.WireModel,
+                Dimensions: embeddingProfile.OutputDimensions,
+                SpaceId: embeddingProfile.SpaceId,
+                ProbeStatus: embedProbe.Status.ToString()));
     }
 
     /// <summary>
@@ -415,7 +424,15 @@ public sealed record UpReport(
     IReadOnlyList<UpServiceLiveness> Services,
     // ADDED, never renamed: existing JSONata paths are untouched, so no
     // monitor breaks. See UpOcr.
-    UpOcr? Ocr = null);
+    UpOcr? Ocr = null,
+    // The provider-neutral readiness field (phase 4 of
+    // docs/proposals/embedding-providers.md). Carries the SAME value as the
+    // ollama.reachable compatibility alias: since the classified probe
+    // landed, both mean "the configured embedding profile's readiness probe
+    // succeeded", whatever the provider. Monitors migrate to this path;
+    // the alias is removed only in a separately approved wire-contract
+    // change (proposal decision 6).
+    UpEmbeddingProvider? EmbeddingProvider = null);
 
 /// <summary>
 /// Whether OCR has stopped producing text while work is waiting — not when it
@@ -436,8 +453,14 @@ public sealed record UpOcr(bool Stalled);
 /// <summary>Whether the schema's embedding model disagrees with config — not which model.</summary>
 public sealed record UpEmbeddings(bool ModelMismatch);
 
-/// <summary>Whether Ollama answered — not its address, and not which model it serves.</summary>
+/// <summary>Whether Ollama answered — not its address, and not which model it serves.
+/// COMPATIBILITY ALIAS since phase 4: carries the provider-neutral probe
+/// result even for hosted profiles; migrate monitors to
+/// <see cref="UpEmbeddingProvider"/>.</summary>
 public sealed record UpOllama(bool Reachable);
+
+/// <summary>Whether the configured embedding profile's readiness probe succeeded — not which provider or model.</summary>
+public sealed record UpEmbeddingProvider(bool Ready);
 
 /// <summary>Whether the embedder is failing to drain — not since when, or with what error.</summary>
 public sealed record UpEmbedder(bool Stuck);
@@ -465,6 +488,21 @@ public sealed record UpMail(bool Known, bool SyncStale);
 /// </summary>
 public sealed record UpServiceLiveness(string Service, bool Known, bool Stale);
 
+/// <summary>
+/// The resolved embedding profile as /health (loopback-only) reports it:
+/// identity and readiness, never credentials, and only the endpoint HOST —
+/// the full URL is deployment state that doesn't belong in a report body.
+/// </summary>
+public sealed record EmbeddingProfileHealth(
+    string Name,
+    string Protocol,
+    string ProviderId,
+    string EndpointHost,
+    string WireModel,
+    int Dimensions,
+    string SpaceId,
+    string ProbeStatus);
+
 public sealed record HealthReport(
     string Status,
     string Version,
@@ -474,7 +512,10 @@ public sealed record HealthReport(
     EmbedderHealth Embedder,
     OcrHealth Ocr,
     MailHealth Mail,
-    IReadOnlyList<ServiceLiveness> Services);
+    IReadOnlyList<ServiceLiveness> Services,
+    // Additive (phase 4): the resolved profile identity + readiness. Null
+    // only in offline constructions that predate it (doctor fills it too).
+    EmbeddingProfileHealth? Profile = null);
 
 /// <summary>
 /// Outcome of the mbsync sidecar's last sync attempt — the third signal

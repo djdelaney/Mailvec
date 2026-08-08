@@ -32,7 +32,10 @@ public sealed class SearchEmailsTool(
     IOptions<OllamaOptions> ollamaOptions,
     IOptions<ArchiveOptions> archiveOptions,
     ToolCallLogger callLog,
-    ILogger<SearchEmailsTool> logger)
+    ILogger<SearchEmailsTool> logger,
+    // Provider-aware error translation (phase 4): remediation must name the
+    // configured provider's fix, not tell a Fireworks user to `ollama pull`.
+    Mailvec.Core.Embedding.ResolvedEmbeddingProfile? embeddingProfile = null)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
@@ -188,6 +191,27 @@ public sealed class SearchEmailsTool(
                     "Keyword search is unaffected: retry this query with mode=keyword. The operator can run " +
                     "`mailvec doctor` for the exact mismatch, then either revert the setting or run " +
                     "`mailvec switch-model` to rebuild the vectors.");
+            }
+            if (embeddingProfile?.Protocol == Mailvec.Core.Embedding.EmbeddingRegistration.OpenAiCompatibleProtocol)
+            {
+                // Hosted profile: never `ollama pull`. Kind-specific hint,
+                // provider named by its diagnostic id only — no endpoint, no
+                // key material, no upstream body.
+                var hint = ex.Kind switch
+                {
+                    Mailvec.Core.Embedding.EmbeddingFailureKind.Backpressure =>
+                        $"The provider ({embeddingProfile.ProviderId}) is rate limiting or shedding load — retry shortly.",
+                    Mailvec.Core.Embedding.EmbeddingFailureKind.AuthOrConfig =>
+                        $"The provider ({embeddingProfile.ProviderId}) rejected the request — the operator should check the API key and profile configuration.",
+                    Mailvec.Core.Embedding.EmbeddingFailureKind.ModelUnavailable =>
+                        $"The provider ({embeddingProfile.ProviderId}) does not serve the configured model — the operator should check the profile's model setting.",
+                    _ =>
+                        $"The provider ({embeddingProfile.ProviderId}) could not be reached — likely transient.",
+                };
+                throw new McpException(
+                    "Semantic ranking is unavailable — the hosted embedding call failed. " +
+                    "Keyword search still works: retry this query with mode=keyword. " +
+                    hint + " `mailvec doctor` gives a precise diagnosis.");
             }
             throw new McpException(
                 "Semantic ranking is unavailable — the embedding call to Ollama failed. " +

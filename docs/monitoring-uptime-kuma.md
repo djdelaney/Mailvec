@@ -457,3 +457,28 @@ standing here.)
   (beat cadence, staleness threshold, `known` vs `stale`).
 - `src/Mailvec.Core/Health/HealthService.cs` — `UpReport` is the `/up` body;
   `HealthReport` is `/health`'s.
+
+
+## `embeddingProvider.ready` — the provider-neutral readiness path (added 2026-08-08, unreleased)
+
+Phase 4 of `docs/proposals/embedding-providers.md` added an ADDITIVE field to
+`/up`:
+
+```json
+{ "embeddingProvider": { "ready": true }, "ollama": { "reachable": true } }
+```
+
+Facts, dated as observed in the working tree (nothing below reaches the live
+deployment until the next release's images are pinned):
+
+- `embeddingProvider.ready` and `ollama.reachable` carry the **same value**:
+  since the classified readiness probe landed, both mean "the configured
+  embedding profile's real-embed probe succeeded", whatever the provider —
+  `ollama.reachable` is a compatibility alias whose name is now historical.
+- **Monitor migration is a post-release operator step**: after the release
+  that ships this field, repoint any monitor reading `ollama.reachable` to
+  `embeddingProvider.ready` in the Kuma dashboard (verify with a live `/up`
+  fetch first — this doc records how to VERIFY, not what the dashboard
+  currently holds).
+- The alias is removed only via a separately approved wire-contract change
+  (proposal decision 6), after every monitor is confirmed migrated.

@@ -81,6 +81,18 @@ internal static class DoctorCommand
         // ---------------------------------------------------------------
         // Configuration / static — checks that don't talk to a service
         // ---------------------------------------------------------------
+        // The resolved embedding profile (phase 4): which provider this
+        // machine's search/embedding actually talks to, displayable per the
+        // proposal's "doctor must show every effective value" rule. Never
+        // includes credentials — the resolved profile can't carry them.
+        {
+            var embProfile = sp.GetRequiredService<Mailvec.Core.Embedding.ResolvedEmbeddingProfile>();
+            checks.Add(DoctorCheck.Ok("Embedding profile",
+                $"{embProfile.Name} ({embProfile.Protocol}, provider {embProfile.ProviderId}) — " +
+                $"{embProfile.WireModel} @{embProfile.OutputDimensions}d, space {embProfile.SpaceId}",
+                "config"));
+        }
+
         var dbPath = PathExpansion.Expand(archive.DatabasePath);
         if (File.Exists(dbPath))
         {
@@ -473,6 +485,9 @@ internal static class DoctorCommand
             // because the configured model was never pulled. "Restart Ollama"
             // advice here would send the user chasing a healthy server.
             var hint = IsLocalOllama(report.Ollama.BaseUrl)
+                // Reachable only for the OLLAMA transport: hosted profiles
+                // never report EmbeddingModelAvailable=false (no catalog), so
+                // this advice cannot misfire at a Fireworks user.
                 ? $"Run `ollama pull {report.Ollama.ConfiguredModel}`."
                 : $"Run `ollama pull {report.Ollama.ConfiguredModel}` on the remote Ollama host.";
             checks.Add(DoctorCheck.Warn("Ollama",

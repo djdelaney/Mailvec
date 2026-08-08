@@ -73,8 +73,15 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         // retired counts, which would disclose corpus activity and spend.
         // It exists so a monitor can alert on OCR silently ceasing to produce
         // text, which no other field on this endpoint can express.
+        // `embeddingProvider` was argued for and admitted (phase 4 of the
+        // embedding-providers proposal): one boolean (`ready`), the
+        // provider-neutral path monitors migrate to. `ollama.reachable`
+        // remains as its compatibility alias carrying the SAME value until
+        // proposal decision 6 retires it in a separate wire-contract change.
         doc.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n)
-            .ShouldBe(["embedder", "embeddings", "mail", "ocr", "ollama", "services", "status", "version"]);
+            .ShouldBe(["embedder", "embeddingProvider", "embeddings", "mail", "ocr", "ollama", "services", "status", "version"]);
+        doc.RootElement.GetProperty("embeddingProvider").GetProperty("ready").GetBoolean()
+            .ShouldBe(doc.RootElement.GetProperty("ollama").GetProperty("reachable").GetBoolean());
 
         // Belt and braces on the specific disclosures that motivated the split
         // — a renamed field would slip past a property-name check.
