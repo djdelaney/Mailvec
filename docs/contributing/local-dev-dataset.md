@@ -157,3 +157,34 @@ MAILVEC_LOG_DIR=/tmp/vm-logs mailvec eval-import
 Queries about mail newer than the freeze can't be labeled until the next
 corpus refresh — their Message-IDs don't exist locally yet. Refresh first,
 then label.
+
+
+## Observed machine state, 2026-08-08 (re-check before trusting)
+
+Recorded for whoever picks this up next — these are observations about the
+dev Mac, not durable configuration, and they drift:
+
+- **The shared `appsettings.Local.json` currently points at the subset test
+  corpus**, not the frozen one: `Archive:DatabasePath` =
+  `~/MailvecSubsetOCR/archive.sqlite`, `Ingest:MaildirRoot` =
+  `~/MailvecSubsetOCR/Mail/Fastmail` (662 messages, OCR-heavy; provenance in
+  `~/MailvecSubsetOCR/MANIFEST.json`). Any eval against `baselines/` other
+  than `baselines/subset-ocr/` must revert BOTH keys to the frozen values
+  first (`~/Library/Application Support/Mailvec/archive.sqlite` +
+  `~/Mail/Fastmail`) — always both together: a mixed pair makes the indexer
+  soft-delete everything missing from the other corpus.
+- **The subset DB is at schema v11+; the frozen DB is untouched at v10.**
+  The published `~/.local/bin/mailvec` shim predates v11 and its downgrade
+  guard refuses the subset DB — use `dotnet run --project src/Mailvec.Cli`
+  from the working tree. (`ops/redeploy.sh cli` would refresh the shim but
+  is blocked by the frozen-corpus guard; a deliberate decision, not an
+  accident.)
+- **A Fireworks serverless test key** lives at
+  `~/Library/Application Support/Mailvec/secrets/fireworks-embedding.key`
+  (owner-only). Dan rotates it after test rounds; the phase-6 experiment
+  needs a valid key in that file, nothing else references it.
+- **Neutrality-gate procedure used through phases 0–3:** run
+  `mailvec eval --json <scratch>.json` against the subset DB and diff
+  per-query results (timing fields stripped) against
+  `baselines/subset-ocr/2026-08-07.json` — bit-identical or the change is
+  not ranking-neutral. The baselines README records binary provenance rules.

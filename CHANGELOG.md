@@ -116,6 +116,32 @@ The SwiftUI menu-bar app and the plain-REST `/tray/*` surface it polled are gone
 
 Recoverable from git history. `docs/future-ideas.md` notes what recovery actually costs — the Swift app is self-contained and comes back cleanly; the C# glue was wired into Core/Mcp APIs that will have moved.
 
+## ✅ Pluggable embedding providers, phases 0–3 (2026-08-07..08)
+
+Distinct numbering from this file's original build phases: these are the
+phases of [`docs/proposals/embedding-providers.md`](docs/proposals/embedding-providers.md),
+which carries the full design, decision record, and per-phase commit
+references; two adversarial reviews and their resolutions live in
+[`docs/reviews/`](docs/reviews/). The headline: embeddings are now pluggable
+across two protocols (local Ollama, unchanged and still the default; an
+OpenAI-compatible hosted transport with Fireworks/OpenAI/Baseten as
+config-only profiles), and the database can prove which vector space it
+holds. Schema v11 added the embedding-space identity (`embedding_space_id` +
+canonical config hash over all four text transforms), enforced at every
+write, per-poll in the embedder, transactionally mid-batch, and — after the
+phase 0–2 review — at query time (`EmbeddingSpaceGuard` refuses semantic
+search on any identity disagreement rather than serving plausible, invalid
+rankings). Stability against a provider changing weights behind a stable
+name is the decided hybrid: exact-tag artifact digests for Ollama, measured
+behavioral sentinel fingerprints for hosted (threshold 0.999 against an
+observed bit-stable baseline), with detected drift persisting a marker that
+blocks reads AND writes until `switch-model --force`. Every landing was
+gated on a bit-identical eval against the committed subset baseline
+(`baselines/subset-ocr/`, corpus + binary provenance in its README).
+Remaining: phase 4 (monitoring neutrality), 5 (deployment secrets),
+6 (the Fireworks corpus experiment), 7 (rollout); no release cut — the
+v11 migration makes the eventual one a minor bump.
+
 ## ⬜ Phase 5 — Support for non-Claude local agents
 
 Mailvec works end-to-end with every Claude surface via the remote connector; the local transports (MCPB stdio, loopback HTTP) still ship for single-machine installs. Phase 5 extends those two local transports to other locally-running MCP-capable agents — no protocol changes, just per-client config and quirk capture (the equivalent of the Claude Desktop sanitized-env / TCC-block findings in CLAUDE.md):
