@@ -27,7 +27,7 @@ reporting, retries, and database guards honest.
 
 Recommended first target:
 
-- Fireworks serverless `fireworks/qwen3-embedding-8b`.
+- Fireworks serverless `accounts/fireworks/models/qwen3-embedding-8b`.
 - Explicitly request 1024 output dimensions.
 - Keep the existing query-only Qwen instruction prefix.
 - Preserve Ollama as the default and as a separately selectable OCR provider.
@@ -143,7 +143,7 @@ Authorization: Bearer <key>
 Content-Type: application/json
 
 {
-  "model": "fireworks/qwen3-embedding-8b",
+  "model": "accounts/fireworks/models/qwen3-embedding-8b",
   "input": ["..."],
   "dimensions": 1024
 }
@@ -152,13 +152,19 @@ Content-Type: application/json
 ```json
 {
   "object": "list",
-  "model": "fireworks/qwen3-embedding-8b",
+  "model": "accounts/fireworks/models/qwen3-embedding-8b",
   "data": [
     { "object": "embedding", "index": 0, "embedding": [0.1, 0.2] }
   ],
   "usage": { "prompt_tokens": 123, "total_tokens": 123 }
 }
 ```
+
+Verified live 2026-08-07 with a test key: the wire model requires the full
+`accounts/fireworks/models/...` path (the short form 404s), `dimensions:
+1024` is honored, usage is reported, and **returned vectors are not
+L2-normalized** (observed norm ~65) — the mandatory
+`NormalizeInPlaceIfNeeded` pass is load-bearing for this provider.
 
 Fireworks documents this surface as OpenAI-compatible. It accepts a string or
 array of strings, supports an optional `dimensions` parameter on compatible
@@ -207,7 +213,7 @@ provider ID, use a full endpoint URL, and make the embedding-space ID explicit:
         "ProviderId": "fireworks",
         "Endpoint": "https://api.fireworks.ai/inference/v1/embeddings",
         "Request": {
-          "Model": "fireworks/qwen3-embedding-8b",
+          "Model": "accounts/fireworks/models/qwen3-embedding-8b",
           "ModelParameter": "required",
           "DimensionsParameter": "send",
           "EncodingFormat": "float"
@@ -466,7 +472,7 @@ hosted profiles and validated as a non-secret stable identifier, for example:
 
 ```text
 ollama:mxbai-embed-large:1024
-fireworks:fireworks/qwen3-embedding-8b:1024:<revision-or-fingerprint>
+fireworks:accounts/fireworks/models/qwen3-embedding-8b:1024:<revision-or-fingerprint>
 openai:text-embedding-3-large:1024:<revision-or-fingerprint>
 baseten:<deployment-or-checkpoint>:<pooling>:<quantization>:1024:<fingerprint>
 ```
@@ -499,9 +505,25 @@ One of these stability policies must be selected before production rollout:
    deprecation/update notices, and accept that an unannounced serving change
    may require a full rebuild. This is the smallest implementation and the
    weakest corruption guard; it is not recommended for this repository.
+4. **Hybrid — artifact digest locally, sentinel fingerprint hosted
+   (DECIDED 2026-08-07):** match the check to what each provider makes
+   observable. Ollama tags resolve to content-addressed digests (`/api/tags`
+   reports them), so the local provider gets true artifact pinning: the
+   embedder records `metadata.embedding_model_digest` the first time it
+   embeds, verifies it per poll, and refuses on a change — deterministic,
+   no tolerance to tune, catches a re-pulled tag exactly. Hosted serverless
+   weights are opaque, so hosted profiles get behavioral sentinel probing
+   (option 2), implemented alongside the OpenAI-compatible transport in
+   phase 3 — which confines the tolerance-tuning problem to the only
+   provider class that needs it. Both checks feed the same
+   refuse-on-mismatch path as the config hash.
 
-The sentinel approach protects Ollama tags too: pulling a changed artifact
-under the same tag has the same underlying problem.
+Digest scope note: the digest is an *observation* keyed to runtime state, so
+it lives in its own metadata key, is cleared by `switch-model` in the same
+transaction as the identity rewrite, and needs no schema migration (absent
+means "not yet observed", the same unknown-is-not-stale rule the heartbeats
+follow). A digest mismatch's remedy is `mailvec switch-model --force` — the
+model name is unchanged, so the non-forced form would report nothing to do.
 
 ### Enforcement points
 
@@ -601,7 +623,7 @@ credential in addition to mail-search access.
 
 ## First experiment: model and dimension recommendation
 
-Start with `fireworks/qwen3-embedding-8b` at 1024 dimensions.
+Start with `accounts/fireworks/models/qwen3-embedding-8b` at 1024 dimensions.
 
 Rationale:
 
@@ -696,9 +718,14 @@ distinguish.
 - The config hash canonicalization covers the currently resolved
   query/document transforms even though they still live under `Ollama:*` at
   this point; the legacy resolver defines the canonical serialization.
-- If the sentinel-fingerprint stability policy is selected (decision 2), its
-  storage lands in this same migration so no second migration is needed, and
-  the startup comparison already runs against Ollama.
+- Stability policy, per the decided hybrid (decision 2): Ollama
+  artifact-digest verification lands here — the embedder observes
+  `metadata.embedding_model_digest` from `/api/tags`, stamps it when absent,
+  verifies per poll, refuses on change (`switch-model --force` rebuilds
+  under new weights; plain `switch-model` clears the digest with the
+  identity rewrite). No schema migration needed: the digest is an observed
+  runtime fact and absent means "not yet observed". Hosted sentinel storage
+  is deferred to phase 3 with the transport that needs it.
 - This phase carries the schema migration and is therefore the minor-bump
   candidate under the release policy; the bump happens only when a release is
   explicitly approved.
@@ -729,6 +756,14 @@ the results must be identical to the phase 0 baseline.
 classification, retry/backoff behavior, and telemetry capture defined above;
 Fireworks, OpenAI, Baseten, and custom-compatible profile examples. Everything
 is exercised against stub HTTP fixtures; CI must not require a live hosted key.
+
+Also carries the hosted half of the decided stability hybrid: **sentinel
+fingerprinting** — fixed non-mail sentinel texts embedded at `switch-model`
+time, stored (small additive migration), and re-compared at startup within a
+documented tolerance derived from measured provider jitter. Drift refuses
+vector writes and semantic search (keyword degrades gracefully) until a
+rebuild. Tolerance tuning is confined here, to the only provider class whose
+weights are unobservable.
 
 ### Phase 4 — health, doctor, monitoring, and MCP error neutrality
 
@@ -944,9 +979,11 @@ implementation and avoids duplicating that work for OpenAI or Baseten later.
 
 1. Accept the recommended Fireworks Qwen3 8B @1024 first experiment, or test a
    different model/dimension. *(Gates phase 6.)*
-2. Choose embedding-space stability policy: pinned deployment or sentinel
-   fingerprint. Sentinel is recommended for serverless. *(Gates phase 1 — the
-   migration's shape depends on it.)*
+2. ~~Choose embedding-space stability policy.~~ **Decided 2026-08-07: the
+   hybrid** — Ollama artifact-digest verification (phase 1, implemented with
+   the space-identity work), sentinel fingerprinting for hosted profiles
+   (lands with the phase 3 transport, storage via a small additive
+   migration then).
 3. Confirm that new hosted profiles must provide an explicit `SpaceId` rather
    than accepting an automatically derived provider/model value. *(Gates
    phase 1.)*
