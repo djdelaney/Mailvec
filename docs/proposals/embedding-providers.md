@@ -578,7 +578,14 @@ The detailed `/health` report and CLI should become profile-aware:
 - keep keyword-search fallback advice for semantic/hybrid failures.
 
 The public `/up` endpoint is constrained by an existing Uptime Kuma wire
-contract. Monitors currently read `ollama.reachable`; renaming it in place would
+contract. **As-built note for the phase-4 implementer (2026-08-08):** the
+semantic shift described below has already de facto begun — since phase 2b,
+`ollama.reachable` is computed from the provider-neutral classified probe
+(`EmbeddingService.ProbeAsync`), so it already means "the configured
+embedding profile's readiness probe succeeded" even when the profile is
+hosted. Phase 4's job is to add the neutral field, document the alias
+semantics, and migrate the monitors — the underlying signal is done.
+Monitors currently read `ollama.reachable`; renaming it in place would
 silently break monitoring. Roll out an additive provider-neutral field while
 retaining the old one as a compatibility alias:
 
