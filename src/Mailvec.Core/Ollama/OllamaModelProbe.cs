@@ -33,6 +33,30 @@ internal static class OllamaModelProbe
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
     }
 
+    /// <summary>
+    /// The listed digest of the given model, or null when the server was
+    /// unreachable, answered malformed, or doesn't list the model. Same
+    /// name-matching rule and bounded timeout as the availability probe —
+    /// they read the same endpoint and must agree on what "this model" means.
+    /// </summary>
+    internal static async Task<string?> GetModelDigestAsync(HttpClient http, string model, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            using var response = await http.GetAsync("/api/tags", cts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var tags = await response.Content.ReadFromJsonAsync<TagsResponse>(cts.Token).ConfigureAwait(false);
+            var match = tags?.Models?.FirstOrDefault(m => Matches(m.Name, model));
+            return string.IsNullOrWhiteSpace(match?.Digest) ? null : match.Digest;
+        }
+        catch (HttpRequestException) { return null; }
+        catch (System.Text.Json.JsonException) { return null; }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
+    }
+
     // Ollama lists models as "name:tag" (e.g. "qwen2.5vl:7b"). Match the
     // configured name exactly, or treat a tagless config as ":latest", or
     // any tag of the same base name.
@@ -50,5 +74,6 @@ internal static class OllamaModelProbe
     private sealed class TagModel
     {
         [JsonPropertyName("name")] public string? Name { get; init; }
+        [JsonPropertyName("digest")] public string? Digest { get; init; }
     }
 }

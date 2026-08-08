@@ -98,6 +98,7 @@ public sealed class EmbeddingWorker(
     {
         migrator.EnsureUpToDate();
         VerifyEmbeddingModelMatchesSchema();
+        await VerifyModelArtifactDigestAsync(stoppingToken).ConfigureAwait(false);
 
         var pollInterval = TimeSpan.FromSeconds(Math.Max(1, embedderOptions.Value.PollIntervalSeconds));
         var batchSize = Math.Max(1, ollamaOptions.Value.MaxBatchSize);
@@ -114,6 +115,15 @@ public sealed class EmbeddingWorker(
         {
             try
             {
+                // Artifact-digest check once per poll CYCLE, not per batch:
+                // it's an HTTP round-trip, and per-batch placement would add
+                // a /api/tags call every 16 messages during a drain. The
+                // model/space/hash verify stays per-batch — it's a local
+                // metadata read. A digest refusal throws here and surfaces
+                // through the same RecordBatchFailure -> /health path as a
+                // model mismatch.
+                await VerifyModelArtifactDigestAsync(stoppingToken).ConfigureAwait(false);
+
                 // OCR scanned PDFs first (re-queues their messages), then embed.
                 var ocred = await RunOcrIfEnabledAsync(stoppingToken).ConfigureAwait(false);
 
@@ -686,6 +696,42 @@ public sealed class EmbeddingWorker(
                 "(e.g. Ollama:QueryInstructionPrefix) differs from the one the stored vectors were " +
                 "produced with. Revert the setting, or run `mailvec switch-model` to re-embed everything " +
                 "under the new configuration.");
+        }
+    }
+
+    /// <summary>
+    /// The artifact-pinning half of the stability hybrid (decision 2 of
+    /// docs/proposals/embedding-providers.md): the stored vectors were
+    /// produced by a specific model ARTIFACT, and a re-pulled tag with
+    /// different weights is a new vector space wearing the old name — a
+    /// change no name, dimension, or config hash can see. First observation
+    /// stamps (this worker is about to embed with exactly these weights, so
+    /// the stamp is a statement of fact); a later different digest refuses.
+    /// An unobservable digest (provider unreachable, hosted profile) skips —
+    /// unknown is never drift, and an unreachable provider fails the embed
+    /// call on its own terms anyway.
+    /// </summary>
+    internal async Task VerifyModelArtifactDigestAsync(CancellationToken ct)
+    {
+        var digest = await ollama.GetModelArtifactDigestAsync(ct).ConfigureAwait(false);
+        if (digest is null) return;
+
+        var stored = metadata.Get(EmbeddingSpace.ModelDigestKey);
+        if (stored is null)
+        {
+            metadata.Set(EmbeddingSpace.ModelDigestKey, digest);
+            logger.LogInformation("Recorded embedding model artifact digest {Digest}", digest);
+            return;
+        }
+
+        if (!string.Equals(stored, digest, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Embedding model artifact changed under its name: stored vectors were produced by " +
+                $"digest {stored}, but the server now serves {digest} for " +
+                $"'{ollamaOptions.Value.EmbeddingModel}' (the tag was re-pulled with different weights). " +
+                "Run `mailvec switch-model --force` to rebuild all vectors under the new artifact, or " +
+                "restore the original model version.");
         }
     }
 }

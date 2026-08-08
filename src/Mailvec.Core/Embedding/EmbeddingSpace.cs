@@ -32,6 +32,16 @@ public static class EmbeddingSpace
     public const string ConfigHashKey = "embedding_config_hash";
 
     /// <summary>
+    /// The observed artifact digest of the serving model (Ollama manifest
+    /// digest today) — the third leg of the identity: space id names the
+    /// space, config hash proves the invocation, the digest pins the local
+    /// artifact. An OBSERVATION, not configuration: stamped by the embedder
+    /// when first seen, cleared by switch-model, absent = "not yet observed"
+    /// (never a mismatch). Needs no schema migration for exactly that reason.
+    /// </summary>
+    public const string ModelDigestKey = "embedding_model_digest";
+
+    /// <summary>
     /// The normalization policy token folded into the config hash. Bump the
     /// suffix if <see cref="VectorMath"/>'s contract ever changes — that IS a
     /// vector-affecting change and must invalidate the hash.

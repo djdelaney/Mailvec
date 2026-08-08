@@ -72,6 +72,12 @@ internal static class StatusCommand
             : storedSpaceId == cfgSpaceId ? storedSpaceId
             : $"{storedSpaceId}  [config describes {cfgSpaceId}]";
         @out.WriteLine($"Embed space: {spaceState}  ({hashState})");
+
+        // Artifact digest: observed by the embedder, cleared by switch-model.
+        // Status is offline, so it reports the stored observation only; the
+        // live comparison happens in the embedder and /health.
+        var storedDigest = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.ModelDigestKey);
+        @out.WriteLine($"Embed artifact: {storedDigest ?? "(not observed yet — stamped on the embedder's next run)"}");
         if (schemaModel != "(not set)" && schemaModel != ollama.EmbeddingModel)
         {
             @out.WriteLine("⚠  Schema/config mismatch — the embedder will refuse to start. Run `mailvec switch-model` to migrate the DB to the configured model.");

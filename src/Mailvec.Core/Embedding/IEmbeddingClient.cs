@@ -34,4 +34,21 @@ public interface IEmbeddingClient
     /// need opposite remediation. Bounded by a short internal timeout.
     /// </summary>
     Task<bool?> IsModelAvailableAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Content digest of the model ARTIFACT serving embeddings, when the
+    /// provider makes one observable (Ollama tags resolve to manifest
+    /// digests). This is the local half of the stability hybrid
+    /// (docs/proposals/embedding-providers.md, decision 2): the embedder
+    /// records it and refuses when it changes — a re-pulled tag with
+    /// different weights is a new vector space wearing the old name.
+    /// Null means "not observable right now" (provider unreachable, digest
+    /// not exposed, or a hosted profile whose weights are opaque) and must
+    /// NEVER be treated as a mismatch — unknown is not drift, the same rule
+    /// the heartbeats follow. The default implementation returns null so
+    /// hosted transports (whose check is sentinel-based instead) and test
+    /// fakes are correct by default.
+    /// </summary>
+    Task<string?> GetModelArtifactDigestAsync(CancellationToken ct = default) =>
+        Task.FromResult<string?>(null);
 }

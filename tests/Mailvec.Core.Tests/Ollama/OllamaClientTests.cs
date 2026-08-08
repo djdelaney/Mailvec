@@ -310,6 +310,39 @@ public class OllamaClientTests
         (await client.IsModelAvailableAsync()).ShouldBeNull();
     }
 
+    // ---------- GetModelArtifactDigestAsync (/api/tags digest) ----------
+
+    private static HttpResponseMessage TagsWithDigests(params (string Name, string? Digest)[] models) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new
+            {
+                models = models.Select(m => new { name = m.Name, digest = m.Digest }).ToArray(),
+            }),
+        };
+
+    [Fact]
+    public async Task Digest_comes_from_the_matched_model_including_latest_tag_resolution()
+    {
+        var client = ClientWith(_ => TagsWithDigests(
+            ("qwen2.5vl:7b", "sha256:vision"),
+            ("mxbai-embed-large:latest", "sha256:embed")));
+        (await client.GetModelArtifactDigestAsync()).ShouldBe("sha256:embed");
+    }
+
+    [Fact]
+    public async Task Digest_is_null_when_unlisted_blank_or_unreachable()
+    {
+        // All three are "unobservable", which callers must treat as unknown —
+        // never as drift.
+        (await ClientWith(_ => TagsWithDigests(("qwen2.5vl:7b", "sha256:vision")))
+            .GetModelArtifactDigestAsync()).ShouldBeNull();
+        (await ClientWith(_ => TagsWithDigests(("mxbai-embed-large:latest", "")))
+            .GetModelArtifactDigestAsync()).ShouldBeNull();
+        (await ClientWith(_ => throw new HttpRequestException("connection refused"))
+            .GetModelArtifactDigestAsync()).ShouldBeNull();
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
