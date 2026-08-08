@@ -629,7 +629,18 @@ public class EmbeddingWorkerTests : IDisposable
         OllamaOptions? ollamaOpts = null)
     {
         var ollamaOptions = ollamaOpts ?? DefaultOllamaOptions();
-        var http = new HttpClient(new StubHandler(respond))
+        // Tests written against this helper stub the /api/embed POST only.
+        // The worker's per-poll artifact-digest check also GETs /api/tags;
+        // answer it centrally with an empty model list (digest unobservable
+        // -> check skips) so each test's respond func keeps its single
+        // concern. Digest behavior has its own tests via DigestFake.
+        var http = new HttpClient(new StubHandler(req =>
+            req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/api/tags"
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new { models = Array.Empty<object>() }),
+                }
+                : respond(req)))
         {
             BaseAddress = new Uri("http://localhost:11434"),
         };
@@ -805,5 +816,62 @@ public class EmbeddingWorkerTests : IDisposable
 
         public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
+    }
+
+    // ---------- artifact-digest verification (stability hybrid, local half) ----------
+
+    [Fact]
+    public async Task Digest_is_stamped_on_first_observation_and_accepted_thereafter()
+    {
+        var worker = BuildWorker(new DigestFake("sha256:aaa"));
+
+        await worker.VerifyModelArtifactDigestAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.ModelDigestKey).ShouldBe("sha256:aaa");
+
+        // Same digest on a later poll: no complaint, no rewrite.
+        await Should.NotThrowAsync(() => worker.VerifyModelArtifactDigestAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_changed_artifact_digest_refuses_with_the_force_remedy()
+    {
+        // The tag was re-pulled with different weights: same name, same
+        // dimensions, same config hash — only the digest can see it.
+        var worker = BuildWorker(new DigestFake("sha256:aaa"));
+        await worker.VerifyModelArtifactDigestAsync(CancellationToken.None);
+
+        var changed = BuildWorker(new DigestFake("sha256:bbb"));
+        var ex = await Should.ThrowAsync<InvalidOperationException>(
+            () => changed.VerifyModelArtifactDigestAsync(CancellationToken.None));
+        ex.Message.ShouldContain("sha256:aaa");
+        ex.Message.ShouldContain("sha256:bbb");
+        ex.Message.ShouldContain("switch-model --force");
+        // The stored observation is untouched — refusal, not overwrite.
+        _metadata.Get(EmbeddingSpace.ModelDigestKey).ShouldBe("sha256:aaa");
+    }
+
+    [Fact]
+    public async Task An_unobservable_digest_neither_stamps_nor_refuses()
+    {
+        // Unknown is not drift: an unreachable server (or a hosted profile,
+        // whose default implementation returns null) must not stamp a bogus
+        // observation and must not block a stored one.
+        var worker = BuildWorker(new DigestFake(null));
+        await worker.VerifyModelArtifactDigestAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.ModelDigestKey).ShouldBeNull();
+
+        _metadata.Set(EmbeddingSpace.ModelDigestKey, "sha256:aaa");
+        await Should.NotThrowAsync(() => worker.VerifyModelArtifactDigestAsync(CancellationToken.None));
+        _metadata.Get(EmbeddingSpace.ModelDigestKey).ShouldBe("sha256:aaa");
+    }
+
+    private sealed class DigestFake(string? digest) : IEmbeddingClient
+    {
+        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
+            Task.FromResult(Array.Empty<float[]>());
+
+        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
+        public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
+        public Task<string?> GetModelArtifactDigestAsync(CancellationToken ct = default) => Task.FromResult(digest);
     }
 }

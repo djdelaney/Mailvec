@@ -112,12 +112,24 @@ public sealed class HealthService(
         var imageOcrEnabled = embOpts.ImageOcrEnabled;
         var ocrEnabled = pdfOcrEnabled || imageOcrEnabled;
         var ollamaPing = ollama.PingAsync(ct);
+        // Digest fetch runs concurrently with the ping (same 10s budget
+        // pressure as the vision probe). null = unobservable — never drift.
+        var digestTask = ollama.GetModelArtifactDigestAsync(ct);
         var visionProbeTask = ocrEnabled && vision is not null
             ? vision.ProbeAsync(ct)
             : null;
 
         var ollamaReachable = await ollamaPing.ConfigureAwait(false);
+        var liveDigest = await digestTask.ConfigureAwait(false);
         var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);
+
+        // Artifact-digest leg of the stability hybrid: mismatch only when
+        // both sides are known — folded into the widened modelMismatch
+        // (computed above from names/space/hash, which need no network).
+        var storedDigest = metadata.Get(Embedding.EmbeddingSpace.ModelDigestKey);
+        var digestMismatch = storedDigest is not null && liveDigest is not null
+            && !string.Equals(storedDigest, liveDigest, StringComparison.Ordinal);
+        modelMismatch |= digestMismatch;
 
         // "Not checkable from this process" is not the same as "broken", and
         // must not read as false: the MCP server deliberately holds no

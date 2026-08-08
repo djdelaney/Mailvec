@@ -74,6 +74,14 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
         OllamaModelProbe.IsModelAvailableAsync(http, _opts.EmbeddingModel, ct);
 
     /// <summary>
+    /// Ollama exposes each tag's content-addressed manifest digest via
+    /// /api/tags — the artifact-pinning half of the stability hybrid. Null
+    /// when unreachable or unlisted (unknown, never drift).
+    /// </summary>
+    public Task<string?> GetModelArtifactDigestAsync(CancellationToken ct = default) =>
+        OllamaModelProbe.GetModelDigestAsync(http, _opts.EmbeddingModel, ct);
+
+    /// <summary>
     /// Returns one float[] per input string, in the same order. May silently
     /// truncate inputs that exceed the model's context length — log warnings
     /// surface this. Throws on any non-recoverable Ollama error.

@@ -21,24 +21,26 @@ internal static class SwitchModelCommand
         var modelOpt = new Option<string?>("--model") { Description = "Target embedding model. Defaults to Ollama:EmbeddingModel from config/env." };
         var dimsOpt = new Option<int?>("--dims") { Description = "Target embedding dimensions. Defaults to Ollama:EmbeddingDimensions from config/env." };
         var yesOpt = new Option<bool>("--yes", "-y") { Description = "Skip the y/N confirmation prompt." };
+        var forceOpt = new Option<bool>("--force") { Description = "Rebuild even when model and dimensions are unchanged — the remedy when the model ARTIFACT changed under its name (embedding_model_digest mismatch: the tag was re-pulled with different weights)." };
 
         var cmd = new Command("switch-model", "Rebuild the vector index for a different embedding model. Deletes all chunks/vectors and re-queues every message.")
         {
             modelOpt,
             dimsOpt,
             yesOpt,
+            forceOpt,
         };
 
         cmd.SetAction(parse =>
         {
             using var sp = CliServices.Build();
-            return Execute(sp, parse.GetValue(modelOpt), parse.GetValue(dimsOpt), parse.GetValue(yesOpt), Console.Out, () => Console.ReadLine());
+            return Execute(sp, parse.GetValue(modelOpt), parse.GetValue(dimsOpt), parse.GetValue(yesOpt), Console.Out, () => Console.ReadLine(), parse.GetValue(forceOpt));
         });
         return cmd;
     }
 
     /// <summary>Test seam — see <see cref="PurgeDeletedCommand"/> for the pattern.</summary>
-    internal static int Execute(IServiceProvider sp, string? model, int? dims, bool yes, TextWriter @out, Func<string?> readLine)
+    internal static int Execute(IServiceProvider sp, string? model, int? dims, bool yes, TextWriter @out, Func<string?> readLine, bool force = false)
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var metadata = sp.GetRequiredService<MetadataRepository>();
@@ -50,9 +52,10 @@ internal static class SwitchModelCommand
         var currentModel = metadata.Get("embedding_model");
         var currentDims = metadata.Get("embedding_dimensions");
 
-        if (currentModel == targetModel && currentDims == targetDims.ToString(System.Globalization.CultureInfo.InvariantCulture))
+        if (!force && currentModel == targetModel && currentDims == targetDims.ToString(System.Globalization.CultureInfo.InvariantCulture))
         {
             @out.WriteLine($"Database is already on {targetModel} ({targetDims}d). Nothing to do.");
+            @out.WriteLine("(If the model ARTIFACT changed under this name — digest mismatch — rerun with --force to rebuild.)");
             return 0;
         }
 

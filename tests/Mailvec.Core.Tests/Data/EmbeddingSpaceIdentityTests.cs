@@ -114,6 +114,21 @@ public class EmbeddingSpaceIdentityTests
     }
 
     [Fact]
+    public void SwitchEmbeddingModel_clears_the_artifact_digest_in_the_same_transaction()
+    {
+        // The digest describes the OLD artifact. Left in place, it would make
+        // the embedder refuse the very rebuild switch-model exists to enable.
+        using var db = new TempDatabase();
+        SetMetadata(db, EmbeddingSpace.ModelDigestKey, "sha256:old-artifact");
+
+        var migrator = new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance,
+            Microsoft.Extensions.Options.Options.Create(new OllamaOptions()));
+        migrator.SwitchEmbeddingModel("qwen3-embedding:4b", 2560);
+
+        Metadata(db, EmbeddingSpace.ModelDigestKey).ShouldBeNull();
+    }
+
+    [Fact]
     public void Changing_the_query_prefix_changes_the_config_hash_but_not_the_space_id()
     {
         var withoutPrefix = EmbeddingSpace.FromOllamaOptions(new OllamaOptions());
@@ -167,5 +182,18 @@ public class EmbeddingSpaceIdentityTests
         cmd.CommandText = "SELECT value FROM metadata WHERE key = $k";
         cmd.Parameters.AddWithValue("$k", key);
         return cmd.ExecuteScalar() as string;
+    }
+
+    private static void SetMetadata(TempDatabase db, string key, string value)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO metadata(key, value) VALUES($k, $v)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """;
+        cmd.Parameters.AddWithValue("$k", key);
+        cmd.Parameters.AddWithValue("$v", value);
+        cmd.ExecuteNonQuery();
     }
 }
