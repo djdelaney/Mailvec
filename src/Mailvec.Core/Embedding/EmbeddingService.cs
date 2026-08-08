@@ -27,20 +27,50 @@ public sealed class EmbeddingService(IEmbeddingClient client, ResolvedEmbeddingP
         // models are trained. Empty transforms (mxbai et al.) embed unchanged.
         var vectors = await client.EmbedAsync(
             [profile.QueryPrefix + text + profile.QuerySuffix], ct).ConfigureAwait(false);
-        return vectors.Length > 0
-            ? vectors[0]
-            : throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
-                "Provider returned no vector for a single query input.");
+        ValidateAndNormalize(vectors, expectedCount: 1);
+        return vectors[0];
     }
 
-    public Task<float[][]> EmbedDocumentsAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
+    public async Task<float[][]> EmbedDocumentsAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(texts);
-        if (texts.Count == 0) return Task.FromResult(Array.Empty<float[]>());
-        if (profile.DocumentPrefix.Length == 0 && profile.DocumentSuffix.Length == 0)
-            return client.EmbedAsync(texts, ct);
-        return client.EmbedAsync(
-            texts.Select(t => profile.DocumentPrefix + t + profile.DocumentSuffix).ToArray(), ct);
+        if (texts.Count == 0) return [];
+        var inputs = profile.DocumentPrefix.Length == 0 && profile.DocumentSuffix.Length == 0
+            ? texts
+            : texts.Select(t => profile.DocumentPrefix + t + profile.DocumentSuffix).ToArray();
+        var vectors = await client.EmbedAsync(inputs, ct).ConfigureAwait(false);
+        ValidateAndNormalize(vectors, texts.Count);
+        return vectors;
+    }
+
+    /// <summary>
+    /// Mathematical-contract enforcement, owned HERE per the proposal's
+    /// service/transport boundary: transports serialize, classify, and return
+    /// indexed raw vectors; the service — which holds the profile — checks
+    /// count, dimension width, and finiteness ONCE for every provider, and
+    /// L2-normalizes (vec0 KNN is L2; unit norm is what makes ranking
+    /// cosine-equivalent). Verified live: Fireworks Qwen3 returns norms ~65,
+    /// so this pass is load-bearing for hosted transports, not defensive.
+    /// </summary>
+    private void ValidateAndNormalize(float[][] vectors, int expectedCount)
+    {
+        if (vectors.Length != expectedCount)
+            throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
+                $"Provider returned {vectors.Length} vectors for {expectedCount} inputs.");
+        for (int i = 0; i < vectors.Length; i++)
+        {
+            var vec = vectors[i];
+            if (vec.Length != profile.OutputDimensions)
+                throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
+                    $"Vector {i} has {vec.Length} dimensions; profile '{profile.Name}' requires {profile.OutputDimensions}.");
+            for (int j = 0; j < vec.Length; j++)
+            {
+                if (!float.IsFinite(vec[j]))
+                    throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
+                        $"Vector {i} contains a non-finite value at index {j} — refusing to serialize it into sqlite-vec.");
+            }
+            VectorMath.NormalizeInPlaceIfNeeded(vec);
+        }
     }
 
     public async Task<EmbeddingProbe> ProbeAsync(CancellationToken ct = default)

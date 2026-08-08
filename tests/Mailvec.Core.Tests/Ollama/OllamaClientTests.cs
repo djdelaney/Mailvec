@@ -51,33 +51,19 @@ public class OllamaClientTests
     }
 
     [Fact]
-    public async Task Normalizes_vectors_that_arrive_unnormalized()
+    public async Task Returns_raw_vectors_without_normalizing_or_width_checking()
     {
-        // A model that returns raw (unnormalized) embeddings must be
-        // normalized client-side so vec0's L2 KNN ranks cosine-equivalently.
+        // The transport contract: raw vectors through. Dimension validation,
+        // finiteness and L2 normalization live in EmbeddingService — once for
+        // every transport (see EmbeddingServiceTests).
         var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = JsonContent.Create(new { embeddings = new[] { new[] { 2f, 0f, 0f, 0f } } })
+            Content = JsonContent.Create(new { embeddings = new[] { new[] { 2f, 0f, 0f } } })  // 3-wide, unnormalized
         });
 
         var result = await client.EmbedAsync(["x"]);
 
-        result[0].ShouldBe(new[] { 1f, 0f, 0f, 0f });
-    }
-
-    [Fact]
-    public async Task Leaves_already_normalized_vectors_bit_for_bit_untouched()
-    {
-        // mxbai vectors arrive normalized; they must pass through unchanged so
-        // re-embeds stay byte-identical to vectors stored before the safeguard.
-        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = JsonContent.Create(new { embeddings = new[] { new[] { 0.6f, 0.8f, 0f, 0f } } })
-        });
-
-        var result = await client.EmbedAsync(["x"]);
-
-        result[0].ShouldBe(new[] { 0.6f, 0.8f, 0f, 0f });
+        result[0].ShouldBe(new[] { 2f, 0f, 0f });
     }
 
     [Fact]
@@ -149,21 +135,6 @@ public class OllamaClientTests
         ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
     }
 
-    [Fact]
-    public async Task Throws_when_dimensions_mismatch_configured_model()
-    {
-        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            // 3 dims, but configured for 4
-            Content = JsonContent.Create(new { embeddings = new[] { new[] { 1f, 2f, 3f } } })
-        });
-
-        var ex = await Should.ThrowAsync<EmbeddingException>(
-            () => client.EmbedAsync(["x"]));
-        ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
-        ex.Message.ShouldContain("3 dimensions");
-        ex.Message.ShouldContain("4");
-    }
 
     [Fact]
     public async Task Surfaces_http_error_status()
