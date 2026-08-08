@@ -473,6 +473,66 @@ public class ChunkRepositoryTests
         chunks.CountForMessage(id).ShouldBe(1);
     }
 
+    [Fact]
+    public void ReplaceChunksForMessage_skips_when_space_id_moved()
+    {
+        // v11: a space change that lands during the HTTP embed call. Model
+        // name alone can't see it (two providers can serve the same nominal
+        // model); the space id comparison must abandon the write.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+
+        chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedSpaceId: "ollama:some-other-space:1024").ShouldBeFalse();
+        chunks.CountForMessage(id).ShouldBe(0);
+        EmbeddedAt(db, id).ShouldBeNull();
+
+        chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedSpaceId: "ollama:mxbai-embed-large:1024").ShouldBeTrue();
+        chunks.CountForMessage(id).ShouldBe(1);
+    }
+
+    [Fact]
+    public void ReplaceChunksForMessage_skips_when_config_hash_moved()
+    {
+        // v11: a vector-affecting setting changed mid-embed (query prefix).
+        // Every NAME still matches — only the config hash can catch it.
+        using var db = new TempDatabase();
+        var messages = new MessageRepository(db.Connections);
+        var chunks = new ChunkRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+
+        long id = messages.Upsert(Sample("a@x"), "INBOX", "INBOX/cur", "fa", now);
+        var stampedHash = Metadata(db, Mailvec.Core.Embedding.EmbeddingSpace.ConfigHashKey);
+        stampedHash.ShouldNotBeNull(); // fresh DB stamps it (StampConfigHashIfMissing)
+
+        chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedConfigHash: "0000000000000000000000000000000000000000000000000000000000000000")
+            .ShouldBeFalse();
+        chunks.CountForMessage(id).ShouldBe(0);
+
+        chunks.ReplaceChunksForMessage(
+            id, [new TextChunk(0, "alpha", 1)], [Hot(0)], now,
+            expectedConfigHash: stampedHash).ShouldBeTrue();
+        chunks.CountForMessage(id).ShouldBe(1);
+    }
+
+    private static string? Metadata(TempDatabase db, string key)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = $k";
+        cmd.Parameters.AddWithValue("$k", key);
+        return cmd.ExecuteScalar() as string;
+    }
+
     private static long EmbedEpoch(TempDatabase db, long messageId)
     {
         using var conn = db.Connections.Open();

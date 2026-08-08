@@ -201,7 +201,14 @@ CREATE TABLE metadata (
     value TEXT NOT NULL
 );
 
+-- embedding_space_id (v11) names the vector space; the seed below is
+-- substituted from config at fresh-DB creation alongside the model/dimension
+-- literals (SchemaMigrator.SubstituteEmbeddingConfig — the token must appear
+-- exactly once). embedding_config_hash is stamped in code after creation
+-- (SchemaMigrator.StampConfigHashIfMissing): it covers config-side text
+-- transforms SQL cannot see.
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '10'),
+    ('schema_version',       '11'),
     ('embedding_model',      'mxbai-embed-large'),
-    ('embedding_dimensions', '1024');
+    ('embedding_dimensions', '1024'),
+    ('embedding_space_id',   'ollama:mxbai-embed-large:1024');

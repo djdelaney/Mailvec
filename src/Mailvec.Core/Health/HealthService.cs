@@ -83,8 +83,23 @@ public sealed class HealthService(
         var configModel = ollamaOpts.Value.EmbeddingModel;
         var configDim = ollamaOpts.Value.EmbeddingDimensions;
 
-        var modelMismatch = schemaModel is not null
-            && (schemaModel != configModel || (schemaDim != 0 && schemaDim != configDim));
+        // v11 widened this beyond the model/dimension names: a stored space id
+        // or config hash that disagrees with the current configuration means
+        // query vectors and stored document vectors no longer share a space —
+        // the same corruption the model check exists for, so it reports (and
+        // degrades /health) through the same flag. The /up wire name
+        // `embeddings.modelMismatch` is locked and keeps carrying the widened
+        // meaning. Absent metadata is unknown, never a mismatch.
+        var (cfgSpaceId, cfgConfigHash) = Embedding.EmbeddingSpace.FromOllamaOptions(ollamaOpts.Value);
+        var storedSpaceId = metadata.Get(Embedding.EmbeddingSpace.SpaceIdKey);
+        var storedConfigHash = metadata.Get(Embedding.EmbeddingSpace.ConfigHashKey);
+        var spaceMismatch =
+            (storedSpaceId is not null && !string.Equals(storedSpaceId, cfgSpaceId, StringComparison.Ordinal))
+            || (storedConfigHash is not null && !string.Equals(storedConfigHash, cfgConfigHash, StringComparison.Ordinal));
+
+        var modelMismatch = (schemaModel is not null
+            && (schemaModel != configModel || (schemaDim != 0 && schemaDim != configDim)))
+            || spaceMismatch;
 
         // OCR (vision) is a separate, best-effort pipeline stage. Probe the
         // vision model concurrently with the embedding-Ollama ping so /health
