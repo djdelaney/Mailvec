@@ -51,8 +51,25 @@ public sealed class EmbeddingProfileOptions
 
     public EmbeddingTextOptions Text { get; set; } = new();
 
+    public EmbeddingAuthOptions Auth { get; set; } = new();
+
     public int? MaxBatchSize { get; set; }
     public int? RequestTimeoutSeconds { get; set; }
+}
+
+/// <summary>
+/// Hosted-protocol authentication. New auth behavior is CODE, not arbitrary
+/// configured headers — "none" and "bearer" are the whole surface. The key
+/// itself never reaches the resolved profile, descriptions, or health
+/// output; prefer <see cref="ApiKeyFile"/> (owner-only file) for long-running
+/// services, <see cref="ApiKey"/> for CI stubs and ephemeral shell runs.
+/// Secrets must never be written into the shared appsettings.Local.json.
+/// </summary>
+public sealed class EmbeddingAuthOptions
+{
+    public string Scheme { get; set; } = "none";
+    public string? ApiKey { get; set; }
+    public string? ApiKeyFile { get; set; }
 }
 
 public sealed class EmbeddingRequestOptions

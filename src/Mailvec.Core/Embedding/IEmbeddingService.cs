@@ -8,7 +8,7 @@ namespace Mailvec.Core.Embedding;
 /// query/document transforms are applied here, centrally — callers can no
 /// longer issue an untyped embed that bypasses text policy, which is how a
 /// prefix once applied in one call site and forgotten in another would
-/// split the vector space. <see cref="IEmbeddingClient"/> remains
+/// split the vector space. <see cref="IEmbeddingTransport"/> remains
 /// underneath as the protocol transport; consumers should not touch it.
 /// The transforms applied here are part of the mathematical embedding
 /// space — they are covered by the config hash, and changing one requires

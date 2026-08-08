@@ -57,14 +57,15 @@ internal static class StatusCommand
         // and could not answer without waiting for new mail to arrive.
         WriteOcrLines(@out, ocrCounts, metadata, embedder);
         @out.WriteLine();
-        @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={ollama.EmbeddingModel} ({ollama.EmbeddingDimensions}d)");
+        var profile = sp.GetRequiredService<Mailvec.Core.Embedding.ResolvedEmbeddingProfile>();
+        @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={profile.WireModel} ({profile.OutputDimensions}d)  [profile {profile.Name}]");
 
         // v11 space identity: the stored space id names the vector space; the
         // config-hash comparison catches a vector-affecting setting change
         // (query prefix) that every name-based line above would miss.
         var storedSpaceId = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey);
         var storedConfigHash = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.ConfigHashKey);
-        var (cfgSpaceId, cfgConfigHash) = Mailvec.Core.Embedding.EmbeddingSpace.FromOllamaOptions(ollama);
+        var (cfgSpaceId, cfgConfigHash) = Mailvec.Core.Embedding.EmbeddingSpace.ForProfile(profile);
         var hashState = storedConfigHash is null ? "config hash not stamped"
             : storedConfigHash == cfgConfigHash ? "config hash ok"
             : "CONFIG HASH MISMATCH — a vector-affecting setting changed";
@@ -78,7 +79,7 @@ internal static class StatusCommand
         // live comparison happens in the embedder and /health.
         var storedDigest = metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.ModelDigestKey);
         @out.WriteLine($"Embed artifact: {storedDigest ?? "(not observed yet — stamped on the embedder's next run)"}");
-        if (schemaModel != "(not set)" && schemaModel != ollama.EmbeddingModel)
+        if (schemaModel != "(not set)" && schemaModel != profile.WireModel)
         {
             @out.WriteLine("⚠  Schema/config mismatch — the embedder will refuse to start. Run `mailvec switch-model` to migrate the DB to the configured model.");
         }

@@ -44,10 +44,10 @@ internal static class SwitchModelCommand
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var metadata = sp.GetRequiredService<MetadataRepository>();
-        var ollama = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
+        var profile = sp.GetRequiredService<Mailvec.Core.Embedding.ResolvedEmbeddingProfile>();
 
-        var targetModel = model ?? ollama.EmbeddingModel;
-        var targetDims = dims ?? ollama.EmbeddingDimensions;
+        var targetModel = model ?? profile.WireModel;
+        var targetDims = dims ?? profile.OutputDimensions;
 
         var currentModel = metadata.Get("embedding_model");
         var currentDims = metadata.Get("embedding_dimensions");

@@ -358,7 +358,7 @@ public class VectorSearchServiceTests
         cmd.ExecuteNonQuery();
     }
 
-    private sealed class CapturingEmbeddingClient : IEmbeddingClient
+    private sealed class CapturingEmbeddingClient : IEmbeddingTransport
     {
         public IReadOnlyList<string>? LastInputs;
 
@@ -368,7 +368,6 @@ public class VectorSearchServiceTests
             return Task.FromResult(new[] { OneHot(1024, hotIndex: 0) });
         }
 
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 }

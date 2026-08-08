@@ -1,15 +1,15 @@
 namespace Mailvec.Core.Embedding;
 
 /// <summary>
-/// Provider-neutral embedding seam. OllamaClient is the only implementation
-/// today; a hosted API (OpenAI, Voyage) would slot in here without touching
-/// consumers. Contract: <see cref="EmbedAsync"/> returns one float[] per
-/// input, in the same order, RAW — the mathematical contract (dimension
-/// width, finiteness, L2 normalization for vec0's L2 KNN) is enforced once
-/// by EmbeddingService for every transport. This interface is the protocol
-/// transport seam; consumers go through IEmbeddingService.
+/// The protocol transport seam (the proposal's IEmbeddingTransport):
+/// serializes raw inputs, performs one protocol request, classifies the
+/// response, returns indexed RAW vectors. The mathematical contract
+/// (dimension width, finiteness, L2 normalization for vec0's L2 KNN) is
+/// enforced once by EmbeddingService for every transport — consumers go
+/// through IEmbeddingService and never touch this. Implementations:
+/// OllamaClient, OpenAiCompatibleTransport.
 /// </summary>
-public interface IEmbeddingClient
+public interface IEmbeddingTransport
 {
     /// <summary>
     /// Embed each input string. Returns one RAW float[] per input, same
@@ -19,13 +19,6 @@ public interface IEmbeddingClient
     /// EmbeddingException on non-recoverable provider errors.
     /// </summary>
     Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default);
-
-    /// <summary>
-    /// Readiness check — true only when the provider is reachable AND can
-    /// actually produce an embedding with the configured model. Bounded by a
-    /// short internal timeout; returns false on any error.
-    /// </summary>
-    Task<bool> PingAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Diagnostic follow-up for a failed <see cref="PingAsync"/>: is the

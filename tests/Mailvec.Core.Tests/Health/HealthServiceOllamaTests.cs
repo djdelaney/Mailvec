@@ -16,10 +16,10 @@ namespace Mailvec.Core.Tests.Health;
 /// </summary>
 public class HealthServiceOllamaTests
 {
-    // The fakes stay IEmbeddingClient (transport-level) and are wrapped in
+    // The fakes stay IEmbeddingTransport (transport-level) and are wrapped in
     // the REAL EmbeddingService, so these tests exercise the production
     // probe classification + tags refinement, not a fake's re-implementation.
-    private static HealthService Build(TempDatabase db, IEmbeddingClient embedding) =>
+    private static HealthService Build(TempDatabase db, IEmbeddingTransport embedding) =>
         new(db.Connections,
             new MetadataRepository(db.Connections),
             new EmbeddingService(embedding, Tests.Embedding.TestProfiles.Legacy()),
@@ -99,12 +99,11 @@ public class HealthServiceOllamaTests
         r.Status.ShouldBe("degraded");
     }
 
-    private sealed class HangingProbeEmbedding : IEmbeddingClient
+    private sealed class HangingProbeEmbedding : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
             throw new EmbeddingException(EmbeddingFailureKind.Transient, "connection failed");
 
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(false);
 
         public async Task<bool?> IsModelAvailableAsync(CancellationToken ct = default)
         {
@@ -113,7 +112,7 @@ public class HealthServiceOllamaTests
         }
     }
 
-    private sealed class FakeEmbedding(bool ping, bool? modelAvailable) : IEmbeddingClient
+    private sealed class FakeEmbedding(bool ping, bool? modelAvailable) : IEmbeddingTransport
     {
         public int ProbeCalls;
 
@@ -126,7 +125,6 @@ public class HealthServiceOllamaTests
                 ? Task.FromResult(new[] { new[] { 1f } })
                 : throw new EmbeddingException(EmbeddingFailureKind.Transient, "connection failed");
 
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(ping);
 
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default)
         {

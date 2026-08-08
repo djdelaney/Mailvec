@@ -656,7 +656,7 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     private EmbeddingWorker BuildWorker(
-        IEmbeddingClient client,
+        IEmbeddingTransport client,
         EmbedderOptions? embedderOpts = null,
         OllamaOptions? ollamaOpts = null)
         => Assemble(client, embedderOpts, ollamaOpts ?? DefaultOllamaOptions());
@@ -668,7 +668,7 @@ public class EmbeddingWorkerTests : IDisposable
         MaxBatchSize = 16,
     };
 
-    private EmbeddingWorker Assemble(IEmbeddingClient client, EmbedderOptions? embedderOpts, OllamaOptions ollamaOptions)
+    private EmbeddingWorker Assemble(IEmbeddingTransport client, EmbedderOptions? embedderOpts, OllamaOptions ollamaOptions)
     {
         var ollamaOptionsW = Options.Create(ollamaOptions);
         var embedderOptionsW = Options.Create(embedderOpts ?? new EmbedderOptions
@@ -694,7 +694,7 @@ public class EmbeddingWorkerTests : IDisposable
 
         return new EmbeddingWorker(
             migrator, _metadata, _messages, _chunks, chunker, new EmbeddingService(client, profile),
-            profile, embedderOptionsW, ollamaOptionsW, NullLogger<EmbeddingWorker>.Instance);
+            profile, embedderOptionsW, NullLogger<EmbeddingWorker>.Instance);
     }
 
     private static HttpResponseMessage Ok(float[][] embeddings) =>
@@ -822,16 +822,15 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     /// <summary>
-    /// Drives EmbeddingWorker through the IEmbeddingClient seam so tests can
+    /// Drives EmbeddingWorker through the IEmbeddingTransport seam so tests can
     /// force failures or wrong-shaped responses that the real OllamaClient (and
     /// its own validation) wouldn't let through.
     /// </summary>
-    private sealed class FakeEmbeddingClient(Func<IReadOnlyList<string>, float[][]> embed) : IEmbeddingClient
+    private sealed class FakeEmbeddingClient(Func<IReadOnlyList<string>, float[][]> embed) : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
             Task.FromResult(embed(inputs));
 
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 
@@ -919,12 +918,11 @@ public class EmbeddingWorkerTests : IDisposable
         _metadata.Get(EmbeddingSpace.ModelDigestKey).ShouldBe("sha256:aaa");
     }
 
-    private sealed class DigestFake(string? digest) : IEmbeddingClient
+    private sealed class DigestFake(string? digest) : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
             Task.FromResult(Array.Empty<float[]>());
 
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
         public Task<string?> GetModelArtifactDigestAsync(CancellationToken ct = default) => Task.FromResult(digest);
     }

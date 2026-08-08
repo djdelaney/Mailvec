@@ -87,12 +87,11 @@ public class HealthServiceOcrTests
         r.Ocr.ImagePending.ShouldBe(1);
     }
 
-    private sealed class FakeEmbedding : IEmbeddingClient
+    private sealed class FakeEmbedding : IEmbeddingTransport
     {
         // Healthy: the wrapped EmbeddingService probe needs a real vector back.
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
             Task.FromResult(new[] { new[] { 1f } });
-        public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 

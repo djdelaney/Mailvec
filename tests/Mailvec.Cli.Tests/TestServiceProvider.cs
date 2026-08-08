@@ -38,6 +38,19 @@ public sealed class TestServiceProvider : IDisposable
         _services.AddSingleton<MetadataRepository>();
         _services.AddSingleton<ChunkRepository>();
         _services.AddSingleton<KeywordSearchService>();
+        // Legacy-shaped resolved profile derived from whatever OllamaOptions
+        // the test configures (factory registration so AddOption + Rebuild
+        // flows through) — commands read identity from the profile now.
+        _services.AddSingleton(sp =>
+        {
+            var o = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OllamaOptions>>().Value;
+            return new Mailvec.Core.Embedding.ResolvedEmbeddingProfile(
+                "ollama-legacy", "ollama", "ollama", o.BaseUrl,
+                o.EmbeddingModel, o.EmbeddingDimensions,
+                Mailvec.Core.Embedding.EmbeddingSpace.LegacySpaceId(o.EmbeddingModel, o.EmbeddingDimensions),
+                o.QueryInstructionPrefix, "", "", "",
+                o.MaxBatchSize, o.RequestTimeoutSeconds);
+        });
 
         Services = _services.BuildServiceProvider();
         Connections = Services.GetRequiredService<ConnectionFactory>();
