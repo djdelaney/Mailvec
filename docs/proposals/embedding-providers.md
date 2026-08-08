@@ -1095,9 +1095,19 @@ implementation and avoids duplicating that work for OpenAI or Baseten later.
    compose `secrets:` mount at `/run/secrets/embedding_api_key`, mcp +
    embedder only); the endpoint and other non-secret profile values ride
    `.env`; macOS uses `~/Library/Application Support/Mailvec/secrets/`.
-5. Define the semantic/hybrid eval threshold required for rollout. *(Gates the
-   phase 6 accept/reject decision; should be fixed before results exist to
-   argue about.)*
+5. ~~Define the semantic/hybrid eval threshold required for rollout.~~
+   **Decided 2026-08-08 (pre-registered before any phase-6 numbers exist):
+   the switch must EARN the boundary change.** Accept for rollout only if,
+   on the identical 70-query subset eval at top-10: **hybrid NDCG >= 0.915**
+   (baseline 0.905 + 0.01) AND **semantic NDCG >= 0.869** (baseline 0.849 +
+   0.02 — the bigger hurdle goes to the leg the model actually changes);
+   tail guard: no more than 3 queries with an NDCG drop > 0.2, and MRR /
+   Recall each no worse than baseline − 0.01. Keyword must be unchanged
+   (provider-independent — it validates the harness). A result in the
+   parity band is recorded as a measured outcome and defaults to STAYING
+   LOCAL: privacy and zero marginal cost win ties, and a well-documented
+   "no" is a valid return on the experiment. Latency is measured and
+   reviewed at rollout (step 10) but is not part of this hard gate.
 6. Decide how long to retain the `/up` `ollama.reachable` compatibility alias
    after monitors migrate. *(Gates only the phase 7 alias retirement; not
    needed earlier.)*
