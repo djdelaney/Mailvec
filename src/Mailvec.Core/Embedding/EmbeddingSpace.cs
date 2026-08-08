@@ -42,6 +42,71 @@ public static class EmbeddingSpace
     public const string ModelDigestKey = "embedding_model_digest";
 
     /// <summary>
+    /// Sentinel fingerprints — the HOSTED half of the stability hybrid
+    /// (decision 2): serverless weights are unobservable, so the served
+    /// function is fingerprinted behaviorally instead. Fixed non-mail texts
+    /// (nothing private ever leaves for a sentinel), embedded once and
+    /// stored under versioned metadata keys; the embedder re-embeds them per
+    /// poll cycle and refuses when cosine similarity drops below
+    /// <see cref="SentinelMinCosine"/>. Observations like the digest:
+    /// stamped on first sight, cleared by switch-model, absent = not yet
+    /// observed, an unobservable provider skips (unknown is never drift).
+    ///
+    /// The threshold is set from measurement, not guesswork: 8 repeated
+    /// embeds of a fixed sentinel against Fireworks qwen3-embedding-8b on
+    /// 2026-08-08 returned cosine 1.00000000 every time (bit-stable at
+    /// float32), so 0.999 sits orders of magnitude above observed jitter
+    /// while a genuine weight change (same-text cosine typically &lt; 0.99
+    /// across revisions) trips it. Re-measure before lowering.
+    /// </summary>
+    public const string SentinelKeyPrefix = "embedding_sentinel_v1.";
+    public const double SentinelMinCosine = 0.999;
+
+    /// <summary>
+    /// Diverse fixed texts: prose, numerals/dates, code-ish tokens, and
+    /// non-Latin script, so a quantization or pooling change that shifts only
+    /// one region of the embedding space still moves at least one sentinel.
+    /// Changing this list means bumping the key prefix version — stored
+    /// fingerprints are only comparable to embeddings of the SAME texts.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SentinelTexts =
+    [
+        "Mailvec sentinel: the quick brown fox jumps over the lazy dog.",
+        "Invoice 4821-A, due 2026-03-15: total EUR 1,249.00 including 19% VAT.",
+        "def rerank(hits): return sorted(hits, key=lambda h: h.score)[:10]",
+        "会議は木曜日の午後3時に変更されました。議事録を添付します。",
+    ];
+
+    public static string PackSentinel(float[] vector)
+    {
+        var bytes = new byte[vector.Length * sizeof(float)];
+        Buffer.BlockCopy(vector, 0, bytes, 0, bytes.Length);
+        return Convert.ToBase64String(bytes);
+    }
+
+    public static float[] UnpackSentinel(string packed)
+    {
+        var bytes = Convert.FromBase64String(packed);
+        var vector = new float[bytes.Length / sizeof(float)];
+        Buffer.BlockCopy(bytes, 0, vector, 0, bytes.Length);
+        return vector;
+    }
+
+    /// <summary>Cosine over raw floats (double accumulation); 0 when either norm is 0.</summary>
+    public static double CosineSimilarity(float[] a, float[] b)
+    {
+        if (a.Length != b.Length) return 0;
+        double dot = 0, na = 0, nb = 0;
+        for (int i = 0; i < a.Length; i++)
+        {
+            dot += (double)a[i] * b[i];
+            na += (double)a[i] * a[i];
+            nb += (double)b[i] * b[i];
+        }
+        return na == 0 || nb == 0 ? 0 : dot / (Math.Sqrt(na) * Math.Sqrt(nb));
+    }
+
+    /// <summary>
     /// The normalization policy token folded into the config hash. Bump the
     /// suffix if <see cref="VectorMath"/>'s contract ever changes — that IS a
     /// vector-affecting change and must invalidate the hash.

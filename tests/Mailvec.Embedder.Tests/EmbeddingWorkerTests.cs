@@ -871,6 +871,90 @@ public class EmbeddingWorkerTests : IDisposable
         EmbeddedAt(GetMessageId("throttled@x")).ShouldNotBeNull();
     }
 
+    // ---------- sentinel fingerprints (stability hybrid, hosted half) ----------
+
+    private EmbeddingWorker HostedWorker(Func<float[][]> vectors)
+    {
+        var profile = new ResolvedEmbeddingProfile(
+            "fireworks-qwen", "openai-compatible", "fireworks",
+            "https://api.example.test/v1/embeddings",
+            "accounts/fireworks/models/qwen3-embedding-8b", 4,
+            "fireworks:qwen3-embedding-8b:4:test", "", "", "", "", 16, 60,
+            SendWireModel: true, SendDimensions: true, EncodingFormat: "float");
+        var client = new SentinelFake(vectors);
+        var embedderOptionsW = Options.Create(new EmbedderOptions
+        {
+            PollIntervalSeconds = 60, ChunkSizeTokens = 200, ChunkOverlapTokens = 32, MinBodyCharsForVector = 100,
+        });
+        return new EmbeddingWorker(
+            new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance),
+            _metadata, _messages, _chunks, new ChunkingService(embedderOptionsW),
+            new EmbeddingService(client, profile), profile,
+            embedderOptionsW, NullLogger<EmbeddingWorker>.Instance);
+    }
+
+    private static float[][] SentinelVectors(float marker) =>
+        [.. EmbeddingSpace.SentinelTexts.Select((_, i) =>
+        {
+            var v = new float[4];
+            v[i % 4] = 1f;
+            v[(i + 1) % 4] = marker;
+            return v;
+        })];
+
+    [Fact]
+    public async Task Sentinels_stamp_on_first_sight_and_accept_a_stable_function()
+    {
+        var worker = HostedWorker(() => SentinelVectors(0.1f));
+
+        await worker.VerifySentinelFingerprintsAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.SentinelKeyPrefix + "0").ShouldNotBeNull();
+
+        await Should.NotThrowAsync(() => worker.VerifySentinelFingerprintsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_drifted_hosted_function_refuses_with_the_force_remedy()
+    {
+        // A serverless revision swap behind the stable alias: same name, same
+        // dims, same config hash, digest unobservable — only the behavioral
+        // fingerprint can see it.
+        var worker = HostedWorker(() => SentinelVectors(0.1f));
+        await worker.VerifySentinelFingerprintsAsync(CancellationToken.None);
+
+        var drifted = HostedWorker(() => SentinelVectors(0.9f)); // cosine ~0.8 vs stored
+        var ex = await Should.ThrowAsync<InvalidOperationException>(
+            () => drifted.VerifySentinelFingerprintsAsync(CancellationToken.None));
+        ex.Message.ShouldContain("switch-model --force");
+        ex.Message.ShouldContain("drifted");
+    }
+
+    [Fact]
+    public async Task An_unobservable_provider_never_stamps_nor_refuses_sentinels()
+    {
+        var worker = HostedWorker(() => throw new EmbeddingException(
+            EmbeddingFailureKind.Backpressure, "429"));
+        await Should.NotThrowAsync(() => worker.VerifySentinelFingerprintsAsync(CancellationToken.None));
+        _metadata.Get(EmbeddingSpace.SentinelKeyPrefix + "0").ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Ollama_profiles_never_run_the_sentinel_check()
+    {
+        // Their integrity leg is the artifact digest; a sentinel embed here
+        // would be a pointless per-cycle batch against the local model.
+        var worker = BuildWorker(new DigestFake("sha256:aaa")); // ollama-legacy profile
+        await worker.VerifySentinelFingerprintsAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.SentinelKeyPrefix + "0").ShouldBeNull();
+    }
+
+    private sealed class SentinelFake(Func<float[][]> vectors) : IEmbeddingTransport
+    {
+        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
+            Task.FromResult(vectors());
+        public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(null);
+    }
+
     // ---------- artifact-digest verification (stability hybrid, local half) ----------
 
     [Fact]

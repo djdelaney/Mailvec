@@ -414,12 +414,13 @@ public sealed class SchemaMigrator(
         var oldModel = Scalar("SELECT value FROM metadata WHERE key = 'embedding_model'");
         var oldDims = Scalar("SELECT value FROM metadata WHERE key = 'embedding_dimensions'");
 
-        // The digest is an observation about the OLD artifact; the embedder
-        // re-observes and stamps the new one on its first run. Cleared in
-        // this same transaction so a crash can't leave the new identity
-        // carrying the old artifact's digest (which would refuse the very
-        // rebuild switch-model exists to enable).
+        // The digest and sentinel fingerprints are observations about the OLD
+        // serving function; the embedder re-observes and stamps new ones on
+        // its first run. Cleared in this same transaction so a crash can't
+        // leave the new identity carrying stale observations (which would
+        // refuse the very rebuild switch-model exists to enable).
         Exec($"DELETE FROM metadata WHERE key = '{Embedding.EmbeddingSpace.ModelDigestKey}'");
+        Exec($"DELETE FROM metadata WHERE key LIKE '{Embedding.EmbeddingSpace.SentinelKeyPrefix}%'");
 
         Exec("DROP TABLE chunk_embeddings");
         // vec0 DDL can't take parameters; dimensions is range-validated above.

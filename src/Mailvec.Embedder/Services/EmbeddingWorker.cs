@@ -119,10 +119,11 @@ public sealed class EmbeddingWorker(
                 // it's an HTTP round-trip, and per-batch placement would add
                 // a /api/tags call every 16 messages during a drain. The
                 // model/space/hash verify stays per-batch — it's a local
-                // metadata read. A digest refusal throws here and surfaces
-                // through the same RecordBatchFailure -> /health path as a
-                // model mismatch.
+                // metadata read. A digest or sentinel refusal throws here and
+                // surfaces through the same RecordBatchFailure -> /health
+                // path as a model mismatch.
                 await VerifyModelArtifactDigestAsync(stoppingToken).ConfigureAwait(false);
+                await VerifySentinelFingerprintsAsync(stoppingToken).ConfigureAwait(false);
 
                 // OCR scanned PDFs first (re-queues their messages), then embed.
                 var ocred = await RunOcrIfEnabledAsync(stoppingToken).ConfigureAwait(false);
@@ -748,6 +749,67 @@ public sealed class EmbeddingWorker(
                 $"'{embeddingProfile.WireModel}' (the tag was re-pulled with different weights). " +
                 "Run `mailvec switch-model --force` to rebuild all vectors under the new artifact, or " +
                 "restore the original model version.");
+        }
+    }
+
+    /// <summary>
+    /// The hosted half of the stability hybrid: behavioral sentinel
+    /// fingerprints (see <see cref="EmbeddingSpace.SentinelTexts"/>). Hosted
+    /// weights are unobservable, so the served FUNCTION is what gets pinned:
+    /// first successful embed of the sentinels stamps their vectors; each
+    /// later cycle re-embeds and refuses when any cosine drops below the
+    /// measured-jitter threshold — a serverless revision swap behind the
+    /// stable alias, invisible to every name and hash. Failure to OBSERVE
+    /// (any classified transport failure) skips: unknown is never drift, and
+    /// the embed pass will surface a real outage on its own terms. Ollama
+    /// profiles skip entirely — their leg is the artifact digest.
+    /// </summary>
+    internal async Task VerifySentinelFingerprintsAsync(CancellationToken ct)
+    {
+        if (embeddingProfile.Protocol != EmbeddingRegistration.OpenAiCompatibleProtocol) return;
+
+        float[][] current;
+        try
+        {
+            current = await embeddings.EmbedDocumentsAsync(EmbeddingSpace.SentinelTexts, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (EmbeddingException) { return; }   // unobservable this cycle — never drift
+
+        var stored = new List<float[]>(EmbeddingSpace.SentinelTexts.Count);
+        var anyMissing = false;
+        for (int i = 0; i < EmbeddingSpace.SentinelTexts.Count; i++)
+        {
+            var packed = metadata.Get(EmbeddingSpace.SentinelKeyPrefix + i.ToString(CultureInfo.InvariantCulture));
+            if (packed is null) { anyMissing = true; break; }
+            stored.Add(EmbeddingSpace.UnpackSentinel(packed));
+        }
+
+        if (anyMissing)
+        {
+            // First observation (or a partial stamp from a crash): this
+            // worker is about to write vectors produced by exactly this
+            // function, so recording its fingerprint is a statement of fact.
+            for (int i = 0; i < current.Length; i++)
+                metadata.Set(EmbeddingSpace.SentinelKeyPrefix + i.ToString(CultureInfo.InvariantCulture),
+                    EmbeddingSpace.PackSentinel(current[i]));
+            logger.LogInformation("Recorded {Count} sentinel fingerprints for hosted embedding space {SpaceId}",
+                current.Length, embeddingProfile.SpaceId);
+            return;
+        }
+
+        for (int i = 0; i < current.Length; i++)
+        {
+            var similarity = EmbeddingSpace.CosineSimilarity(stored[i], current[i]);
+            if (similarity < EmbeddingSpace.SentinelMinCosine)
+            {
+                throw new InvalidOperationException(
+                    $"Hosted embedding function drifted: sentinel {i} cosine similarity {similarity:F6} is below " +
+                    $"{EmbeddingSpace.SentinelMinCosine} for space '{embeddingProfile.SpaceId}' — the provider is " +
+                    "serving different weights behind the same name. Stored vectors are no longer comparable to " +
+                    "new ones. Run `mailvec switch-model --force` to rebuild under the current serving function, " +
+                    "or point the profile at a deployment serving the original revision.");
+            }
         }
     }
 }
