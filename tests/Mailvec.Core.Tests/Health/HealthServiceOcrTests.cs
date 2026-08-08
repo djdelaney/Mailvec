@@ -89,9 +89,10 @@ public class HealthServiceOcrTests
 
     private sealed class FakeEmbedding : IEmbeddingTransport
     {
-        // Healthy: the wrapped EmbeddingService probe needs a real vector back.
-        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
-            Task.FromResult(new[] { new[] { 1f } });
+        // Healthy: the probe validates the full mathematical contract now,
+        // so the vector must be profile-width (1024).
+        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
+        { var v = new float[1024]; v[0] = 1f; return Task.FromResult(new[] { v }); }
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }
 

@@ -83,9 +83,13 @@ public sealed class EmbeddingService(IEmbeddingTransport client, ResolvedEmbeddi
         try
         {
             var vectors = await client.EmbedAsync(["mailvec readiness probe"], cts.Token).ConfigureAwait(false);
-            return vectors is { Length: > 0 } && vectors[0].Length > 0
-                ? new EmbeddingProbe(EmbeddingProbeStatus.Available, profile.WireModel, ModelListed: true)
-                : new EmbeddingProbe(EmbeddingProbeStatus.InvalidResponse, "empty probe vector");
+            // The SAME mathematical contract as real embeddings — a probe
+            // that only checks non-emptiness reports Available through a
+            // provider-wide width/finiteness regression, and isolation mode
+            // then reads that as "provider healthy" and quarantines valid
+            // messages whose only crime was failing the way everything fails.
+            ValidateAndNormalize(vectors, expectedCount: 1);
+            return new EmbeddingProbe(EmbeddingProbeStatus.Available, profile.WireModel, ModelListed: true);
         }
         catch (EmbeddingException ex)
         {

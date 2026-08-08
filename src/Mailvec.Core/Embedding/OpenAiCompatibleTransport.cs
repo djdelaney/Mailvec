@@ -22,7 +22,10 @@ namespace Mailvec.Core.Embedding;
 /// Upstream response bodies NEVER appear in exception messages or logs —
 /// provider errors can echo their input, and the input is mail content.
 /// </summary>
-public sealed class OpenAiCompatibleTransport(HttpClient http, ResolvedEmbeddingProfile profile) : IEmbeddingTransport
+public sealed class OpenAiCompatibleTransport(
+    HttpClient http,
+    ResolvedEmbeddingProfile profile,
+    IEmbeddingTelemetryObserver? telemetry = null) : IEmbeddingTransport
 {
     public async Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
     {
@@ -57,6 +60,7 @@ public sealed class OpenAiCompatibleTransport(HttpClient http, ResolvedEmbedding
             var parsed = await response.Content.ReadFromJsonAsync<EmbedResponse>(ct).ConfigureAwait(false)
                 ?? throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
                     "Embeddings endpoint returned an empty body.");
+            Observe(response, parsed);
             return Reassemble(parsed, inputs.Count);
         }
         catch (EmbeddingException) { throw; }
@@ -141,6 +145,41 @@ public sealed class OpenAiCompatibleTransport(HttpClient http, ResolvedEmbedding
     }
 
     /// <summary>
+    /// Telemetry is best-effort by contract: every field optional, absence
+    /// is normal, and an observer exception must never fail an embed that
+    /// already succeeded. Never contains inputs or credentials.
+    /// </summary>
+    private void Observe(HttpResponseMessage response, EmbedResponse parsed)
+    {
+        if (telemetry is null) return;
+        try
+        {
+            static long? Header(HttpResponseMessage r, params string[] names)
+            {
+                foreach (var n in names)
+                    if (r.Headers.TryGetValues(n, out var vals)
+                        && long.TryParse(vals.FirstOrDefault(), out var parsedVal))
+                        return parsedVal;
+                return null;
+            }
+            string? requestId = null;
+            foreach (var n in (string[])["x-request-id", "request-id"])
+                if (response.Headers.TryGetValues(n, out var vals)) { requestId = vals.FirstOrDefault(); break; }
+
+            telemetry.OnEmbeddingResponse(new EmbeddingTelemetry(
+                PromptTokens: parsed.Usage?.PromptTokens,
+                ResponseModel: parsed.Model,
+                RequestId: requestId,
+                RateLimitRemainingRequests: Header(response, "x-ratelimit-remaining-requests"),
+                RateLimitRemainingTokens: Header(response, "x-ratelimit-remaining-tokens")));
+        }
+        catch
+        {
+            // Observation must never take down the embed it observed.
+        }
+    }
+
+    /// <summary>
     /// No model-catalog requirement for hosted profiles (a deployment-scoped
     /// endpoint need not offer one) — null keeps the probe's refinement
     /// honest: unknown, never a missing-model claim.
@@ -164,6 +203,12 @@ public sealed class OpenAiCompatibleTransport(HttpClient http, ResolvedEmbedding
     {
         [JsonPropertyName("data")] public EmbedItem[]? Data { get; init; }
         [JsonPropertyName("model")] public string? Model { get; init; }
+        [JsonPropertyName("usage")] public EmbedUsage? Usage { get; init; }
+    }
+
+    private sealed class EmbedUsage
+    {
+        [JsonPropertyName("prompt_tokens")] public int? PromptTokens { get; init; }
     }
 
     private sealed class EmbedItem

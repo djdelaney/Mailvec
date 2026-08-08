@@ -97,14 +97,20 @@ public sealed class SchemaMigrator(
 
         if (current == 0)
         {
-            var opts = ollamaOptions?.Value ?? new OllamaOptions();
+            // Identity comes from the resolved profile when one is registered
+            // — a fresh database created under a hosted profile must stamp
+            // the ASSERTED space id, not an Ollama derivation of a hosted
+            // wire model. The Ollama-options fallback covers legacy test
+            // constructions; every executable that can create the schema
+            // (indexer included, via the credential-free identity
+            // registration) supplies the profile in production.
+            var (model, dims, spaceId) = FreshIdentity();
             logger.LogInformation(
-                "Applying initial schema (stamping version {Version}, embedding model {Model} @{Dim}d)",
-                LatestSchemaVersion, opts.EmbeddingModel, opts.EmbeddingDimensions);
+                "Applying initial schema (stamping version {Version}, embedding model {Model} @{Dim}d, space {SpaceId})",
+                LatestSchemaVersion, model, dims, spaceId);
             var initialSql = LoadEmbeddedSql("001_initial.sql");
             AssertBaselineStampsLatest(initialSql);
-            ExecuteScript(conn, SubstituteEmbeddingConfig(
-                initialSql, opts.EmbeddingModel, opts.EmbeddingDimensions),
+            ExecuteScript(conn, SubstituteEmbeddingConfig(initialSql, model, dims, spaceId),
                 guardAtLeast: 1); // skip if another starter already initialized the schema
             StampConfigHashIfMissing(conn);
             return;
@@ -118,6 +124,15 @@ public sealed class SchemaMigrator(
         }
 
         StampConfigHashIfMissing(conn);
+    }
+
+    private (string Model, int Dimensions, string SpaceId) FreshIdentity()
+    {
+        if (embeddingProfile is not null)
+            return (embeddingProfile.WireModel, embeddingProfile.OutputDimensions, embeddingProfile.SpaceId);
+        var opts = ollamaOptions?.Value ?? new OllamaOptions();
+        return (opts.EmbeddingModel, opts.EmbeddingDimensions,
+            Embedding.EmbeddingSpace.LegacySpaceId(opts.EmbeddingModel, opts.EmbeddingDimensions));
     }
 
     /// <summary>
@@ -146,12 +161,15 @@ public sealed class SchemaMigrator(
         if (Read(Embedding.EmbeddingSpace.ConfigHashKey) is not null) return;
 
         var opts = ollamaOptions?.Value ?? new OllamaOptions();
+        var (configModel, configDims) = embeddingProfile is not null
+            ? (embeddingProfile.WireModel, embeddingProfile.OutputDimensions)
+            : (opts.EmbeddingModel, opts.EmbeddingDimensions);
         var storedModel = Read("embedding_model");
         var storedDims = Read("embedding_dimensions");
         var storedSpaceId = Read(Embedding.EmbeddingSpace.SpaceIdKey);
         if (storedModel is null || storedDims is null || storedSpaceId is null) return;
-        if (!string.Equals(storedModel, opts.EmbeddingModel, StringComparison.Ordinal)) return;
-        if (storedDims != opts.EmbeddingDimensions.ToString(CultureInfo.InvariantCulture)) return;
+        if (!string.Equals(storedModel, configModel, StringComparison.Ordinal)) return;
+        if (storedDims != configDims.ToString(CultureInfo.InvariantCulture)) return;
 
         var (derivedSpaceId, hash) = embeddingProfile is not null
             ? Embedding.EmbeddingSpace.ForProfile(embeddingProfile)
@@ -303,13 +321,16 @@ public sealed class SchemaMigrator(
     /// that assumption fails loudly here instead of silently shipping a DB
     /// whose vec0 dimension disagrees with config.
     /// </summary>
-    internal static string SubstituteEmbeddingConfig(string sql, string model, int dimensions)
+    internal static string SubstituteEmbeddingConfig(string sql, string model, int dimensions, string? spaceId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
         ArgumentOutOfRangeException.ThrowIfLessThan(dimensions, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(dimensions, 8192);
         if (model.Contains('\''))
             throw new ArgumentException($"Embedding model name must not contain a single quote: {model}", nameof(model));
+        spaceId ??= Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions);
+        if (spaceId.Contains('\''))
+            throw new ArgumentException($"Space id must not contain a single quote: {spaceId}", nameof(spaceId));
 
         var dims = dimensions.ToString(CultureInfo.InvariantCulture);
         // Order matters: FLOAT[1024] must be rewritten before the
@@ -319,8 +340,7 @@ public sealed class SchemaMigrator(
         // the space-id seed embeds the name without its own quotes, so the
         // quoted token still appears exactly once). The space-id seed is
         // rewritten first, while its default literal is still intact.
-        sql = ReplaceExactlyOnce(sql, "'ollama:mxbai-embed-large:1024'",
-            $"'{Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions)}'");
+        sql = ReplaceExactlyOnce(sql, "'ollama:mxbai-embed-large:1024'", $"'{spaceId}'");
         sql = ReplaceExactlyOnce(sql, "FLOAT[1024]", $"FLOAT[{dims}]");
         sql = ReplaceExactlyOnce(sql, "'mxbai-embed-large'", $"'{model}'");
         sql = ReplaceExactlyOnce(sql, "('embedding_dimensions', '1024')", $"('embedding_dimensions', '{dims}')");
@@ -437,13 +457,32 @@ public sealed class SchemaMigrator(
         // switch invocation too, so the transforms here match the ones the
         // embedder will run with); the text transforms come from the resolved
         // profile when one is registered — suffixes exist only there.
-        var spaceId = Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions);
-        var prefix = embeddingProfile?.QueryPrefix ?? ollamaOptions?.Value.QueryInstructionPrefix ?? "";
-        var configHash = Embedding.EmbeddingSpace.ComputeConfigHash(
-            spaceId, model, dimensions, prefix,
-            embeddingProfile?.QuerySuffix ?? "",
-            embeddingProfile?.DocumentPrefix ?? "",
-            embeddingProfile?.DocumentSuffix ?? "");
+        // Identity: when the switch targets exactly the active profile's
+        // model+dims, stamp the PROFILE's identity — for hosted profiles
+        // that is the asserted SpaceId (an Ollama derivation of a hosted
+        // wire model would be refused by the very embedder this migration
+        // feeds). Any divergence from the active profile is an Ollama-side
+        // experiment (the embedding-experiments env-override flow) and gets
+        // the legacy derivation; hosted divergence is rejected before this
+        // method is reached (SwitchModelCommand).
+        var matchesProfile = embeddingProfile is not null
+            && string.Equals(embeddingProfile.WireModel, model, StringComparison.Ordinal)
+            && embeddingProfile.OutputDimensions == dimensions;
+        string spaceId, configHash;
+        if (matchesProfile)
+        {
+            (spaceId, configHash) = Embedding.EmbeddingSpace.ForProfile(embeddingProfile!);
+        }
+        else
+        {
+            spaceId = Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions);
+            var prefix = embeddingProfile?.QueryPrefix ?? ollamaOptions?.Value.QueryInstructionPrefix ?? "";
+            configHash = Embedding.EmbeddingSpace.ComputeConfigHash(
+                spaceId, model, dimensions, prefix,
+                embeddingProfile?.QuerySuffix ?? "",
+                embeddingProfile?.DocumentPrefix ?? "",
+                embeddingProfile?.DocumentSuffix ?? "");
+        }
 
         using (var cmd = conn.CreateCommand())
         {

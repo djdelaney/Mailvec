@@ -63,7 +63,7 @@ public class EmbeddingServiceTests
     [Fact]
     public async Task Probe_success_reports_available_with_model_listed()
     {
-        var service = new EmbeddingService(new CapturingClient(), TestProfiles.Legacy());
+        var service = new EmbeddingService(new CapturingClient(), TestProfiles.Legacy() with { OutputDimensions = 1 });
         var probe = await service.ProbeAsync();
         probe.Status.ShouldBe(EmbeddingProbeStatus.Available);
         probe.ModelListed.ShouldBe(true);
@@ -99,6 +99,27 @@ public class EmbeddingServiceTests
                 () => new EmbeddingService(client, TestProfiles.Legacy() with { OutputDimensions = dims })
                     .EmbedDocumentsAsync(["x"]));
             ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
+        }
+    }
+
+    [Fact]
+    public async Task The_probe_enforces_the_same_mathematical_contract_as_real_embeddings()
+    {
+        // Review P1: a nonempty-only probe reported Available through a
+        // provider-wide width/finiteness regression, which isolation mode
+        // read as "healthy" — quarantining valid messages that only failed
+        // the way everything failed.
+        foreach (var vectors in new[]
+        {
+            new[] { new[] { 1f, 0f, 0f } },                 // wrong width vs 2
+            new[] { new[] { 1f, 0f }, new[] { 0f, 1f } },   // wrong count for 1 input
+            new[] { new[] { float.NaN, 0f } },              // non-finite
+        })
+        {
+            var probe = await new EmbeddingService(new RawClient(vectors),
+                TestProfiles.Legacy() with { OutputDimensions = 2 }).ProbeAsync();
+            probe.Status.ShouldBe(EmbeddingProbeStatus.InvalidResponse);
+            probe.IsAvailable.ShouldBeFalse();
         }
     }
 

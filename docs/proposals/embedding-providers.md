@@ -724,6 +724,30 @@ returned cosine 1.00000000 every time. Live E2E verified the read-side
 guard refuses SpaceMismatch with the Fireworks profile active against an
 Ollama-space database before any query leaves the machine.
 
+Post-review hardening (2026-08-08, phase-3 review): fresh-schema creation
+and `switch-model` stamp the resolved profile's asserted identity (the
+indexer carries a credential-free identity registration so a hosted-profile
+fresh database is possible without the key ever reaching it; hosted
+`--model`/`--dims` overrides diverging from the active profile are
+rejected); detected sentinel drift persists a marker that the read-side
+guard refuses until resolved (auto-cleared on a healthy re-observation or
+by `switch-model`); the readiness probe enforces the full mathematical
+contract so a provider-wide shape regression reads as an outage, never as
+per-message quarantine evidence; remote stability checks (digest +
+sentinels) run on a bounded five-minute cadence rather than once per
+drain batch; hosted responses surface optional usage/model/request-id/
+rate-limit telemetry through a provider-neutral observer (Debug log
+lines); and interactive hosted requests retry backpressure once within a
+~10s budget, honoring Retry-After, while auth/model errors still fail
+fast. **Accepted as-built deviation:** the hosted transport implements NO
+context-overflow split/truncate fallback — a positively identified length
+400 classifies `InputTooLong` and surfaces loudly, because current chunks
+cap at ~930 characters against a 32k-token window, so a genuine overflow
+means an upstream bug that silent truncation would hide. The
+identification is substring-based (`context`, `maximum length`, `too
+long`, `max_tokens`); revisit if a provider's structured error format
+makes stricter matching possible.
+
 The work lands as ordered phases. Each phase leaves the repository releasable
 and behavior-compatible on the existing Ollama path; no phase requires the next
 one to ship. Mail content first reaches a hosted provider in phase 6, and only
