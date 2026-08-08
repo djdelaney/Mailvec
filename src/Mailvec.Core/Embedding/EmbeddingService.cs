@@ -23,10 +23,10 @@ public sealed class EmbeddingService(IEmbeddingClient client, ResolvedEmbeddingP
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         // Query-side instruction transform for asymmetric (instruction-tuned)
-        // models. Documents are embedded with the document transform (empty
-        // today); only the query carries the instruction — that's how these
-        // models are trained. Empty prefix (mxbai et al.) embeds unchanged.
-        var vectors = await client.EmbedAsync([profile.QueryPrefix + text], ct).ConfigureAwait(false);
+        // models. Only the query carries the instruction — that's how these
+        // models are trained. Empty transforms (mxbai et al.) embed unchanged.
+        var vectors = await client.EmbedAsync(
+            [profile.QueryPrefix + text + profile.QuerySuffix], ct).ConfigureAwait(false);
         return vectors.Length > 0
             ? vectors[0]
             : throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
@@ -37,8 +37,10 @@ public sealed class EmbeddingService(IEmbeddingClient client, ResolvedEmbeddingP
     {
         ArgumentNullException.ThrowIfNull(texts);
         if (texts.Count == 0) return Task.FromResult(Array.Empty<float[]>());
-        if (profile.DocumentPrefix.Length == 0) return client.EmbedAsync(texts, ct);
-        return client.EmbedAsync(texts.Select(t => profile.DocumentPrefix + t).ToArray(), ct);
+        if (profile.DocumentPrefix.Length == 0 && profile.DocumentSuffix.Length == 0)
+            return client.EmbedAsync(texts, ct);
+        return client.EmbedAsync(
+            texts.Select(t => profile.DocumentPrefix + t + profile.DocumentSuffix).ToArray(), ct);
     }
 
     public async Task<EmbeddingProbe> ProbeAsync(CancellationToken ct = default)

@@ -30,3 +30,8 @@ scored lower across the board (keyword NDCG 0.877 vs 0.906); it was replaced
 the same day and must not be compared against. Baselines here are only valid
 against the binary lineage that produced them — record the commit when
 capturing a new one.
+
+Neutrality gates run against this baseline (per-query results bit-identical,
+timing stripped): phase 2a (`ff21281`), phase 2b (`5a45148`), and the
+post-review hardening (read-side guard + v2 config hash), each measured with
+the working tree at that commit against this corpus.

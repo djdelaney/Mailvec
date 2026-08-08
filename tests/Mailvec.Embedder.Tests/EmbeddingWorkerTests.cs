@@ -688,12 +688,12 @@ public class EmbeddingWorkerTests : IDisposable
             "ollama-legacy", "ollama", "ollama", "http://localhost:11434",
             ollamaOptions.EmbeddingModel, ollamaOptions.EmbeddingDimensions,
             $"ollama:{ollamaOptions.EmbeddingModel}:{ollamaOptions.EmbeddingDimensions}",
-            ollamaOptions.QueryInstructionPrefix, "",
+            ollamaOptions.QueryInstructionPrefix, "", "", "",
             ollamaOptions.MaxBatchSize, ollamaOptions.RequestTimeoutSeconds);
 
         return new EmbeddingWorker(
             migrator, _metadata, _messages, _chunks, chunker, new EmbeddingService(client, profile),
-            embedderOptionsW, ollamaOptionsW, NullLogger<EmbeddingWorker>.Instance);
+            profile, embedderOptionsW, ollamaOptionsW, NullLogger<EmbeddingWorker>.Instance);
     }
 
     private static HttpResponseMessage Ok(float[][] embeddings) =>

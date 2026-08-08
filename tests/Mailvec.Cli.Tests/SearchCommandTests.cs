@@ -225,7 +225,7 @@ public class SearchCommandTests
                 sp.GetRequiredService<Mailvec.Core.Embedding.IEmbeddingClient>(),
                 new Mailvec.Core.Embedding.ResolvedEmbeddingProfile(
                     "ollama-legacy", "ollama", "ollama", "http://localhost:11434",
-                    "mxbai-embed-large", 1024, "ollama:mxbai-embed-large:1024", "", "", 16, 60)));
+                    "mxbai-embed-large", 1024, "ollama:mxbai-embed-large:1024", "", "", "", "", 16, 60)));
         services.AddSingleton<VectorSearchService>();
         services.AddSingleton<HybridSearchService>();
 

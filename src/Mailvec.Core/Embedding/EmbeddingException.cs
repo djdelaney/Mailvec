@@ -29,6 +29,16 @@ public enum EmbeddingFailureKind
 
     /// <summary>Network faults, timeouts, other 5xx — bounded retry, and the only kind that may count strikes.</summary>
     Transient,
+
+    /// <summary>
+    /// The active profile describes a different vector space than the one the
+    /// stored vectors belong to (model, dimensions, space id, or config
+    /// hash). Raised by the read-side guard before query embedding/KNN:
+    /// serving a cross-space ranking would be plausible and meaningless.
+    /// Configuration-level, never message evidence; remedied by reverting
+    /// config or `mailvec switch-model`.
+    /// </summary>
+    SpaceMismatch,
 }
 
 /// <summary>
@@ -48,5 +58,6 @@ public sealed class EmbeddingException(EmbeddingFailureKind kind, string message
     public bool IsProviderWide =>
         Kind is EmbeddingFailureKind.AuthOrConfig
              or EmbeddingFailureKind.ModelUnavailable
-             or EmbeddingFailureKind.Backpressure;
+             or EmbeddingFailureKind.Backpressure
+             or EmbeddingFailureKind.SpaceMismatch;
 }

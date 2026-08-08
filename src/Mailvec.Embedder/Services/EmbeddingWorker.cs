@@ -16,6 +16,7 @@ public sealed class EmbeddingWorker(
     ChunkRepository chunks,
     ChunkingService chunker,
     IEmbeddingService embeddings,
+    ResolvedEmbeddingProfile embeddingProfile,
     IOptions<EmbedderOptions> embedderOptions,
     IOptions<OllamaOptions> ollamaOptions,
     ILogger<EmbeddingWorker> logger,
@@ -271,7 +272,7 @@ public sealed class EmbeddingWorker(
                 var vecs = texts.Count == 0
                     ? Array.Empty<float[]>()
                     : await EmbedInBatchesAsync(texts, batchSize, ct).ConfigureAwait(false);
-                var (isoSpaceId, isoConfigHash) = EmbeddingSpace.FromOllamaOptions(ollamaOptions.Value);
+                var (isoSpaceId, isoConfigHash) = EmbeddingSpace.ForProfile(embeddingProfile);
                 var committed = chunks.ReplaceChunksForMessage(m.Id, msgChunks, vecs, embeddedAt, m.ContentHash,
                     checkContentHash: true, expectedEmbedEpoch: m.EmbedEpoch,
                     expectedEmbeddingModel: ollamaOptions.Value.EmbeddingModel,
@@ -449,7 +450,7 @@ public sealed class EmbeddingWorker(
         var attachmentChunkCount = 0;
         var nonEmptyMessageCount = 0;
         var skipped = 0;
-        var (expectedSpaceId, expectedConfigHash) = EmbeddingSpace.FromOllamaOptions(ollamaOptions.Value);
+        var (expectedSpaceId, expectedConfigHash) = EmbeddingSpace.ForProfile(embeddingProfile);
         foreach (var (id, contentHash, embedEpoch, msgChunks) in perMessageChunks)
         {
             if (msgChunks.Count == 0)
@@ -686,7 +687,7 @@ public sealed class EmbeddingWorker(
         // check can see. Absent values self-heal — this worker is about to
         // produce vectors under exactly this identity, so stamping it is a
         // statement of fact, mirroring the model/dims initialisation above.
-        var (spaceId, configHash) = EmbeddingSpace.FromOllamaOptions(ollamaOptions.Value);
+        var (spaceId, configHash) = EmbeddingSpace.ForProfile(embeddingProfile);
         var existingSpace = metadata.Get(EmbeddingSpace.SpaceIdKey);
         if (existingSpace is null)
         {

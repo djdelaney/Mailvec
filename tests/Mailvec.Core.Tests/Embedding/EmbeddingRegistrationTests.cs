@@ -166,13 +166,35 @@ public class EmbeddingRegistrationTests
     }
 
     [Fact]
-    public void Unapplied_text_transforms_are_refused_not_silently_ignored()
+    public void All_four_text_transforms_resolve_and_each_changes_the_config_hash()
     {
-        var ex = Should.Throw<NotSupportedException>(() => EmbeddingRegistration.Resolve(Config(
+        // Every transform is vector-affecting (the proposal defines all
+        // four); each must be carried by the resolved profile AND covered by
+        // the canonical hash, or a configured transform could silently
+        // split the space.
+        var resolved = EmbeddingRegistration.Resolve(Config(
             ("Embedding:ActiveProfile", "p"),
             ("Embedding:Profiles:p:Protocol", "ollama"),
-            ("Embedding:Profiles:p:Text:DocumentPrefix", "passage: "))));
-        ex.Message.ShouldContain("silently ignored");
+            ("Embedding:Profiles:p:Text:QueryPrefix", "q<"),
+            ("Embedding:Profiles:p:Text:QuerySuffix", ">q"),
+            ("Embedding:Profiles:p:Text:DocumentPrefix", "d<"),
+            ("Embedding:Profiles:p:Text:DocumentSuffix", ">d")));
+
+        resolved.QueryPrefix.ShouldBe("q<");
+        resolved.QuerySuffix.ShouldBe(">q");
+        resolved.DocumentPrefix.ShouldBe("d<");
+        resolved.DocumentSuffix.ShouldBe(">d");
+
+        var baseline = EmbeddingSpace.ForProfile(resolved with
+        { QueryPrefix = "", QuerySuffix = "", DocumentPrefix = "", DocumentSuffix = "" }).ConfigHash;
+        EmbeddingSpace.ForProfile(resolved with { QuerySuffix = "", DocumentPrefix = "", DocumentSuffix = "" })
+            .ConfigHash.ShouldNotBe(baseline);
+        EmbeddingSpace.ForProfile(resolved with { QueryPrefix = "", DocumentPrefix = "", DocumentSuffix = "" })
+            .ConfigHash.ShouldNotBe(baseline);
+        EmbeddingSpace.ForProfile(resolved with { QueryPrefix = "", QuerySuffix = "", DocumentSuffix = "" })
+            .ConfigHash.ShouldNotBe(baseline);
+        EmbeddingSpace.ForProfile(resolved with { QueryPrefix = "", QuerySuffix = "", DocumentPrefix = "" })
+            .ConfigHash.ShouldNotBe(baseline);
     }
 
     // ---------- registration wiring ----------

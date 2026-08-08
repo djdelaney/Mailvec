@@ -43,7 +43,9 @@ public sealed record ResolvedEmbeddingProfile(
     int OutputDimensions,
     string SpaceId,
     string QueryPrefix,
+    string QuerySuffix,
     string DocumentPrefix,
+    string DocumentSuffix,
     int MaxBatchSize,
     int RequestTimeoutSeconds);
 
@@ -118,6 +120,8 @@ public static class EmbeddingRegistration
         // can never be two divergent config reads.
         services.AddTransient<IEmbeddingService>(sp =>
             new EmbeddingService(sp.GetRequiredService<IEmbeddingClient>(), resolved));
+        // Read-side identity enforcement for the semantic search path.
+        services.AddTransient<EmbeddingSpaceGuard>();
         return services;
     }
 
@@ -168,7 +172,9 @@ public static class EmbeddingRegistration
         OutputDimensions: ollama.EmbeddingDimensions,
         SpaceId: EmbeddingSpace.LegacySpaceId(ollama.EmbeddingModel, ollama.EmbeddingDimensions),
         QueryPrefix: ollama.QueryInstructionPrefix,
+        QuerySuffix: "",
         DocumentPrefix: "",
+        DocumentSuffix: "",
         MaxBatchSize: ollama.MaxBatchSize,
         RequestTimeoutSeconds: ollama.RequestTimeoutSeconds);
 
@@ -186,18 +192,6 @@ public static class EmbeddingRegistration
                 "are derived (ollama:<model>:<dims>) and enforced by the artifact digest — an asserted value " +
                 "could only agree (redundant) or disagree (wrong).");
 
-        // The purpose-aware service that honors suffixes and document
-        // prefixes is the next phase-2 slice. Accepting them now would mean
-        // silently not applying configured text transforms — the exact
-        // quiet contract break the config hash exists to catch.
-        if (!string.IsNullOrEmpty(profile.Text.QuerySuffix)
-            || !string.IsNullOrEmpty(profile.Text.DocumentPrefix)
-            || !string.IsNullOrEmpty(profile.Text.DocumentSuffix))
-            throw new NotSupportedException(
-                $"Embedding profile '{name}': QuerySuffix/DocumentPrefix/DocumentSuffix are not applied yet " +
-                "(they arrive with the purpose-aware embedding service). Refusing to accept text transforms " +
-                "that would be silently ignored.");
-
         var dims = profile.OutputDimensions ?? ollama.EmbeddingDimensions;
         ArgumentOutOfRangeException.ThrowIfLessThan(dims, 1, nameof(profile.OutputDimensions));
         ArgumentOutOfRangeException.ThrowIfGreaterThan(dims, 8192, nameof(profile.OutputDimensions));
@@ -214,8 +208,13 @@ public static class EmbeddingRegistration
             WireModel: model,
             OutputDimensions: dims,
             SpaceId: EmbeddingSpace.LegacySpaceId(model, dims),
+            // All four transforms are honored by EmbeddingService and covered
+            // by the config hash — a profile carrying any of them is a
+            // different vector space than one without.
             QueryPrefix: profile.Text.QueryPrefix ?? ollama.QueryInstructionPrefix,
-            DocumentPrefix: "",
+            QuerySuffix: profile.Text.QuerySuffix ?? "",
+            DocumentPrefix: profile.Text.DocumentPrefix ?? "",
+            DocumentSuffix: profile.Text.DocumentSuffix ?? "",
             MaxBatchSize: Positive(profile.MaxBatchSize, ollama.MaxBatchSize, name, "MaxBatchSize"),
             RequestTimeoutSeconds: Positive(profile.RequestTimeoutSeconds, ollama.RequestTimeoutSeconds, name, "RequestTimeoutSeconds"));
     }

@@ -337,6 +337,31 @@ public class OllamaClientTests
     }
 
     [Fact]
+    public async Task Digest_resolves_latest_never_an_arbitrary_same_base_tag()
+    {
+        // model:old precedes model:latest in the listing. Artifact identity
+        // must name what an embed request actually resolves to (:latest for a
+        // tagless config) — the broad availability rule would let array order
+        // stamp the wrong digest.
+        var client = ClientWith(_ => TagsWithDigests(
+            ("mxbai-embed-large:old", "sha256:old"),
+            ("mxbai-embed-large:latest", "sha256:new")));
+        (await client.GetModelArtifactDigestAsync()).ShouldBe("sha256:new");
+
+        // An explicitly tagged config resolves only its exact tag.
+        var tagged = ClientWith(_ => TagsWithDigests(
+            ("qwen3-embedding:latest", "sha256:latest"),
+            ("qwen3-embedding:4b", "sha256:4b")),
+            new Core.Options.OllamaOptions { EmbeddingModel = "qwen3-embedding:4b" });
+        (await tagged.GetModelArtifactDigestAsync()).ShouldBe("sha256:4b");
+
+        // Only a same-base tag installed, but not :latest and not exact:
+        // unobservable, never a guess.
+        var strayOnly = ClientWith(_ => TagsWithDigests(("mxbai-embed-large:old", "sha256:old")));
+        (await strayOnly.GetModelArtifactDigestAsync()).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Digest_is_null_when_unlisted_blank_or_unreachable()
     {
         // All three are "unobservable", which callers must treat as unknown —

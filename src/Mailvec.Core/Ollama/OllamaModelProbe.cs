@@ -35,9 +35,17 @@ internal static class OllamaModelProbe
 
     /// <summary>
     /// The listed digest of the given model, or null when the server was
-    /// unreachable, answered malformed, or doesn't list the model. Same
-    /// name-matching rule and bounded timeout as the availability probe —
-    /// they read the same endpoint and must agree on what "this model" means.
+    /// unreachable, answered malformed, or doesn't list the model.
+    ///
+    /// <para>Deliberately STRICTER than <see cref="Matches"/>: an explicit
+    /// tag resolves only its exact tag, a tagless config resolves exact name
+    /// then <c>name:latest</c> — the same resolution an embed request gets —
+    /// and there is NO fallback to an arbitrary same-base tag. The broad rule
+    /// answers "is some tag of this model pulled?" (availability); artifact
+    /// identity must name the artifact that actually serves. With
+    /// <c>model:old</c> and <c>model:latest</c> both installed, the broad rule
+    /// let list ordering decide which digest got stamped — false drift when
+    /// the order changed, or a stale tag watched while <c>:latest</c> moved.</para>
     /// </summary>
     internal static async Task<string?> GetModelDigestAsync(HttpClient http, string model, CancellationToken ct)
     {
@@ -49,7 +57,10 @@ internal static class OllamaModelProbe
             if (!response.IsSuccessStatusCode) return null;
 
             var tags = await response.Content.ReadFromJsonAsync<TagsResponse>(cts.Token).ConfigureAwait(false);
-            var match = tags?.Models?.FirstOrDefault(m => Matches(m.Name, model));
+            if (tags?.Models is not { } models) return null;
+
+            var match = models.FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase))
+                ?? models.FirstOrDefault(m => string.Equals(m.Name, model + ":latest", StringComparison.OrdinalIgnoreCase));
             return string.IsNullOrWhiteSpace(match?.Digest) ? null : match.Digest;
         }
         catch (HttpRequestException) { return null; }

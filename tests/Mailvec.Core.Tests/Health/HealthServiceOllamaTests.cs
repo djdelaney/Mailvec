@@ -23,6 +23,7 @@ public class HealthServiceOllamaTests
         new(db.Connections,
             new MetadataRepository(db.Connections),
             new EmbeddingService(embedding, Tests.Embedding.TestProfiles.Legacy()),
+            Tests.Embedding.TestProfiles.Legacy(),
             Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = db.DatabasePath }),
             Microsoft.Extensions.Options.Options.Create(new OllamaOptions()));
 

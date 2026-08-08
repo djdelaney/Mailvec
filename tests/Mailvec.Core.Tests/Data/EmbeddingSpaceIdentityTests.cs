@@ -110,7 +110,7 @@ public class EmbeddingSpaceIdentityTests
         Metadata(db, EmbeddingSpace.SpaceIdKey).ShouldBe("ollama:qwen3-embedding:4b:2560");
         Metadata(db, EmbeddingSpace.ConfigHashKey).ShouldBe(EmbeddingSpace.ComputeConfigHash(
             "ollama:qwen3-embedding:4b:2560", "qwen3-embedding:4b", 2560,
-            options.QueryInstructionPrefix, documentPrefix: ""));
+            options.QueryInstructionPrefix, "", "", ""));
     }
 
     [Fact]
@@ -144,14 +144,14 @@ public class EmbeddingSpaceIdentityTests
     [Fact]
     public void The_config_hash_is_deterministic_and_field_boundary_safe()
     {
-        var a = EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "");
-        var b = EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "");
+        var a = EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "", "", "");
+        var b = EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "", "", "");
         a.ShouldBe(b);
 
         // Length-prefixing means moving characters across a field boundary
         // can never serialize identically.
-        EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "px", "")
-            .ShouldNotBe(EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "x"));
+        EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "px", "", "", "")
+            .ShouldNotBe(EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "x", "", ""));
     }
 
     /// <summary>

@@ -17,6 +17,7 @@ public sealed class HealthService(
     ConnectionFactory connections,
     MetadataRepository metadata,
     Embedding.IEmbeddingService embeddings,
+    Embedding.ResolvedEmbeddingProfile embeddingProfile,
     IOptions<ArchiveOptions> archiveOpts,
     IOptions<OllamaOptions> ollamaOpts,
     // OCR-pipeline deps are optional so the unit tests (which build a minimal
@@ -90,7 +91,7 @@ public sealed class HealthService(
         // degrades /health) through the same flag. The /up wire name
         // `embeddings.modelMismatch` is locked and keeps carrying the widened
         // meaning. Absent metadata is unknown, never a mismatch.
-        var (cfgSpaceId, cfgConfigHash) = Embedding.EmbeddingSpace.FromOllamaOptions(ollamaOpts.Value);
+        var (cfgSpaceId, cfgConfigHash) = Embedding.EmbeddingSpace.ForProfile(embeddingProfile);
         var storedSpaceId = metadata.Get(Embedding.EmbeddingSpace.SpaceIdKey);
         var storedConfigHash = metadata.Get(Embedding.EmbeddingSpace.ConfigHashKey);
         var spaceMismatch =
