@@ -110,3 +110,22 @@ Ships inside `SQLitePCLRaw.bundle_e_sqlite3` — bump the bundle to bump SQLite.
 - **Ollama floor:** ≥ 0.21.2, for `truncate: true` on batched `/api/embed`. Older versions ignore the flag and produce HTTP 400s on overflow, which is when the client-side fallback in `OllamaClient.EmbedAsync` kicks in (see Phase 2 gotchas in `CLAUDE.md`).
 - **Embedding model:** schema-coupled to a fixed per-DB `FLOAT[N]` dimension (1024 with the default mxbai model — `N` is substituted from `Ollama:EmbeddingDimensions` at fresh-DB creation). **Switch it only with `mailvec switch-model --model <name> --dims <n>`** — it rebuilds the `chunk_embeddings` vec0 table at the new dimension, clears chunks, re-queues every message, and updates `metadata` in one transaction. Do **not** hand-edit the schema or manually reindex: mixing vector spaces silently corrupts similarity scores in ways that look plausible. See the embedding-model invariant in `CLAUDE.md` and `docs/contributing/embedding-experiments.md`.
 - **Vision model (OCR):** `Ollama:VisionModel`, default `qwen2.5vl:7b`, used by the embedder's scanned-PDF OCR pass (`Embedder:OcrEnabled`, on by default). Pull it with `ollama pull qwen2.5vl:7b`. Unlike the embedding model it is **not** schema-coupled — swap it freely (no reindex); only newly-OCR'd PDFs use the new model, and you can re-run OCR on existing ones by resetting their `extraction_status` from `ocr` back to `no_text`. If it isn't pulled, OCR logs a warning and skips (scanned PDFs stay `no_text`); `mailvec doctor` flags it. Loaded on demand, not pinned — see the OCR design doc. There is no hard version floor today; `/api/generate` with `images` is long-standing.
+
+
+## Upgrading a compose deployment across the embedding-providers work (unreleased -> next release)
+
+`compose.yml` now unconditionally declares the `embedding_api_key` secret
+(mounted into mcp and embedder), and compose refuses to start a service whose
+file-backed secret is missing. **Before `docker compose pull && up -d` on an
+existing installation, create the file** — empty is correct for Ollama-only
+deployments:
+
+```sh
+umask 077
+: > secrets/embedding_api_key
+chmod 600 secrets/embedding_api_key
+```
+
+Skipping this fails the stack at create time with a missing-secret error —
+loud, but avoidable. The rollout checklist in `docs/deploy-docker.md` applies
+as usual.

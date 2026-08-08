@@ -66,9 +66,24 @@ internal static class SwitchModelCommand
         var currentModel = metadata.Get("embedding_model");
         var currentDims = metadata.Get("embedding_dimensions");
 
-        if (!force && currentModel == targetModel && currentDims == targetDims.ToString(System.Globalization.CultureInfo.InvariantCulture))
+        // No-op requires the COMPLETE identity to match, not just model+dims:
+        // the same nominal model at the same width on a different provider
+        // (an asserted hosted SpaceId), or with changed text transforms (a
+        // different config hash), is a different vector space that needs the
+        // full rebuild. Model+dims alone reported "nothing to do" for exactly
+        // the cloud-hosted-same-model move this feature exists to support,
+        // leaving the operator wedged between a no-op and refusing guards.
+        var (targetSpaceId, targetConfigHash) = sp.GetRequiredService<SchemaMigrator>()
+            .TargetIdentity(targetModel, targetDims);
+        var identityUnchanged =
+            currentModel == targetModel
+            && currentDims == targetDims.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            && metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey) == targetSpaceId
+            && metadata.Get(Mailvec.Core.Embedding.EmbeddingSpace.ConfigHashKey) == targetConfigHash;
+
+        if (!force && identityUnchanged)
         {
-            @out.WriteLine($"Database is already on {targetModel} ({targetDims}d). Nothing to do.");
+            @out.WriteLine($"Database is already on {targetModel} ({targetDims}d) in space {targetSpaceId}. Nothing to do.");
             @out.WriteLine("(If the model ARTIFACT changed under this name — digest mismatch — rerun with --force to rebuild.)");
             return 0;
         }
@@ -95,17 +110,29 @@ internal static class SwitchModelCommand
         @out.WriteLine($"{result.ChunksDeleted:N0} chunk(s) dropped; {result.MessagesReset:N0} message(s) re-queued.");
         @out.WriteLine();
         @out.WriteLine("Next steps:");
-        @out.WriteLine($"  1. ollama pull {targetModel}");
-        @out.WriteLine($"  2. Make sure the embedder runs with Ollama:EmbeddingModel={targetModel} and");
-        @out.WriteLine($"     Ollama:EmbeddingDimensions={targetDims} (Ollama__* env vars or appsettings.Local.json)");
-        @out.WriteLine("  3. Start the embedder to rebuild vectors (dotnet run --project src/Mailvec.Embedder");
-        @out.WriteLine("     with the same env vars for an experiment DB; ops/redeploy.sh embedder for the live DB).");
+        if (profile.Protocol == Mailvec.Core.Embedding.EmbeddingRegistration.OpenAiCompatibleProtocol)
+        {
+            @out.WriteLine("  1. Make sure the API key is in place (secrets/embedding_api_key for compose;");
+            @out.WriteLine("     the profile's Auth:ApiKeyFile for a local install).");
+            @out.WriteLine("  2. Recreate the services so they see the current profile env (docker compose");
+            @out.WriteLine("     up -d — NOT restart, env is fixed at container creation).");
+            @out.WriteLine("  3. Watch `mailvec status` coverage; the embedder stamps sentinel fingerprints");
+            @out.WriteLine("     on its first cycle and refuses if the provider's function drifts.");
+        }
+        else
+        {
+            @out.WriteLine($"  1. ollama pull {targetModel}");
+            @out.WriteLine($"  2. Make sure the embedder runs with Ollama:EmbeddingModel={targetModel} and");
+            @out.WriteLine($"     Ollama:EmbeddingDimensions={targetDims} (Ollama__* env vars or appsettings.Local.json)");
+            @out.WriteLine("  3. Start the embedder to rebuild vectors (dotnet run --project src/Mailvec.Embedder");
+            @out.WriteLine("     with the same env vars for an experiment DB; ops/redeploy.sh embedder for the live DB).");
+        }
         @out.WriteLine("  4. After the re-embed completes, VACUUM the database. The drop+rebuild leaves the new");
         @out.WriteLine("     vectors fragmented across freed pages, which makes KNN scans ~10x slower until then:");
         @out.WriteLine("       sqlite3 <db-path> 'VACUUM;'   # with services stopped, or VACUUM INTO a new file");
         @out.WriteLine();
-        @out.WriteLine("Note: if this is the live database and the shared config still names the old model,");
-        @out.WriteLine("the launchd embedder will refuse to start until the config matches (by design).");
+        @out.WriteLine("Note: services still configured with the OLD profile refuse to run against the");
+        @out.WriteLine("switched database until their config matches (by design).");
         return 0;
     }
 

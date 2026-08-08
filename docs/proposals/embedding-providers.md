@@ -904,9 +904,14 @@ candidate; the alias-retirement decision 6 stays open for whenever a
 future candidate passes. **The feature's status is independent of this
 verdict** (owner intent, recorded 2026-08-08): hosted profiles are a
 first-class deployment shape for users who only have cloud-hosted models
-— including the SAME model hosted, which carries no quality penalty at
-all — kept honest by the stub-tested transport in CI and the identity
-guards; the gate only decided which model this author's corpus uses.
+— including the SAME nominal model hosted. Same-model hosting is first
+class but is still a DISTINCT asserted embedding space: serving revision,
+pooling, prompts, quantization and runtime can all move vectors despite an
+identical checkpoint name, which is the entire reason hosted spaces are
+asserted and sentinel-checked rather than assumed. It therefore passes
+through the normal evaluation gate like any candidate. Kept honest by the
+stub-tested transport in CI and the identity guards; the gate only decided
+which model this author's corpus uses.
 
 ### Phase 7 — production rollout (separate approval)
 

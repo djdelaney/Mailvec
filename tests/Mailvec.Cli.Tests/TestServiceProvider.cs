@@ -69,6 +69,13 @@ public sealed class TestServiceProvider : IDisposable
         return this;
     }
 
+    /// <summary>Replace the resolved embedding profile (last registration wins on next Rebuild).</summary>
+    public TestServiceProvider UseProfile(Mailvec.Core.Embedding.ResolvedEmbeddingProfile profile)
+    {
+        _services.AddSingleton(profile);
+        return this;
+    }
+
     /// <summary>Rebuilds the provider after additional Configure calls.</summary>
     public ServiceProvider Rebuild()
     {

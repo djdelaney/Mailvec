@@ -272,9 +272,15 @@ public static class EmbeddingRegistration
                 $"Embedding profile '{name}': Request:ModelParameter must be 'required', 'placeholder', or 'omit'.");
         var sendModel = modelPolicy != "omit";
         var wireModel = profile.Request.Model;
-        if (sendModel && string.IsNullOrWhiteSpace(wireModel))
+        // Required even for 'omit': the value doubles as the database's LOCAL
+        // model identity (metadata.embedding_model, fresh-schema stamping,
+        // switch-model), which must exist whether or not the wire request
+        // carries it. Without this, an omit-policy profile passed resolution
+        // but could never create or migrate a database.
+        if (string.IsNullOrWhiteSpace(wireModel))
             throw new InvalidOperationException(
-                $"Embedding profile '{name}': Request:Model is required when ModelParameter is '{modelPolicy}'.");
+                $"Embedding profile '{name}': Request:Model is required — it is the database's local model " +
+                $"identity even when ModelParameter='omit' keeps it off the wire.");
 
         var dimsPolicy = profile.Request.DimensionsParameter.ToLowerInvariant();
         if (dimsPolicy is not ("send" or "omit"))

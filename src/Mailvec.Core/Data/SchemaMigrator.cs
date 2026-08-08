@@ -392,6 +392,35 @@ public sealed class SchemaMigrator(
         return string.Concat(sql.AsSpan(0, first), replacement, sql.AsSpan(first + token.Length));
     }
 
+    /// <summary>
+    /// The complete embedding-space identity a switch to (model, dimensions)
+    /// would stamp — the SAME derivation SwitchEmbeddingModel writes, exposed
+    /// so the no-op decision can compare against it. When the target matches
+    /// the active profile's model+dims, the identity is the PROFILE's (for
+    /// hosted profiles the asserted SpaceId — an Ollama derivation of a
+    /// hosted wire model would be refused by the very embedder this feeds);
+    /// any divergence is an Ollama-side experiment and gets the legacy
+    /// derivation. Model/dims alone are NOT a no-op test: the same nominal
+    /// model at the same width on a different provider, or with changed
+    /// text transforms, is a different space.
+    /// </summary>
+    public (string SpaceId, string ConfigHash) TargetIdentity(string model, int dimensions)
+    {
+        var matchesProfile = embeddingProfile is not null
+            && string.Equals(embeddingProfile.WireModel, model, StringComparison.Ordinal)
+            && embeddingProfile.OutputDimensions == dimensions;
+        if (matchesProfile)
+            return Embedding.EmbeddingSpace.ForProfile(embeddingProfile!);
+
+        var spaceId = Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions);
+        var prefix = embeddingProfile?.QueryPrefix ?? ollamaOptions?.Value.QueryInstructionPrefix ?? "";
+        return (spaceId, Embedding.EmbeddingSpace.ComputeConfigHash(
+            spaceId, model, dimensions, prefix,
+            embeddingProfile?.QuerySuffix ?? "",
+            embeddingProfile?.DocumentPrefix ?? "",
+            embeddingProfile?.DocumentSuffix ?? ""));
+    }
+
     public sealed record SwitchModelResult(
         string? OldModel, string? OldDimensions, long ChunksDeleted, long MessagesReset);
 
@@ -457,32 +486,7 @@ public sealed class SchemaMigrator(
         // switch invocation too, so the transforms here match the ones the
         // embedder will run with); the text transforms come from the resolved
         // profile when one is registered — suffixes exist only there.
-        // Identity: when the switch targets exactly the active profile's
-        // model+dims, stamp the PROFILE's identity — for hosted profiles
-        // that is the asserted SpaceId (an Ollama derivation of a hosted
-        // wire model would be refused by the very embedder this migration
-        // feeds). Any divergence from the active profile is an Ollama-side
-        // experiment (the embedding-experiments env-override flow) and gets
-        // the legacy derivation; hosted divergence is rejected before this
-        // method is reached (SwitchModelCommand).
-        var matchesProfile = embeddingProfile is not null
-            && string.Equals(embeddingProfile.WireModel, model, StringComparison.Ordinal)
-            && embeddingProfile.OutputDimensions == dimensions;
-        string spaceId, configHash;
-        if (matchesProfile)
-        {
-            (spaceId, configHash) = Embedding.EmbeddingSpace.ForProfile(embeddingProfile!);
-        }
-        else
-        {
-            spaceId = Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions);
-            var prefix = embeddingProfile?.QueryPrefix ?? ollamaOptions?.Value.QueryInstructionPrefix ?? "";
-            configHash = Embedding.EmbeddingSpace.ComputeConfigHash(
-                spaceId, model, dimensions, prefix,
-                embeddingProfile?.QuerySuffix ?? "",
-                embeddingProfile?.DocumentPrefix ?? "",
-                embeddingProfile?.DocumentSuffix ?? "");
-        }
+        var (spaceId, configHash) = TargetIdentity(model, dimensions);
 
         using (var cmd = conn.CreateCommand())
         {
