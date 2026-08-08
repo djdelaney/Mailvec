@@ -84,13 +84,9 @@ internal static class CliServices
         services.AddSingleton<MbsyncSyncFile>();
         services.AddSingleton<HealthService>();
 
-        services.AddHttpClient<OllamaClient>((sp, client) =>
-        {
-            var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-            client.BaseAddress = new Uri(opts.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
-        });
-        services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+        // Centralized provider selection — same resolution as Embedder/MCP.
+        // Interactive role: search/eval/doctor are user-facing calls.
+        services.AddMailvecEmbedding(config, EmbeddingClientRole.Interactive);
 
         // Vision client so `mailvec doctor` can check OCR is actually reachable —
         // for Ollama that the model is pulled, for the hosted provider that the

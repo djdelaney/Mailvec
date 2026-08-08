@@ -33,33 +33,12 @@ builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<ChunkingService>();
 builder.Services.AddSingleton<MaildirAttachmentReader>();
 
-builder.Services
-    .AddHttpClient<OllamaClient>((sp, client) =>
-    {
-        var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OllamaOptions>>().Value;
-        client.BaseAddress = new Uri(opts.BaseUrl);
-        // The resilience handler below owns the per-attempt/total timeouts.
-        // HttpClient.Timeout wraps the entire handler chain — retries
-        // included — so it must sit ABOVE TotalRequestTimeout or it silently
-        // caps the pipeline (the old 60s default made the widened 120s/300s
-        // resilience timeouts dead config: cold model loads threw
-        // TaskCanceledException at 60s and the retry attempts never ran).
-        // But it must not be infinite either: the resilience timeouts only
-        // cover up to response HEADERS, while PostAsJsonAsync's buffered
-        // body read happens afterwards under HttpClient.Timeout alone — an
-        // Ollama that returns 200 and then stalls mid-body would hang the
-        // worker until SIGTERM. 330s = 300s total + slack for the body read.
-        // (PingAsync stays bounded by its own 5s linked CTS regardless.)
-        client.Timeout = TimeSpan.FromSeconds(330);
-    })
-    .AddStandardResilienceHandler(o =>
-    {
-        // Embedding a batch can be slow on first model load; widen the per-attempt timeout.
-        o.AttemptTimeout.Timeout = TimeSpan.FromSeconds(120);
-        o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(300);
-        o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
-    });
-builder.Services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+// Centralized provider selection (EmbeddingRegistration): identical profile
+// resolution in Embedder, MCP and CLI, so this process can never write a
+// vector space the query paths don't read. BackgroundIngestion role = the
+// 330s ceiling + standard resilience handler (timeout rationale lives with
+// the registration).
+builder.Services.AddMailvecEmbedding(builder.Configuration, EmbeddingClientRole.BackgroundIngestion);
 
 // Vision client for scanned-PDF + image OCR — its own HttpClient with a longer
 // timeout (OCR runs much longer than an embed). No resilience handler: a

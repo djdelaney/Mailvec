@@ -329,13 +329,11 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<HealthService>();
     services.AddSingleton<Mailvec.Mcp.ToolCallLogger>();
 
-    services.AddHttpClient<OllamaClient>((sp, client) =>
-    {
-        var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-        client.BaseAddress = new Uri(opts.BaseUrl);
-        client.Timeout = TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
-    });
-    services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+    // Centralized provider selection — same resolution as Embedder/CLI, so
+    // query embedding can never read a different vector space than the one
+    // the embedder writes. Interactive role = tight timeout, no retry
+    // pipeline (a user is waiting on search).
+    services.AddMailvecEmbedding(config, EmbeddingClientRole.Interactive);
 
     // Vision client so HealthService can probe whether OCR is reachable
     // (surfaced in /health's Ocr section, never as a 503). Mirrors CliServices.
