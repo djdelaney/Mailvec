@@ -29,9 +29,10 @@ public sealed record VectorHit(
     int? MatchedAttachmentPartIndex = null,
     string? MatchedAttachmentFileName = null);
 
-// ollamaOptions is optional so existing direct test constructions compile;
-// DI always supplies it. Only QueryInstructionPrefix is read here.
-public sealed class VectorSearchService(ConnectionFactory connections, IEmbeddingClient ollama, IOptions<OllamaOptions>? ollamaOptions = null)
+// The query instruction transform moved into IEmbeddingService (purpose-aware,
+// carried by the resolved profile) — this class no longer reads any Ollama
+// config. Tests that only exercise SearchByVector pass a null service.
+public sealed class VectorSearchService(ConnectionFactory connections, IEmbeddingService embeddings)
 {
     // vec0 KNN runs BEFORE our filter join, so the k nearest chunks may all be
     // filtered out. Rather than make every caller guess a filter-aware k (which
@@ -58,17 +59,11 @@ public sealed class VectorSearchService(ConnectionFactory connections, IEmbeddin
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
-        // Query-side instruction prefix for asymmetric (instruction-tuned)
-        // models. Documents are embedded bare by the EmbeddingWorker; only
-        // the query carries the instruction — that's how these models are
-        // trained. Empty prefix (mxbai et al.) embeds the query unchanged.
-        var prefix = ollamaOptions?.Value.QueryInstructionPrefix;
-        var embedText = string.IsNullOrEmpty(prefix) ? query : prefix + query;
-
-        var vectors = await ollama.EmbedAsync([embedText], ct).ConfigureAwait(false);
-        if (vectors.Length == 0) return [];
-
-        return SearchByVector(vectors[0], limit, k, filters);
+        // The query-side instruction transform lives in IEmbeddingService
+        // (purpose-aware, profile-carried) — not here. This call site cannot
+        // bypass or duplicate it.
+        var vector = await embeddings.EmbedQueryAsync(query, ct).ConfigureAwait(false);
+        return SearchByVector(vector, limit, k, filters);
     }
 
     /// <summary>

@@ -112,6 +112,12 @@ public static class EmbeddingRegistration
         }
 
         services.AddTransient<IEmbeddingClient>(sp => sp.GetRequiredService<OllamaClient>());
+        // The purpose-aware seam consumers actually use. Same resolved
+        // profile object in every executable, so the query transform applied
+        // at search time and the document transform applied at embed time
+        // can never be two divergent config reads.
+        services.AddTransient<IEmbeddingService>(sp =>
+            new EmbeddingService(sp.GetRequiredService<IEmbeddingClient>(), resolved));
         return services;
     }
 

@@ -31,7 +31,7 @@ public class HealthServiceMailTests : IDisposable
     private static HealthService Build(TempDatabase db, MbsyncSyncFile? sync) =>
         new(db.Connections,
             new MetadataRepository(db.Connections),
-            new FakeEmbedding(),
+            new EmbeddingService(new FakeEmbedding(), Tests.Embedding.TestProfiles.Legacy()),
             Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = db.DatabasePath }),
             Microsoft.Extensions.Options.Options.Create(new OllamaOptions()),
             mbsyncSync: sync);
@@ -103,8 +103,9 @@ public class HealthServiceMailTests : IDisposable
 
     private sealed class FakeEmbedding : IEmbeddingClient
     {
+        // Healthy: the wrapped EmbeddingService probe needs a real vector back.
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
-            Task.FromResult(Array.Empty<float[]>());
+            Task.FromResult(new[] { new[] { 1f } });
         public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
     }

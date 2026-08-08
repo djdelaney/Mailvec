@@ -174,7 +174,8 @@ public sealed class DbEvalRankingSourceTests
             var ollama = new OllamaClient(http, ollamaOpts, NullLogger<OllamaClient>.Instance);
 
             var keyword = new KeywordSearchService(_db.Connections);
-            var vector = new VectorSearchService(_db.Connections, ollama);
+            var vector = new VectorSearchService(_db.Connections,
+                new EmbeddingService(ollama, Tests.Embedding.TestProfiles.Legacy()));
             var hybrid = new HybridSearchService(keyword, vector);
             Source = new DbEvalRankingSource(keyword, vector, hybrid, _messages);
         }

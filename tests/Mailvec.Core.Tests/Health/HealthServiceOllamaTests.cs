@@ -16,10 +16,13 @@ namespace Mailvec.Core.Tests.Health;
 /// </summary>
 public class HealthServiceOllamaTests
 {
+    // The fakes stay IEmbeddingClient (transport-level) and are wrapped in
+    // the REAL EmbeddingService, so these tests exercise the production
+    // probe classification + tags refinement, not a fake's re-implementation.
     private static HealthService Build(TempDatabase db, IEmbeddingClient embedding) =>
         new(db.Connections,
             new MetadataRepository(db.Connections),
-            embedding,
+            new EmbeddingService(embedding, Tests.Embedding.TestProfiles.Legacy()),
             Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = db.DatabasePath }),
             Microsoft.Extensions.Options.Options.Create(new OllamaOptions()));
 
@@ -98,7 +101,7 @@ public class HealthServiceOllamaTests
     private sealed class HangingProbeEmbedding : IEmbeddingClient
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
-            Task.FromResult(Array.Empty<float[]>());
+            throw new EmbeddingException(EmbeddingFailureKind.Transient, "connection failed");
 
         public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(false);
 
@@ -113,8 +116,14 @@ public class HealthServiceOllamaTests
     {
         public int ProbeCalls;
 
+        // ping=true -> the real embed succeeds; ping=false -> a classified
+        // transport failure, which EmbeddingService refines via the tags
+        // probe. Same tri-state the old PingAsync/IsModelAvailableAsync pair
+        // expressed, now driven through the transport surface.
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
-            Task.FromResult(Array.Empty<float[]>());
+            ping
+                ? Task.FromResult(new[] { new[] { 1f } })
+                : throw new EmbeddingException(EmbeddingFailureKind.Transient, "connection failed");
 
         public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(ping);
 

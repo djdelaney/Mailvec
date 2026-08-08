@@ -15,7 +15,7 @@ public sealed class EmbeddingWorker(
     MessageRepository messages,
     ChunkRepository chunks,
     ChunkingService chunker,
-    IEmbeddingClient ollama,
+    IEmbeddingService embeddings,
     IOptions<EmbedderOptions> embedderOptions,
     IOptions<OllamaOptions> ollamaOptions,
     ILogger<EmbeddingWorker> logger,
@@ -320,6 +320,23 @@ public sealed class EmbeddingWorker(
 
         foreach (var (snapshot, ex) in failed)
         {
+            // Classified provider-wide failures are never evidence against a
+            // message — the vision taxonomy's core lesson applied here. The
+            // concrete hazard: a 429/503 lands on THIS message while others
+            // in the same pass succeed, so the health-probe rule reads the
+            // provider as fine and would count a strike; five throttled
+            // cycles later a perfectly good message is quarantined. The next
+            // poll is the backoff. Unclassified exceptions fall through to
+            // the strike path — for a single-message failure amid successes,
+            // "retry it" (and eventually quarantine) stays the right default.
+            if (ex is EmbeddingException { IsProviderWide: true } providerWide)
+            {
+                logger.LogWarning(
+                    "Message {Id} hit a provider-wide {Kind} in isolation; not counting it against the message.",
+                    snapshot.MessageId, providerWide.Kind);
+                continue;
+            }
+
             var strikes = _embedStrikes.GetValueOrDefault(snapshot) + 1;
             if (strikes >= QuarantineStrikes)
             {
@@ -368,8 +385,7 @@ public sealed class EmbeddingWorker(
     {
         try
         {
-            await ollama.EmbedAsync(["mailvec embed health probe"], ct).ConfigureAwait(false);
-            return true;
+            return (await embeddings.ProbeAsync(ct).ConfigureAwait(false)).IsAvailable;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -543,7 +559,7 @@ public sealed class EmbeddingWorker(
         for (int i = 0; i < inputs.Count; i += batchSize)
         {
             var slice = inputs.Skip(i).Take(batchSize).ToList();
-            var vecs = await ollama.EmbedAsync(slice, ct).ConfigureAwait(false);
+            var vecs = await embeddings.EmbedDocumentsAsync(slice, ct).ConfigureAwait(false);
             results.AddRange(vecs);
         }
         return [.. results];
@@ -713,7 +729,7 @@ public sealed class EmbeddingWorker(
     /// </summary>
     internal async Task VerifyModelArtifactDigestAsync(CancellationToken ct)
     {
-        var digest = await ollama.GetModelArtifactDigestAsync(ct).ConfigureAwait(false);
+        var digest = await embeddings.GetModelArtifactDigestAsync(ct).ConfigureAwait(false);
         if (digest is null) return;
 
         var stored = metadata.Get(EmbeddingSpace.ModelDigestKey);

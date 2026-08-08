@@ -156,21 +156,24 @@ public sealed class SearchEmailsTool(
                 _ => throw new McpException($"Unknown mode '{mode}'. Use 'keyword', 'semantic', or 'hybrid'."),
             };
         }
-        catch (HttpRequestException ex)
+        catch (Mailvec.Core.Embedding.EmbeddingException ex)
         {
             // The MCP SDK collapses any non-McpException into a bare
             // "An error occurred." — invisible to the client LLM. The only
             // HTTP dependency in the search path is the query-embedding call,
-            // so translate it into something the client can act on (this is
-            // the single most common broken state on a fresh install: Ollama
-            // not running, or the embedding model never pulled).
+            // which throws the classified EmbeddingException, so translate it
+            // into something the client can act on (this is the single most
+            // common broken state on a fresh install: Ollama not running, or
+            // the embedding model never pulled).
             //
             // The detail goes to the LOG, not the client. An MCP client here is
             // Anthropic's cloud, so anything in this message leaves the network,
             // and both obvious things to include leak the internal endpoint:
-            // Ollama:BaseUrl is the GPU VM's LAN address, and a connection-level
-            // HttpRequestException puts host:port in ex.Message. The model name
-            // stays — it's public, and it's the actionable half.
+            // Ollama:BaseUrl is the GPU VM's LAN address, and the exception's
+            // INNER (connection-level HttpRequestException) puts host:port in
+            // its message — the classified wrapper's own message is
+            // Mailvec-authored (status codes only), but only the model name
+            // goes to the client: it's public, and it's the actionable half.
             logger.LogWarning(ex,
                 "search_emails: embedding call to Ollama at {BaseUrl} failed; returning a sanitized error to the client.",
                 _ollama.BaseUrl);

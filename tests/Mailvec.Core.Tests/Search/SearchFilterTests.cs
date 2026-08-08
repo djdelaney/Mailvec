@@ -323,7 +323,7 @@ public class SearchFilterTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         long pdf = messages.Upsert(M("pdf@x", attachments: [new ParsedAttachment(0, "doc.pdf", "application/pdf", 10L)]),
@@ -365,7 +365,7 @@ public class SearchFilterTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         long inboxId   = messages.Upsert(M("a@x"), "INBOX",        "INBOX/cur",        "a", now);
@@ -385,7 +385,7 @@ public class SearchFilterTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         long a = messages.Upsert(M("a@x", from: "billing@vendor.com"), "INBOX", "INBOX/cur", "a", now);
@@ -405,7 +405,7 @@ public class SearchFilterTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
         var jan = new DateTimeOffset(2024, 1, 15, 12, 0, 0, TimeSpan.Zero);
         var jul = new DateTimeOffset(2024, 7, 15, 12, 0, 0, TimeSpan.Zero);
@@ -440,7 +440,7 @@ public class SearchFilterTests
         chunks.ReplaceChunksForMessage(inbox, [new TextChunk(0, "x", 1)], [OneHot(0)], now);
         chunks.ReplaceChunksForMessage(arch,  [new TextChunk(0, "x", 1)], [OneHot(0)], now);
 
-        var vectorService = new VectorSearchService(db.Connections, ollama: null!);
+        var vectorService = new VectorSearchService(db.Connections, embeddings: null!);
         var filters = new SearchFilters(Folder: "Archive");
 
         var kwHits = keyword.Search("ramen", filters: filters);
