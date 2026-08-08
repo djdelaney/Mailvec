@@ -20,3 +20,13 @@ Corpus identity (observed 2026-08-07, at the first baseline):
 Known caveat: the negative query scores 0.000 specificity on this corpus in
 all modes (it was authored against the full mailbox; the subset appears to
 contain lookalike matches). Judge specificity deltas accordingly.
+
+Binary provenance: `2026-08-07.json` was measured with a **working-tree build
+of main** (post-`5baaf6d`, with the ranking-neutral v11 space-identity change
+— neutrality verified by an A/B against `5baaf6d` on an identical DB copy:
+per-query results bit-identical). An earlier capture of this file used the
+stale July-2 published CLI, which predates main's KNN-escalation change and
+scored lower across the board (keyword NDCG 0.877 vs 0.906); it was replaced
+the same day and must not be compared against. Baselines here are only valid
+against the binary lineage that produced them — record the commit when
+capturing a new one.
