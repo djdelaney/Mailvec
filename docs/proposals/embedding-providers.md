@@ -867,6 +867,16 @@ indexer/mbsync), `compose.yml` / `.env.example` changes, the launchd
 owner-only key file, and the `docs/security.md` data-flow and credential
 updates. Gated on decision 4.
 
+**Complete (2026-08-08):** compose mounts `secrets/embedding_api_key` into
+mcp + embedder (empty file when unused — required to exist, harmless);
+non-secret profile config rides the shared env anchor deliberately (the
+indexer needs the identity for fresh-schema stamping and can't read key
+material by construction); `.env.example` documents the `hosted` profile
+block; `docs/security.md` gains the hosted-embedding threat-model section
+(boundary, key blast radius incl. the mcp-holds-a-key change, dedicated
+account + spend-limit guidance); `docs/deploy-docker.md` documents the
+switch/switch-back procedure through the identity guards.
+
 ### Phase 6 — Fireworks experiment on a database copy
 
 The experiment procedure detailed under "Rollout and evaluation" steps 4–9.
@@ -1079,8 +1089,12 @@ implementation and avoids duplicating that work for OpenAI or Baseten later.
    an identity. Ollama profiles are the inverse: they may NOT assert a
    SpaceId (derived + digest-enforced), which registration validation
    enforces.
-4. Choose the persistent local secret-file location and Docker secret name.
-   *(Gates phase 5.)*
+4. ~~Choose the persistent local secret-file location and Docker secret
+   name.~~ **Decided 2026-08-08:** `secrets/embedding_api_key` beside
+   `compose.yml`, following the `fastmail_password` pattern (owner-only file,
+   compose `secrets:` mount at `/run/secrets/embedding_api_key`, mcp +
+   embedder only); the endpoint and other non-secret profile values ride
+   `.env`; macOS uses `~/Library/Application Support/Mailvec/secrets/`.
 5. Define the semantic/hybrid eval threshold required for rollout. *(Gates the
    phase 6 accept/reject decision; should be fixed before results exist to
    argue about.)*

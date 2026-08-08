@@ -17,12 +17,14 @@
 #   2. cp ops/mbsyncrc.container.example mbsyncrc    # fill in User / Patterns
 #   3. install -d -m 700 secrets
 #      printf '%s' '<fastmail app password>' > secrets/fastmail_password
+#      : > secrets/embedding_api_key   # empty unless hosted embedding is used;
+#                                      # compose requires the file to exist
 #      # Verify. The umask covers all three (cp applies it to the new file
 #      # rather than copying .env.example's mode), but check anyway: the umask
 #      # only applies to the shell that set it, and these steps get run
 #      # piecemeal across sessions more often than not.
-#      chmod 600 .env mbsyncrc secrets/fastmail_password
-#      ls -l .env mbsyncrc secrets/fastmail_password   # expect -rw-------
+#      chmod 600 .env mbsyncrc secrets/fastmail_password secrets/embedding_api_key
+#      ls -l .env mbsyncrc secrets/*   # expect -rw-------
 #      # If any of these were ever group/other-readable on a host with other
 #      # local accounts, rotate BOTH credentials — the files are the only
 #      # thing standing between a local reader and the mailbox.
@@ -157,6 +159,27 @@ x-mailvec: &mailvec-common
     Vision__Mistral__Endpoint: ${MAILVEC_MISTRAL_ENDPOINT:-}
     Vision__Mistral__Model: ${MAILVEC_MISTRAL_MODEL:-}
     Vision__Mistral__Route: ${MAILVEC_MISTRAL_ROUTE:-providers/mistral/azure/ocr}
+    # Hosted embedding profile (docs/proposals/embedding-providers.md, phase
+    # 5). INERT until MAILVEC_EMBEDDING_PROFILE=hosted — Ollama stays the
+    # default, and the inactive profile is never validated. These are
+    # deliberately in the SHARED anchor: they are non-secret identity/config
+    # that the indexer needs too (it stamps the profile's space id on a fresh
+    # database via its credential-free identity registration), while the KEY
+    # rides the embedding_api_key secret mounted into mcp and embedder only —
+    # never this anchor. ApiKeyFile is just a path string; in containers
+    # without the mount the file doesn't exist, and only processes that
+    # actually embed ever read it.
+    Embedding__ActiveProfile: ${MAILVEC_EMBEDDING_PROFILE:-}
+    Embedding__Profiles__hosted__Protocol: openai-compatible
+    Embedding__Profiles__hosted__ProviderId: ${MAILVEC_EMBEDDING_PROVIDER:-custom}
+    Embedding__Profiles__hosted__Endpoint: ${MAILVEC_EMBEDDING_ENDPOINT:-}
+    Embedding__Profiles__hosted__Request__Model: ${MAILVEC_EMBEDDING_MODEL:-}
+    Embedding__Profiles__hosted__Request__EncodingFormat: float
+    Embedding__Profiles__hosted__OutputDimensions: ${MAILVEC_EMBEDDING_DIMENSIONS:-}
+    Embedding__Profiles__hosted__SpaceId: ${MAILVEC_EMBEDDING_SPACE_ID:-}
+    Embedding__Profiles__hosted__Text__QueryPrefix: ${MAILVEC_EMBEDDING_QUERY_PREFIX:-}
+    Embedding__Profiles__hosted__Auth__Scheme: bearer
+    Embedding__Profiles__hosted__Auth__ApiKeyFile: /run/secrets/embedding_api_key
     # Refuse to start against a missing/empty archive (the expected state for
     # a snapshot-seeded deployment — see the entrypoint guard in Dockerfile).
     MAILVEC_REQUIRE_SEEDED_DB: ${MAILVEC_REQUIRE_SEEDED_DB:-1}
@@ -263,6 +286,12 @@ services:
     # so nothing crashes and nothing logs; search just degrades from ~0.3 s warm
     # to ~2-3 s cold and stays there. See docs/contributing/search-performance.md.
     mem_limit: 3g
+    # Query embedding needs the hosted key when a hosted profile is active
+    # (empty file otherwise — costs nothing). The CLI reads this same mount
+    # via `docker compose exec mcp`. Indexer and mbsync are deliberately
+    # excluded; see docs/security.md.
+    secrets:
+      - embedding_api_key
     healthcheck:
       # /health returns 503 when degraded, which includes "Ollama unreachable"
       # — so an Ollama VM outage shows here as an unhealthy mcp container even
@@ -359,6 +388,9 @@ services:
     # caps a SINGLE decode at ~160 MB of raster, this caps the process around it
     # so a leak or a pathological batch can't walk past that either.
     mem_limit: 2g
+    # Chunk embedding needs the hosted key when a hosted profile is active.
+    secrets:
+      - embedding_api_key
 
   mbsync:
     # NOT read_only, deliberately. It starts, loops and writes its heartbeat
@@ -470,6 +502,12 @@ services:
 secrets:
   fastmail_password:
     file: ./secrets/fastmail_password
+  # Hosted embedding API key (decision 4: secrets/embedding_api_key, the
+  # fastmail_password pattern). Empty file when only Ollama is used — the
+  # file must exist for compose to start, and an empty key only errors if a
+  # bearer-auth hosted profile is actually activated.
+  embedding_api_key:
+    file: ./secrets/embedding_api_key
 
 networks:
   # Compose's implicit default, named so `isolated` can sit beside it. Every

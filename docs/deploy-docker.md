@@ -283,6 +283,29 @@ docker compose exec mcp mailvec doctor
   that owner is the container's root, so run backup reads via
   `docker compose exec` or as root on the host.
 
+## Hosted embedding provider (optional)
+
+Off by default; Ollama serves embeddings unless `MAILVEC_EMBEDDING_PROFILE=hosted`
+is set. To switch (read `docs/security.md` "Hosted embedding" FIRST — this
+sends the corpus and all queries off-network):
+
+1. Put the API key in `secrets/embedding_api_key` (owner-only, same pattern
+   as `secrets/fastmail_password`; the file exists as empty from initial
+   setup). `chmod 600` and verify.
+2. Fill the `MAILVEC_EMBEDDING_*` block in `.env` — endpoint, model,
+   dimensions, and YOUR asserted `MAILVEC_EMBEDDING_SPACE_ID` (see the
+   proposal's decision 3; a wire model name is not an identity).
+3. `docker compose exec mcp mailvec switch-model --yes` to rebuild the vector
+   table under the new space, then `docker compose up -d` (env is fixed at
+   container creation — `restart` keeps old values).
+4. The embedder re-embeds everything; watch `mailvec status` coverage and the
+   Debug-level embedding-telemetry log lines for cost/rate-limit audit.
+5. Going back to Ollama is the same dance in reverse: clear the profile,
+   `switch-model` again, `up -d`.
+
+The identity guards refuse half-switched states (embedder AND semantic search)
+— that refusal is the feature, not a bug to work around.
+
 ## Never edit `compose.yml` through a management UI
 
 The live stack is managed by [Dockge](https://github.com/louislam/dockge), which
