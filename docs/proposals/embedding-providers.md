@@ -884,6 +884,23 @@ Ends at a decision gate: quality against the eval threshold (decision 5),
 cost, latency, and security posture are reviewed before any live-deployment
 proposal.
 
+**Complete (2026-08-08) — outcome: REJECTED at the pre-registered gate;
+the archive stays on local mxbai.** Full numbers in
+`baselines/subset-ocr/README.md`. Semantic alone improved (+0.026 NDCG,
+clearing its bar) but hybrid — what production serves — regressed −0.006
+against a required +0.01, and 4 queries against an allowed 3 dropped
+NDCG > 0.2 under fusion. Cost/reliability were fine (~$0.12, zero
+throttling, ~4-minute drain); latency roughly tripled on the query path
+(hybrid 84→230 ms mean), acceptable but not free. The infrastructure
+verdict is separate from the model verdict: the entire hosted lifecycle —
+switch-model stamping the asserted space, sentinel stamping, guarded
+drain, eval through the guards — worked first-try with zero manual
+intervention, so trying the NEXT candidate model is config + ~$0.15, and
+this negative result is exactly the cheap, well-documented "no" the gate
+was designed to permit. Phase 7 (rollout) is therefore moot for this
+candidate; the alias-retirement decision 6 stays open for whenever a
+future candidate passes.
+
 ### Phase 7 — production rollout (separate approval)
 
 Only after phase 6 acceptance: coordinated configuration for embedder, MCP,
