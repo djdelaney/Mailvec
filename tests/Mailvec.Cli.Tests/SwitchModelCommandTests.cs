@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Mailvec.Cli.Tests;
 
+// (review phases 4-7, finding 1: model+dims alone must never decide no-op)
+
 public class SwitchModelCommandTests
 {
     [Fact]
@@ -91,5 +93,68 @@ public class SwitchModelCommandTests
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE embedded_at IS NULL";
         return Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+}
+
+
+public class SwitchModelIdentityNoOpTests
+{
+    [Fact]
+    public void Same_model_and_dims_on_a_different_provider_space_is_not_a_no_op()
+    {
+        // The cloud-hosted-same-model move: identical nominal model and
+        // width, different asserted space. The old model+dims check reported
+        // "nothing to do" and left the operator wedged between a no-op and
+        // guards refusing the un-restamped database.
+        using var tsp = new TestServiceProvider();
+        tsp.UseProfile(new Mailvec.Core.Embedding.ResolvedEmbeddingProfile(
+            "tei-mxbai", "openai-compatible", "custom",
+            "https://embed.example.test/v1/embeddings",
+            "mxbai-embed-large", 1024,
+            "tei:mxbai-embed-large:1024:adopted-2026-08", "", "", "", "", 16, 60,
+            SendWireModel: true, SendDimensions: false, EncodingFormat: "float"));
+        var sp = tsp.Rebuild();
+
+        var @out = new StringWriter();
+        var exit = SwitchModelCommand.Execute(sp, model: null, dims: null, yes: true, @out, () => null);
+
+        exit.ShouldBe(0);
+        @out.ToString().ShouldNotContain("Nothing to do");
+        ReadMeta(tsp, Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey)
+            .ShouldBe("tei:mxbai-embed-large:1024:adopted-2026-08");
+    }
+
+    [Fact]
+    public void A_changed_query_prefix_same_model_is_not_a_no_op()
+    {
+        using var tsp = new TestServiceProvider();
+        tsp.AddOption<Mailvec.Core.Options.OllamaOptions>(o =>
+            o.QueryInstructionPrefix = "Instruct: retrieve\nQuery: ");
+        var sp = tsp.Rebuild();
+
+        var @out = new StringWriter();
+        var exit = SwitchModelCommand.Execute(sp, model: null, dims: null, yes: true, @out, () => null);
+
+        exit.ShouldBe(0);
+        @out.ToString().ShouldNotContain("Nothing to do");
+    }
+
+    [Fact]
+    public void An_identical_full_identity_still_no_ops()
+    {
+        using var tsp = new TestServiceProvider();
+        var @out = new StringWriter();
+        var exit = SwitchModelCommand.Execute(tsp.Services, model: null, dims: null, yes: true, @out, () => null);
+        exit.ShouldBe(0);
+        @out.ToString().ShouldContain("Nothing to do");
+    }
+
+    private static string? ReadMeta(TestServiceProvider tsp, string key)
+    {
+        using var conn = tsp.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = $k";
+        cmd.Parameters.AddWithValue("$k", key);
+        return cmd.ExecuteScalar() as string;
     }
 }

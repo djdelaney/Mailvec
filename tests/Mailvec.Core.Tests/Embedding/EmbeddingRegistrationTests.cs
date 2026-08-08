@@ -185,6 +185,24 @@ public class EmbeddingRegistrationTests
     }
 
     [Fact]
+    public void Omit_model_policy_still_requires_a_local_model_identity()
+    {
+        // Review phases 4-7, finding 5: the value doubles as the database's
+        // model identity (fresh schema, switch-model) even when kept off the
+        // wire — without it the profile resolved but could never create or
+        // migrate a database.
+        Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Request:ModelParameter", "omit"),
+            ("Embedding:Profiles:fw:Request:Model", null)))))
+            .Message.ShouldContain("local model");
+
+        var resolved = EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Request:ModelParameter", "omit"))));
+        resolved.SendWireModel.ShouldBeFalse();
+        resolved.WireModel.ShouldBe("accounts/fireworks/models/qwen3-embedding-8b");
+    }
+
+    [Fact]
     public void The_hosted_transport_is_registered_for_an_active_hosted_profile()
     {
         var sp = BuildProvider(Config(FireworksConfig()), EmbeddingClientRole.Interactive);

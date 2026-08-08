@@ -116,6 +116,38 @@ public class HealthServiceOllamaTests
         r.Profile.ProbeStatus.ShouldBe("Available");
     }
 
+    [Fact]
+    public async Task A_standing_sentinel_drift_marker_degrades_health()
+    {
+        // Reads are refused by the guard while the marker stands; a green
+        // /health beside a down semantic search is the silent state the
+        // widened flag exists to prevent.
+        using var db = new TempDatabase();
+        new MetadataRepository(db.Connections).Set(EmbeddingSpace.SentinelDriftKey, "2026-08-08T12:00:00Z");
+
+        var r = await Build(db, new FakeEmbedding(ping: true, modelAvailable: null)).CheckAsync();
+
+        r.Embeddings.ModelMismatch.ShouldBeTrue();
+        r.Status.ShouldBe("degraded");
+    }
+
+    [Fact]
+    public async Task Rapid_health_checks_coalesce_onto_one_real_probe()
+    {
+        // Every probe is a real embed — a paid request under a hosted
+        // profile — and the healthcheck plus several /up monitors poll
+        // continuously. The singleton caches for a short interval.
+        using var db = new TempDatabase();
+        var fake = new FakeEmbedding(ping: true, modelAvailable: null);
+        var health = Build(db, fake);
+
+        await health.CheckAsync();
+        await health.CheckAsync();
+        await health.CheckAsync();
+
+        fake.EmbedCalls.ShouldBe(1);
+    }
+
     private sealed class HangingProbeEmbedding : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
@@ -132,6 +164,7 @@ public class HealthServiceOllamaTests
     private sealed class FakeEmbedding(bool ping, bool? modelAvailable) : IEmbeddingTransport
     {
         public int ProbeCalls;
+        public int EmbedCalls;
 
         // ping=true -> the real embed succeeds; ping=false -> a classified
         // transport failure, which EmbeddingService refines via the tags
@@ -139,6 +172,7 @@ public class HealthServiceOllamaTests
         // expressed, now driven through the transport surface.
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
         {
+            EmbedCalls++;
             if (!ping) throw new EmbeddingException(EmbeddingFailureKind.Transient, "connection failed");
             var v = new float[1024]; v[0] = 1f;   // probe validates full width now
             return Task.FromResult(new[] { v });

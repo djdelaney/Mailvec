@@ -295,13 +295,20 @@ sends the corpus and all queries off-network):
 2. Fill the `MAILVEC_EMBEDDING_*` block in `.env` — endpoint, model,
    dimensions, and YOUR asserted `MAILVEC_EMBEDDING_SPACE_ID` (see the
    proposal's decision 3; a wire model name is not an identity).
-3. `docker compose exec mcp mailvec switch-model --yes` to rebuild the vector
-   table under the new space, then `docker compose up -d` (env is fixed at
+3. `docker compose run --rm --no-deps mcp mailvec switch-model --yes` to
+   rebuild the vector table under the new space. **`run`, not `exec`,
+   deliberately**: `exec` enters the EXISTING mcp container, which still
+   carries the environment it was created with — the CLI would resolve the
+   OLD profile and migrate to the wrong identity (or wrongly no-op). `run`
+   creates a one-off container from the current `.env`. Then
+   `docker compose up -d` to recreate the services (env is fixed at
    container creation — `restart` keeps old values).
 4. The embedder re-embeds everything; watch `mailvec status` coverage and the
    Debug-level embedding-telemetry log lines for cost/rate-limit audit.
-5. Going back to Ollama is the same dance in reverse: clear the profile,
-   `switch-model` again, `up -d`.
+5. Going back to Ollama is the same dance in reverse: clear the profile in
+   `.env`, then the same `docker compose run --rm --no-deps mcp mailvec
+   switch-model --yes` (again `run`, for the same stale-environment reason),
+   then `up -d`.
 
 The identity guards refuse half-switched states (embedder AND semantic search)
 — that refusal is the feature, not a bug to work around.

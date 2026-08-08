@@ -50,6 +50,29 @@ public sealed class HealthService(
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
 
+    private static readonly TimeSpan ProbeCacheTtl = TimeSpan.FromSeconds(15);
+    private readonly SemaphoreSlim _probeGate = new(1, 1);
+    private (Embedding.EmbeddingProbe Probe, string? Digest, DateTimeOffset At)? _probeCache;
+
+    private async Task<(Embedding.EmbeddingProbe Probe, string? Digest)> GetProbeCachedAsync(CancellationToken ct)
+    {
+        if (_probeCache is { } hit && DateTimeOffset.UtcNow - hit.At < ProbeCacheTtl)
+            return (hit.Probe, hit.Digest);
+        await _probeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_probeCache is { } hit2 && DateTimeOffset.UtcNow - hit2.At < ProbeCacheTtl)
+                return (hit2.Probe, hit2.Digest);
+            var probeTask = embeddings.ProbeAsync(ct);
+            var digestTask = embeddings.GetModelArtifactDigestAsync(ct);  // null = unobservable — never drift
+            var probe = await probeTask.ConfigureAwait(false);
+            var digest = await digestTask.ConfigureAwait(false);
+            _probeCache = (probe, digest, DateTimeOffset.UtcNow);
+            return (probe, digest);
+        }
+        finally { _probeGate.Release(); }
+    }
+
     /// <summary>
     /// Whether OCR looks stalled: work is waiting and nothing has committed
     /// within <see cref="OcrHealthKeys.StalledAfter"/>.
@@ -96,7 +119,12 @@ public sealed class HealthService(
         var storedConfigHash = metadata.Get(Embedding.EmbeddingSpace.ConfigHashKey);
         var spaceMismatch =
             (storedSpaceId is not null && !string.Equals(storedSpaceId, cfgSpaceId, StringComparison.Ordinal))
-            || (storedConfigHash is not null && !string.Equals(storedConfigHash, cfgConfigHash, StringComparison.Ordinal));
+            || (storedConfigHash is not null && !string.Equals(storedConfigHash, cfgConfigHash, StringComparison.Ordinal))
+            // A standing sentinel-drift marker means the read guard is
+            // refusing semantic search RIGHT NOW — a reachable provider
+            // serving the wrong function must not report green while search
+            // is down. Same widened-flag contract as every identity leg.
+            || !string.IsNullOrEmpty(metadata.Get(Embedding.EmbeddingSpace.SentinelDriftKey));
 
         var modelMismatch = (schemaModel is not null
             && (schemaModel != configModel || (schemaDim != 0 && schemaDim != configDim)))
@@ -115,18 +143,20 @@ public sealed class HealthService(
         // Provider-neutral readiness: one real classified embed (bounded at
         // 5s + a 2s Ollama tags refinement inside EmbeddingService — the same
         // budget split the old ping + follow-up pair spent). Runs concurrently
-        // with the digest fetch and vision probe; /health's compose
-        // healthcheck budget is 10s total.
-        var embedProbeTask = embeddings.ProbeAsync(ct);
-        // null = unobservable — never drift.
-        var digestTask = embeddings.GetModelArtifactDigestAsync(ct);
+        // with the vision probe; /health's compose healthcheck budget is 10s.
+        //
+        // CACHED for a short interval on this singleton: every probe is a
+        // REAL embed, which against a hosted profile is a paid request — the
+        // compose healthcheck plus several per-field /up monitors would
+        // otherwise generate continuous provider traffic and rate-limit
+        // pressure whose 429s then read as false outages. 15s coalesces
+        // concurrent monitor polls while staying far fresher than any
+        // monitor's own interval.
         var visionProbeTask = ocrEnabled && vision is not null
             ? vision.ProbeAsync(ct)
             : null;
-
-        var embedProbe = await embedProbeTask.ConfigureAwait(false);
+        var (embedProbe, liveDigest) = await GetProbeCachedAsync(ct).ConfigureAwait(false);
         var ollamaReachable = embedProbe.IsAvailable;
-        var liveDigest = await digestTask.ConfigureAwait(false);
         var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);
 
         // Artifact-digest leg of the stability hybrid: mismatch only when
