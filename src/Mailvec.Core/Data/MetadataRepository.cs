@@ -11,6 +11,15 @@ public sealed class MetadataRepository(ConnectionFactory connections)
         return cmd.ExecuteScalar() as string;
     }
 
+    public void Delete(string key)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM metadata WHERE key = $k";
+        cmd.Parameters.AddWithValue("$k", key);
+        cmd.ExecuteNonQuery();
+    }
+
     public void Set(string key, string value)
     {
         using var conn = connections.Open();

@@ -182,6 +182,87 @@ public class EmbeddingSpaceIdentityTests
             .ShouldNotBe(EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "x", "", ""));
     }
 
+    private static ResolvedEmbeddingProfile HostedProfile(int dims = 1024) => new(
+        "fireworks-qwen", "openai-compatible", "fireworks",
+        "https://api.example.test/v1/embeddings",
+        "accounts/fireworks/models/qwen3-embedding-8b", dims,
+        $"fireworks:qwen3-embedding-8b:{dims}:adopted-2026-08", "", "", "", "", 16, 60,
+        SendWireModel: true, SendDimensions: true, EncodingFormat: "float");
+
+    [Fact]
+    public void A_fresh_database_created_under_a_hosted_profile_stamps_the_asserted_identity()
+    {
+        // Review P1: fresh-schema creation used to stamp an Ollama derivation
+        // of the hosted wire model — a database the hosted embedder itself
+        // would refuse. The profile's asserted identity must land instead.
+        using var db = new TempDatabase(migrate: false);
+        var profile = HostedProfile();
+        new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance,
+            embeddingProfile: profile).EnsureUpToDate();
+
+        Metadata(db, "embedding_model").ShouldBe("accounts/fireworks/models/qwen3-embedding-8b");
+        Metadata(db, "embedding_dimensions").ShouldBe("1024");
+        Metadata(db, EmbeddingSpace.SpaceIdKey).ShouldBe("fireworks:qwen3-embedding-8b:1024:adopted-2026-08");
+        Metadata(db, EmbeddingSpace.ConfigHashKey).ShouldBe(EmbeddingSpace.ForProfile(profile).ConfigHash);
+
+        // The read guard — the strictest consumer — accepts what was stamped.
+        Should.NotThrow(() => new EmbeddingSpaceGuard(
+            new MetadataRepository(db.Connections), profile).VerifyReadCompatible());
+    }
+
+    [Fact]
+    public void An_ollama_to_hosted_switch_stamps_the_profile_identity_the_guards_accept()
+    {
+        // Review P1: the sanctioned migration wrote
+        // ollama:accounts/fireworks/... and the embedder refused its own
+        // migration's output. Same dims on purpose — the space id must still
+        // change, because the PROVIDER changed.
+        using var db = new TempDatabase(); // fresh legacy mxbai/1024 DB
+        var profile = HostedProfile(dims: 1024);
+        var migrator = new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance,
+            Microsoft.Extensions.Options.Options.Create(new OllamaOptions()), profile);
+
+        migrator.SwitchEmbeddingModel(profile.WireModel, profile.OutputDimensions);
+
+        Metadata(db, EmbeddingSpace.SpaceIdKey).ShouldBe(profile.SpaceId);
+        Metadata(db, EmbeddingSpace.ConfigHashKey).ShouldBe(EmbeddingSpace.ForProfile(profile).ConfigHash);
+        Should.NotThrow(() => new EmbeddingSpaceGuard(
+            new MetadataRepository(db.Connections), profile).VerifyReadCompatible());
+    }
+
+    [Fact]
+    public void An_ollama_experiment_switch_diverging_from_the_profile_keeps_the_legacy_derivation()
+    {
+        using var db = new TempDatabase();
+        var migrator = new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance,
+            Microsoft.Extensions.Options.Options.Create(new OllamaOptions())); // legacy profile-less
+        migrator.SwitchEmbeddingModel("qwen3-embedding:4b", 2560);
+        Metadata(db, EmbeddingSpace.SpaceIdKey).ShouldBe("ollama:qwen3-embedding:4b:2560");
+    }
+
+    [Fact]
+    public void A_standing_drift_marker_refuses_reads_until_cleared()
+    {
+        using var db = new TempDatabase();
+        var profile = HostedProfile();
+        // Make the metadata identity match the hosted profile so ONLY the
+        // drift marker is in play.
+        new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance, embeddingProfile: profile)
+            .SwitchEmbeddingModel(profile.WireModel, profile.OutputDimensions);
+        var guard = new EmbeddingSpaceGuard(new MetadataRepository(db.Connections), profile);
+        Should.NotThrow(guard.VerifyReadCompatible);
+
+        SetMetadata(db, EmbeddingSpace.SentinelDriftKey, "2026-08-08T12:00:00Z");
+        var ex = Should.Throw<EmbeddingException>(guard.VerifyReadCompatible);
+        ex.Kind.ShouldBe(EmbeddingFailureKind.SpaceMismatch);
+        ex.Message.ShouldContain("drift");
+
+        // switch-model's sentinel LIKE-clear covers the marker (same prefix).
+        new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance, embeddingProfile: profile)
+            .SwitchEmbeddingModel(profile.WireModel, profile.OutputDimensions);
+        Should.NotThrow(guard.VerifyReadCompatible);
+    }
+
     /// <summary>
     /// Rewind a fresh (latest-version) database to the v10 shape: no space
     /// id, no config hash, schema_version stamped 10, and the stored

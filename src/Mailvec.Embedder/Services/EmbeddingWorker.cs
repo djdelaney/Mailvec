@@ -98,7 +98,7 @@ public sealed class EmbeddingWorker(
     {
         migrator.EnsureUpToDate();
         VerifyEmbeddingModelMatchesSchema();
-        await VerifyModelArtifactDigestAsync(stoppingToken).ConfigureAwait(false);
+        await RunRemoteStabilityChecksIfDueAsync(stoppingToken).ConfigureAwait(false);
 
         var pollInterval = TimeSpan.FromSeconds(Math.Max(1, embedderOptions.Value.PollIntervalSeconds));
         var batchSize = Math.Max(1, embeddingProfile.MaxBatchSize);
@@ -115,15 +115,17 @@ public sealed class EmbeddingWorker(
         {
             try
             {
-                // Artifact-digest check once per poll CYCLE, not per batch:
-                // it's an HTTP round-trip, and per-batch placement would add
-                // a /api/tags call every 16 messages during a drain. The
+                // Remote stability checks (artifact digest, sentinel
+                // fingerprints) on a TRUE bounded cadence. The loop does not
+                // wait for the poll interval while a drain is processing
+                // batches, so an unguarded call here runs once per BATCH —
+                // during a 75k-message rebuild that is thousands of extra
+                // hosted requests burning cost and rate-limit headroom. The
                 // model/space/hash verify stays per-batch — it's a local
-                // metadata read. A digest or sentinel refusal throws here and
-                // surfaces through the same RecordBatchFailure -> /health
-                // path as a model mismatch.
-                await VerifyModelArtifactDigestAsync(stoppingToken).ConfigureAwait(false);
-                await VerifySentinelFingerprintsAsync(stoppingToken).ConfigureAwait(false);
+                // metadata read. A refusal throws here and surfaces through
+                // the same RecordBatchFailure -> /health path as a model
+                // mismatch.
+                await RunRemoteStabilityChecksIfDueAsync(stoppingToken).ConfigureAwait(false);
 
                 // OCR scanned PDFs first (re-queues their messages), then embed.
                 var ocred = await RunOcrIfEnabledAsync(stoppingToken).ConfigureAwait(false);
@@ -717,6 +719,26 @@ public sealed class EmbeddingWorker(
     }
 
     /// <summary>
+    /// Remote stability checks run at most once per this interval — and
+    /// always before the first write (the field starts at MinValue). Local
+    /// identity checks are NOT gated: they're metadata reads.
+    /// </summary>
+    private static readonly TimeSpan RemoteStabilityInterval = TimeSpan.FromMinutes(5);
+    internal DateTimeOffset NextRemoteStabilityCheckAfter = DateTimeOffset.MinValue;
+
+    internal async Task RunRemoteStabilityChecksIfDueAsync(CancellationToken ct)
+    {
+        if (DateTimeOffset.UtcNow < NextRemoteStabilityCheckAfter) return;
+        await VerifyModelArtifactDigestAsync(ct).ConfigureAwait(false);
+        await VerifySentinelFingerprintsAsync(ct).ConfigureAwait(false);
+        // Stamp only after both passed (or skipped as unobservable): a
+        // refusal above throws, and the next cycle retries immediately —
+        // a standing drift/digest problem must not be probed only every
+        // five minutes once it is already known.
+        NextRemoteStabilityCheckAfter = DateTimeOffset.UtcNow + RemoteStabilityInterval;
+    }
+
+    /// <summary>
     /// The artifact-pinning half of the stability hybrid (decision 2 of
     /// docs/proposals/embedding-providers.md): the stored vectors were
     /// produced by a specific model ARTIFACT, and a re-pulled tag with
@@ -803,13 +825,31 @@ public sealed class EmbeddingWorker(
             var similarity = EmbeddingSpace.CosineSimilarity(stored[i], current[i]);
             if (similarity < EmbeddingSpace.SentinelMinCosine)
             {
+                // Persist BEFORE throwing: the read-side guard refuses
+                // semantic search on this marker, so detection in this
+                // process protects queries in MCP and the CLI too — drift
+                // stopping only writes would leave reads ranking drifted
+                // query vectors against old documents.
+                metadata.Set(EmbeddingSpace.SentinelDriftKey,
+                    DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                 throw new InvalidOperationException(
                     $"Hosted embedding function drifted: sentinel {i} cosine similarity {similarity:F6} is below " +
                     $"{EmbeddingSpace.SentinelMinCosine} for space '{embeddingProfile.SpaceId}' — the provider is " +
                     "serving different weights behind the same name. Stored vectors are no longer comparable to " +
-                    "new ones. Run `mailvec switch-model --force` to rebuild under the current serving function, " +
-                    "or point the profile at a deployment serving the original revision.");
+                    "new ones; semantic search is refused until resolved. Run `mailvec switch-model --force` to " +
+                    "rebuild under the current serving function, or point the profile at a deployment serving " +
+                    "the original revision.");
             }
+        }
+
+        // Healthy comparison: a standing drift marker means the provider
+        // rolled back to the fingerprinted function. No writes happened in
+        // between (the marker's own refusal saw to that), so clearing is
+        // safe and reopens semantic search.
+        if (metadata.Get(EmbeddingSpace.SentinelDriftKey) is not null)
+        {
+            metadata.Delete(EmbeddingSpace.SentinelDriftKey);
+            logger.LogInformation("Sentinel fingerprints match again; cleared the drift marker.");
         }
     }
 }

@@ -49,6 +49,20 @@ internal static class SwitchModelCommand
         var targetModel = model ?? profile.WireModel;
         var targetDims = dims ?? profile.OutputDimensions;
 
+        // Hosted profiles assert their space id, so a --model/--dims override
+        // that diverges from the active profile has no honest identity to
+        // stamp — an Ollama-style derivation of a hosted wire model would be
+        // refused by the embedder this migration feeds. Ollama profiles keep
+        // override freedom (the embedding-experiments flow).
+        if (profile.Protocol == Mailvec.Core.Embedding.EmbeddingRegistration.OpenAiCompatibleProtocol
+            && (targetModel != profile.WireModel || targetDims != profile.OutputDimensions))
+        {
+            @out.WriteLine($"--model/--dims must match the active hosted profile '{profile.Name}' " +
+                $"({profile.WireModel} @{profile.OutputDimensions}d). Hosted identity is asserted by the " +
+                "profile's SpaceId — change the profile configuration, not the flags.");
+            return 1;
+        }
+
         var currentModel = metadata.Get("embedding_model");
         var currentDims = metadata.Get("embedding_dimensions");
 

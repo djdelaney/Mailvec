@@ -63,6 +63,20 @@ public static class EmbeddingSpace
     public const double SentinelMinCosine = 0.999;
 
     /// <summary>
+    /// Persisted when the embedder DETECTS sentinel drift (never on
+    /// unreachability — unknown is not drift). Shares the sentinel key
+    /// prefix so switch-model's one LIKE-clear covers it, and the read-side
+    /// guard refuses semantic search while it stands: a drifted hosted
+    /// function embeds queries that are not comparable to the stored
+    /// document vectors, and the guard is the only thing standing between
+    /// MCP and plausible-but-invalid rankings. Cleared automatically if a
+    /// later cycle observes the sentinels healthy again (a provider
+    /// rollback) — no writes happened in between, because the same drift
+    /// stopped the embedder.
+    /// </summary>
+    public const string SentinelDriftKey = SentinelKeyPrefix + "drift_detected_at";
+
+    /// <summary>
     /// Diverse fixed texts: prose, numerals/dates, code-ish tokens, and
     /// non-Latin script, so a quantization or pooling change that shifts only
     /// one region of the embedding space still moves at least one sentinel.

@@ -948,6 +948,85 @@ public class EmbeddingWorkerTests : IDisposable
         _metadata.Get(EmbeddingSpace.SentinelKeyPrefix + "0").ShouldBeNull();
     }
 
+    [Fact]
+    public async Task Drift_persists_a_marker_and_a_healthy_recheck_clears_it()
+    {
+        var worker = HostedWorker(() => SentinelVectors(0.1f));
+        await worker.VerifySentinelFingerprintsAsync(CancellationToken.None);
+
+        var drifted = HostedWorker(() => SentinelVectors(0.9f));
+        await Should.ThrowAsync<InvalidOperationException>(
+            () => drifted.VerifySentinelFingerprintsAsync(CancellationToken.None));
+        _metadata.Get(EmbeddingSpace.SentinelDriftKey).ShouldNotBeNull(); // reads now refuse via the guard
+
+        // Provider rolls back to the fingerprinted function: marker clears,
+        // reads reopen. Safe because the drift itself stopped all writes.
+        await worker.VerifySentinelFingerprintsAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.SentinelDriftKey).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_provider_wide_shape_regression_never_quarantines_messages()
+    {
+        // Review P1: the readiness probe used to accept any nonempty vector,
+        // so a provider returning wrong-width vectors for EVERYTHING failed
+        // each message as InvalidResponse while the probe said healthy —
+        // and isolation counted strikes against valid mail. The probe now
+        // runs the same mathematical contract, fails the same way, and the
+        // outage path counts nothing.
+        var broken = true;
+        InsertMessage("victim@x", "ok", new string('v', 300));
+        var worker = BuildWorker(req => broken
+            ? Ok([new[] { 1f, 2f, 3f }])   // wrong width for EVERY call, probe included
+            : Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))]));
+
+        for (int cycle = 0; cycle < 8; cycle++)
+        {
+            try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
+            catch (InvalidOperationException) { }
+            catch (Mailvec.Core.Embedding.EmbeddingException) { }
+        }
+        EmbeddedAt(GetMessageId("victim@x")).ShouldBeNull();
+
+        // Provider heals: the message must still be selectable — quarantine
+        // would have excluded it forever.
+        broken = false;
+        await worker.ProcessNextBatchAsync(batchSize: 16, ct: default);
+        EmbeddedAt(GetMessageId("victim@x")).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task Remote_stability_checks_run_once_per_interval_not_once_per_batch()
+    {
+        // Review P2: during a drain the worker loop never waits for the poll
+        // interval, so an ungated check ran once per 16-message batch —
+        // thousands of extra hosted calls across a rebuild.
+        var calls = 0;
+        var counting = new CountingDigestFake(() => calls++);
+        var worker = BuildWorker(counting);
+
+        await worker.RunRemoteStabilityChecksIfDueAsync(CancellationToken.None);
+        await worker.RunRemoteStabilityChecksIfDueAsync(CancellationToken.None);
+        await worker.RunRemoteStabilityChecksIfDueAsync(CancellationToken.None);
+        calls.ShouldBe(1);
+
+        worker.NextRemoteStabilityCheckAfter = DateTimeOffset.MinValue; // interval elapses
+        await worker.RunRemoteStabilityChecksIfDueAsync(CancellationToken.None);
+        calls.ShouldBe(2);
+    }
+
+    private sealed class CountingDigestFake(Action onDigest) : IEmbeddingTransport
+    {
+        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
+            Task.FromResult(inputs.Select(_ => HotVector(0)).ToArray());
+        public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
+        public Task<string?> GetModelArtifactDigestAsync(CancellationToken ct = default)
+        {
+            onDigest();
+            return Task.FromResult<string?>("sha256:stable");
+        }
+    }
+
     private sealed class SentinelFake(Func<float[][]> vectors) : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>

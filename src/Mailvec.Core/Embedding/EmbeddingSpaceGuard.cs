@@ -25,6 +25,21 @@ public sealed class EmbeddingSpaceGuard(MetadataRepository metadata, ResolvedEmb
 {
     public void VerifyReadCompatible()
     {
+        // Known sentinel drift: the embedder detected the hosted provider
+        // serving a different function behind the stable alias and persisted
+        // the observation (never set on mere unreachability). Query vectors
+        // embedded now are not comparable to the stored document vectors, so
+        // reads refuse alongside writes — still metadata-only, no probe on
+        // the search hot path.
+        if (metadata.Get(EmbeddingSpace.SentinelDriftKey) is { } driftedAt && driftedAt.Length > 0)
+        {
+            throw new EmbeddingException(EmbeddingFailureKind.SpaceMismatch,
+                $"Hosted embedding function drift was detected at {driftedAt} and stands unresolved: query " +
+                "vectors are no longer comparable to the stored document vectors. Semantic results would be " +
+                "meaningless; keyword search is unaffected. Run `mailvec switch-model --force` to rebuild, or " +
+                "restore the original provider revision.");
+        }
+
         var (spaceId, configHash) = EmbeddingSpace.ForProfile(profile);
 
         Check("embedding_model", profile.WireModel);

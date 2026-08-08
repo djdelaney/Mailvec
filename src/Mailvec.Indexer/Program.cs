@@ -1,6 +1,7 @@
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Health;
 using Mailvec.Core.Logging;
 using Mailvec.Core.Options;
@@ -22,6 +23,11 @@ builder.Services.Configure<IndexerOptions>(builder.Configuration.GetSection(Inde
 
 builder.Services.AddSingleton<ConnectionFactory>();
 builder.Services.AddSingleton<SchemaMigrator>();
+// Identity only, no transport, no credentials: the indexer can be the first
+// process to create the schema, and a fresh database must stamp the resolved
+// profile's identity (hosted space ids included). The API key never reaches
+// this process — see EmbeddingRegistration.AddMailvecEmbeddingIdentity.
+builder.Services.AddMailvecEmbeddingIdentity(builder.Configuration);
 builder.Services.AddSingleton<MetadataRepository>();
 builder.Services.AddSingleton<MessageRepository>();
 builder.Services.AddSingleton<ChunkRepository>();

@@ -191,6 +191,56 @@ public class OpenAiCompatibleTransportTests
         (await ((IEmbeddingTransport)transport).GetModelArtifactDigestAsync()).ShouldBeNull();
     }
 
+    [Fact]
+    public async Task Telemetry_captures_usage_model_request_id_and_rate_limits_when_present()
+    {
+        EmbeddingTelemetry? seen = null;
+        var observer = new CapturingObserver(t => seen = t);
+        var p = FireworksLike();
+        var response = Ok((0, [1f, 0f, 0f, 0f]));
+        response.Headers.Add("x-request-id", "req-123");
+        response.Headers.Add("x-ratelimit-remaining-requests", "5999");
+        response.Headers.Add("x-ratelimit-remaining-tokens", "899000");
+        var http = new HttpClient(new StubHandler(_ => response)) { BaseAddress = new Uri(p.Endpoint) };
+
+        await new OpenAiCompatibleTransport(http, p, observer).EmbedAsync(["hello"]);
+
+        seen.ShouldNotBeNull();
+        seen!.PromptTokens.ShouldBe(11);
+        seen.ResponseModel.ShouldBe("accounts/fireworks/models/qwen3-embedding-8b");
+        seen.RequestId.ShouldBe("req-123");
+        seen.RateLimitRemainingRequests.ShouldBe(5999);
+        seen.RateLimitRemainingTokens.ShouldBe(899000);
+    }
+
+    [Fact]
+    public async Task Absent_telemetry_is_normal_and_a_throwing_observer_never_fails_the_embed()
+    {
+        // Missing telemetry is not an invalid response (proposal rule), and
+        // observation must never take down the embed it observed.
+        EmbeddingTelemetry? seen = null;
+        var p = FireworksLike();
+        var bare = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { data = new[] { new { index = 0, embedding = new[] { 1f, 0f, 0f, 0f } } } }),
+        };
+        var http = new HttpClient(new StubHandler(_ => bare)) { BaseAddress = new Uri(p.Endpoint) };
+        await new OpenAiCompatibleTransport(http, p, new CapturingObserver(t => seen = t)).EmbedAsync(["x"]);
+        seen.ShouldNotBeNull();
+        seen!.PromptTokens.ShouldBeNull();
+        seen.ResponseModel.ShouldBeNull();
+        seen.RequestId.ShouldBeNull();
+
+        var http2 = new HttpClient(new StubHandler(_ => Ok((0, [1f, 0f, 0f, 0f])))) { BaseAddress = new Uri(p.Endpoint) };
+        var throwing = new CapturingObserver(_ => throw new InvalidOperationException("observer bug"));
+        (await new OpenAiCompatibleTransport(http2, p, throwing).EmbedAsync(["x"])).Length.ShouldBe(1);
+    }
+
+    private sealed class CapturingObserver(Action<EmbeddingTelemetry> onSeen) : IEmbeddingTelemetryObserver
+    {
+        public void OnEmbeddingResponse(EmbeddingTelemetry telemetry) => onSeen(telemetry);
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>

@@ -120,10 +120,12 @@ public class HealthServiceOllamaTests
         // transport failure, which EmbeddingService refines via the tags
         // probe. Same tri-state the old PingAsync/IsModelAvailableAsync pair
         // expressed, now driven through the transport surface.
-        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>
-            ping
-                ? Task.FromResult(new[] { new[] { 1f } })
-                : throw new EmbeddingException(EmbeddingFailureKind.Transient, "connection failed");
+        public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
+        {
+            if (!ping) throw new EmbeddingException(EmbeddingFailureKind.Transient, "connection failed");
+            var v = new float[1024]; v[0] = 1f;   // probe validates full width now
+            return Task.FromResult(new[] { v });
+        }
 
 
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default)

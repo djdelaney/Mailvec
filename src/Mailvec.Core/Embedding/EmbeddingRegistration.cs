@@ -2,6 +2,7 @@ using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace Mailvec.Core.Embedding;
@@ -69,6 +70,22 @@ public static class EmbeddingRegistration
     public const string OllamaProtocol = "ollama";
     public const string OpenAiCompatibleProtocol = "openai-compatible";
 
+    /// <summary>
+    /// Identity WITHOUT transport or credentials: registers only the
+    /// resolved profile. For the indexer — it can be the first process to
+    /// create the schema (SchemaMigrator stamps the profile's identity on a
+    /// fresh database) but must NEVER receive the hosted API key, embed
+    /// anything, or hold an embedding HttpClient. Resolution never touches
+    /// key material, so this cannot leak a credential into the indexer's
+    /// process however the profile is configured.
+    /// </summary>
+    public static IServiceCollection AddMailvecEmbeddingIdentity(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddSingleton(Resolve(configuration));
+        return services;
+    }
+
     public static IServiceCollection AddMailvecEmbedding(
         this IServiceCollection services, IConfiguration configuration, EmbeddingClientRole role)
     {
@@ -89,6 +106,11 @@ public static class EmbeddingRegistration
             // and a process that starts cleanly but can't embed queries is a
             // search outage wearing a green healthcheck.
             var bearerToken = ResolveBearerToken(configuration, resolved.Name);
+
+            // Usage/rate-limit telemetry sink (Debug log lines the phase-6
+            // audit greps). Optional by contract; TryAdd so a host can
+            // substitute a richer observer.
+            services.TryAddSingleton<IEmbeddingTelemetryObserver, LoggingEmbeddingTelemetryObserver>();
 
             var hostedHttp = services.AddHttpClient<OpenAiCompatibleTransport>((sp, client) =>
             {
@@ -115,6 +137,23 @@ public static class EmbeddingRegistration
                     o.AttemptTimeout.Timeout = TimeSpan.FromSeconds(120);
                     o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(300);
                     o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
+                });
+            }
+            else
+            {
+                // Interactive hosted requests get a SMALL bounded retry, not
+                // none: 429/503 are routine serverless conditions and the
+                // standard handler honors Retry-After, while auth/model/4xx
+                // errors are never retried. The budget respects a waiting
+                // user — one retry inside ~10s total, nothing like the
+                // ingestion pipeline's 300s. (Interactive OLLAMA keeps no
+                // retry pipeline: against a local server a retry burns the
+                // user's time without changing the outcome.)
+                hostedHttp.AddStandardResilienceHandler(o =>
+                {
+                    o.Retry.MaxRetryAttempts = 1;
+                    o.AttemptTimeout.Timeout = TimeSpan.FromSeconds(4);
+                    o.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(10);
                 });
             }
 

@@ -327,6 +327,60 @@ public class EmbeddingRegistrationTests
         }
     }
 
+    [Fact]
+    public async Task Interactive_hosted_requests_retry_backpressure_but_never_auth_failures()
+    {
+        // Review P2: interactive hosted requests had NO retry pipeline —
+        // 429/503 are routine serverless conditions and failed straight
+        // through to the user. Auth errors must still fail fast. Exercised
+        // end-to-end through the registration-built pipeline against a real
+        // loopback server.
+        var port = new Random().Next(20000, 60000);
+        using var listener = new System.Net.HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+
+        var requests = 0;
+        var serving = Task.Run(async () =>
+        {
+            while (listener.IsListening)
+            {
+                System.Net.HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync(); } catch { break; }
+                var n = Interlocked.Increment(ref requests);
+                if (n == 1)
+                {
+                    ctx.Response.StatusCode = 429;
+                    ctx.Response.Headers.Add("Retry-After", "0");
+                    ctx.Response.Close();
+                }
+                else
+                {
+                    var vec = string.Join(",", Enumerable.Repeat("0.5", 4));
+                    var body = System.Text.Encoding.UTF8.GetBytes(
+                        $"{{\"data\":[{{\"index\":0,\"embedding\":[{vec}]}}]}}");
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/json";
+                    await ctx.Response.OutputStream.WriteAsync(body);
+                    ctx.Response.Close();
+                }
+            }
+        });
+
+        var sp = BuildProvider(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Endpoint", $"http://127.0.0.1:{port}/v1/embeddings"),
+            ("Embedding:Profiles:fw:OutputDimensions", "4"),
+            ("Embedding:Profiles:fw:Auth:Scheme", "none"),
+            ("Embedding:Profiles:fw:Auth:ApiKey", null))), EmbeddingClientRole.Interactive);
+
+        var vector = await sp.GetRequiredService<IEmbeddingService>().EmbedQueryAsync("hello");
+        vector.Length.ShouldBe(4);
+        requests.ShouldBe(2);   // the 429 was retried once, honoring Retry-After
+
+        listener.Stop();
+        await Task.WhenAny(serving, Task.Delay(1000));
+    }
+
     private static ResolvedEmbeddingProfile ResolvedProfileFrom(IConfiguration config, EmbeddingClientRole role) =>
         BuildProvider(config, role).GetRequiredService<ResolvedEmbeddingProfile>();
 
