@@ -41,7 +41,7 @@ mbsync ──► ~/Mail/<account>/  (Maildir)
 
 ## Quickstart
 
-Requires macOS 14+ on **Apple Silicon** (Intel Macs are not supported — macOS is dropping Intel in its next release, and the install scripts refuse to run on x86_64), the .NET 10 SDK, and a few brews. Embeddings are local-only via Ollama.
+Requires macOS 14+ on **Apple Silicon** (Intel Macs are not supported — macOS is dropping Intel in its next release, and the install scripts refuse to run on x86_64), the .NET 10 SDK, and a few brews. Embeddings run via Ollama by default — local, or any reachable Ollama (`Ollama:BaseUrl`); deployments without local inference can instead point an `Embedding:*` profile at any OpenAI-compatible embeddings endpoint (a hosted provider, or the same mxbai served from TEI/vLLM/a remote Ollama's `/v1/embeddings`). Hosted profiles send mail content off-network and are a deliberate opt-in — read `docs/security.md` "Hosted embedding" first; `docs/proposals/embedding-providers.md` documents the configuration and the space-identity guards that keep provider switches safe.
 
 ```sh
 # 1. Prereqs
