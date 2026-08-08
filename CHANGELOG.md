@@ -138,9 +138,15 @@ observed bit-stable baseline), with detected drift persisting a marker that
 blocks reads AND writes until `switch-model --force`. Every landing was
 gated on a bit-identical eval against the committed subset baseline
 (`baselines/subset-ocr/`, corpus + binary provenance in its README).
-Remaining: phase 4 (monitoring neutrality), 5 (deployment secrets),
-6 (the Fireworks corpus experiment), 7 (rollout); no release cut — the
-v11 migration makes the eventual one a minor bump.
+Phases 4–6 followed on 2026-08-08: monitoring neutrality
+(`embeddingProvider.ready` beside the alias), secret wiring
+(`secrets/embedding_api_key`, the fastmail pattern), and the Fireworks
+experiment itself — run on a database copy and REJECTED at the
+pre-registered quality gate (semantic improved, hybrid regressed; the
+archive stays on local mxbai, with the full hosted capability dormant
+behind config and the negative result recorded in
+`baselines/subset-ocr/README.md`). No release cut — the v11 migration
+makes the eventual one a minor bump.
 
 ## ⬜ Phase 5 — Support for non-Claude local agents
 
