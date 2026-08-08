@@ -1,3 +1,4 @@
+using Mailvec.Core.Embedding;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -143,8 +144,9 @@ public class OllamaClientTests
             Content = JsonContent.Create(new { embeddings = new[] { new[] { 1f, 2f, 3f, 4f } } })
         });
 
-        await Should.ThrowAsync<InvalidOperationException>(
+        var ex = await Should.ThrowAsync<EmbeddingException>(
             () => client.EmbedAsync(["one", "two"]));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
     }
 
     [Fact]
@@ -156,8 +158,9 @@ public class OllamaClientTests
             Content = JsonContent.Create(new { embeddings = new[] { new[] { 1f, 2f, 3f } } })
         });
 
-        var ex = await Should.ThrowAsync<InvalidOperationException>(
+        var ex = await Should.ThrowAsync<EmbeddingException>(
             () => client.EmbedAsync(["x"]));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
         ex.Message.ShouldContain("3 dimensions");
         ex.Message.ShouldContain("4");
     }
@@ -170,7 +173,8 @@ public class OllamaClientTests
             Content = new StringContent("model not found")
         });
 
-        await Should.ThrowAsync<HttpRequestException>(() => client.EmbedAsync(["x"]));
+        var ex = await Should.ThrowAsync<EmbeddingException>(() => client.EmbedAsync(["x"]));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.Transient); // other 5xx: bounded retry territory
     }
 
     [Fact]
@@ -187,7 +191,8 @@ public class OllamaClientTests
             };
         });
 
-        await Should.ThrowAsync<HttpRequestException>(() => client.EmbedAsync(["x"]));
+        var ex = await Should.ThrowAsync<EmbeddingException>(() => client.EmbedAsync(["x"]));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.Transient);
         calls.ShouldBe(1);
     }
 
@@ -270,7 +275,8 @@ public class OllamaClientTests
         });
 
         var huge = new string('x', 2000);
-        var ex = await Should.ThrowAsync<InvalidOperationException>(() => client.EmbedAsync([huge]));
+        var ex = await Should.ThrowAsync<EmbeddingException>(() => client.EmbedAsync([huge]));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.InputTooLong);
         ex.Message.ShouldContain("truncation");
         calls.ShouldBeGreaterThan(3);   // at least: initial + several truncation halvings
     }

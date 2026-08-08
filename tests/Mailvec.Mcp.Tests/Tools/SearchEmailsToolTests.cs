@@ -19,7 +19,11 @@ public class SearchEmailsToolTests
     {
         var messages = new MessageRepository(db.Connections);
         var keyword = new KeywordSearchService(db.Connections);
-        var vector = new VectorSearchService(db.Connections, ollama!);
+        var vector = new VectorSearchService(db.Connections, ollama is null
+            ? null!
+            : new Mailvec.Core.Embedding.EmbeddingService(ollama, new Mailvec.Core.Embedding.ResolvedEmbeddingProfile(
+                "ollama-legacy", "ollama", "ollama", "http://localhost:11434",
+                "mxbai-embed-large", 1024, "ollama:mxbai-embed-large:1024", "", "", 16, 60)));
         var hybrid = new HybridSearchService(keyword, vector);
         return new SearchEmailsTool(
             keyword, vector, hybrid, messages,

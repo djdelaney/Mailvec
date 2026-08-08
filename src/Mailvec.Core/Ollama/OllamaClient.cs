@@ -84,20 +84,65 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
     /// <summary>
     /// Returns one float[] per input string, in the same order. May silently
     /// truncate inputs that exceed the model's context length — log warnings
-    /// surface this. Throws on any non-recoverable Ollama error.
+    /// surface this. Non-recoverable failures throw a classified
+    /// <see cref="EmbeddingException"/> (the provider-neutral taxonomy):
+    /// callers branch on <see cref="EmbeddingFailureKind"/>, never on
+    /// HTTP-level exception types. Only a positively identified
+    /// context-length 400 enters the split/truncate fallback — an auth,
+    /// model, or malformed-request failure must surface immediately rather
+    /// than being misdiagnosed as long input.
     /// </summary>
     public async Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(inputs);
         if (inputs.Count == 0) return [];
 
-        var (vectors, error) = await TryEmbedAsync(inputs, ct).ConfigureAwait(false);
-        if (vectors is not null) return vectors;
+        try
+        {
+            var (vectors, error) = await TryEmbedAsync(inputs, ct).ConfigureAwait(false);
+            if (vectors is not null) return vectors;
 
-        // Server returned a context-length 400. Recover by splitting / truncating.
-        if (!IsContextLengthError(error)) throw error!;
+            // Server returned a context-length 400. Recover by splitting / truncating.
+            if (!IsContextLengthError(error)) throw Classify(error!);
 
-        return await EmbedWithFallbackAsync(inputs, ct).ConfigureAwait(false);
+            return await EmbedWithFallbackAsync(inputs, ct).ConfigureAwait(false);
+        }
+        catch (EmbeddingException) { throw; }               // already classified (incl. recursion)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException ex)
+        {
+            // Timeout (HttpClient / resilience pipeline), not caller cancellation.
+            throw new EmbeddingException(EmbeddingFailureKind.Transient,
+                "Ollama /api/embed timed out.", ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            // Network-level: connection refused, DNS, TLS. No status code.
+            throw new EmbeddingException(EmbeddingFailureKind.Transient,
+                "Ollama /api/embed connection failed.", ex);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
+                "Ollama /api/embed returned unparseable JSON.", ex);
+        }
+    }
+
+    /// <summary>
+    /// Status-code classification for a non-2xx /api/embed answer. The
+    /// message carries the status code only — the body stays on Data, out of
+    /// logs and MCP errors (it can echo mail content).
+    /// </summary>
+    private static EmbeddingException Classify(HttpRequestException error)
+    {
+        var kind = error.StatusCode switch
+        {
+            HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => EmbeddingFailureKind.AuthOrConfig,
+            HttpStatusCode.NotFound => EmbeddingFailureKind.ModelUnavailable,
+            HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable => EmbeddingFailureKind.Backpressure,
+            _ => EmbeddingFailureKind.Transient,
+        };
+        return new EmbeddingException(kind, error.Message, error);
     }
 
     private async Task<float[][]> EmbedWithFallbackAsync(IReadOnlyList<string> inputs, CancellationToken ct)
@@ -131,10 +176,10 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
 
             var (vectors, error) = await TryEmbedAsync([truncated], ct).ConfigureAwait(false);
             if (vectors is not null) return vectors;
-            if (!IsContextLengthError(error)) throw error!;
+            if (!IsContextLengthError(error)) throw Classify(error!);
         }
 
-        throw new InvalidOperationException(
+        throw new EmbeddingException(EmbeddingFailureKind.InputTooLong,
             $"Ollama rejected input as too long even after truncation to {MinTruncatedChars} chars (original {input.Length}).");
     }
 
@@ -177,11 +222,11 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
         }
 
         var parsed = await response.Content.ReadFromJsonAsync<EmbedResponse>(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("Ollama returned an empty body.");
+            ?? throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse, "Ollama returned an empty body.");
 
         if (parsed.Embeddings is null || parsed.Embeddings.Length != inputs.Count)
         {
-            throw new InvalidOperationException(
+            throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
                 $"Ollama returned {parsed.Embeddings?.Length ?? 0} embeddings for {inputs.Count} inputs.");
         }
 
@@ -191,7 +236,7 @@ public sealed class OllamaClient(HttpClient http, IOptions<OllamaOptions> option
             var vec = parsed.Embeddings[i];
             if (vec.Length != expected)
             {
-                throw new InvalidOperationException(
+                throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
                     $"Embedding {i} has {vec.Length} dimensions; expected {expected} for model {_opts.EmbeddingModel}.");
             }
             // IEmbeddingClient contract: vectors are L2-normalized so vec0's

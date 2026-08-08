@@ -38,7 +38,11 @@ public sealed class OllamaOptions
     // those, set e.g.
     //   "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
     // Empty (the default) embeds the bare query — correct for symmetric
-    // models like mxbai-embed-large. Applied in VectorSearchService, so the
-    // same prefix reaches the CLI, MCP, and eval paths identically.
+    // models like mxbai-embed-large. Rides the resolved embedding profile
+    // and is applied by EmbeddingService.EmbedQueryAsync — the single
+    // purpose-aware seam — so the same prefix reaches the CLI, MCP, and
+    // eval paths identically and no call site can bypass it. Covered by the
+    // embedding config hash: changing it on an existing DB refuses to embed
+    // until reverted or re-embedded via switch-model.
     public string QueryInstructionPrefix { get; set; } = "";
 }

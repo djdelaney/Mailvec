@@ -16,7 +16,7 @@ namespace Mailvec.Core.Health;
 public sealed class HealthService(
     ConnectionFactory connections,
     MetadataRepository metadata,
-    IEmbeddingClient ollama,
+    Embedding.IEmbeddingService embeddings,
     IOptions<ArchiveOptions> archiveOpts,
     IOptions<OllamaOptions> ollamaOpts,
     // OCR-pipeline deps are optional so the unit tests (which build a minimal
@@ -111,15 +111,20 @@ public sealed class HealthService(
         var pdfOcrEnabled = embOpts.OcrEnabled;
         var imageOcrEnabled = embOpts.ImageOcrEnabled;
         var ocrEnabled = pdfOcrEnabled || imageOcrEnabled;
-        var ollamaPing = ollama.PingAsync(ct);
-        // Digest fetch runs concurrently with the ping (same 10s budget
-        // pressure as the vision probe). null = unobservable — never drift.
-        var digestTask = ollama.GetModelArtifactDigestAsync(ct);
+        // Provider-neutral readiness: one real classified embed (bounded at
+        // 5s + a 2s Ollama tags refinement inside EmbeddingService — the same
+        // budget split the old ping + follow-up pair spent). Runs concurrently
+        // with the digest fetch and vision probe; /health's compose
+        // healthcheck budget is 10s total.
+        var embedProbeTask = embeddings.ProbeAsync(ct);
+        // null = unobservable — never drift.
+        var digestTask = embeddings.GetModelArtifactDigestAsync(ct);
         var visionProbeTask = ocrEnabled && vision is not null
             ? vision.ProbeAsync(ct)
             : null;
 
-        var ollamaReachable = await ollamaPing.ConfigureAwait(false);
+        var embedProbe = await embedProbeTask.ConfigureAwait(false);
+        var ollamaReachable = embedProbe.IsAvailable;
         var liveDigest = await digestTask.ConfigureAwait(false);
         var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);
 
@@ -147,34 +152,12 @@ public sealed class HealthService(
         // fine and the embedding model was never pulled (`ollama pull ...`).
         // One cheap /api/tags follow-up disambiguates; doctor keys its hints
         // off this. A successful ping implies the model works.
-        bool? embeddingModelAvailable;
-        if (ollamaReachable)
-        {
-            embeddingModelAvailable = true;
-        }
-        else
-        {
-            // Cap the follow-up at 2s instead of the probe's own 5s. It runs
-            // serially after the ping, so against a hang-accepting Ollama
-            // (ping eats its full 5s) the old worst case pushed /health to
-            // ~10s — the compose healthcheck's own timeout, so the container
-            // started failing its healthcheck on a slow Ollama rather than
-            // reporting one. 2s loses no information: every scenario where the probe
-            // answers (server down → fast failure; model missing → fast tags
-            // list; model can't load → tags is metadata, no model load) does
-            // so well inside 2s, and a server too hung to list tags reads as
-            // null ("can't tell") exactly as the full-length probe would.
-            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            probeCts.CancelAfter(TimeSpan.FromSeconds(2));
-            try
-            {
-                embeddingModelAvailable = await ollama.IsModelAvailableAsync(probeCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                embeddingModelAvailable = null; // probe deadline — same reading as a hung server
-            }
-        }
+        // The classified probe already ran the tags refinement internally
+        // (EmbeddingService.RefineAsync, 2s-capped for exactly the /health
+        // budget reasons the old inline follow-up documented). ModelListed
+        // preserves the report's original tri-state, including "reachable
+        // false + available true" = model pulled but can't load.
+        bool? embeddingModelAvailable = embedProbe.IsAvailable ? true : embedProbe.ModelListed;
 
         var counts = messages?.OcrCounts(embOpts.ImageOcrMinBytes)
             ?? new OcrStageCounts(0, 0, 0, 0);

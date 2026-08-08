@@ -137,6 +137,7 @@ public class EmbeddingWorkerTests : IDisposable
             try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
             catch (InvalidOperationException) { }
             catch (HttpRequestException) { }
+            catch (Mailvec.Core.Embedding.EmbeddingException) { }
         }
 
         // Every healthy message made it through despite the poison one...
@@ -181,6 +182,7 @@ public class EmbeddingWorkerTests : IDisposable
             try { await worker.ProcessNextBatchAsync(batchSize: 2, ct: default); }
             catch (InvalidOperationException) { }
             catch (HttpRequestException) { }
+            catch (Mailvec.Core.Embedding.EmbeddingException) { }
         }
 
         // The poisons are honestly unembedded (quarantined, no fake stamp)...
@@ -233,6 +235,7 @@ public class EmbeddingWorkerTests : IDisposable
             try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
             catch (InvalidOperationException) { }
             catch (HttpRequestException) { }
+            catch (Mailvec.Core.Embedding.EmbeddingException) { }
         }
         EmbeddedAt(GetMessageId("m1@x")).ShouldBeNull();
         EmbeddedAt(GetMessageId("m2@x")).ShouldBeNull();
@@ -361,10 +364,10 @@ public class EmbeddingWorkerTests : IDisposable
     [Fact]
     public async Task ProcessOneBatchAsync_throws_when_vector_count_mismatches_chunk_count()
     {
-        // Sanity assert in worker: the Ollama wrapper's contract says
+        // Sanity assert in worker: the transport contract says
         // vectors.Length == inputs.Count. If a future regression breaks that,
         // ChunkRepository would silently associate wrong vectors with wrong
-        // chunks (vector-space corruption). The InvalidOperationException is
+        // chunks (vector-space corruption). The classified InvalidResponse is
         // the loud-failure guard for this — keep it.
         var bodyText = new string('a', 400);
         InsertMessage("mismatch@x", subject: "S", body: bodyText);
@@ -372,8 +375,9 @@ public class EmbeddingWorkerTests : IDisposable
         var worker = BuildWorker(_ => Ok([])); // returns 0 vectors for 1 input
         // OllamaClient itself will throw before returning to EmbeddingWorker
         // because parsed.Embeddings.Length (0) != inputs.Count (1).
-        await Should.ThrowAsync<InvalidOperationException>(
+        var ex = await Should.ThrowAsync<EmbeddingException>(
             () => worker.ProcessOneBatchAsync(batchSize: 16, ct: default));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
     }
 
     [Fact]
@@ -557,6 +561,7 @@ public class EmbeddingWorkerTests : IDisposable
             try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
             catch (InvalidOperationException) { }
             catch (HttpRequestException) { }
+            catch (Mailvec.Core.Embedding.EmbeddingException) { }
         }
 
         var poisonId = GetMessageId("poison@x");
@@ -593,6 +598,7 @@ public class EmbeddingWorkerTests : IDisposable
             try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
             catch (InvalidOperationException) { }
             catch (HttpRequestException) { }
+            catch (Mailvec.Core.Embedding.EmbeddingException) { }
         }
 
         // A clean cycle: fresh mail embeds without the poison re-entering and
@@ -675,8 +681,18 @@ public class EmbeddingWorkerTests : IDisposable
         var chunker = new ChunkingService(embedderOptionsW);
         var migrator = new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance);
 
+        // Wrap the transport-level fake/stub in the REAL EmbeddingService so
+        // the worker's probe and document-embed paths exercise production
+        // text policy and probe classification.
+        var profile = new ResolvedEmbeddingProfile(
+            "ollama-legacy", "ollama", "ollama", "http://localhost:11434",
+            ollamaOptions.EmbeddingModel, ollamaOptions.EmbeddingDimensions,
+            $"ollama:{ollamaOptions.EmbeddingModel}:{ollamaOptions.EmbeddingDimensions}",
+            ollamaOptions.QueryInstructionPrefix, "",
+            ollamaOptions.MaxBatchSize, ollamaOptions.RequestTimeoutSeconds);
+
         return new EmbeddingWorker(
-            migrator, _metadata, _messages, _chunks, chunker, client,
+            migrator, _metadata, _messages, _chunks, chunker, new EmbeddingService(client, profile),
             embedderOptionsW, ollamaOptionsW, NullLogger<EmbeddingWorker>.Instance);
     }
 
@@ -816,6 +832,43 @@ public class EmbeddingWorkerTests : IDisposable
 
         public Task<bool> PingAsync(CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool?> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult<bool?>(true);
+    }
+
+    [Fact]
+    public async Task Backpressure_failures_never_quarantine_however_long_they_last()
+    {
+        // The vision taxonomy's core hazard, embed-side: a 503 lands on one
+        // message while others in the same isolation pass succeed, so the
+        // same-cycle-success rule reads the provider as healthy and would
+        // count strikes — quarantining a perfectly good message after five
+        // throttled cycles. Classified Backpressure must never strike; when
+        // the throttle lifts, the message embeds normally.
+        var throttled = true;
+        InsertMessage("throttled@x", "ok", "THROTTLEMARKER " + new string('t', 300));
+        var worker = BuildWorker(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().Result;
+            if (throttled && body.Contains("THROTTLEMARKER", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("overloaded") };
+            return Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))]);
+        });
+
+        // Far more cycles than QuarantineStrikes, each with a same-cycle success.
+        for (int cycle = 0; cycle < 12; cycle++)
+        {
+            InsertMessage($"ok-{cycle}@x", "ok", new string('g', 300));
+            try { await worker.ProcessNextBatchAsync(batchSize: 16, ct: default); }
+            catch (InvalidOperationException) { }
+            catch (HttpRequestException) { }
+            catch (Mailvec.Core.Embedding.EmbeddingException) { }
+        }
+        EmbeddedAt(GetMessageId("throttled@x")).ShouldBeNull(); // honestly unembedded
+
+        // Throttle lifts: the message must still be selectable — a
+        // quarantined message would be excluded and stay unembedded forever.
+        throttled = false;
+        await worker.ProcessNextBatchAsync(batchSize: 16, ct: default);
+        EmbeddedAt(GetMessageId("throttled@x")).ShouldNotBeNull();
     }
 
     // ---------- artifact-digest verification (stability hybrid, local half) ----------

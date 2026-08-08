@@ -44,7 +44,7 @@ public class VectorSearchServiceTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);   // unused — we use SearchByVector
+        var search = new VectorSearchService(db.Connections, embeddings: null!);   // unused — we use SearchByVector
 
         var now = DateTimeOffset.UtcNow;
         long idA = messages.Upsert(M("a@x", "Alpha topic", "alpha body text"), "INBOX", "INBOX/cur", "a", now);
@@ -75,7 +75,7 @@ public class VectorSearchServiceTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         long keepId = messages.Upsert(M("keep@x", "k", "k"), "INBOX", "INBOX/cur", "k", now);
@@ -98,7 +98,7 @@ public class VectorSearchServiceTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         var withAttachment = M("att@x", "Subject", "thin body") with
@@ -143,7 +143,7 @@ public class VectorSearchServiceTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         // 60 INBOX "chaff" messages whose chunks are the nearest to the query
@@ -178,7 +178,7 @@ public class VectorSearchServiceTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         // 60 soft-deleted messages own the nearest chunks; 3 live targets sit
@@ -216,7 +216,7 @@ public class VectorSearchServiceTests
         using var db = new TempDatabase();
         var messages = new MessageRepository(db.Connections);
         var chunks = new ChunkRepository(db.Connections);
-        var search = new VectorSearchService(db.Connections, ollama: null!);
+        var search = new VectorSearchService(db.Connections, embeddings: null!);
         var now = DateTimeOffset.UtcNow;
 
         long id = messages.Upsert(M("multi@x", "subj", "body"), "INBOX", "INBOX/cur", "m", now);
@@ -238,13 +238,13 @@ public class VectorSearchServiceTests
     [Fact]
     public async Task Query_instruction_prefix_is_prepended_to_query_embeds()
     {
+        // The prefix now rides the resolved profile through the REAL
+        // EmbeddingService — this pins that a profile prefix reaches the
+        // wire through the search path, with no way to bypass it here.
         using var db = new TempDatabase();
         var fake = new CapturingEmbeddingClient();
-        var opts = Microsoft.Extensions.Options.Options.Create(new Core.Options.OllamaOptions
-        {
-            QueryInstructionPrefix = "Instruct: retrieve passages\nQuery: ",
-        });
-        var search = new VectorSearchService(db.Connections, fake, opts);
+        var search = new VectorSearchService(db.Connections, new EmbeddingService(
+            fake, Tests.Embedding.TestProfiles.Legacy(queryPrefix: "Instruct: retrieve passages\nQuery: ")));
 
         await search.SearchAsync("kids haircut barber", limit: 5);
 
@@ -257,7 +257,8 @@ public class VectorSearchServiceTests
     {
         using var db = new TempDatabase();
         var fake = new CapturingEmbeddingClient();
-        var search = new VectorSearchService(db.Connections, fake);   // no options at all
+        var search = new VectorSearchService(db.Connections, new EmbeddingService(
+            fake, Tests.Embedding.TestProfiles.Legacy()));
 
         await search.SearchAsync("kids haircut barber", limit: 5);
 
