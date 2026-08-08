@@ -129,6 +129,34 @@ public class EmbeddingSpaceIdentityTests
     }
 
     [Fact]
+    public void SwitchEmbeddingModel_clears_sentinel_fingerprints_with_the_digest()
+    {
+        // Sentinels fingerprint the OLD serving function; surviving the
+        // switch they would refuse the rebuild they prescribe — same rule as
+        // the digest, same transaction.
+        using var db = new TempDatabase();
+        SetMetadata(db, EmbeddingSpace.SentinelKeyPrefix + "0", "AAAA");
+        SetMetadata(db, EmbeddingSpace.SentinelKeyPrefix + "1", "BBBB");
+
+        new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance,
+            Microsoft.Extensions.Options.Options.Create(new OllamaOptions()))
+            .SwitchEmbeddingModel("qwen3-embedding:4b", 2560);
+
+        Metadata(db, EmbeddingSpace.SentinelKeyPrefix + "0").ShouldBeNull();
+        Metadata(db, EmbeddingSpace.SentinelKeyPrefix + "1").ShouldBeNull();
+    }
+
+    [Fact]
+    public void Sentinel_pack_round_trips_and_cosine_detects_drift()
+    {
+        var v = new[] { 0.1f, -0.9f, 0.4f, 0.2f };
+        EmbeddingSpace.UnpackSentinel(EmbeddingSpace.PackSentinel(v)).ShouldBe(v);
+
+        EmbeddingSpace.CosineSimilarity(v, v).ShouldBe(1.0, tolerance: 1e-9);
+        EmbeddingSpace.CosineSimilarity(new[] { 1f, 0f }, new[] { 0f, 1f }).ShouldBe(0.0, tolerance: 1e-9);
+    }
+
+    [Fact]
     public void Changing_the_query_prefix_changes_the_config_hash_but_not_the_space_id()
     {
         var withoutPrefix = EmbeddingSpace.FromOllamaOptions(new OllamaOptions());

@@ -1,7 +1,7 @@
 # Design proposal — pluggable embedding providers (Fireworks first)
 
-**Status:** phases 0–2 implemented (see "Phased implementation" for commit
-references); phases 3+ proposed.  
+**Status:** phases 0–3 implemented (see "Phased implementation" for commit
+references); phases 4+ proposed.  
 **Date:** 2026-08-07; phase status updated 2026-08-08.  
 **Default remains:** local Ollama. Hosted providers are explicit opt-ins because
 they send mail content and semantic-search queries off-network.
@@ -707,12 +707,22 @@ measured and included in the monthly budget.
 the post-review hardening commit (read-side guard, digest tag resolution,
 full four-transform hash coverage). Each landing verified ranking-neutral:
 eval per-query results bit-identical to the committed subset baseline.
-Boundary note: `IEmbeddingClient` currently serves as the transport seam;
-the `IEmbeddingTransport` extraction is deliberately deferred to phase 3,
-where its second implementor shapes it — at that point count/dimension
-validation and normalization move UP into `EmbeddingService` (done once,
-against the profile) and transports only serialize and classify, per this
-proposal's original boundary.
+Phase 3 complete (2026-08-08): the mathematical contract moved into
+EmbeddingService, `IEmbeddingTransport` extracted, the PostConfigure bridge
+retired, `OpenAiCompatibleTransport` landed stub-tested with hosted profile
+activation (explicit SpaceId enforced per decision 3; bearer key material
+resolved once into the HttpClient closure, fatal in every process), and
+sentinel fingerprints implemented. Sentinel as-built deviations from this
+proposal's sketch: storage is versioned metadata KEYS, not a table — the
+fingerprints are observations like the digest (stamped by the embedder on
+first sight, cleared by switch-model, absent = not yet observed), so no
+schema migration exists; and stamping happens on the embedder's first
+successful sentinel embed rather than inside switch-model, which has no
+provider access. Threshold 0.999 was set from measurement, not guesswork:
+8 repeated embeds against Fireworks qwen3-embedding-8b (2026-08-08)
+returned cosine 1.00000000 every time. Live E2E verified the read-side
+guard refuses SpaceMismatch with the Fireworks profile active against an
+Ollama-space database before any query leaves the machine.
 
 The work lands as ordered phases. Each phase leaves the repository releasable
 and behavior-compatible on the existing Ollama path; no phase requires the next
