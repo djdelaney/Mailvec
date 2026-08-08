@@ -175,8 +175,20 @@ public sealed class SearchEmailsTool(
             // Mailvec-authored (status codes only), but only the model name
             // goes to the client: it's public, and it's the actionable half.
             logger.LogWarning(ex,
-                "search_emails: embedding call to Ollama at {BaseUrl} failed; returning a sanitized error to the client.",
-                _ollama.BaseUrl);
+                "search_emails: semantic leg failed ({Kind}); returning a sanitized error to the client. Endpoint {BaseUrl}.",
+                ex.Kind, _ollama.BaseUrl);
+            if (ex.Kind == Mailvec.Core.Embedding.EmbeddingFailureKind.SpaceMismatch)
+            {
+                // Not an outage: the configuration describes a different
+                // vector space than the stored vectors. Refusing beats
+                // serving plausible, meaningless rankings.
+                throw new McpException(
+                    "Semantic ranking is unavailable — the configured embedding space does not match the " +
+                    "vectors stored in the archive (a vector-affecting setting changed without a re-embed). " +
+                    "Keyword search is unaffected: retry this query with mode=keyword. The operator can run " +
+                    "`mailvec doctor` for the exact mismatch, then either revert the setting or run " +
+                    "`mailvec switch-model` to rebuild the vectors.");
+            }
             throw new McpException(
                 "Semantic ranking is unavailable — the embedding call to Ollama failed. " +
                 "Keyword search still works: retry this query with mode=keyword. " +

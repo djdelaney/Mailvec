@@ -32,6 +32,7 @@ public class HealthServiceMailTests : IDisposable
         new(db.Connections,
             new MetadataRepository(db.Connections),
             new EmbeddingService(new FakeEmbedding(), Tests.Embedding.TestProfiles.Legacy()),
+            Tests.Embedding.TestProfiles.Legacy(),
             Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = db.DatabasePath }),
             Microsoft.Extensions.Options.Options.Create(new OllamaOptions()),
             mbsyncSync: sync);

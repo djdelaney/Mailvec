@@ -265,6 +265,99 @@ public class VectorSearchServiceTests
         fake.LastInputs![0].ShouldBe("kids haircut barber");
     }
 
+    // ---------- read-side embedding-space guard ----------
+
+    [Fact]
+    public async Task Semantic_search_refuses_every_form_of_metadata_identity_drift()
+    {
+        // The write side refuses drift five ways; before this guard the read
+        // side served through it — an edited query prefix (same model, same
+        // dims) produced plausible, meaningless rankings with no error
+        // anywhere. Each drift axis must refuse BEFORE embedding.
+        using var db = new TempDatabase();
+        var search = GuardedSearch(db);
+
+        // Matching identity: searches fine.
+        await Should.NotThrowAsync(() => search.SearchAsync("hello", limit: 5));
+
+        foreach (var (key, drifted) in new[]
+        {
+            ("embedding_model", "some-other-model"),
+            (Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey, "ollama:some-other-model:1024"),
+            (Mailvec.Core.Embedding.EmbeddingSpace.ConfigHashKey, "0000000000000000000000000000000000000000000000000000000000000000"),
+        })
+        {
+            var original = Metadata(db, key);
+            SetMetadata(db, key, drifted);
+            var ex = await Should.ThrowAsync<Mailvec.Core.Embedding.EmbeddingException>(
+                () => search.SearchAsync("hello", limit: 5));
+            ex.Kind.ShouldBe(Mailvec.Core.Embedding.EmbeddingFailureKind.SpaceMismatch, key);
+            ex.Message.ShouldContain(key);
+            SetMetadata(db, key, original!);
+        }
+    }
+
+    [Fact]
+    public async Task Hybrid_search_refuses_through_its_vector_leg()
+    {
+        using var db = new TempDatabase();
+        SetMetadata(db, Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey, "ollama:drifted:1024");
+        var hybrid = new HybridSearchService(new KeywordSearchService(db.Connections), GuardedSearch(db));
+
+        var ex = await Should.ThrowAsync<Mailvec.Core.Embedding.EmbeddingException>(
+            () => hybrid.SearchAsync("hello", limit: 5));
+        ex.Kind.ShouldBe(Mailvec.Core.Embedding.EmbeddingFailureKind.SpaceMismatch);
+    }
+
+    [Fact]
+    public async Task Absent_identity_metadata_is_unknown_and_passes_the_guard()
+    {
+        // A fresh database has no vectors for a wrong answer to come from;
+        // unknown ≠ mismatch, same as everywhere else.
+        using var db = new TempDatabase();
+        DeleteMetadata(db, Mailvec.Core.Embedding.EmbeddingSpace.SpaceIdKey);
+        DeleteMetadata(db, Mailvec.Core.Embedding.EmbeddingSpace.ConfigHashKey);
+
+        await Should.NotThrowAsync(() => GuardedSearch(db).SearchAsync("hello", limit: 5));
+    }
+
+    private static VectorSearchService GuardedSearch(TempDatabase db) => new(
+        db.Connections,
+        new EmbeddingService(new CapturingEmbeddingClient(), Tests.Embedding.TestProfiles.Legacy()),
+        new Mailvec.Core.Embedding.EmbeddingSpaceGuard(
+            new MetadataRepository(db.Connections), Tests.Embedding.TestProfiles.Legacy()));
+
+    private static string? Metadata(TempDatabase db, string key)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = $k";
+        cmd.Parameters.AddWithValue("$k", key);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private static void SetMetadata(TempDatabase db, string key, string value)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO metadata(key, value) VALUES($k, $v)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """;
+        cmd.Parameters.AddWithValue("$k", key);
+        cmd.Parameters.AddWithValue("$v", value);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DeleteMetadata(TempDatabase db, string key)
+    {
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM metadata WHERE key = $k";
+        cmd.Parameters.AddWithValue("$k", key);
+        cmd.ExecuteNonQuery();
+    }
+
     private sealed class CapturingEmbeddingClient : IEmbeddingClient
     {
         public IReadOnlyList<string>? LastInputs;

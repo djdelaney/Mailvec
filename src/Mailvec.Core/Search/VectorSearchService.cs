@@ -32,7 +32,11 @@ public sealed record VectorHit(
 // The query instruction transform moved into IEmbeddingService (purpose-aware,
 // carried by the resolved profile) — this class no longer reads any Ollama
 // config. Tests that only exercise SearchByVector pass a null service.
-public sealed class VectorSearchService(ConnectionFactory connections, IEmbeddingService embeddings)
+// spaceGuard is the read-side identity enforcement; optional only so direct
+// test constructions compile — DI always supplies it, and SearchAsync without
+// it would happily rank across mismatched vector spaces.
+public sealed class VectorSearchService(
+    ConnectionFactory connections, IEmbeddingService embeddings, EmbeddingSpaceGuard? spaceGuard = null)
 {
     // vec0 KNN runs BEFORE our filter join, so the k nearest chunks may all be
     // filtered out. Rather than make every caller guess a filter-aware k (which
@@ -58,6 +62,12 @@ public sealed class VectorSearchService(ConnectionFactory connections, IEmbeddin
     public async Task<IReadOnlyList<VectorHit>> SearchAsync(string query, int limit = 20, int k = 100, SearchFilters? filters = null, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+
+        // Read-side space enforcement BEFORE embedding: a query vector from a
+        // mismatched profile ranks against stored vectors with no error
+        // anywhere downstream. Metadata-only, so it adds one cheap read, not
+        // a network dependency.
+        spaceGuard?.VerifyReadCompatible();
 
         // The query-side instruction transform lives in IEmbeddingService
         // (purpose-aware, profile-carried) — not here. This call site cannot

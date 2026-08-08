@@ -13,7 +13,13 @@ namespace Mailvec.Core.Data;
 public sealed class SchemaMigrator(
     ConnectionFactory connections,
     ILogger<SchemaMigrator> logger,
-    IOptions<OllamaOptions>? ollamaOptions = null)
+    IOptions<OllamaOptions>? ollamaOptions = null,
+    // The resolved embedding profile, when this process registered one via
+    // AddMailvecEmbedding (DI fills it; test constructions may omit it and
+    // fall back to options-derived identity with empty suffix transforms).
+    // Needed because suffix transforms live only on profiles: an
+    // options-derived config hash would silently ignore them.
+    Mailvec.Core.Embedding.ResolvedEmbeddingProfile? embeddingProfile = null)
 {
     // Bump this when adding a new migration file under schema/migrations/.
     // Fresh DBs get 001_initial.sql which stamps schema_version directly;
@@ -147,7 +153,9 @@ public sealed class SchemaMigrator(
         if (!string.Equals(storedModel, opts.EmbeddingModel, StringComparison.Ordinal)) return;
         if (storedDims != opts.EmbeddingDimensions.ToString(CultureInfo.InvariantCulture)) return;
 
-        var (derivedSpaceId, hash) = Embedding.EmbeddingSpace.FromOllamaOptions(opts);
+        var (derivedSpaceId, hash) = embeddingProfile is not null
+            ? Embedding.EmbeddingSpace.ForProfile(embeddingProfile)
+            : Embedding.EmbeddingSpace.FromOllamaOptions(opts);
         // A space id this config can't reproduce (a future hosted profile's
         // asserted id, or a hand-edited value) is not ours to describe.
         if (!string.Equals(storedSpaceId, derivedSpaceId, StringComparison.Ordinal)) return;
@@ -425,12 +433,16 @@ public sealed class SchemaMigrator(
         // false-compatibility claim the v11 columns exist to prevent. The
         // hash is computed from the CLI's resolved config (the
         // embedding-experiments flow sets Ollama__* env overrides for the
-        // switch invocation too, so the query prefix here matches the one the
-        // embedder will run with).
+        // switch invocation too, so the transforms here match the ones the
+        // embedder will run with); the text transforms come from the resolved
+        // profile when one is registered — suffixes exist only there.
         var spaceId = Embedding.EmbeddingSpace.LegacySpaceId(model, dimensions);
-        var prefix = ollamaOptions?.Value.QueryInstructionPrefix ?? "";
+        var prefix = embeddingProfile?.QueryPrefix ?? ollamaOptions?.Value.QueryInstructionPrefix ?? "";
         var configHash = Embedding.EmbeddingSpace.ComputeConfigHash(
-            spaceId, model, dimensions, prefix, documentPrefix: "");
+            spaceId, model, dimensions, prefix,
+            embeddingProfile?.QuerySuffix ?? "",
+            embeddingProfile?.DocumentPrefix ?? "",
+            embeddingProfile?.DocumentSuffix ?? "");
 
         using (var cmd = conn.CreateCommand())
         {

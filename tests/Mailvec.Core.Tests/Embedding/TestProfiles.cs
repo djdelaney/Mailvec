@@ -20,7 +20,9 @@ public static class TestProfiles
         OutputDimensions: 1024,
         SpaceId: "ollama:mxbai-embed-large:1024",
         QueryPrefix: queryPrefix,
+        QuerySuffix: "",
         DocumentPrefix: "",
+        DocumentSuffix: "",
         MaxBatchSize: 16,
         RequestTimeoutSeconds: 60);
 }

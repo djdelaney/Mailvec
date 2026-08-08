@@ -1,7 +1,8 @@
 # Design proposal — pluggable embedding providers (Fireworks first)
 
-**Status:** proposed; not implemented.  
-**Date:** 2026-08-07.  
+**Status:** phases 0–2 implemented (see "Phased implementation" for commit
+references); phases 3+ proposed.  
+**Date:** 2026-08-07; phase status updated 2026-08-08.  
 **Default remains:** local Ollama. Hosted providers are explicit opt-ins because
 they send mail content and semantic-search queries off-network.
 
@@ -81,9 +82,14 @@ vector-space drift whether or not a hosted provider ever ships.
   OpenAI-compatible embeddings route is in scope; custom prediction contracts
   are separate protocols.
 
-## Current call graph
+## Pre-implementation call graph (historical)
 
-There are two distinct uses of Ollama today:
+This section describes the architecture BEFORE phase 2 landed and is kept as
+design rationale. As of `5a45148` consumers depend on `IEmbeddingService`,
+registration is centralized in `EmbeddingRegistration.AddMailvecEmbedding`,
+and the read path is guarded by `EmbeddingSpaceGuard`.
+
+There were two distinct uses of Ollama:
 
 | Caller | Operation | Purpose | Pluggable design |
 |---|---|---|---|
@@ -397,6 +403,9 @@ classification, similar to `VisionException`:
 - `InputTooLong`
 - `InvalidResponse`
 - `Transient`
+- `SpaceMismatch` (added post-review: the read-side guard's refusal — the
+  active profile describes a different vector space than the stored vectors;
+  configuration-level, never message evidence)
 
 Use the following default mapping for hosted OpenAI-compatible profiles, with
 small provider-specific refinements only where an official contract warrants
@@ -534,7 +543,14 @@ model name is unchanged, so the non-forced form would report nothing to do.
 - health mismatch reporting;
 - `mailvec status` and `mailvec doctor`;
 - `mailvec switch-model`;
-- `ChunkRepository.ReplaceChunksForMessage`'s transactional mid-batch guard.
+- `ChunkRepository.ReplaceChunksForMessage`'s transactional mid-batch guard;
+- **query-time read enforcement** (added post-review — the original list
+  omitted it): `EmbeddingSpaceGuard` refuses semantic/hybrid search before
+  query embedding/KNN when stored model, dimensions, space id, or config hash
+  disagree with the active profile. Metadata-only by design: digest and
+  hosted-sentinel checks stay on the embedder/health cadence, because a
+  network probe inside every search would couple availability and
+  unknown-is-never-drift forbids failing on an unreachable listing.
 
 The last item is essential. A provider/model switch that lands during an HTTP
 request must not commit stale-space vectors after the migration transaction.
@@ -684,6 +700,20 @@ measured and included in the monthly budget.
 
 ## Phased implementation
 
+**Status (2026-08-08):** phase 0 complete (subset baseline, see note in phase
+0 below); phase 1 complete — `7c815aa` (space identity v11), `50f3888`
+(artifact digest); phase 2 complete — `ff21281` (profiles + registration),
+`5a45148` (purpose-aware service, classified failures, neutral probe), plus
+the post-review hardening commit (read-side guard, digest tag resolution,
+full four-transform hash coverage). Each landing verified ranking-neutral:
+eval per-query results bit-identical to the committed subset baseline.
+Boundary note: `IEmbeddingClient` currently serves as the transport seam;
+the `IEmbeddingTransport` extraction is deliberately deferred to phase 3,
+where its second implementor shapes it — at that point count/dimension
+validation and normalization move UP into `EmbeddingService` (done once,
+against the profile) and transports only serialize and classify, per this
+proposal's original boundary.
+
 The work lands as ordered phases. Each phase leaves the repository releasable
 and behavior-compatible on the existing Ollama path; no phase requires the next
 one to ship. Mail content first reaches a hosted provider in phase 6, and only
@@ -691,10 +721,16 @@ from a database copy.
 
 ### Phase 0 — baseline capture (no code)
 
-Capture `mailvec eval --json baselines/<date>.json` against the frozen corpus
-with the current Ollama/mxbai configuration before any phase below merges —
-including the "pure refactor" phases. A baseline taken after a refactor cannot
-prove the refactor was neutral.
+Capture `mailvec eval --json baselines/<date>.json` with the current
+Ollama/mxbai configuration before any phase below merges — including the
+"pure refactor" phases. A baseline taken after a refactor cannot prove the
+refactor was neutral.
+
+**As executed:** the baseline was captured against the 662-message
+`~/MailvecSubsetOCR` corpus (not the frozen full corpus) at
+`baselines/subset-ocr/2026-08-07.json`; its README records corpus identity,
+binary provenance, and the rule that subset numbers are only comparable to
+subset numbers.
 
 ### Phase 1 — embedding-space identity (schema migration + guards)
 
@@ -984,9 +1020,13 @@ implementation and avoids duplicating that work for OpenAI or Baseten later.
    the space-identity work), sentinel fingerprinting for hosted profiles
    (lands with the phase 3 transport, storage via a small additive
    migration then).
-3. Confirm that new hosted profiles must provide an explicit `SpaceId` rather
-   than accepting an automatically derived provider/model value. *(Gates
-   phase 1.)*
+3. ~~Confirm that new hosted profiles must provide an explicit `SpaceId`.~~
+   **Decided 2026-08-08: yes.** Confirmed after empirically checking the
+   Fireworks models API: it exposes no revision or weights identity to derive
+   from, so derivation would launder the serverless alias into looking like
+   an identity. Ollama profiles are the inverse: they may NOT assert a
+   SpaceId (derived + digest-enforced), which registration validation
+   enforces.
 4. Choose the persistent local secret-file location and Docker secret name.
    *(Gates phase 5.)*
 5. Define the semantic/hybrid eval threshold required for rollout. *(Gates the

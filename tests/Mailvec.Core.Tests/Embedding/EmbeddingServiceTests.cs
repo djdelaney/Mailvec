@@ -25,6 +25,25 @@ public class EmbeddingServiceTests
     }
 
     [Fact]
+    public async Task All_four_transforms_are_applied_to_their_own_purpose_exactly_once()
+    {
+        var fake = new CapturingClient();
+        var profile = TestProfiles.Legacy(queryPrefix: "q<") with
+        {
+            QuerySuffix = ">q",
+            DocumentPrefix = "d<",
+            DocumentSuffix = ">d",
+        };
+        var service = new EmbeddingService(fake, profile);
+
+        await service.EmbedQueryAsync("find it");
+        fake.LastInputs![0].ShouldBe("q<find it>q");
+
+        await service.EmbedDocumentsAsync(["chunk"]);
+        fake.LastInputs![0].ShouldBe("d<chunk>d");
+    }
+
+    [Fact]
     public async Task Probe_maps_classified_failures_without_refining_non_transient_ones()
     {
         // Backpressure must stay Backpressure: refining a rate-limited probe

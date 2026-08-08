@@ -61,25 +61,31 @@ public static class EmbeddingSpace
     }
 
     /// <summary>
-    /// Canonical, versioned config hash. Field values are length-prefixed so
-    /// no delimiter collision can make two different configurations serialize
-    /// identically; the leading <c>v1</c> versions the serialization itself
-    /// (adding a field later means bumping it, which correctly invalidates
-    /// every stored hash rather than silently comparing across shapes).
+    /// Canonical, versioned config hash covering all four text transforms.
+    /// Field values are length-prefixed so no delimiter collision can make
+    /// two different configurations serialize identically; the leading
+    /// version token versions the serialization itself — v2 added the
+    /// suffix fields before any v11 database shipped in a release, so no
+    /// stored v1 hash exists outside development machines (a dev DB
+    /// self-heals by deleting the stored key; the vectors are unaffected
+    /// because every added field was empty under v1).
     /// </summary>
     public static string ComputeConfigHash(
-        string spaceId, string wireModel, int dimensions, string queryPrefix, string documentPrefix)
+        string spaceId, string wireModel, int dimensions,
+        string queryPrefix, string querySuffix, string documentPrefix, string documentSuffix)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(spaceId);
         ArgumentException.ThrowIfNullOrWhiteSpace(wireModel);
 
         var sb = new StringBuilder();
-        sb.Append("v1\n");
+        sb.Append("v2\n");
         AppendField(sb, "spaceId", spaceId);
         AppendField(sb, "wireModel", wireModel);
         AppendField(sb, "dimensions", dimensions.ToString(System.Globalization.CultureInfo.InvariantCulture));
         AppendField(sb, "queryPrefix", queryPrefix);
+        AppendField(sb, "querySuffix", querySuffix);
         AppendField(sb, "documentPrefix", documentPrefix);
+        AppendField(sb, "documentSuffix", documentSuffix);
         AppendField(sb, "normalization", NormalizationPolicy);
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
@@ -87,20 +93,30 @@ public static class EmbeddingSpace
     }
 
     /// <summary>
-    /// The identity the current Ollama configuration describes. This is what
-    /// the embedder verifies per poll, what the guarded chunk write re-checks
-    /// transactionally, and what <c>switch-model</c> stamps — one derivation,
-    /// so the writers and the verifiers cannot disagree about what the config
-    /// means. Document prefix is empty today (no configured document
-    /// transform exists yet); when one arrives it must be threaded through
-    /// here, never appended at a call site.
+    /// The identity a resolved profile describes — what the embedder verifies
+    /// per poll, the guarded chunk write re-checks transactionally, the
+    /// read-side guard enforces before KNN, and health/doctor/status compare.
+    /// One derivation, so writers, readers and verifiers cannot disagree
+    /// about what the configuration means. Always compute from the PROFILE,
+    /// not OllamaOptions: suffix transforms exist only on profiles, and an
+    /// options-derived hash would silently ignore them.
+    /// </summary>
+    public static (string SpaceId, string ConfigHash) ForProfile(ResolvedEmbeddingProfile profile) =>
+        (profile.SpaceId, ComputeConfigHash(
+            profile.SpaceId, profile.WireModel, profile.OutputDimensions,
+            profile.QueryPrefix, profile.QuerySuffix, profile.DocumentPrefix, profile.DocumentSuffix));
+
+    /// <summary>
+    /// Legacy-shaped identity straight from <see cref="OllamaOptions"/> (no
+    /// profile in play, all suffixes empty). Used by <c>SchemaMigrator</c>'s
+    /// fallback when constructed without a profile, and by tests.
     /// </summary>
     public static (string SpaceId, string ConfigHash) FromOllamaOptions(OllamaOptions options)
     {
         var spaceId = LegacySpaceId(options.EmbeddingModel, options.EmbeddingDimensions);
         var hash = ComputeConfigHash(
             spaceId, options.EmbeddingModel, options.EmbeddingDimensions,
-            options.QueryInstructionPrefix, documentPrefix: "");
+            options.QueryInstructionPrefix, querySuffix: "", documentPrefix: "", documentSuffix: "");
         return (spaceId, hash);
     }
 
