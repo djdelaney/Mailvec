@@ -110,7 +110,7 @@ internal static class BackfillInlineImagesCommand
         @out.WriteLine(dryRun ? "Mode: DRY RUN (no writes)." : "Mode: writing new inline-image rows.");
         @out.WriteLine();
 
-        long processed = 0, messagesWithNewRows = 0, rowsAdded = 0, parseFailures = 0, missingFiles = 0;
+        long processed = 0, messagesWithNewRows = 0, rowsAdded = 0, parseFailures = 0, missingFiles = 0, refusedPaths = 0;
         var statusCounts = new Dictionary<string, long>(StringComparer.Ordinal);
         long cursor = 0;
 
@@ -125,7 +125,21 @@ internal static class BackfillInlineImagesCommand
                 cursor = msg.Id;
                 processed++;
 
-                var maildirFile = Path.Combine(maildirRoot, msg.MaildirPath.Replace('/', Path.DirectorySeparatorChar), msg.MaildirFilename);
+                // Shared containment guard rather than a bare Path.Combine —
+                // see MaildirAttachmentReader.ResolveWithinRoot. Per-message
+                // refusal, so one bad row can't abort the whole backfill.
+                string maildirFile;
+                try
+                {
+                    maildirFile = MaildirAttachmentReader.ResolveWithinRoot(maildirRoot, msg.MaildirPath, msg.MaildirFilename);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    refusedPaths++;
+                    err.WriteLine($"  msg {msg.Id}: refusing to read its recorded location ({ex.Message}); skipping.");
+                    continue;
+                }
+
                 if (!File.Exists(maildirFile)) { missingFiles++; continue; }
 
                 MimeMessage mime;
@@ -181,6 +195,14 @@ internal static class BackfillInlineImagesCommand
         }
         if (missingFiles > 0) @out.WriteLine($"Skipped {missingFiles:N0} message(s) whose .eml was missing (mbsync moved it; re-run after a rescan).");
         if (parseFailures > 0) @out.WriteLine($"Skipped {parseFailures:N0} message(s) that failed to parse.");
+        if (refusedPaths > 0)
+        {
+            // Not transient, unlike missingFiles above — a re-run refuses these
+            // again. Bad maildir_path/maildir_filename in the database.
+            @out.WriteLine(
+                $"REFUSED {refusedPaths:N0} message(s) whose recorded location resolves outside the Maildir root. " +
+                "That is a database problem, not a transient one — investigate before re-running.");
+        }
         if (!dryRun && rowsAdded > 0)
             @out.WriteLine("\nInline images are 'unsupported'; the embedder's image-OCR pass will process them (behind its size/dimension gate) on its next cycles.");
         return 0;

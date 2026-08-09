@@ -234,6 +234,102 @@ public class ExtractAttachmentsCommandTests : IDisposable
     }
 
     [Fact]
+    public void A_recorded_location_outside_the_maildir_root_is_refused_not_read()
+    {
+        // This backfill reads the whole .eml rather than one part, so it can't
+        // go through MaildirAttachmentReader.Read — which is exactly how it
+        // came to build the path with a bare Path.Combine and open it with no
+        // containment check at all, quietly exempting itself from the
+        // "never read outside the Maildir root" invariant. It now shares the
+        // guard. The planted file is real and readable, so only the guard can
+        // be what stops this: a File.Exists-only check would sail through.
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+
+        var outside = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "secret.eml"),
+            "Message-ID: <esc@x>\nFrom: a@x\nTo: b@x\nSubject: s\n\nplain body\n");
+
+        var messages = sp.GetRequiredService<MessageRepository>();
+        var parsed = new ParsedMessage(
+            MessageId: "esc@x", ThreadId: "esc@x", Subject: "esc",
+            FromAddress: "alice@example.com", FromName: null,
+            ToAddresses: [], CcAddresses: [],
+            DateSent: DateTimeOffset.UtcNow,
+            BodyText: "", BodyHtml: null,
+            RawHeaders: "Message-ID: <esc@x>\r\n",
+            SizeBytes: 100, ContentHash: "h",
+            Attachments: [new ParsedAttachment(1, "x.pdf", "application/pdf", 100L, ExtractedText: null, ExtractionStatus: null)]);
+        // A traversal sequence in maildir_path — the shape the guard exists for
+        // if a future writer ever lets one into the column.
+        messages.Upsert(parsed, "INBOX", "../outside", "secret.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
+
+        exit.ShouldBe(0);
+        err.ToString().ShouldContain("refusing to read");
+        // Reported in the summary, and reported as the non-transient thing it
+        // is — a bounded run must never read as full coverage.
+        writer.ToString().ShouldContain("REFUSED 1");
+
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT extraction_status FROM attachments WHERE message_id = (SELECT id FROM messages WHERE message_id='esc@x')";
+        cmd.ExecuteScalar().ShouldBe(DBNull.Value);
+    }
+
+    [Fact]
+    public void One_refused_path_does_not_abort_the_rest_of_the_run()
+    {
+        // Per-message refusal, not fatal: a single poisoned row must not strand
+        // the thousands of good messages behind it in the cursor.
+        using var sp = BuildProvider(maildirRoot: _maildirRoot);
+
+        var outside = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "secret.eml"), "Message-ID: <esc2@x>\n\nbody\n");
+
+        var messages = sp.GetRequiredService<MessageRepository>();
+        var bad = new ParsedMessage(
+            MessageId: "esc2@x", ThreadId: "esc2@x", Subject: "esc", FromAddress: "a@x", FromName: null,
+            ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow,
+            BodyText: "", BodyHtml: null, RawHeaders: "Message-ID: <esc2@x>\r\n",
+            SizeBytes: 100, ContentHash: "hb",
+            Attachments: [new ParsedAttachment(1, "x.pdf", "application/pdf", 100L, null, null)]);
+        messages.Upsert(bad, "INBOX", "../outside", "secret.eml", DateTimeOffset.UtcNow);
+
+        // A well-formed message that sorts after it by id.
+        var emlPath = Path.Combine(_maildirRoot, "INBOX", "cur", "good.eml");
+        File.WriteAllText(emlPath,
+            "Message-ID: <good@x>\nFrom: a@x\nTo: b@x\nSubject: s\nMIME-Version: 1.0\n" +
+            "Content-Type: multipart/mixed; boundary=\"b\"\n\n" +
+            "--b\nContent-Type: text/plain\n\nbody\n" +
+            "--b\nContent-Type: text/plain; name=\"note.txt\"\n" +
+            "Content-Disposition: attachment; filename=\"note.txt\"\n\nhello from the attachment\n--b--\n");
+        var good = new ParsedMessage(
+            MessageId: "good@x", ThreadId: "good@x", Subject: "s", FromAddress: "a@x", FromName: null,
+            ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow,
+            BodyText: "body", BodyHtml: null, RawHeaders: "Message-ID: <good@x>\r\n",
+            SizeBytes: 100, ContentHash: "hg",
+            Attachments: [new ParsedAttachment(0, "note.txt", "text/plain", 25L, null, null)]);
+        messages.Upsert(good, "INBOX", "INBOX/cur", "good.eml", DateTimeOffset.UtcNow);
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldContain("REFUSED 1");
+
+        using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT extraction_status FROM attachments WHERE message_id = (SELECT id FROM messages WHERE message_id='good@x')";
+        cmd.ExecuteScalar().ShouldBe(AttachmentTextExtractor.StatusDone);
+    }
+
+    [Fact]
     public void A_renamed_message_is_reported_as_skipped_not_counted_as_covered()
     {
         // The run summary must never let a bounded run read as full coverage —

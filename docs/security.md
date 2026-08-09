@@ -318,6 +318,24 @@ change than hosted OCR, because embedding touches everything:
   material by construction. It is never placed in the shared env anchor, the
   shared `appsettings.Local.json` (world-readable by design), or the profile
   object that health/doctor display.
+- **Two credentials deliberately do NOT use this pattern**, and the asymmetry
+  is a choice rather than an oversight: the Mistral OCR key
+  (`Vision__Mistral__ApiKey`) and the Cloudflare tunnel token (`TUNNEL_TOKEN`)
+  both ride container environment variables from `.env`. Environment is a
+  weaker channel than a file mount — it is readable through `docker inspect`,
+  `/proc/1/environ` and crash dumps, none of which a `/run/secrets` mount
+  exposes. Reading any of them requires **root on the Docker VM**, which is
+  outside this threat model (see the scope section), so the two channels are
+  equivalent against every attacker this document defends against. The
+  practical reasons: `cloudflared` has no `_FILE` convention, so a file secret
+  there needs an entrypoint wrapper working against the `read_only` rootfs;
+  and `Vision:Mistral` has no `ApiKeyFile` option — its
+  [`ApiKey` doc](../src/Mailvec.Core/Options/VisionOptions.cs) names the
+  environment as the intended channel. **If the threat model ever widens to
+  include a local unprivileged account on the VM, both need to move**, and the
+  OCR key is the cheaper of the two (an `ApiKeyFile` option mirroring
+  `EmbeddingAuthOptions`). Scoping is already correct either way: the OCR key
+  reaches the embedder only, never the internet-fronted mcp.
 - **Blast radius of a compromised mcp container** therefore now includes a
   reusable hosted-inference credential in addition to mail-search access. Use
   a dedicated provider account/key with a conservative monthly spend limit,

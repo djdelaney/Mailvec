@@ -186,6 +186,44 @@ public class MaildirAttachmentReaderTests : IDisposable
     }
 
     [Fact]
+    public void The_resolved_path_is_what_gets_opened_not_the_lexical_one()
+    {
+        // The guard resolves symlinks to decide, then the caller opens whatever
+        // the resolve returned. It used to return the LEXICAL path — checking
+        // one path and opening another, which is the window an actor with write
+        // access to the Maildir could use to swap a directory component for an
+        // escaping symlink between the two. It returns the resolved path now.
+        //
+        // Observable proof: an in-root symlinked directory. Reading through it
+        // works either way (same bytes), so assert on the path the reader
+        // reports — FileNotFoundException.FileName carries it, and it must be
+        // the physical location, not the route taken to it.
+        var real = Path.Combine(_maildirRoot, "Real", "cur");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(Path.Combine(_maildirRoot, "Alias"), Path.Combine(_maildirRoot, "Real"));
+
+        // Present through the alias: the read succeeds (in-root, so allowed).
+        File.WriteAllText(Path.Combine(real, "there.eml"), Eml);
+        var present = new Message
+        {
+            Id = 20, MessageId = "alias@x", MaildirPath = "Alias/cur",
+            MaildirFilename = "there.eml", Folder = "INBOX", HasAttachments = true,
+        };
+        Encoding.UTF8.GetString(Reader().ReadBytes(present, 0, maxBytes: null)).ShouldContain("HELLO-BYTES");
+
+        // Absent through the alias: the reported path went through the symlink.
+        var missing = new Message
+        {
+            Id = 21, MessageId = "alias-gone@x", MaildirPath = "Alias/cur",
+            MaildirFilename = "gone.eml", Folder = "INBOX", HasAttachments = true,
+        };
+        var ex = Should.Throw<FileNotFoundException>(() => Reader().ReadBytes(missing, 0, maxBytes: null));
+        ex.FileName.ShouldNotBeNull();
+        ex.FileName!.ShouldContain($"Real{Path.DirectorySeparatorChar}cur");
+        ex.FileName.ShouldNotContain("Alias");
+    }
+
+    [Fact]
     public void Refuses_to_read_through_a_symlinked_directory_that_escapes_the_root()
     {
         // A secret dir OUTSIDE the Maildir root, reachable only via a symlink

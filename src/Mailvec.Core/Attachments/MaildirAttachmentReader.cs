@@ -123,13 +123,30 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
         return string.IsNullOrWhiteSpace(name) ? $"the attachment at partIndex {partIndex}" : $"'{Path.GetFileName(name)}'";
     }
 
-    private string ResolveMaildirFile(Message message)
+    private string ResolveMaildirFile(Message message) =>
+        ResolveWithinRoot(_maildirRoot, message.MaildirPath, message.MaildirFilename);
+
+    /// <summary>
+    /// The containment guard on its own: combine <paramref name="maildirRoot"/>
+    /// with a stored <c>maildir_path</c> / <c>maildir_filename</c> pair and
+    /// refuse to hand back anything outside the root. Does not check existence.
+    /// </summary>
+    /// <remarks>
+    /// Public and static because the guard has to be reachable from callers that
+    /// read the whole <c>.eml</c> rather than one part, and so can't go through
+    /// <see cref="Read"/> — the <c>mailvec extract-attachments</c> and
+    /// <c>backfill-inline-images</c> CLI backfills. Both used to build the path
+    /// with a bare <c>Path.Combine</c> and open it directly, which quietly
+    /// exempted them from the invariant stated below. Any new Maildir read must
+    /// come through here; a bare Path.Combine on those columns is the bug.
+    /// </remarks>
+    public static string ResolveWithinRoot(string maildirRoot, string maildirPath, string maildirFilename)
     {
         // maildir_path looks like "INBOX/cur" — relative to MaildirRoot, with
         // '/' separators that Path.Combine handles fine on macOS.
-        var relative = message.MaildirPath.Replace('/', Path.DirectorySeparatorChar);
-        var canonicalRoot = Path.GetFullPath(_maildirRoot);
-        var target = Path.GetFullPath(Path.Combine(canonicalRoot, relative, message.MaildirFilename));
+        var relative = maildirPath.Replace('/', Path.DirectorySeparatorChar);
+        var canonicalRoot = Path.GetFullPath(maildirRoot);
+        var target = Path.GetFullPath(Path.Combine(canonicalRoot, relative, maildirFilename));
 
         // Containment guard — the path is built from DB columns, which are only
         // ever written by the trusted indexer (via Path.GetRelativePath). This
@@ -154,7 +171,27 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
                 $"Refusing to read outside Maildir root (symlink-resolved). Target '{realTarget}' is not within '{realRoot}'.");
         }
 
-        return target;
+        // Hand back the RESOLVED path, not the lexical one — the caller opens
+        // whatever this returns, and returning `target` meant checking one path
+        // and opening another. An actor who can write into the Maildir between
+        // the check above and the caller's open could swap a directory
+        // component for a symlink escaping the root; opening realTarget means
+        // the open follows the chain that was actually verified.
+        //
+        // This NARROWS the race, it does not close it: a component of
+        // realTarget could still become a symlink before the open. Closing it
+        // properly needs openat/O_NOFOLLOW, which .NET doesn't expose. But the
+        // remaining move is "delete a real directory and replace it with a
+        // symlink mid-race" rather than "swap a leaf", which is far harder and
+        // far noisier. Under the current threat model (only mbsync and the
+        // indexer write here) neither is reachable; this is for the wider trust
+        // model the symlink check above already anticipates.
+        //
+        // Side effect worth knowing: paths in logs and in the
+        // FileNotFoundException below are now physically resolved, so a
+        // symlinked Maildir root (~/Mail -> a volume) reports the volume path.
+        // That is more accurate, but it is a visible change.
+        return realTarget;
     }
 
     private static bool IsWithin(string path, string root) =>

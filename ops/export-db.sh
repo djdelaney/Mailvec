@@ -148,18 +148,24 @@ SNAP_BYTES="$(stat -f%z "$OUT" 2>/dev/null || echo '?')"
 echo "  size=${SNAP_BYTES} bytes"
 
 if [[ -n "$TO" ]]; then
-  # scp does not preserve the local 0600 (no -p), so the remote copy lands at the
-  # destination umask. A world-readable, world-writable /tmp is the worst place
-  # for a full-PII archive to come to rest — warn loudly.
+  # -p is load-bearing, not a nicety: without it scp applies the REMOTE umask
+  # and the copy lands 0644 — a full, unencrypted copy of the entire mailbox
+  # readable by every local account on that host. -p carries the local 0600
+  # across with the timestamps. If the remote filesystem can't honour modes,
+  # scp says so and the warning below is the fallback.
   case "$TO" in
     *:/tmp/*|*:/tmp|*:/var/tmp/*|*:/var/tmp)
       echo "  WARN: '$TO' targets a world-readable temp dir. The snapshot is an" >&2
       echo "        unencrypted copy of all your mail — prefer a path under the" >&2
-      echo "        remote home dir and 'chmod 600' it there after import." >&2
+      echo "        remote home dir." >&2
       ;;
   esac
+  # Every remote destination gets this, not just temp dirs: the documented
+  # 'you@laptop' form is just as multi-user, and it used to get no warning at all.
+  echo "  NOTE: transferring an unencrypted full-mail copy to another machine." >&2
+  echo "        Confirm it landed 0600 there ('ls -l'), and delete it once imported." >&2
   echo "==> Transferring to $TO"
-  scp "$OUT" "$TO"
+  scp -p "$OUT" "$TO"
 fi
 
 echo

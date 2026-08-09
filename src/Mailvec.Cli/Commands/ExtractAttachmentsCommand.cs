@@ -203,6 +203,7 @@ internal static class ExtractAttachmentsCommand
         long attachmentsExtracted = 0;
         long messagesSkippedStale = 0;
         long messagesSkippedMissing = 0;
+        long messagesSkippedRefused = 0;
         var statusCounts = new Dictionary<string, long>(StringComparer.Ordinal);
 
         // Cursor pagination by messages.id (rowid-ordered). We don't OFFSET
@@ -222,7 +223,24 @@ internal static class ExtractAttachmentsCommand
                 cursor = msg.Id;
                 messagesProcessed++;
 
-                var maildirFile = Path.Combine(maildirRoot, msg.MaildirPath.Replace('/', Path.DirectorySeparatorChar), msg.MaildirFilename);
+                // Through the shared containment guard, not a bare Path.Combine:
+                // this read has to honour the same "never open anything outside
+                // the Maildir root" invariant as MaildirAttachmentReader, even
+                // though it wants the whole .eml rather than one part. Refusing
+                // is per-message, not fatal — a poisoned row must not abort a
+                // backfill that still has thousands of good messages to do.
+                string maildirFile;
+                try
+                {
+                    maildirFile = MaildirAttachmentReader.ResolveWithinRoot(maildirRoot, msg.MaildirPath, msg.MaildirFilename);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    err.WriteLine($"  msg {msg.Id}: refusing to read its recorded location ({ex.Message}); skipping.");
+                    messagesSkippedRefused++;
+                    continue;
+                }
+
                 if (!File.Exists(maildirFile))
                 {
                     // A missing source is STALE, not malformed — so it's
@@ -304,6 +322,17 @@ internal static class ExtractAttachmentsCommand
             @out.WriteLine(
                 $"Skipped {messagesSkippedMissing:N0} message(s) whose Maildir source was missing (most likely renamed and not yet " +
                 "rescanned); their attachments are untouched and will be picked up by a later run.");
+        }
+        if (messagesSkippedRefused > 0)
+        {
+            // Unlike the two counts above, this one will NOT clear on a re-run:
+            // the recorded location resolves outside the Maildir root, which
+            // means a bad maildir_path/maildir_filename in the database, not a
+            // transient filesystem state. Say so rather than implying patience
+            // fixes it.
+            @out.WriteLine(
+                $"REFUSED {messagesSkippedRefused:N0} message(s) whose recorded location resolves outside the Maildir root. " +
+                "This is a database problem, not a transient one — a re-run will refuse them again. Investigate before re-running.");
         }
         if (statusCounts.Count > 0)
         {

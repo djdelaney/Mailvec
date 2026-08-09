@@ -163,16 +163,21 @@ if [[ " ${SERVICES[*]} " == *" mcp "* ]]; then
     deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
     status=""
     body=""
+    # mktemp, not $$ — see the same spot in install.sh: a predictable name in a
+    # shared /tmp is pre-plantable as a symlink that `curl -o` will follow.
+    HEALTH_BODY="$(mktemp -t mailvec-redeploy-health)"
+    trap 'rm -f "$HEALTH_BODY"' EXIT
     while (( $(date +%s) < deadline )); do
-        response="$(curl -sS -o /tmp/mailvec-redeploy-health.$$ -w '%{http_code}' "$MCP_HEALTH_URL" 2>/dev/null || true)"
+        response="$(curl -sS -o "$HEALTH_BODY" -w '%{http_code}' "$MCP_HEALTH_URL" 2>/dev/null || true)"
         if [[ "$response" == "200" || "$response" == "503" ]]; then
             status="$response"
-            body="$(cat /tmp/mailvec-redeploy-health.$$ 2>/dev/null || true)"
+            body="$(cat "$HEALTH_BODY" 2>/dev/null || true)"
             break
         fi
         sleep 1
     done
-    rm -f /tmp/mailvec-redeploy-health.$$
+    rm -f "$HEALTH_BODY"
+    trap - EXIT
 
     case "$status" in
         200) echo "MCP healthy (HTTP 200)." ;;
