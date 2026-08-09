@@ -29,7 +29,22 @@ export DOTNET_ROOT="${DOTNET_ROOT:-/usr/local/share/dotnet}"
 export PATH="$DOTNET_ROOT:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LOG_DIR="${TMPDIR:-/tmp}"
+
+# The build log keeps a STABLE name on purpose — the failure path below tells
+# the developer to go read it — so mktemp is the wrong tool here, and the
+# trailing exec means a cleanup trap would never fire anyway. Harden the
+# directory instead of randomising the file: on macOS $TMPDIR is already a
+# per-user 0700 directory, but the bare /tmp fallback is shared and world-
+# writable, where a stable filename is pre-plantable as a symlink that the
+# build redirect below would follow and truncate. Give the fallback its own
+# owner-only directory so the name can stay predictable safely.
+if [[ -n "${TMPDIR:-}" ]]; then
+    LOG_DIR="$TMPDIR"
+else
+    LOG_DIR="/tmp/mailvec-$(id -u)"
+    mkdir -p "$LOG_DIR"
+    chmod 700 "$LOG_DIR"
+fi
 BUILD_LOG="$LOG_DIR/mailvec-mcp-stdio-build.log"
 
 cd "$REPO_ROOT"

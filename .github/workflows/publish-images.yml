@@ -87,7 +87,18 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_run" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             TAGS="$TAGS,${{ matrix.image }}:latest"
           fi
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          # Read the ref from the environment, never through an Actions
+          # expression: expressions are pasted into the script as text before
+          # bash parses it, and git ref names permit " ; | and command
+          # substitution (check-ref-format bans only control chars, space and
+          # ~^:?*[\). A crafted tag would therefore execute right here, in a job
+          # holding packages: write and a live GHCR login — the exact privilege
+          # the tag/<Version> gate above exists to police. Same reason
+          # GITHUB_REF_NAME is used for the tag value below. The two expressions
+          # left in this block, matrix.image and github.event_name, are
+          # workflow-controlled literals and can't carry attacker input.
+          # :- because set -u is on and the ref is absent for some event types.
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
             TAGS="$TAGS,${{ matrix.image }}:${GITHUB_REF_NAME}"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
