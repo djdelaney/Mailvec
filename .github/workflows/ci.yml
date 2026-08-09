@@ -31,6 +31,13 @@ on:
     branches: [main]
   pull_request:
 
+# Declared rather than inherited from the repo default, matching the other two
+# workflows. This job needs nothing but the checkout, and fork PRs already get
+# a read-only token — so this changes little today. It exists so the absence of
+# a block here can't read as "someone decided the default was needed".
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   # Cancel superseded runs on PR branches — only the tip matters there, and a

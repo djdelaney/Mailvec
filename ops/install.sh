@@ -484,16 +484,23 @@ echo "Waiting for MCP /health (up to ${HEALTH_TIMEOUT}s)..."
 deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
 status=""
 body=""
+# mktemp, not a $$-suffixed name: a PID-derived path in a shared /tmp is
+# predictable enough to pre-plant as a symlink, and `curl -o` follows it and
+# truncates the target as this user. Same reason fetch-sqlite-vec.sh and
+# build-mcpb.sh already use mktemp.
+HEALTH_BODY="$(mktemp -t mailvec-install-health)"
+trap 'rm -f "$HEALTH_BODY"' EXIT
 while (( $(date +%s) < deadline )); do
-    response="$(curl -sS -o /tmp/mailvec-install-health.$$ -w '%{http_code}' "$MCP_HEALTH_URL" 2>/dev/null || true)"
+    response="$(curl -sS -o "$HEALTH_BODY" -w '%{http_code}' "$MCP_HEALTH_URL" 2>/dev/null || true)"
     if [[ "$response" == "200" || "$response" == "503" ]]; then
         status="$response"
-        body="$(cat /tmp/mailvec-install-health.$$ 2>/dev/null || true)"
+        body="$(cat "$HEALTH_BODY" 2>/dev/null || true)"
         break
     fi
     sleep 1
 done
-rm -f /tmp/mailvec-install-health.$$
+rm -f "$HEALTH_BODY"
+trap - EXIT
 
 if [[ "$status" == "200" ]]; then
     echo "MCP healthy (HTTP 200)."

@@ -171,7 +171,27 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
                 $"Refusing to read outside Maildir root (symlink-resolved). Target '{realTarget}' is not within '{realRoot}'.");
         }
 
-        return target;
+        // Hand back the RESOLVED path, not the lexical one — the caller opens
+        // whatever this returns, and returning `target` meant checking one path
+        // and opening another. An actor who can write into the Maildir between
+        // the check above and the caller's open could swap a directory
+        // component for a symlink escaping the root; opening realTarget means
+        // the open follows the chain that was actually verified.
+        //
+        // This NARROWS the race, it does not close it: a component of
+        // realTarget could still become a symlink before the open. Closing it
+        // properly needs openat/O_NOFOLLOW, which .NET doesn't expose. But the
+        // remaining move is "delete a real directory and replace it with a
+        // symlink mid-race" rather than "swap a leaf", which is far harder and
+        // far noisier. Under the current threat model (only mbsync and the
+        // indexer write here) neither is reachable; this is for the wider trust
+        // model the symlink check above already anticipates.
+        //
+        // Side effect worth knowing: paths in logs and in the
+        // FileNotFoundException below are now physically resolved, so a
+        // symlinked Maildir root (~/Mail -> a volume) reports the volume path.
+        // That is more accurate, but it is a visible change.
+        return realTarget;
     }
 
     private static bool IsWithin(string path, string root) =>
