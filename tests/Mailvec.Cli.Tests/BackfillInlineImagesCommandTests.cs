@@ -101,6 +101,43 @@ public class BackfillInlineImagesCommandTests : IDisposable
     }
 
     [Fact]
+    public void A_recorded_location_outside_the_maildir_root_is_refused_not_read()
+    {
+        // Same invariant as the extract-attachments backfill: this command reads
+        // the whole .eml, so it can't go through MaildirAttachmentReader.Read,
+        // and it used to open a bare Path.Combine with no containment check. The
+        // planted file is real and parseable, so a File.Exists-only check would
+        // read it and add rows — only the guard stops this.
+        using var sp = BuildProvider();
+
+        var outside = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "secret.eml"),
+            "Message-ID: <esc@x>\nFrom: a@x\nTo: b@x\nSubject: s\nMIME-Version: 1.0\n" +
+            "Content-Type: multipart/related; boundary=\"rel\"\n\n" +
+            "--rel\nContent-Type: text/html; charset=utf-8\n\n<div><img src=\"cid:img1\"></div>\n" +
+            "--rel\nContent-Type: image/png; name=\"inline.png\"\n" +
+            "Content-Disposition: inline; filename=\"inline.png\"\nContent-Transfer-Encoding: base64\nContent-ID: <img1>\n\n" +
+            "SU1HREFUQQ==\n--rel--\n");
+
+        var repo = sp.GetRequiredService<MessageRepository>();
+        var parsed = new ParsedMessage(
+            MessageId: "esc@x", ThreadId: "esc@x", Subject: "s", FromAddress: "a@x", FromName: null,
+            ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
+            BodyHtml: "<div><img src=\"cid:img1\"></div>", RawHeaders: "Message-ID: <esc@x>\r\n",
+            SizeBytes: 100, ContentHash: "h-esc", Attachments: []);
+        long id = repo.Upsert(parsed, "INBOX", "../outside", "secret.eml", DateTimeOffset.UtcNow).Id;
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        BackfillInlineImagesCommand.Execute(sp, null, 100, false, null, writer, err).ShouldBe(0);
+
+        err.ToString().ShouldContain("refusing to read");
+        writer.ToString().ShouldContain("REFUSED 1");
+        repo.GetById(id)!.Attachments.ShouldBeEmpty(); // nothing was read, so nothing was added
+    }
+
+    [Fact]
     public void Dry_run_writes_no_rows()
     {
         using var sp = BuildProvider();

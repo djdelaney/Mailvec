@@ -459,6 +459,13 @@ with open(out_path, "w") as f:
     json.dump(doc, f, indent=2)
     f.write("\n")
 PY
+# Assert the 0644 the comment above claims, rather than inheriting the
+# install-time umask. Under umask 0 or 002 this file would be group/world-
+# WRITABLE — and it controls Archive:DatabasePath, Ingest:MaildirRoot and
+# Ollama:BaseUrl for every Mailvec binary on the machine. A writable
+# Ollama:BaseUrl points query embedding at another local account's host
+# (every search term leaks); a writable DatabasePath redirects the archive.
+chmod 644 "$SHARED_CONFIG"
 echo "Wrote shared config: $SHARED_CONFIG"
 
 # ---------------------------------------------------------------------------

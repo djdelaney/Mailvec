@@ -123,13 +123,30 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
         return string.IsNullOrWhiteSpace(name) ? $"the attachment at partIndex {partIndex}" : $"'{Path.GetFileName(name)}'";
     }
 
-    private string ResolveMaildirFile(Message message)
+    private string ResolveMaildirFile(Message message) =>
+        ResolveWithinRoot(_maildirRoot, message.MaildirPath, message.MaildirFilename);
+
+    /// <summary>
+    /// The containment guard on its own: combine <paramref name="maildirRoot"/>
+    /// with a stored <c>maildir_path</c> / <c>maildir_filename</c> pair and
+    /// refuse to hand back anything outside the root. Does not check existence.
+    /// </summary>
+    /// <remarks>
+    /// Public and static because the guard has to be reachable from callers that
+    /// read the whole <c>.eml</c> rather than one part, and so can't go through
+    /// <see cref="Read"/> — the <c>mailvec extract-attachments</c> and
+    /// <c>backfill-inline-images</c> CLI backfills. Both used to build the path
+    /// with a bare <c>Path.Combine</c> and open it directly, which quietly
+    /// exempted them from the invariant stated below. Any new Maildir read must
+    /// come through here; a bare Path.Combine on those columns is the bug.
+    /// </remarks>
+    public static string ResolveWithinRoot(string maildirRoot, string maildirPath, string maildirFilename)
     {
         // maildir_path looks like "INBOX/cur" — relative to MaildirRoot, with
         // '/' separators that Path.Combine handles fine on macOS.
-        var relative = message.MaildirPath.Replace('/', Path.DirectorySeparatorChar);
-        var canonicalRoot = Path.GetFullPath(_maildirRoot);
-        var target = Path.GetFullPath(Path.Combine(canonicalRoot, relative, message.MaildirFilename));
+        var relative = maildirPath.Replace('/', Path.DirectorySeparatorChar);
+        var canonicalRoot = Path.GetFullPath(maildirRoot);
+        var target = Path.GetFullPath(Path.Combine(canonicalRoot, relative, maildirFilename));
 
         // Containment guard — the path is built from DB columns, which are only
         // ever written by the trusted indexer (via Path.GetRelativePath). This
