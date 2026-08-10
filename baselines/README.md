@@ -23,13 +23,16 @@ Then make the change, re-run, compare:
 mailvec eval --baseline baselines/2026-05-08.json --timing
 ```
 
-## Why this matters before Phase 5
+## Why this matters more now, not less
 
-Phase 5 adds Gemini CLI / Codex CLI / ChatGPT desktop as MCP clients. Each
-new client multiplies the surface area where a tool-shape regression can hide.
-A committed baseline means changes that look like "just renaming a parameter"
-or "just tweaking a description" can be evaluated against ground truth before
-they ship.
+This section used to say "why this matters before Phase 5" — that phase was
+going to add Gemini CLI / Codex CLI / ChatGPT desktop as local clients, each one
+more surface area where a tool-shape regression could hide. Phase 5 was dropped
+(CHANGELOG, 2026-08-10), and the argument got *stronger* rather than moot: one
+hosted connector now serves every Claude surface simultaneously, so a change
+that looks like "just renaming a parameter" or "just tweaking a description"
+reaches all of them at once. A committed baseline is what lets that be evaluated
+against ground truth before it ships.
 
 ## Snapshot provenance (what the JSON doesn't record)
 

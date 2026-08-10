@@ -336,8 +336,11 @@ when triaging.
 ## Tuning
 
 - **Check interval: 60s.** Matches the workers' beat cadence; faster is wasted.
-  (mbsync beats every 600s but staleness scales with each service's own
-  `expectedIntervalSeconds`, so a 60s poll is fine for it too.)
+  (This once read "mbsync beats every 600s" — it never did after the beat moved
+  onto its own timer: every service in the stack, sidecar included, beats on the
+  same 60s cadence, and staleness scales with each service's own declared
+  `expectedIntervalSeconds`. mbsync's *sync* interval is a separate number,
+  reported through `mail.syncStale` rather than its beat.)
 - **Retries: 1–2 before alerting.**
 - **Deploy windows are self-quieting** with the `stale`-based monitors: a
   restarting worker reads `known:false, stale:false`, which does **not** trip a

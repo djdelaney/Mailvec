@@ -142,7 +142,7 @@ Operations and dev:
 
 Client wiring:
 
-- **[docs/clients/](docs/clients/)** — per-client setup: Claude Desktop and Claude Code today (Gemini CLI / Codex CLI / ChatGPT desktop are Phase 5 placeholders, not yet written)
+- **[docs/clients/](docs/clients/)** — per-client setup for a single-machine install: Claude Desktop and Claude Code. Any other MCP-capable client works too, via the stdio launcher or the HTTP URL; there are no per-provider integrations to write.
 - **[docs/attachments.md](docs/attachments.md)** — reading attachments three ways (`view_attachment` inline image/text, `get_attachment_text`, `get_attachment_page_image`)
 - **[docs/fastmail-deep-links.md](docs/fastmail-deep-links.md)** — optional `webmailUrl` field
 - **[docs/security.md](docs/security.md)** — threat model: what's exposed, what's accepted, what's out of scope
@@ -163,6 +163,6 @@ A **loopback-only, single-machine install is still fully supported** (`ops/insta
 
 ## Status
 
-End-to-end working. The author's deployment runs in Docker on a Proxmox homelab ([`docs/deploy-docker.md`](docs/deploy-docker.md)) with every Claude surface — Code, Desktop, iOS, claude.ai — reaching it through one OAuth-gated remote connector ([`docs/remote-access-cloudflare.md`](docs/remote-access-cloudflare.md)); the author's Mac is now a development machine only. Phase 5 (other local agents — Gemini CLI, Codex CLI, ChatGPT desktop) not yet started. See [CHANGELOG.md](CHANGELOG.md) for the phase-by-phase history.
+End-to-end working. The author's deployment runs in Docker on a Proxmox homelab ([`docs/deploy-docker.md`](docs/deploy-docker.md)) with every Claude surface — Code, Desktop, iOS, claude.ai — reaching it through one OAuth-gated remote connector ([`docs/remote-access-cloudflare.md`](docs/remote-access-cloudflare.md)); the author's Mac is now a development machine only. Phase 5 (per-provider local agent integrations) was dropped — one OAuth-gated endpoint serves any MCP-capable client, so there is nothing per-provider left to build; see [CHANGELOG.md](CHANGELOG.md) for that decision and the phase-by-phase history.
 
 **The macOS install below is fully supported and is the right starting point if you want Mailvec on one machine** — the launchd services and the Claude Desktop MCPB bundle both still build and work. It's simply no longer what the author runs, so the Docker path is where deployment issues get found first.

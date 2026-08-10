@@ -148,16 +148,17 @@ behind config and the negative result recorded in
 `baselines/subset-ocr/README.md`). No release cut — the v11 migration
 makes the eventual one a minor bump.
 
-## ⬜ Phase 5 — Support for non-Claude local agents
+## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
-Mailvec works end-to-end with every Claude surface via the remote connector; the local transports (MCPB stdio, loopback HTTP) still ship for single-machine installs. Phase 5 extends those two local transports to other locally-running MCP-capable agents — no protocol changes, just per-client config and quirk capture (the equivalent of the Claude Desktop sanitized-env / TCC-block findings in CLAUDE.md):
+Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
 
-- **Gemini CLI** via `~/.gemini/settings.json` `mcpServers`.
-- **Codex CLI** via `~/.codex/config.toml` `[mcp_servers.mailvec]`.
-- **ChatGPT desktop** once its MCP-server registration ships in the user's release.
-- Per-client config snippets checked into `docs/clients/`, exercised in an integration tier during release prep.
+**Dropped because the hosted server made it the wrong shape of answer.** Phase 5 was designed when reaching Mailvec meant a local process on the same machine, so every new agent needed its own launcher path, its own sanitized-env and PATH quirks, and its own doc. The container behind the Cloudflare tunnel serves one OAuth-gated HTTP endpoint that any MCP-capable client can be pointed at, so per-provider local integration buys nothing a URL doesn't already give. The local transports (MCPB stdio, loopback HTTP) still ship and still work for single-machine installs; they are simply no longer the growth path.
 
-Cross-vendor *cloud* access (ChatGPT Connectors, Gemini in the browser) stays parked in [`docs/future-ideas.md`](docs/future-ideas.md) — but the reason has changed. The tunnel + OAuth front now exist and are vendor-agnostic; the blocker is that nothing scopes access per-client, so a second vendor's connector would get the same unscoped read of the entire mailbox.
+What this does **not** retire:
+
+- **The MCP wire contract.** It got stricter, not looser — the connector serves every Claude surface at once, so a tool or field rename breaks all of them simultaneously. Enforcement is unchanged in [`src/Mailvec.Mcp/CLAUDE.md`](src/Mailvec.Mcp/CLAUDE.md) + `McpSurfaceTests`.
+- **Cross-vendor *cloud* access** (ChatGPT Connectors, Gemini in the browser), which stays parked in [`docs/future-ideas.md`](docs/future-ideas.md) for a different reason: the tunnel and OAuth front are vendor-agnostic and already built, but nothing scopes access per-client, so a second vendor's connector would get the same unscoped read of the entire mailbox.
+- **`ops/install-stdio-launcher.sh`**, which remains the supported way to point *any* local stdio client at a single-machine install.
 
 ## Out of scope
 

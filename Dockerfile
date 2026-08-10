@@ -65,9 +65,13 @@ RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 # skip-while-running behaviour means those had some other cause, and replacing
 # a measurement with an inference is how a runbook goes quietly wrong.)
 #
-# So 600s is a load choice against the IMAP provider, not a safety floor. A
-# shorter interval is a supportable change — see docs/future-ideas.md's
-# one-minute polling rollout for the canary that would justify it.
+# So the interval is a load choice against the IMAP provider, not a safety
+# floor. The default was 600s until the author's deployment ran a 60s canary
+# and it was promoted; the macOS launchd plist deliberately stayed at 600s,
+# because its comment records a dated measurement from a path this deployment
+# no longer exercises. Raise it if your provider throttles — and note the real
+# cost of a short interval is unbatched indexer scans contending for SQLite's
+# single writer, not the syncs themselves (see .env.example).
 #
 # This runs as PID 1, which gets no default SIGTERM handler — without the
 # trap, every `docker stop` burned the full grace period and SIGKILLed the
@@ -78,7 +82,7 @@ RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 # completes — a foreground sleep would defer the stop by up to the full
 # interval.
 set -u
-: "${MBSYNC_INTERVAL_SECONDS:=600}"
+: "${MBSYNC_INTERVAL_SECONDS:=60}"
 : "${MBSYNC_MAILDIR:=/mail/Fastmail}"
 mkdir -p "${MBSYNC_MAILDIR}"
 
@@ -104,10 +108,10 @@ if [ "${MBSYNC_INTERVAL_SECONDS}" -lt 1 ]; then
     echo "mbsync: MBSYNC_INTERVAL_SECONDS must be at least 1, got '${MBSYNC_INTERVAL_SECONDS}'." >&2
     exit 1
 fi
-# Warn rather than refuse below 60. The interval is a load choice against the
-# IMAP provider, not a safety floor — the loop cannot overlap itself at any
-# value — so a hard minimum would block legitimate experimentation that
-# docs/future-ideas.md explicitly contemplates. Loud, but not fatal.
+# Warn rather than refuse below 60 (the shipped default). The interval is a
+# load choice against the IMAP provider, not a safety floor — the loop cannot
+# overlap itself at any value — so a hard minimum would block legitimate
+# experimentation below the default. Loud, but not fatal.
 if [ "${MBSYNC_INTERVAL_SECONDS}" -lt 60 ]; then
     echo "mbsync: MBSYNC_INTERVAL_SECONDS=${MBSYNC_INTERVAL_SECONDS} is below 60s; this is a load choice against your IMAP provider, watch for throttling." >&2
 fi

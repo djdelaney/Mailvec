@@ -12,7 +12,9 @@ The Anthropic / Google / OpenAI cloud clients (Claude.ai web app, Gemini in the 
 
 **The Anthropic slice of this shipped.** Cloudflare Tunnel + Access Managed OAuth is live and serves every Claude surface — see [remote-access-cloudflare.md](remote-access-cloudflare.md) for the as-built wiring. So (1) and (2) above are solved *generically*: the tunnel and the OAuth front are vendor-agnostic infrastructure that a ChatGPT or Gemini connector could register against too.
 
-**The cross-vendor part is still deferred, and the reason has changed.** It's no longer operational cost — that's a sunk cost now. It's (3): there is still no per-tool or per-client authorization. Today's model is "one identity, all seven tools, the whole mailbox." Adding a second vendor's connector means handing a second cloud that same unscoped access, and the Access policy has no way to say "this client gets `search_emails` but not `view_attachment`." That's a real design problem (Access service tokens per client? per-tool scopes at the origin?), not a config toggle — and it's the same hardening [security.md](security.md) parks under Phase 5. Un-defer when there's an actual reason to want a non-Claude cloud client, and expect to solve scoping first.
+**The cross-vendor part is still deferred, and the reason has changed.** It's no longer operational cost — that's a sunk cost now. It's (3): there is still no per-tool or per-client authorization. Today's model is "one identity, all seven tools, the whole mailbox." Adding a second vendor's connector means handing a second cloud that same unscoped access, and the Access policy has no way to say "this client gets `search_emails` but not `view_attachment`." That's a real design problem (Access service tokens per client? per-tool scopes at the origin?), not a config toggle — and it's the same per-client scoping [security.md](security.md) parks under "More local clients don't change the threat model". Un-defer when there's an actual reason to want a non-Claude cloud client, and expect to solve scoping first.
+
+Note this is the *only* surviving cross-vendor item: the local-agent half (per-provider stdio/HTTP config for Gemini CLI, Codex CLI, ChatGPT desktop) was dropped outright in 2026-08-10, because one OAuth-gated endpoint already serves any MCP-capable client and per-provider wiring bought nothing a URL doesn't. Cloud access is a different question — it's blocked on authorization, not on plumbing.
 
 ## ~~Tailnet-only access from another personal machine~~ (obsolete)
 
@@ -138,174 +140,41 @@ separate problems, one trigger:
    when the trigger arrives; still needs re-processing affected messages and
    a re-baseline.
 
-## Faster mail arrival via one-minute polling
+## Faster mail arrival: one-minute polling (shipped)
 
-**The problem.** New mail becomes searchable somewhere between instantly and
-~10 minutes after it arrives, and the spread is almost entirely one term. The
-chain is: mbsync pulls it (`MBSYNC_INTERVAL_SECONDS`, **600s**) → the indexer's
-`MaildirWatcher` sees the new file (500ms debounce, effectively immediate) →
-the embedder picks it up (30s idle poll). Keyword search is ready during the
-indexer pass; semantic search follows after the embedder pass. Everything after
-mbsync is already fast enough that the ten-minute IMAP poll dominates normal
-steady-state delivery.
+**Kept here only so the reasoning that made it safe isn't re-derived.**
+`MBSYNC_INTERVAL_SECONDS` now defaults to **60** in `compose.yml`,
+`.env.example` and the Dockerfile, promoted after running at that cadence on
+the author's deployment. The load-bearing parts moved to the code they govern:
+the Dockerfile comment explains why the loop cannot overlap its own runs (the
+interval is a delay *after* completion, not an independent timer, so a backlog
+pull never queues anything behind it), `.env.example` explains what a shorter
+interval actually costs, and CLAUDE.md's heartbeat section records the
+prerequisite — the beat runs on its own 60s timer, because beating only on sync
+completion would report a *busy* sidecar as dead during exactly the long
+backlog pulls an operator most wants to watch. **Do not re-couple the beat
+cadence to the sync cadence**; that is the bug the prerequisite removed.
 
-**The key finding.** The current Linux sidecar cannot overlap its own mbsync
-runs. `mbsync-loop` starts `mbsync -a`, waits for that exact child to finish,
-and only then sleeps for `MBSYNC_INTERVAL_SECONDS`. (It used to write the
-heartbeat between those two steps; that moved to its own timer — see the
-prerequisite below.) The
-interval is therefore a delay *after completion*, not an independent timer. If
-a backlog pull takes 12 minutes, no one-minute run starts behind it; the next
-run starts one minute after the backlog completes. This differs from the old
-rationale copied into the Dockerfile and launchd plist, which says a short
-schedule collides with an in-flight run. A genuinely separate invocation can
-still contend for `.mbsyncstate`, but the production Compose stack declares
-one mbsync service and no request-time sync path.
+The macOS launchd plist deliberately stayed at 600s. Its comment records a
+dated observation of `.mbsyncstate` lock failures at 300s, on a path this
+deployment no longer exercises, and launchd's `StartInterval` is a genuinely
+independent timer rather than a sleep-after-completion — so the container's
+result does not transfer. Re-measure on a live macOS install before changing
+it; overwriting a measurement with an inference is how a runbook goes quietly
+wrong.
 
-**Verified 2026-08-04, and the Dockerfile comment has been corrected** to state
-that the loop cannot self-overlap and that 600s is a load choice rather than a
-safety floor. **The launchd plist comment was deliberately left alone**: it
-records a dated observation (92% of runs succeeding at 300s, 8% failing with
-`channel is locked`), and launchd's own skip-while-running behaviour says those
-failures had some other cause. Overwriting a measurement with an inference is
-how a runbook goes quietly wrong — re-measure on a live macOS install before
-rewriting it, and note that path is not exercised by the author's deployment.
-
-**First move: one minute.** Set the deployment's
-`MBSYNC_INTERVAL_SECONDS=60` and recreate only the mbsync sidecar. Do not change
-the image default in the same step: a deployment override makes the first move
-easy to reverse and separates "does this cadence work on the real account?"
-from "should this become the product default?" The effective start-to-start
-cadence is `sync duration + 60s`; for the normal incremental case that should
-put most new mail on disk within roughly a minute rather than ten.
-
-### Prerequisite: the heartbeat fix (done 2026-08-04)
-
-This was a **blocker**, not a follow-up, and shipping the interval change without
-it would have failed the canary's own acceptance criteria.
-
-`MbsyncHeartbeatFile` feeds the beat file's declared interval into
-`ServiceHeartbeat.Classify`, which marks a service stale at
-`StaleAfterMissedBeats` (3) x that value. The sidecar used to beat **only after
-`mbsync -a` returned**, and to declare `MBSYNC_INTERVAL_SECONDS` as the cadence.
-At 600s that gave a 30-minute window, comfortably wider than the 12-minute
-backlog pull above — so the flaw was invisible. At 60s the window becomes 180
-seconds, and **any sync longer than three minutes would report a busy sidecar as
-dead** on `/health` and `mailvec doctor`, during precisely the long pulls an
-operator most wants to watch.
-
-This is the failure CLAUDE.md already documents for the .NET services ("the
-liveness beat must never be emitted from the work loop"). The tempting patch —
-raising `StaleAfterMissedBeats` — is the wrong one: that constant is shared with
-the indexer and embedder, so it would degrade dead-worker detection everywhere
-to paper over one sidecar.
-
-The sidecar now beats on its own timer for the life of the container, mirroring
-`HeartbeatService`, and the beat file's second line declares that **beat**
-cadence (a 60s constant) rather than the sync interval. Verified against a stub
-`mbsync` sleeping 6s at a 1s beat cadence: the old logic wrote nothing for the
-whole sync, the new one beats every second through it. One beater for the whole
-run rather than one per cycle, because a per-cycle beater must be killed each
-time, which orphans its in-flight `sleep` onto PID 1 and leaks a zombie per sync
-(1,440/day at the proposed cadence).
-
-**Do not re-couple the beat cadence to the sync cadence.** They are unrelated
-now, and joining them reintroduces the bug this removed.
-
-### Rollout plan
-
-1. **Capture the before window.** Retain at least 24 hours of timestamped mbsync
-   and indexer container logs at the 600-second cadence. Record ordinary sync
-   duration, failures, `channel is locked` occurrences, and the delay observed
-   for a few uniquely identifiable test messages between receipt, mbsync
-   completion, and the indexer's next completed scan. This is an observed,
-   dated deployment measurement, not a value to copy into this document as a
-   permanent fact.
-2. **Apply only the interval override.** Set `MBSYNC_INTERVAL_SECONDS=60` in the
-   deploy host's `.env`, then recreate the mbsync service. Leave the indexer,
-   embedder, Maildir layout, mbsync configuration, and folder patterns
-   unchanged.
-
-   **Do not verify this from the heartbeat file.** An earlier draft of this step
-   said to confirm its second line becomes `60`. That line is now the *beat*
-   cadence — a 60s constant, unrelated to the sync interval — so it reads `60`
-   whether or not the override took effect, and the check would confirm the
-   change vacuously. Verify from the sidecar's own log instead: successive
-   `mbsync -a` start timestamps should sit about `sync duration + 60s` apart.
-3. **Run a 48-hour canary.** Include both quiet periods and normal working-day
-   traffic. Send several uniquely identifiable messages at different points in
-   the minute. Verify that Maildir delivery wakes the indexer and that keyword
-   search sees each message on the following scan. Semantic availability is a
-   separate downstream measurement because the embedder may add up to its
-   30-second idle poll.
-4. **Review load and correctness together.** Compare mbsync failures, sync
-   duration, IMAP authentication/rate-limit errors, sidecar CPU/network use,
-   indexer scan duration, and parse failures with the before window. Pay special
-   attention to `channel is locked`: the current loop rules out self-overlap,
-   so any occurrence points to another invoker, an interrupted prior run, or a
-   stale lock that should be diagnosed rather than "fixed" by restoring ten
-   minutes automatically.
-
-   **Measure indexer write volume, not just scan duration** — scan duration
-   alone will miss the real cost here. Scans are watcher-driven, so a shorter
-   sync cadence does not add scans directly, it *unbatches* them: the same day's
-   mail arrives across roughly 10x as many scans. And a scan's dominant cost is
-   independent of how much new mail it carries, because `MaildirScanner`'s mtime
-   fast path calls `syncState.Upsert` for **every file it walks** (80,559 rows,
-   observed 2026-08-04) — a scan carrying one new message costs nearly what one
-   carrying two hundred does. Expect total writer-lock occupancy to rise close to
-   10x while per-scan duration looks flat. That lock is the single SQLite writer,
-   contending under `BEGIN IMMEDIATE` with the embedder's guarded chunk writes
-   and the OCR write-back, so watch embedder `SQLITE_BUSY` retries and OCR
-   throughput alongside the indexer's own numbers.
-5. **Promote or roll back.** Keep 60 seconds if the canary is clean and normal
-   mail is consistently keyword-searchable within about 90 seconds of server
-   receipt (one poll plus ordinary sync/index time). Restore 600 seconds by
-   reverting the single `.env` value if error rate, provider throttling, or
-   resource use moves materially. Rollback changes no synchronization state and
-   requires no database work.
-6. **Only then change repository defaults and docs.** If the production result
-   is good, change the Compose default, Dockerfile commentary, launchd template,
-   IMAP setup guide, `docs/monitoring-uptime-kuma.md`, and this section together so the shipped configuration no longer preserves the
-   superseded overlap rationale. The monitoring runbook is on that list because
-   the heartbeat fix already moved mbsync's staleness window from 30 minutes to
-   3, so a dead sidecar shows up roughly ten times faster.
-   **That does not change when Kuma pages**, and an earlier draft of this line
-   wrongly said it did: liveness never flips `/health`'s 503 — degraded is
-   Ollama-unreachable, embedding-model-mismatch, or embedder-stuck only, and
-   liveness rides along in `Services` for clients to render. What changes is the
-   payload an operator reads, and any monitor keyed on its content rather than
-   on HTTP status. Verify what the monitors actually poll before writing
-   anything down — that runbook has been wrong about live state before.
-
-   Keep platform behaviour explicit while you are in there: the Linux loop waits
-   then sleeps, so its cadence is `sync duration + interval`; macOS launchd
-   misses an interval firing while its job is already running.
-
-### Acceptance criteria
-
-- No concurrent mbsync processes are created by the sidecar.
-- No increase in `channel is locked`, authentication, TLS, or provider
-  throttling failures compared with the dated before window.
-- Ordinary incremental syncs finish reliably; a large backlog merely extends
-  the current cycle and never queues a pile of one-minute invocations.
-- Under normal caught-up conditions, test mail is keyword-searchable within
-  about 90 seconds of server receipt. Outliers caused by an active backlog are
-  reported separately rather than folded into the steady-state number.
-- The mbsync heartbeat remains known and non-stale **throughout a long backlog
-  pull**, not merely between syncs. This is now a genuine test of the beat's
-  independence rather than a restatement of the interval: the beat runs on its
-  own 60s timer, so a sync of any duration must not move the sidecar to stale.
-  A stale reading during a healthy sync means the beat has been re-coupled to
-  the work loop — see the prerequisite above.
-- The indexer's event-driven scans continue to fire after Maildir writes.
-
-**Possible follow-up, only if one-minute full sync is too expensive.** Keep one
-serialized runner but check INBOX every minute and retain a less frequent
-full-account `mbsync -a` pass for labels, server-side filing, moves, deletions,
-and flags. That is more machinery and changes freshness semantics outside
-INBOX, so it is a fallback to a measured cost problem, not part of the first
-rollout.
+**Still deferred: going below a minute by splitting the sync.** Keep one
+serialized runner, poll INBOX on a tight loop, and retain a less frequent
+full-account `mbsync -a` for labels, server-side filing, moves, deletions and
+flags. More machinery, and it changes freshness semantics outside INBOX, so
+it's a fallback to a *measured* cost problem rather than a next step. The two
+costs that would trigger it: provider throttling, or SQLite writer-lock
+contention from unbatched indexer scans — scans are watcher-driven, so a
+shorter cadence doesn't add them, it spreads the same mail across ~10x as many,
+and a scan's dominant cost is independent of how much new mail it carries
+(`MaildirScanner`'s mtime fast path touches `sync_state` for every file it
+walks). Watch embedder `SQLITE_BUSY` retries and OCR throughput, not scan
+duration.
 
 ## Still open (small)
 

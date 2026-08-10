@@ -46,9 +46,15 @@ Boots launchd agents for the indexer / embedder / mbsync / MCP HTTP server. The 
 | --- | --- | --- | --- |
 | Claude Desktop | stdio | ✅ supported | [`claude-desktop.md`](claude-desktop.md) — install via MCPB bundle (`ops/build-mcpb.sh`), not the stdio launcher |
 | Claude Code | HTTP | ✅ supported | [`claude-code.md`](claude-code.md) — points at `http://127.0.0.1:3333` |
-| Gemini CLI | stdio | ⬜ Phase 5 | _todo_ — `~/.gemini/settings.json` `mcpServers` block |
-| Codex CLI | stdio | ⬜ Phase 5 | _todo_ — `~/.codex/config.toml` `[mcp_servers.mailvec]` |
-| ChatGPT desktop | stdio | ⬜ Phase 5 | _todo_ — pending the in-app MCP-server registration UI |
+| Any other MCP client | stdio or HTTP | ⚪ no snippet planned | Point it at `~/.local/bin/mailvec-mcp-stdio` or `http://127.0.0.1:3333` — see below |
+
+Gemini CLI / Codex CLI / ChatGPT desktop rows lived here as Phase 5 placeholders
+and were removed with that phase (CHANGELOG, 2026-08-10). Nothing about them was
+blocked: they need no protocol work, and the stdio launcher plus the HTTP URL
+already cover them. Writing a per-provider page per client is the part that
+stopped earning its keep once one OAuth-gated endpoint served every client. The
+authoring guide below is still here for anyone who hits a client-specific
+spawning quirk worth recording.
 
 ## Authoring a new client snippet
 
