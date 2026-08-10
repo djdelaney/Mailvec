@@ -54,10 +54,16 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   to start any service against a missing/empty archive. Set `0` only for a
   deliberate from-scratch rebuild. `docker exec` bypasses the entrypoint, so
   CLI commands still work against whatever state exists.
-- **mbsync sidecar** (Dockerfile stage `mbsync`): Alpine + isync on a 600 s
-  interval loop, replacing the `com.mailvec.mbsync` launchd job (same default
-  cadence, same `.mbsyncstate` state-file locking rationale — see the plist
-  comment). Upstream uses `fcntl` record locks, not `flock(2)`; the distinction
+- **mbsync sidecar** (Dockerfile stage `mbsync`): Alpine + isync on a 60 s
+  interval loop (`MBSYNC_INTERVAL_SECONDS`), replacing the
+  `com.mailvec.mbsync` launchd job. **The two cadences deliberately differ**:
+  the container loop sleeps *after* each sync completes and so cannot overlap
+  itself at any interval, while the launchd job's `StartInterval` is an
+  independent timer whose comment records a dated observation of
+  `.mbsyncstate` lock failures at 300 s. That plist stays at 600 s until
+  someone re-measures on a live macOS install — see the Dockerfile comment for
+  why the inherited "a short schedule collides with an in-flight run"
+  rationale does not describe this loop. Upstream uses `fcntl` record locks, not `flock(2)`; the distinction
   matters because those release when the process dies, so a leftover lock
   *filename* is not a held lock and should not be deleted by hand. Config is a
   bind-mounted `mbsyncrc` ([ops/mbsyncrc.container.example](../ops/mbsyncrc.container.example));

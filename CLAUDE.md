@@ -232,4 +232,4 @@ End-to-end working. **The author's deployment is the Docker stack on a Proxmox h
 
 The macOS launchd install and the MCPB bundle both still build and are supported for anyone wanting a local single-machine setup — that support is what the paragraph above is protecting, not contradicting; it just isn't exercised by installing them *on this machine*.
 
-Read [`docs/deploy-docker.md`](docs/deploy-docker.md) + [`docs/remote-access-cloudflare.md`](docs/remote-access-cloudflare.md) before assuming a change only has to work on macOS. Phase 5 (other local agents) not yet started. See [`CHANGELOG.md`](CHANGELOG.md) for the phase-by-phase build history.
+Read [`docs/deploy-docker.md`](docs/deploy-docker.md) + [`docs/remote-access-cloudflare.md`](docs/remote-access-cloudflare.md) before assuming a change only has to work on macOS. Phase 5 (per-provider local agent integrations) was dropped 2026-08-10 — the hosted endpoint serves any MCP-capable client, so there is nothing per-provider to build; the wire contract it was going to lock is locked anyway, and harder. See [`CHANGELOG.md`](CHANGELOG.md) for the phase-by-phase build history.

@@ -561,7 +561,7 @@ These are explicit decisions, not oversights:
 
   **You often don't need it.** The always-on `mcp-tool` line carries tool name, latency, and (where meaningful) result count and search mode — enough for "was that slow, and did it return anything?" without any PII. Reach for `LogToolCalls` only when you specifically need the content.
 - **Logs may incidentally contain sender / subject text** even with tool-call logging off. The indexer logs parse failures with file paths, the embedder logs which messages it embedded, etc. None of these include body content, but they aren't sanitized either. Treat the log directory as confidential.
-- **`~/Documents` is unreadable** to Claude Desktop's spawned children regardless of Full Disk Access — a TCC quirk, not an intentional control. Don't rely on it as a security boundary; it's a `com.apple.macl` ACL that a different client (e.g. Phase 5 stdio) might or might not be subject to.
+- **`~/Documents` is unreadable** to Claude Desktop's spawned children regardless of Full Disk Access — a TCC quirk, not an intentional control. Don't rely on it as a security boundary; it's a `com.apple.macl` ACL that a different stdio client might or might not be subject to.
 
 ## What's out of scope
 
@@ -586,10 +586,10 @@ These are explicit decisions, not oversights:
 > what it would take and when to un-defer, in
 > [future-ideas.md → Adversarial testing of the prompt-injection framing](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing).
 
-## Phase 5 doesn't change the threat model
+## More local clients don't change the threat model
 
-Adding Gemini CLI / Codex CLI / ChatGPT desktop as MCP clients multiplies the *number of trusted callers* but not the *trust boundary*. Each such client either clears the same Access gate as any other remote caller, or — if pointed at a local dev instance — runs as the user against the frozen dev corpus, not the live archive. Either way it lands inside an existing boundary rather than opening a new one.
+Pointing another MCP-capable client at Mailvec multiplies the *number of trusted callers* but not the *trust boundary*. Each such client either clears the same Access gate as any other remote caller, or — if pointed at a local install — runs as the user against a database they can already read directly. Either way it lands inside an existing boundary rather than opening a new one. This was written when a "Phase 5" was going to add Gemini CLI / Codex CLI / ChatGPT desktop as local clients; that phase was dropped (CHANGELOG, 2026-08-10) because the hosted endpoint made per-provider wiring unnecessary, but the reasoning is what matters and it is unchanged.
 
 What *would* change the model is per-client differentiation: moving from "one identity, all tools" to per-client scopes (Access service tokens per client, per-tool authorization, MCP token issuance). That's a much bigger lift and stays parked in [Future ideas](future-ideas.md) — note it's also the prerequisite for the cross-vendor path, since a ChatGPT or Gemini connector means handing a *second vendor's cloud* the same unscoped access to the whole mailbox that Anthropic's has today.
 
-The only thing Phase 5 introduces near-term is more places where `LogToolCalls=on` is tempting (capturing real usage from each client during quirk-debugging). Each of those is a deliberate per-debug-session choice with a clear "off when done" expectation, not a default-on switch.
+The near-term risk more clients introduce is more places where `LogToolCalls=on` is tempting (capturing real usage while debugging a client-specific quirk). Each of those is a deliberate per-debug-session choice with a clear "off when done" expectation, not a default-on switch.

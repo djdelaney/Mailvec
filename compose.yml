@@ -400,6 +400,12 @@ services:
     # mail pipeline for a hardening win on the one service here that does NOT
     # parse attachments. Enable it after a real sync against live credentials,
     # not before.
+    # Same bound as the .NET services, but NOT the same meaning: mbsync is the
+    # one service with no Serilog rolling file behind it, so this IS its archive
+    # of record rather than a duplicate. The 60s default writes roughly ten
+    # times the lines the old 600s one did, so the same 50 MB covers about a
+    # tenth of the wall-clock history — raise max-file here if you need to look
+    # further back than the last few days of syncs.
     logging: *mailvec-logging
     image: ${MAILVEC_MBSYNC_IMAGE:-mailvec-mbsync:local}
     build:
@@ -417,7 +423,7 @@ services:
     # The sh loop, one mbsync child, one sleep — single digits in practice.
     pids_limit: 128
     environment:
-      MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-600}
+      MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-60}
       # Liveness beat (read by mcp's /health via MbsyncHeartbeatFile) lands at
       # dirname(MBSYNC_MAILDIR)/.mailvec-mbsync-heartbeat. MBSYNC_MAILDIR
       # defaults to /mail/Fastmail (Dockerfile), so the beat is /mail/... and

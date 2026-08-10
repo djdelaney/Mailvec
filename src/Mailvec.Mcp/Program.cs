@@ -345,14 +345,15 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
 }
 
 // Surfaced to clients in the `initialize` response as `serverInfo`. The `name`
-// is the protocol identifier (lowercase, stable — Phase 5 clients key off it
-// in their config blocks); the `title` is the human-readable label some
+// is the protocol identifier (lowercase, stable — client config blocks and the
+// remote connector registration key off it); the `title` is the human-readable label some
 // clients show in connector pickers; the `version` is read from the assembly
 // (Mailvec.Mcp.csproj <Version>, kept in sync with manifest.json by
 // ops/build-mcpb.sh --bump).
 //
-// Why this matters: once Gemini CLI / Codex CLI / ChatGPT desktop start
-// pointing at this server (Phase 5), being able to call `initialize` and see
+// Why this matters: with several client surfaces pointing at one server
+// (Claude Code, Desktop, iOS and claude.ai all reach the same connector, and
+// any other MCP client can be pointed here), being able to call `initialize` and see
 // "I'm talking to mailvec 0.1.15" is the cheapest possible diagnostic when a
 // tool call returns something unexpected ("did the user upgrade? am I on the
 // build that has the new field?"). Without this, the server name defaults to
