@@ -38,6 +38,7 @@ Operator/release/contributor docs (read on demand):
 - `docs/contributing/local-dev-dataset.md` — post-Docker-migration local dev: the frozen-corpus strategy, agent teardown (`install.sh --uninstall`, not `stop.sh`), corpus refresh, and eval curation from VM logs.
 - `docs/contributing/mcpb.md` — `manifest.json` quirks + tool-shape rules that break the Claude Desktop install.
 - `docs/contributing/embedding-experiments.md` — A/B-testing embedding models / chunk sizes against a parallel DB copy with `mailvec switch-model` + env-var overrides; read before changing the embedding model.
+- `docs/contributing/cloud-smoke-tests.md` — `tests/Mailvec.CloudSmoke.Tests`, the live weekly check that the hosted Fireworks/mistral-ocr paths still work (deliberately excluded from `Mailvec.slnx`); read before touching `OpenAiCompatibleTransport`, `MistralOcrClient`, or `.github/workflows/cloud-smoke.yml`.
 
 ## Common commands
 

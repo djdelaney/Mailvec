@@ -1,0 +1,89 @@
+# Live smoke test for the HOSTED embedding/OCR paths (Fireworks-style
+# OpenAI-compatible embeddings, mistral-ocr) — see
+# docs/contributing/cloud-smoke-tests.md.
+#
+# This deployment runs Ollama only, so nothing in day-to-day use ever
+# exercises the hosted provider code (OpenAiCompatibleTransport,
+# MistralOcrClient). ci.yml's unit tests cover Mailvec's own parsing of
+# those providers' response shapes, but only against hand-authored stub
+# fixtures — never a real call. This workflow is the check that the real
+# APIs still match what those fixtures assume.
+#
+# Deliberately NOT a pull_request trigger: this is a public repo, so a
+# fork-triggered PR build has no access to repository secrets anyway, and
+# keeping real (billed, occasionally flaky) API calls off every PR is the
+# right default regardless. schedule + workflow_dispatch instead — weekly is
+# enough to catch drift in a reasonable window, and workflow_dispatch lets
+# this run on demand (e.g. by hand before `ops/release.sh`).
+#
+# tests/Mailvec.CloudSmoke.Tests is deliberately NOT part of Mailvec.slnx, so
+# it is invoked here by explicit path and never runs as a side effect of the
+# normal `dotnet build`/`dotnet test` ci.yml (or any local dev workflow)
+# already does.
+
+name: Cloud smoke
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-smoke-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  cloud-smoke:
+    name: Live Fireworks + Mistral smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-cloudsmoke-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', 'tests/Mailvec.CloudSmoke.Tests/*.csproj') }}
+          restore-keys: nuget-cloudsmoke-${{ runner.os }}-
+
+      # No fetch-sqlite-vec.sh step here, unlike ci.yml: these tests are pure
+      # HTTP calls against IEmbeddingService / IVisionClient — no DB, no
+      # sqlite-vec, no PDF rendering involved.
+      - name: Run live smoke tests
+        run: dotnet test tests/Mailvec.CloudSmoke.Tests --logger "console;verbosity=normal"
+        env:
+          # --- Fireworks-style hosted embedding profile ---
+          # Non-secret identity/config; the key is supplied separately below.
+          # TODO(dan): confirm these against the actual endpoint/model/dims
+          # used for the 2026-06 embedding A/B and the phase-6 sentinel
+          # measurement — placeholders below are the code's own comment
+          # ("Fireworks qwen3-embedding-8b") and Fireworks' documented
+          # serverless embeddings endpoint, not a verified deployment.
+          Embedding__ActiveProfile: fireworks-smoke
+          Embedding__Profiles__fireworks-smoke__Protocol: openai-compatible
+          Embedding__Profiles__fireworks-smoke__ProviderId: fireworks
+          Embedding__Profiles__fireworks-smoke__Endpoint: https://api.fireworks.ai/inference/v1/embeddings
+          Embedding__Profiles__fireworks-smoke__Request__Model: accounts/fireworks/models/qwen3-embedding-8b
+          Embedding__Profiles__fireworks-smoke__Request__EncodingFormat: float
+          Embedding__Profiles__fireworks-smoke__OutputDimensions: "4096"
+          Embedding__Profiles__fireworks-smoke__SpaceId: fireworks:qwen3-embedding-8b:4096:cloud-smoke
+          Embedding__Profiles__fireworks-smoke__Auth__Scheme: bearer
+          Embedding__Profiles__fireworks-smoke__Auth__ApiKey: ${{ secrets.FIREWORKS_SMOKE_API_KEY }}
+
+          # --- Hosted OCR (mistral-ocr) ---
+          # Endpoint/Model per docs/contributing/ocr-bakeoff-2026-08-06.md
+          # (Azure AI Foundry, mistral-ocr-4-0, eastus). Route/AuthHeader
+          # left at their defaults, matching compose.yml's production config.
+          Vision__Provider: mistral
+          Vision__Mistral__Endpoint: ${{ vars.CLOUD_SMOKE_MISTRAL_ENDPOINT }}
+          Vision__Mistral__Model: mistral-ocr-4-0
+          Vision__Mistral__ApiKey: ${{ secrets.MISTRAL_SMOKE_API_KEY }}

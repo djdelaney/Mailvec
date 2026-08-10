@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Live smoke tests against the REAL Fireworks / Mistral APIs — see
+       docs/contributing/cloud-smoke-tests.md. Deliberately NOT listed in
+       Mailvec.slnx and never referenced by ci.yml: `dotnet build`/`dotnet
+       test` at the repo root must keep resolving exactly the projects it
+       always has, so this project can never accidentally run (and fail on
+       missing credentials) during normal PR CI. Only
+       .github/workflows/cloud-smoke.yml invokes it, by explicit path, on a
+       schedule + workflow_dispatch. -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Mailvec.Core\Mailvec.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
