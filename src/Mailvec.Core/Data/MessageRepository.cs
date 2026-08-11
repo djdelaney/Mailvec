@@ -476,6 +476,21 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// (we don't want them mixed in with current mail when the user asks "what's
     /// recent").
     /// </summary>
+    /// <summary>
+    /// The date-ordering clause that <c>idx_messages_date_sort</c> (v12) is
+    /// shaped to satisfy — term for term, direction included.
+    /// </summary>
+    /// <remarks>
+    /// A const rather than an inline string because the index only applies while
+    /// the two agree, and nothing else would notice if they stopped: drop the
+    /// <c>IS NULL</c> key or flip a direction and SQLite silently goes back to
+    /// full-scanning the widest table in the database, with every test still
+    /// green. <c>SchemaMigratorTests</c> asserts the plan for THIS string, so a
+    /// drift here fails there rather than in production. A test carrying its own
+    /// copy of the clause would have been worthless for exactly that reason.
+    /// </remarks>
+    internal const string BrowseOrderBy = "m.date_sent IS NULL, datetime(m.date_sent) DESC";
+
     public IReadOnlyList<Message> BrowseByFilters(SearchFilters filters, int limit)
     {
         ArgumentNullException.ThrowIfNull(filters);
@@ -490,7 +505,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // datetime() normalises the mixed-offset ISO-8601 stored via ToString("O")
         // so a +HH:mm sender doesn't sort as if it were UTC. A raw string sort
         // silently mis-orders "recent" across timezones.
-        sql.Append("\nORDER BY m.date_sent IS NULL, datetime(m.date_sent) DESC\nLIMIT $limit;");
+        sql.Append($"\nORDER BY {BrowseOrderBy}\nLIMIT $limit;");
         cmd.CommandText = sql.ToString();
         cmd.Parameters.AddWithValue("$limit", limit);
 

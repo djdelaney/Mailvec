@@ -53,7 +53,13 @@ public sealed class SchemaMigrator(
     // stored model/dimensions) and metadata.embedding_config_hash (stamped in
     // code by StampConfigHashIfMissing — it covers config-side text
     // transforms SQL cannot see). Identity only; vectors are untouched.
-    public const int LatestSchemaVersion = 11;
+    // v12 adds idx_messages_date_sort, an expression index the date-ordered
+    // queries can actually use (they wrap date_sent in datetime() because the
+    // column mixes offsets, which makes idx_messages_date_sent unusable). The
+    // column list must match MessageRepository's ORDER BY term for term,
+    // DESC included — without DESC, SQLite adopts the index and still sorts,
+    // measuring 43x slower than no index. Index only; no data is touched.
+    public const int LatestSchemaVersion = 12;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying

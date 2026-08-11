@@ -277,6 +277,92 @@ public class SchemaMigratorTests
         int.Parse(m.Groups[1].Value).ShouldBe(SchemaMigrator.LatestSchemaVersion);
     }
 
+    /// <summary>
+    /// The v12 index is only worth its pages while SQLite actually resolves the
+    /// browse ordering FROM it. Existence-by-name cannot show that: an index of
+    /// the right name with the wrong column list, or a `DESC` dropped from the
+    /// second column, still exists — and measured on the 81k dev corpus, the
+    /// both-ASC shape made browse 43x SLOWER than having no index at all (SQLite
+    /// adopts it and then still sorts). So this asserts the PLAN: the index is
+    /// used, and there is no sort step left.
+    /// </summary>
+    [Fact]
+    public void The_date_sort_index_resolves_the_browse_ordering_with_no_sort_step()
+    {
+        using var db = new TempDatabase();
+        using (var seed = db.Connections.Open())
+        {
+            // Mixed offsets on purpose: this is the shape datetime() exists for.
+            InsertMessageWithDate(seed, "a@x", "2026-01-02T07:13:20.0000000-05:00"); // 12:13Z
+            InsertMessageWithDate(seed, "b@x", "2026-01-02T11:00:00.0000000+00:00"); // 11:00Z
+            InsertMessageWithDate(seed, "c@x", null);
+        }
+
+        // The ORDER BY comes from production, not from this test — a local copy
+        // would keep passing after MessageRepository drifted, which is the whole
+        // failure mode being guarded.
+        var plan = ExplainQueryPlan(db.Connections,
+            $"SELECT m.* FROM messages m WHERE m.deleted_at IS NULL ORDER BY {MessageRepository.BrowseOrderBy} LIMIT 50");
+
+        plan.ShouldContain("idx_messages_date_sort",
+            Case.Sensitive,
+            $"the browse ordering must resolve from the v12 index; plan was: {plan}");
+        plan.ShouldNotContain("TEMP B-TREE",
+            Case.Insensitive,
+            $"a sort step means the index does not match the ORDER BY (a dropped DESC does this); plan was: {plan}");
+    }
+
+    /// <summary>
+    /// The correctness half, which the index must not break: mixed offsets have
+    /// to order as instants, not as text. Sorted lexically, 12:13Z would sit
+    /// below 11:00Z. Undated mail sorts last.
+    /// </summary>
+    [Fact]
+    public void Browse_ordering_compares_instants_not_ISO_strings()
+    {
+        using var db = new TempDatabase();
+        using (var seed = db.Connections.Open())
+        {
+            InsertMessageWithDate(seed, "earlier@x", "2026-01-02T11:00:00.0000000+00:00"); // 11:00Z
+            InsertMessageWithDate(seed, "later@x", "2026-01-02T07:13:20.0000000-05:00");   // 12:13Z
+            InsertMessageWithDate(seed, "undated@x", null);
+        }
+
+        var order = new MessageRepository(db.Connections)
+            .BrowseByFilters(Mailvec.Core.Search.SearchFilters.None, 10)
+            .Select(m => m.MessageId)
+            .ToList();
+
+        order.ShouldBe(["later@x", "earlier@x", "undated@x"]);
+    }
+
+    private static void InsertMessageWithDate(Microsoft.Data.Sqlite.SqliteConnection conn, string messageId, string? dateSent)
+    {
+        using var cmd = conn.CreateCommand();
+        // size_bytes is nullable in the schema but Map() reads it as non-null, so
+        // a row inserted without it cannot round-trip through BrowseByFilters.
+        cmd.CommandText = """
+            INSERT INTO messages (message_id, maildir_path, maildir_filename, folder, subject,
+                                  date_sent, size_bytes, raw_headers, indexed_at)
+            VALUES ($mid, 'cur', $fn, 'INBOX', 'subject', $date, 1024, '', '2026-01-01T00:00:00Z');
+            """;
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        cmd.Parameters.AddWithValue("$fn", messageId + ":2,S");
+        cmd.Parameters.AddWithValue("$date", (object?)dateSent ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static string ExplainQueryPlan(ConnectionFactory connections, string sql)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        var parts = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) parts.Add(reader.GetString(3));
+        return string.Join(" | ", parts);
+    }
+
     private static string LoadInitialSchemaSql()
     {
         var asm = typeof(SchemaMigrator).Assembly;
@@ -436,6 +522,10 @@ public class SchemaMigratorTests
             // Partial index (WHERE ocr_model IS NOT NULL) — a typo in the
             // predicate still creates *an* index, so assert it by name.
             IndexExists(connections, "idx_attachments_ocr_model").ShouldBeTrue();       // v10
+            // v12: the migrated path must end up with the same index the fresh
+            // path creates, or migrated databases quietly keep full-scanning
+            // while new installs don't — a divergence nothing else surfaces.
+            IndexExists(connections, "idx_messages_date_sort").ShouldBeTrue();          // v12
 
             // The pre-existing row survives and is still searchable via FTS,
             // i.e. the rebuild repopulated the index from messages.
