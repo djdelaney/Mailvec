@@ -148,6 +148,14 @@ behind config and the negative result recorded in
 `baselines/subset-ocr/README.md`). No release cut — the v11 migration
 makes the eventual one a minor bump.
 
+## ✅ Date-ordering index (schema v12, 2026-08-10)
+
+`idx_messages_date_sort` — an expression index over `(date_sent IS NULL, datetime(date_sent) DESC)`, which is the shape the date-ordered queries actually need. `date_sent` mixes UTC `Z` and `+HH:mm` offsets, so those queries wrap it in `datetime()` for correct ordering, and no plain-column index can serve an expression: query-less browse, `dateFrom`/`dateTo` filters and `reocr` candidate selection were all full-scanning `messages`.
+
+Measured on the 81,732-message dev corpus through the app's own SQLite build, browse of the newest 50 went from **215 ms to under a millisecond** (the plan loses its sort step entirely), and the date-filtered variant likewise. Write cost is ~24 µs per inserted row — 0.04% of a real `Upsert`, below noise — and nothing at all for the bulk re-queue paths, which don't assign `date_sent`. Index size 2.25 MiB.
+
+Two shapes were measured and rejected, both of which look right: indexing `datetime(date_sent)` alone is **never used** by the planner (the `ORDER BY` leads with `date_sent IS NULL`), and omitting `DESC` is **43× worse than having no index at all** (SQLite adopts it and still sorts). Because both failures are silent — latency only, every test green — the clause lives in one place (`MessageRepository.BrowseOrderBy`) and `SchemaMigratorTests` asserts the *query plan* for that const rather than the index's existence; both mutations were verified to fail it. Accepted trade-offs, both measured: folder-filtered browse is ~36% slower, and `list_folders` (~490 ms, a membership-CTE cost) is unaffected by design. Full numbers and rationale: [`docs/future-ideas.md`](docs/future-ideas.md#date-ordering-index-for-datetimedate_sent).
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

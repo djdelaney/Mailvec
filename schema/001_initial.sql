@@ -66,6 +66,14 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_thread     ON messages(thread_id);
 CREATE INDEX idx_messages_folder     ON messages(folder);
 CREATE INDEX idx_messages_date_sent  ON messages(date_sent);
+-- (v12) The date-ORDERED paths can't use the index above: date_sent mixes UTC
+-- 'Z' and '+HH:mm' offsets, so they wrap the column in datetime() and a
+-- plain-column index can't satisfy an expression. This one matches
+-- MessageRepository's ORDER BY term for term — including DESC on the second
+-- column, WITHOUT which SQLite adopts the index and still sorts, measuring 43x
+-- SLOWER than no index at all. See schema/migrations/012_messages_date_sort_index.sql
+-- for the measurements and CLAUDE.md for the invariant.
+CREATE INDEX idx_messages_date_sort  ON messages(date_sent IS NULL, datetime(date_sent) DESC);
 CREATE INDEX idx_messages_to_embed   ON messages(embedded_at) WHERE embedded_at IS NULL;
 -- Used by HealthService.ReadCounts for cheap MAX(indexed_at) lookups; without
 -- it /health takes ~7 s on a real-sized archive (full table scan).
@@ -208,7 +216,7 @@ CREATE TABLE metadata (
 -- (SchemaMigrator.StampConfigHashIfMissing): it covers config-side text
 -- transforms SQL cannot see.
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '11'),
+    ('schema_version',       '12'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024'),
     ('embedding_space_id',   'ollama:mxbai-embed-large:1024');

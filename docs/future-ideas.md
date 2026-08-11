@@ -176,20 +176,166 @@ and a scan's dominant cost is independent of how much new mail it carries
 walks). Watch embedder `SQLITE_BUSY` retries and OCR throughput, not scan
 duration.
 
+## Date-ordering index for `datetime(date_sent)`
+
+> **Status 2026-08-10: SHIPPED as schema v12** —
+> `schema/migrations/012_messages_date_sort_index.sql`, and the index is in
+> `001_initial.sql` for fresh databases. This section is kept because it is the
+> only record of what was measured and, more importantly, of the two index shapes
+> that were tried and rejected; CLAUDE.md's invariant links here. Not a proposal
+> any more — read it before touching the browse `ORDER BY` or the index.
+
+**The mechanism.** `date_sent` holds `DateTimeOffset.ToString("O")`, so one
+column mixes UTC `Z` and `+HH:mm` offsets. Sorted as text, `…07:13:20-05:00`
+(12:13Z) lands below `…11:00:00+00:00` (11:00Z) — exactly inverted. Every
+date-ordered or date-filtered query therefore wraps the column in SQLite's
+`datetime()`, which is load-bearing for correctness and fatal for
+`idx_messages_date_sent`: a plain-column index cannot satisfy an expression, so
+these paths full-scan `messages` instead. Affected: query-less browse
+(`BrowseByFilters`), `FolderStats` / `list_folders`, the `dateFrom`/`dateTo`
+filters in `SearchFilterSql`, `reocr` candidate ordering, `purge-deleted`'s
+cutoff. Ranked search is unaffected — BM25 and KNN order by relevance.
+
+**Measured 2026-08-10** (observed, not a permanent fact — re-measure before
+acting). Copy of the frozen dev corpus: 81,732 messages, 75,414 live, 4.5 GiB,
+zero NULL `date_sent`, no `sqlite_stat1`. Numbers below are **through the app's
+own stack** — `MessageRepository.BrowseByFilters` / `.FolderStats()` called via
+`ConnectionFactory`, so Microsoft.Data.Sqlite over
+`SQLitePCLRaw.bundle_e_sqlite3` (reported `sqlite_version()` **3.53.4**) — not a
+CLI. Best of 3 warm:
+
+| index | browse | +dateFrom | +folder | list_folders |
+|---|---|---|---|---|
+| baseline (as shipped) | 215 ms | 162 ms | 106 ms | 499 ms |
+| `(datetime(date_sent))` | 219 ms | 189 ms | 106 ms | 485 ms |
+| `(date_sent IS NULL, datetime(date_sent))` | **9,173 ms** | 275 ms | 144 ms | 482 ms |
+| `(date_sent IS NULL, datetime(date_sent) DESC)` | **<1 ms** | **<1 ms** | 144 ms | 490 ms |
+
+Cross-checked against `sqlite3` CLI 3.51.0 and Python's 3.50.4 on the same copy:
+**every ratio and every query plan reproduced on all three builds**, which is
+the part worth trusting. Absolute times did not — `list_folders` reads 490 ms
+here, 594 ms via the CLI, 998 ms via Python, and 325 ms in `FolderStats`'s own
+recorded measurement. Quote ratios from this entry, never the milliseconds.
+An additional `(folder, message_id)` index was measured too and changed nothing
+(see below), so it is omitted from the table.
+
+Four things that table says, in rough order of how expensive it would be to
+learn them the other way:
+
+1. **The obvious index does nothing.** `ON messages(datetime(date_sent))` — what
+   this entry prescribed for months — leaves the plan at `SCAN m` and the time
+   unmoved. The real `ORDER BY` leads with `m.date_sent IS NULL` (the explicit
+   key that keeps undated mail sorting last in both directions, since SQLite puts
+   NULLs first ascending), and an index whose first column is a *different*
+   expression cannot satisfy that ordering.
+2. **The naive repair is ~43x worse than doing nothing.** Adding the `IS NULL`
+   key but leaving both columns ASC gets the index adopted and browse takes **9.2
+   seconds**: the `ORDER BY` is mixed-direction (`IS NULL` ascending,
+   `datetime(...)` descending), so SQLite walks the whole index and still needs a
+   `TEMP B-TREE FOR LAST TERM OF ORDER BY`. **The second column must be declared
+   `DESC`.** This is the shape of mistake that ships looking principled.
+3. **The correct index takes browse from 215 ms to under a millisecond** — below
+   `Stopwatch` resolution, plan `SCAN m USING INDEX` with no sort step at all, so
+   >200x rather than the ~40x an earlier CLI measurement suggested (that figure
+   was inflated by process startup). Costs 102 ms to build and grew the file by
+   0 KiB, fitting in existing free pages.
+4. **It regresses folder-filtered browse by ~36%** (106 → 144 ms), reproducibly
+   on all three SQLite builds, because the planner takes the new ordering index
+   and then evaluates the folder `EXISTS` per row. `ANALYZE` does not fix it. Net
+   across the paths is overwhelmingly positive, but this is a real cost, not a
+   rounding error — and it is why "just add the index" is not the whole design.
+
+**`list_folders` is a different problem and this index is not it.** Its ~490 ms
+does not move under any variant. The cost is the `membership` CTE's
+`UNION`/`TEMP B-TREE` over both folder sources, not the date ordering. Note also
+that `FolderStats`'s own remarks propose "a covering index on
+`messages(folder, message_id)`" if its cost ever matters: **measured, that index
+changes nothing here** (586 vs 594 ms, inside noise). Treat that comment as an
+untested hypothesis, not a plan. **The ~490 ms was reviewed and accepted as-is
+by the owner 2026-08-10** — `list_folders` is called once before a folder-scoped
+search rather than per search, so this is not a live follow-up. Reopen it only
+if that call pattern changes.
+
+**The argument for un-parking is stronger than the old "tens of ms" claim.**
+Browse is ~200 ms warm and was 2.1 s cold on first touch, on the author's own
+corpus — not obviously below perception. And the scan reads most of a 4.5 GiB
+table, so it competes for exactly the page cache that
+[search-performance.md](contributing/search-performance.md) documents search
+latency as depending on (~1.2 GB of chunk vectors resident, where the container's
+`mem_limit` charges page cache to the cgroup). A cheap index that stops
+full-scanning the widest table in the database is also cache hygiene for the
+search path.
+
+**Both costs were measured and accepted before it shipped**, and both are
+recorded here rather than in a commit message so a later reader finds the price
+next to the win:
+
+- ~~**Decide about the folder-filter regression.**~~ **Accepted by the owner
+  2026-08-10**: folder-filtered browse going 106 → 144 ms is worth unfiltered
+  browse going 215 ms → sub-millisecond. Recorded so a later reader doesn't
+  "discover" the regression and treat it as an oversight — it is a priced
+  trade, and the price is in the table above.
+- ~~**Cost the write side.**~~ **Measured 2026-08-10 — it is a non-issue.** Same
+  app stack, 5,000-row workloads inside rolled-back transactions so the copy
+  stayed clean:
+
+  | write workload | no index | +index | delta |
+  |---|---|---|---|
+  | INSERT 5,000 new messages | 184 ms | 303 ms | +23.8 us/row |
+  | UPDATE 5,000 reassigning `date_sent` (the Upsert branch) | 115 ms | 127 ms | +2.4 us/row |
+  | UPDATE 5,000 with a genuinely changed `date_sent` | 170 ms | 180 ms | +2 us/row |
+  | UPDATE 5,000 re-queue only (`embedded_at`, no `date_sent`) | 164 ms | 161 ms | none |
+
+  Two results matter. **The bulk re-queue paths pay nothing** — `reocr`,
+  `extract-attachments` and `rebuild-bodies` clear `embedded_at` / bump
+  `embed_epoch` without assigning `date_sent`, and SQLite skips an index whose
+  columns no `SET` clause touches, so the highest-volume `messages` writers are
+  unaffected. And **against a real write the cost vanishes**: 300 fresh messages
+  through `MessageRepository.Upsert` (own transaction each, FTS triggers, real
+  connection open) ran 55.0 ms/msg without the index and 54.9 ms/msg with it —
+  the 24 us of index maintenance is ~0.04% of a message write and does not rise
+  above measurement noise.
+
+  Storage is 2.25 MiB (577 pages, per `dbstat`) for 81,732 rows — 0.05% of the
+  4.5 GiB file, and on this database the file did not grow at all because the
+  index was absorbed by the existing freelist (2,095 → 1,518 free pages). Build
+  cost 0.1-0.7 s depending on cache state.
+- ~~**Write down the silent-regression invariant.**~~ **Done** — it is in
+  CLAUDE.md's schema invariants, and it is enforced rather than merely described:
+  the clause lives once as `MessageRepository.BrowseOrderBy` and
+  `SchemaMigratorTests.The_date_sort_index_resolves_the_browse_ordering_with_no_sort_step`
+  asserts the query PLAN for that const. Both failure shapes were verified by
+  mutation — dropping `DESC` from the index, and dropping the `IS NULL` key from
+  the clause — and each fails that test with a message naming the cause.
+
+**Shipped as v12**, and the DDL is the one measured above — note the `DESC`,
+which is the whole difference between a 200x win and a 43x regression:
+
+```sql
+CREATE INDEX idx_messages_date_sort
+    ON messages(date_sent IS NULL, datetime(date_sent) DESC);
+```
+
+Per CLAUDE.md's migration rule, both carriers moved (`LatestSchemaVersion` and
+the `schema_version` literal in `001_initial.sql`) and the index is declared in
+`001_initial.sql` too, so the fresh-install and migrated paths converge — the
+v1-forward walk test asserts the index exists at the end, because a divergence
+there would leave migrated databases full-scanning while new installs don't.
+
+**One caveat on the measurement, unresolved on purpose:** every number here was
+taken on a schema **v8** copy (the frozen dev corpus) while main is v12. v9-v12
+add no indexes on `messages` and touch none of these queries' columns, so the
+plans transfer — but nothing has re-measured this against a v12 database with
+real data, and the only honest confirmation is doing so on the next corpus
+refresh.
+
 ## Still open (small)
 
 Carried forward from the original design doc — none are committed work, all gated on a problem actually being observed:
 
-- **`datetime(date_sent)` expression index.** `date_sent` stores mixed-offset
-  ISO strings, so every date-ordered query (query-less browse, `FolderStats`'s
-  per-folder oldest/latest, date-range filters) wraps the column in
-  `datetime()` for correct ordering — which makes `idx_messages_date_sent`
-  unusable and full-scans instead. Fix is a v10 migration adding
-  `CREATE INDEX … ON messages(datetime(date_sent))` (or a normalized-UTC sort
-  column). Parked because at ~80k messages the scan is tens of ms: benchmark
-  against a live-DB copy (`ops/export-db.sh`, then time browse/`list_folders`
-  with and without the index) before shipping a migration. Un-park when that
-  latency is user-visible or a corpus hits 200k+.
+- ~~**Date-ordering index.**~~ Shipped as schema v12 — measured, and the
+  rejected alternatives are recorded in
+  [its own section above](#date-ordering-index-for-datetimedate_sent).
 - **Thread reconstruction.** Today's `In-Reply-To` / `References` heuristic is acceptable; revisit if mismatches with Fastmail's JMAP threading become a usability issue.
 - **JMAP-specific metadata.** IMAP flags are available via mbsync, but JMAP-only fields (masked email, server-side labels) would require a separate JMAP path. Not currently planned.
 - **WAL checkpointing strategy.** No periodic auto-checkpoint configured beyond SQLite's default (every 1000 frames). For one-off cleanup after a bulk embed, `mailvec checkpoint` runs `PRAGMA wal_checkpoint(TRUNCATE)`. Worth measuring `-wal` file growth on a long-running install before deciding whether automatic periodic checkpoints are needed.

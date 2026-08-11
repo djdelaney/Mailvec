@@ -1,0 +1,55 @@
+-- v11 -> v12: an expression index that the date-ordered queries can actually use.
+--
+-- date_sent holds DateTimeOffset.ToString("O"), so one column mixes UTC 'Z' and
+-- '+HH:mm' offsets. Sorted as text, '...07:13:20-05:00' (12:13Z) lands below
+-- '...11:00:00+00:00' (11:00Z) — exactly inverted. Every date-ordered or
+-- date-filtered query therefore wraps the column in datetime(), which is
+-- load-bearing for correctness and fatal for idx_messages_date_sent: a
+-- plain-column index cannot satisfy an expression, so those paths full-scanned
+-- `messages` — the widest table in the database.
+--
+-- THE SHAPE IS THE WHOLE MIGRATION. Measured on the 81,732-message dev corpus
+-- (4.5 GiB) through Microsoft.Data.Sqlite / SQLitePCLRaw (sqlite 3.53.4), best
+-- of 3 warm, query-less browse of the newest 50:
+--
+--     no index                                        215 ms   (SCAN + temp B-tree)
+--     ON messages(datetime(date_sent))                219 ms   (never used)
+--     ON messages(date_sent IS NULL, datetime(date_sent))
+--                                                   9,173 ms   (43x WORSE)
+--     ON messages(date_sent IS NULL, datetime(date_sent) DESC)
+--                                                      <1 ms   (no sort step)
+--
+-- Two traps, both of which produce an index that looks principled and isn't:
+--
+--   1. Indexing datetime(date_sent) alone does NOTHING. The ORDER BY leads with
+--      `date_sent IS NULL` (the explicit key that keeps undated mail sorting
+--      last in both directions, since SQLite puts NULLs first ascending), and an
+--      index whose first column is a different expression cannot satisfy it.
+--   2. Omitting DESC on the second column is worse than having no index at all.
+--      The ORDER BY is mixed-direction (IS NULL ascending, datetime descending),
+--      so SQLite adopts the index and STILL needs a
+--      "TEMP B-TREE FOR LAST TERM OF ORDER BY" — it walks the whole index and
+--      then sorts, hence 9.2 seconds.
+--
+-- So: the column list must match MessageRepository's ORDER BY term for term,
+-- including the direction. If that clause is ever edited, this index silently
+-- stops applying and the full scans come back with no test failing. See
+-- CLAUDE.md "Schema & data invariants".
+--
+-- Deliberately not addressed here:
+--   * list_folders / FolderStats (~490 ms) does not move under this or any index
+--     variant tested — its cost is the membership CTE's UNION over both folder
+--     sources, not date ordering. Reviewed and accepted; it is called once
+--     before a folder-scoped search, not per search.
+--   * Folder-FILTERED browse gets ~36% slower (106 -> 144 ms): the planner takes
+--     this index for the ordering and then evaluates the folder EXISTS per row.
+--     A priced, accepted trade for unfiltered browse going 215 ms -> <1 ms.
+--
+-- Cost: ~24 us per inserted row (0.04% of a real MessageRepository.Upsert, which
+-- measured 55 ms/msg — below noise), nothing at all for updates that don't
+-- assign date_sent (the reocr / extract-attachments / rebuild-bodies re-queue
+-- paths), and 2.25 MiB of index pages.
+--
+-- Pure index addition: no columns, no data, no vectors touched. Safe to re-run.
+CREATE INDEX IF NOT EXISTS idx_messages_date_sort
+    ON messages(date_sent IS NULL, datetime(date_sent) DESC);
