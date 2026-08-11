@@ -7,11 +7,16 @@ This page is the one-time teardown, the day-to-day workflow, and the refresh
 procedure.
 
 > **Status: done.** The teardown ran on **2026-07-16** — the four launchd
-> agents are booted out and their plists removed, mbsync included. The Mac is
-> a dev machine now; the archive below is frozen at
-> **~80k messages, 100% embedded**, with every eval label still resolving. The
-> teardown section is kept as a record and as the recipe if the Mac pipeline is
-> ever rebuilt.
+> agents are booted out and their plists removed, mbsync included. The Mac is a
+> dev machine now, and its archive is frozen with full embedding coverage and
+> every eval label still resolving. The teardown section is kept as a record and
+> as the recipe if a Mac pipeline is ever rebuilt.
+>
+> Deliberately not recorded here: which corpus is currently active, where it
+> lives, or what schema version it is at. Those are properties of one machine at
+> one moment; an earlier revision of this page asserted them and was wrong about
+> every one within a few weeks. Read them from the machine
+> (`mailvec status`), never from this file.
 >
 > **The freeze is now enforced, not just documented.** `ops/install.sh`,
 > `ops/install-all.sh` and `ops/redeploy.sh` refuse to run while
@@ -100,9 +105,9 @@ pure-code loop with no corpus at all.
    confident, you can also revoke the Mac's Fastmail app password — the
    container reads its own compose secret, not the Mac keychain.
 
-Keep the frozen `~/Mail`: `view_attachment`, page images, OCR experiments,
-and reindex-from-source all read `.eml` bytes from it, and the disk is
-already paid for.
+Keep the frozen Maildir (whatever `Ingest:MaildirRoot` points at):
+`view_attachment`, page images, OCR experiments, and reindex-from-source all
+read `.eml` bytes from it, and the disk is already paid for.
 
 ## Day-to-day workflow
 
@@ -117,9 +122,10 @@ already paid for.
   copy the DB first and point the experiment at the copy with env-var
   overrides, exactly per `docs/contributing/embedding-experiments.md`. The
   frozen dev DB plays the role the live DB used to play there.
-- **Ollama:** keep pointing at the GPU-VM instance — the same one the
-  container uses — so dev query embeddings match production bit-for-bit and
-  eval numbers stay comparable across machines.
+- **Ollama:** keep pointing at the same instance the container uses, so dev
+  query embeddings match production bit-for-bit and eval numbers stay
+  comparable across machines. A second Ollama host is a second embedding space
+  in practice even on an identical model tag.
 - **Eval:** unchanged. `mailvec eval --baseline baselines/<latest>.json`
   against the frozen corpus is now deterministic end to end.
 
@@ -159,32 +165,49 @@ corpus refresh — their Message-IDs don't exist locally yet. Refresh first,
 then label.
 
 
-## Observed machine state, 2026-08-08 (re-check before trusting)
+## Keeping more than one local corpus straight
 
-Recorded for whoever picks this up next — these are observations about the
-dev Mac, not durable configuration, and they drift:
+A dev machine usually ends up with more than one: the frozen full corpus above,
+and smaller purpose-built ones (an OCR-heavy subset for vision work, the
+truncated set for indexer iteration). Which one is active is just two config
+keys, and that is exactly what makes the following traps easy to walk into.
+These are properties of the tooling, so they hold on any machine — unlike the
+paths, versions and corpus sizes an earlier revision of this section recorded for
+one Mac, which were wrong within weeks and are not worth restating.
 
-- **The shared `appsettings.Local.json` currently points at the subset test
-  corpus**, not the frozen one: `Archive:DatabasePath` =
-  `~/MailvecSubsetOCR/archive.sqlite`, `Ingest:MaildirRoot` =
-  `~/MailvecSubsetOCR/Mail/Fastmail` (662 messages, OCR-heavy; provenance in
-  `~/MailvecSubsetOCR/MANIFEST.json`). Any eval against `baselines/` other
-  than `baselines/subset-ocr/` must revert BOTH keys to the frozen values
-  first (`~/Library/Application Support/Mailvec/archive.sqlite` +
-  `~/Mail/Fastmail`) — always both together: a mixed pair makes the indexer
-  soft-delete everything missing from the other corpus.
-- **The subset DB is at schema v11+; the frozen DB is untouched at v10.**
-  The published `~/.local/bin/mailvec` shim predates v11 and its downgrade
-  guard refuses the subset DB — use `dotnet run --project src/Mailvec.Cli`
-  from the working tree. (`ops/redeploy.sh cli` would refresh the shim but
-  is blocked by the frozen-corpus guard; a deliberate decision, not an
-  accident.)
-- **A Fireworks serverless test key** lives at
-  `~/Library/Application Support/Mailvec/secrets/fireworks-embedding.key`
-  (owner-only). Dan rotates it after test rounds; the phase-6 experiment
-  needs a valid key in that file, nothing else references it.
-- **Neutrality-gate procedure used through phases 0–3:** run
-  `mailvec eval --json <scratch>.json` against the subset DB and diff
-  per-query results (timing fields stripped) against
-  `baselines/subset-ocr/2026-08-07.json` — bit-identical or the change is
-  not ranking-neutral. The baselines README records binary provenance rules.
+- **Switch `Archive:DatabasePath` and `Ingest:MaildirRoot` as a PAIR, always.**
+  A mixed pair points the indexer at a Maildir that doesn't contain the
+  database's messages, and the next scan soft-deletes every message whose
+  `.eml` it can't find — which is all of them. Nothing warns you; the corpus
+  just empties. The two keys live together in the shared
+  `appsettings.Local.json` for this reason, and a one-off override should use
+  env vars for both (`Archive__DatabasePath`, `Ingest__MaildirRoot`) so they
+  can't be half-applied.
+- **A baseline family belongs to the corpus it was measured on.** Diffing an
+  eval run against a baseline captured on a *different* corpus produces a
+  confident, meaningless delta — the query set resolves different Message-IDs.
+  Check which corpus is active before `mailvec eval --baseline`, and keep
+  per-corpus baselines in their own subdirectory (as `baselines/subset-ocr/`
+  does) rather than mixing them into the top-level family.
+- **A missing `DatabasePath` is created, not refused.**
+  `SchemaMigrator.EnsureUpToDate` silently creates a fresh empty schema at
+  whatever path it resolves, so a typo or a stale path in a switched pair reads
+  as a healthy but empty archive. `mailvec status` on the path you *think* is
+  active is the cheap check.
+- **The published CLI shim can lag the working tree's schema version.**
+  `~/.local/bin/mailvec` points at the last-published binaries; run anything
+  from the working tree that migrates a database forward and the shim's own
+  downgrade guard then refuses that database — correctly, since an older binary
+  lacks the newer invariants. Use `dotnet run --project src/Mailvec.Cli` rather
+  than weakening the guard. Note `ops/redeploy.sh cli` would refresh the shim
+  but is blocked by the frozen-corpus guard; that is deliberate, not a bug.
+- **Hosted-provider experiments need a key the repo never holds.** Hosted
+  embedding or OCR profiles read their credential from the owner-only file named
+  by `Auth:ApiKeyFile` (see `docs/proposals/embedding-providers.md`). Nothing
+  else references it, and a rotated or absent key surfaces as a classified
+  `AuthOrConfig` failure rather than a crash.
+- **Ranking-neutrality gate.** For a change that should not move retrieval at
+  all, run `mailvec eval --json <scratch>.json` against the active corpus and
+  diff per-query results against that corpus's baseline with the timing fields
+  stripped: bit-identical, or the change is not neutral. `baselines/README.md`
+  records the binary-provenance rules that make such a diff trustworthy.

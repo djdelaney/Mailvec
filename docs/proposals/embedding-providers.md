@@ -767,8 +767,8 @@ Ollama/mxbai configuration before any phase below merges — including the
 "pure refactor" phases. A baseline taken after a refactor cannot prove the
 refactor was neutral.
 
-**As executed:** the baseline was captured against the 662-message
-`~/MailvecSubsetOCR` corpus (not the frozen full corpus) at
+**As executed:** the baseline was captured against the 662-message OCR-heavy
+subset corpus (not the frozen full corpus) at
 `baselines/subset-ocr/2026-08-07.json`; its README records corpus identity,
 binary provenance, and the rule that subset numbers are only comparable to
 subset numbers.
