@@ -74,6 +74,15 @@ CREATE INDEX idx_messages_date_sent  ON messages(date_sent);
 -- SLOWER than no index at all. See schema/migrations/012_messages_date_sort_index.sql
 -- for the measurements and CLAUDE.md for the invariant.
 CREATE INDEX idx_messages_date_sort  ON messages(date_sent IS NULL, datetime(date_sent) DESC);
+-- (v13) The archive-wide oldest/latest bounds on every search response read as
+-- single-key `ORDER BY datetime(date_sent) <dir> LIMIT 1` subqueries, which the
+-- index above cannot serve because it leads with `date_sent IS NULL`. Partial so
+-- its predicate is implied by those subqueries' WHERE. Don't add a companion
+-- partial index on deleted_at for the COUNT(*) leg — measured, it makes the call
+-- slower by displacing this one. See
+-- schema/migrations/013_messages_archive_stats_index.sql.
+CREATE INDEX idx_messages_archive_dates ON messages(datetime(date_sent))
+    WHERE deleted_at IS NULL AND date_sent IS NOT NULL;
 CREATE INDEX idx_messages_to_embed   ON messages(embedded_at) WHERE embedded_at IS NULL;
 -- Used by HealthService.ReadCounts for cheap MAX(indexed_at) lookups; without
 -- it /health takes ~7 s on a real-sized archive (full table scan).
@@ -216,7 +225,7 @@ CREATE TABLE metadata (
 -- (SchemaMigrator.StampConfigHashIfMissing): it covers config-side text
 -- transforms SQL cannot see.
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '12'),
+    ('schema_version',       '13'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024'),
     ('embedding_space_id',   'ollama:mxbai-embed-large:1024');

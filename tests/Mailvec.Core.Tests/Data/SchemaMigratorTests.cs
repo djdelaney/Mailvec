@@ -313,6 +313,44 @@ public class SchemaMigratorTests
     }
 
     /// <summary>
+    /// v13's index is PARTIAL, so SQLite uses it only while its predicate stays
+    /// implied by the query's WHERE — loosening either side drops it from the
+    /// plan with no symptom but latency, on a query that runs on every search
+    /// response. Asserts both date legs resolve from the index with no sort.
+    /// The COUNT(*) leg is deliberately still a scan: the obvious partial index
+    /// on deleted_at was measured to make the whole call slower by displacing
+    /// this one, so a future reader should not "fix" that scan.
+    /// </summary>
+    [Fact]
+    public void The_archive_stats_date_bounds_resolve_from_the_partial_index()
+    {
+        using var db = new TempDatabase();
+        using (var seed = db.Connections.Open())
+        {
+            InsertMessageWithDate(seed, "a@x", "2026-01-02T07:13:20.0000000-05:00");
+            InsertMessageWithDate(seed, "b@x", "2026-01-02T11:00:00.0000000+00:00");
+            InsertMessageWithDate(seed, "c@x", null);
+        }
+
+        var plan = ExplainQueryPlan(db.Connections, MessageRepository.ArchiveStatsSql);
+
+        // EXACTLY two: counted rather than ShouldContain, because both directions
+        // of wrong are real and were observed by mutating this. Fewer than two
+        // means the index stopped matching a leg (a loosened WHERE). MORE than
+        // two means the predicate got widened until the planner took it for the
+        // COUNT(*) leg as well — which measured ~2x SLOWER overall, since it then
+        // stops serving the date legs properly. Neither is a passing state.
+        System.Text.RegularExpressions.Regex
+            .Matches(plan, "idx_messages_archive_dates").Count
+            .ShouldBe(2, "exactly the two date bounds must resolve from the v13 index — "
+                       + "fewer means it stopped matching, more means its predicate was widened "
+                       + $"until the COUNT(*) leg took it too (measured slower); plan was: {plan}");
+        plan.ShouldNotContain("TEMP B-TREE",
+            Case.Insensitive,
+            $"a sort step means the partial index no longer matches the WHERE; plan was: {plan}");
+    }
+
+    /// <summary>
     /// The correctness half, which the index must not break: mixed offsets have
     /// to order as instants, not as text. Sorted lexically, 12:13Z would sit
     /// below 11:00Z. Undated mail sorts last.
@@ -526,6 +564,7 @@ public class SchemaMigratorTests
             // path creates, or migrated databases quietly keep full-scanning
             // while new installs don't — a divergence nothing else surfaces.
             IndexExists(connections, "idx_messages_date_sort").ShouldBeTrue();          // v12
+            IndexExists(connections, "idx_messages_archive_dates").ShouldBeTrue();      // v13
 
             // The pre-existing row survives and is still searchable via FTS,
             // i.e. the rebuild repopulated the index from messages.

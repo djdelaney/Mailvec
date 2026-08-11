@@ -695,28 +695,69 @@ public sealed class MessageRepository(ConnectionFactory connections)
     /// oldest/newest date_sent values. Surfaced on every search response so
     /// Claude can size its filters against actual archive scope.
     ///
-    /// MIN/MAX use idx_messages_date_sent so they're cheap; COUNT(*) is a
-    /// scan but sub-100ms on archives in the hundreds of thousands. If this
-    /// ever becomes hot enough to matter, cache in a singleton with a short
-    /// TTL or add a partial index on deleted_at.
+    /// <para>
+    /// <b>This is three full scans of <c>messages</c> per call, and it is on
+    /// every search response.</b> Measured 2026-08-10 on an 81,732-message /
+    /// 4.5 GiB corpus: ~176 ms warm, as `SCAN messages` x3 with a
+    /// `USE TEMP B-TREE FOR ORDER BY` on each date leg. This comment used to
+    /// claim "MIN/MAX use idx_messages_date_sent so they're cheap"; that
+    /// described an earlier literal MIN/MAX implementation, and it has been
+    /// wrong since those became the datetime()-ordered subqueries below —
+    /// no plain-column index can serve an expression. The v12
+    /// <c>idx_messages_date_sort</c> does not help either: it leads with
+    /// <c>date_sent IS NULL</c>, which these single-term ORDER BYs never
+    /// mention (measured — plan and time both unchanged).
+    /// </para>
+    /// <para>
+    /// <b>Fixed in v13</b> by <c>idx_messages_archive_dates</c>, a partial
+    /// expression index over <c>datetime(date_sent)</c> whose predicate matches
+    /// these subqueries' WHERE term for term: both date legs became
+    /// "SCAN messages USING INDEX" with no sort, taking the call to ~61 ms. The
+    /// remaining time is the <c>COUNT(*)</c> leg, left scanning on purpose.
+    /// <b>Do not "finish the job" with a partial index on <c>deleted_at</c> —
+    /// which is what this comment used to recommend:</b> measured, it makes the
+    /// whole call SLOWER (~129 ms), because the planner starts preferring it for
+    /// the date legs too and goes back to sorting them. If the count ever needs
+    /// fixing, cache this behind a short TTL instead; it needs no migration and
+    /// the value only moves when mail arrives.
+    /// </para>
+    /// <para>
+    /// The SQL lives in <see cref="ArchiveStatsSql"/> so the test can assert the
+    /// PLAN for the real query. Edit either predicate and SQLite silently drops
+    /// the index — latency only, no failure.
+    /// </para>
     /// </summary>
+    /// <summary>
+    /// The archive-summary query, shared with the test that asserts its plan.
+    /// </summary>
+    /// <remarks>
+    /// A const for the same reason as <see cref="BrowseOrderBy"/>: the v13 index
+    /// is partial, so SQLite only uses it while its predicate stays implied by
+    /// the WHERE clauses below. Loosen one — drop the <c>date_sent IS NOT NULL</c>,
+    /// widen the <c>deleted_at</c> test — and the index vanishes from the plan
+    /// with nothing to show for it but latency. A test carrying its own copy of
+    /// this SQL would keep passing.
+    ///
+    /// datetime()-ordered subqueries rather than MIN/MAX (see FolderStats) so
+    /// mixed-offset timestamps compare chronologically, returning the original
+    /// offset-bearing string for the caller to parse.
+    /// </remarks>
+    internal const string ArchiveStatsSql = """
+        SELECT
+            (SELECT COUNT(*) FROM messages WHERE deleted_at IS NULL) AS total,
+            (SELECT date_sent FROM messages
+               WHERE deleted_at IS NULL AND date_sent IS NOT NULL
+               ORDER BY datetime(date_sent) ASC LIMIT 1) AS oldest,
+            (SELECT date_sent FROM messages
+               WHERE deleted_at IS NULL AND date_sent IS NOT NULL
+               ORDER BY datetime(date_sent) DESC LIMIT 1) AS latest;
+        """;
+
     public ArchiveStats GetArchiveStats()
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
-        // See FolderStats: datetime()-ordered subqueries instead of MIN/MAX so
-        // mixed-offset timestamps compare chronologically, returning the
-        // original offset-bearing string for the caller to parse.
-        cmd.CommandText = """
-            SELECT
-                (SELECT COUNT(*) FROM messages WHERE deleted_at IS NULL) AS total,
-                (SELECT date_sent FROM messages
-                   WHERE deleted_at IS NULL AND date_sent IS NOT NULL
-                   ORDER BY datetime(date_sent) ASC LIMIT 1) AS oldest,
-                (SELECT date_sent FROM messages
-                   WHERE deleted_at IS NULL AND date_sent IS NOT NULL
-                   ORDER BY datetime(date_sent) DESC LIMIT 1) AS latest;
-            """;
+        cmd.CommandText = ArchiveStatsSql;
 
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
