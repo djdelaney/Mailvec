@@ -59,7 +59,13 @@ public sealed class SchemaMigrator(
     // column list must match MessageRepository's ORDER BY term for term,
     // DESC included — without DESC, SQLite adopts the index and still sorts,
     // measuring 43x slower than no index. Index only; no data is touched.
-    public const int LatestSchemaVersion = 12;
+    // v13 adds idx_messages_archive_dates, a PARTIAL expression index for the
+    // oldest/latest bounds GetArchiveStats returns on every search response —
+    // single-key `ORDER BY datetime(date_sent) <dir> LIMIT 1` subqueries that
+    // neither idx_messages_date_sent (plain column) nor v12 (leads with
+    // `date_sent IS NULL`) can serve. Its WHERE must stay implied by those
+    // subqueries' WHERE or SQLite drops it from the plan. Index only.
+    public const int LatestSchemaVersion = 13;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying

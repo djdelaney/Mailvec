@@ -156,6 +156,14 @@ Measured on the 81,732-message dev corpus through the app's own SQLite build, br
 
 Two shapes were measured and rejected, both of which look right: indexing `datetime(date_sent)` alone is **never used** by the planner (the `ORDER BY` leads with `date_sent IS NULL`), and omitting `DESC` is **43× worse than having no index at all** (SQLite adopts it and still sorts). Because both failures are silent — latency only, every test green — the clause lives in one place (`MessageRepository.BrowseOrderBy`) and `SchemaMigratorTests` asserts the *query plan* for that const rather than the index's existence; both mutations were verified to fail it. Accepted trade-offs, both measured: folder-filtered browse is ~36% slower, and `list_folders` (~490 ms, a membership-CTE cost) is unaffected by design. Full numbers and rationale: [`docs/future-ideas.md`](docs/future-ideas.md#date-ordering-index-for-datetimedate_sent).
 
+## ✅ Archive-stats index (schema v13, 2026-08-10)
+
+`idx_messages_archive_dates` — a **partial** expression index over `datetime(date_sent)` for the archive-wide oldest/latest bounds that `search_emails` returns in `archiveStats` on **every response**. Those read as single-key `ORDER BY datetime(date_sent) <dir> LIMIT 1` subqueries, which neither `idx_messages_date_sent` (plain column) nor v12's `idx_messages_date_sort` (leads with `date_sent IS NULL`) can serve, so the call was three full scans of `messages` plus two sorts: **176 ms → ~61 ms** measured on the 81,732-message corpus.
+
+Found by a review of the v12 commit, which noticed the method's own doc comment asserting those bounds "use `idx_messages_date_sent` so they're cheap" — true of a literal `MIN/MAX` implementation replaced long before, and wrong ever since. The comment also recommended a partial index on `deleted_at` if it ever got hot; **measured, that recommendation makes the call slower** (~129 ms), because the planner then takes it for the date legs too and re-introduces the sorts. Both the stale claim and the bad advice are corrected in place.
+
+The remaining `COUNT(*)` scan is left deliberately, for that reason — a short-TTL cache is the option that doesn't involve the planner. As with v12, the query lives in one place (`MessageRepository.ArchiveStatsSql`) and the test asserts the **plan**, here counting **exactly two** index uses so that widening the predicate fails just as narrowing it does; both directions were verified by mutation. Neighbouring plans (browse, `get_thread`, `FolderStats`) confirmed unchanged with both indexes present.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

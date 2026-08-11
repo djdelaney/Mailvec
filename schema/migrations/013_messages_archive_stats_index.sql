@@ -1,0 +1,48 @@
+-- v12 -> v13: make GetArchiveStats' date bounds an index lookup instead of two
+-- full scans. This one is on EVERY search response.
+--
+-- `archiveStats.oldestDate` / `latestDate` are read as
+-- `ORDER BY datetime(date_sent) <dir> LIMIT 1` subqueries rather than
+-- MIN/MAX(date_sent), because date_sent mixes UTC 'Z' and '+HH:mm' offsets and a
+-- lexical MIN/MAX picks the wrong extreme. Correct, but until now unindexable:
+--
+--   * idx_messages_date_sent is a plain-column index and cannot serve an
+--     expression. (A comment on GetArchiveStats claimed for a long time that
+--     MIN/MAX used it and were "cheap"; that described an earlier literal
+--     MIN/MAX implementation and had been stale ever since.)
+--   * idx_messages_date_sort (v12) cannot serve it either — that index leads
+--     with `date_sent IS NULL`, a term these single-key ORDER BYs never
+--     mention. Measured: plan and time both unchanged by v12.
+--
+-- Measured 2026-08-10, 81,732-message / 4.5 GiB corpus, warm best-of-3:
+--
+--   as shipped            176 ms   SCAN messages x3, TEMP B-TREE on each date leg
+--   + this index           61 ms   both date legs "SCAN messages USING INDEX", no sort
+--
+-- The remaining ~61 ms is the `COUNT(*) WHERE deleted_at IS NULL` leg, which is
+-- deliberately left scanning. **Do not "finish the job" with a partial index on
+-- deleted_at** — measured, that makes the whole call SLOWER (~129 ms): the
+-- planner starts preferring it for the date legs as well and goes back to
+-- sorting them. That is the same partial-adoption pathology that made v12's
+-- both-ASC candidate 43x worse than no index, and this table has now produced it
+-- twice. A plausible index the planner adopts for the wrong leg is worse here
+-- than no index at all. If the count ever needs fixing, cache ArchiveStats
+-- behind a short TTL instead — no schema change, and the value only moves when
+-- mail arrives.
+--
+-- WHY PARTIAL: the WHERE must be implied by the query's WHERE for SQLite to use
+-- the index, and it is matched term for term with the subqueries
+-- (`deleted_at IS NULL AND date_sent IS NOT NULL`). It also keeps the index off
+-- soft-deleted and undated rows, which those subqueries exclude anyway. Editing
+-- either predicate in `MessageRepository.ArchiveStatsSql` silently drops the
+-- index from the plan — hence the plan assertion in SchemaMigratorTests rather
+-- than an existence check.
+--
+-- Verified not to poison neighbours: with both v12 and v13 present, browse still
+-- resolves from idx_messages_date_sort, get_thread still from
+-- idx_messages_thread, and FolderStats' plan is unchanged.
+--
+-- Pure index addition: no columns, no data, no vectors touched. Safe to re-run.
+CREATE INDEX IF NOT EXISTS idx_messages_archive_dates
+    ON messages(datetime(date_sent))
+    WHERE deleted_at IS NULL AND date_sent IS NOT NULL;
