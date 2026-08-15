@@ -114,7 +114,18 @@ updates:
   # unpatched-CVE one, and that bites hardest on `dotnet/aspnet`, whose moving
   # tag is how .NET servicing patches would otherwise arrive. **Removing this
   # ecosystem means reverting those FROMs to tags** — see docs/security.md.
-  # `/` covers compose.yml and the Dockerfile.
+  #
+  # `docker` covers DOCKERFILES ONLY. It does not read compose.yml — Compose is
+  # a SEPARATE ecosystem (`docker-compose`), declared below. This block used to
+  # carry a comment claiming `/` covered both, and it was wrong in the silent
+  # direction: every PR this ecosystem has ever opened touched the Dockerfile
+  # and nothing else, so the cloudflared pin sat unbumped from the day it was
+  # hand-written (2026-08-03, at 2026.7.3) while the config read as if it were
+  # being maintained. Found on 2026-08-15, by which point 2026.8.2 was out.
+  # A decaying pin is the exact failure this ecosystem exists to prevent, so
+  # "configured but not actually covering the file" is worse than uncovered —
+  # it silences the question. If you add another Compose file, add its
+  # directory to the `docker-compose` block, not this one.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -123,4 +134,19 @@ updates:
       - "djdelaney"
     groups:
       docker-all:
+        patterns: ["*"]
+
+  # Compose services (`compose.yml`) — today just the cloudflared sidecar,
+  # pinned tag-plus-digest like the Dockerfile FROMs. Kept as its own group
+  # rather than folded into `docker-all`: they are different ecosystems, so
+  # Dependabot cannot batch them into one PR regardless, and a distinct group
+  # name makes it visible at a glance which file a given PR is refreshing.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "djdelaney"
+    groups:
+      compose-all:
         patterns: ["*"]

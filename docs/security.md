@@ -227,9 +227,13 @@ can't be re-pointed under us:
 **A pin with nothing bumping it is its own failure mode**: it trades supply-chain
 risk for running a known-vulnerable version forever, and that risk is sharpest
 for the Dockerfile bases, whose moving tags are how .NET servicing patches
-arrive. `.github/dependabot.yml` therefore covers the `docker` and
-`github-actions` ecosystems as well as NuGet, and Dependabot understands both
-pin forms (it rewrites digest and comment together). **If Dependabot is ever
+arrive. `.github/dependabot.yml` therefore covers the `docker`,
+`docker-compose` and `github-actions` ecosystems as well as NuGet, and
+Dependabot understands both pin forms (it rewrites digest and comment
+together). **`docker` and `docker-compose` are separate ecosystems** — the
+first reads Dockerfiles and the second reads `compose.yml`, so declaring only
+`docker` leaves the cloudflared pin uncovered while the config looks complete
+(it did, until 2026-08-15). **If Dependabot is ever
 turned off, revert the base images to tags** rather than sitting on a frozen
 base — the pin is only safe because something is bumping it. sqlite-vec is the
 exception either way: it's fetched by a shell script no ecosystem parses, so its
