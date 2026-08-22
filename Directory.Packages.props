@@ -28,7 +28,7 @@
          osx-x64 / linux-x64 / linux-arm64 (the latter via
          SkiaSharp.NativeAssets.Linux.NoDependencies, which needs no system
          fontconfig/freetype — ideal for a headless homelab box). -->
-    <PackageVersion Include="PDFtoImage"                       Version="5.3.0" />
+    <PackageVersion Include="PDFtoImage"                       Version="5.4.0" />
 
     <!-- TIFF decode for the image-OCR pass. SkiaSharp's native build ships no
          TIFF codec, so scanned-document TIFFs (common as email attachments) fail
