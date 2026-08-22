@@ -19,6 +19,15 @@
 # whose patterns match, so the cluster groups are listed before the
 # catch-all update-type ones.
 #
+# CAVEAT (2026-08-22, UNRESOLVED): read literally, that model means `nuget-major`
+# can never fire — `nuget-minor-patch` is declared first with no `patterns`,
+# which matches everything, so a major-only update lands in a group that won't
+# ship it. A major HAS been missed: xunit.runner.visualstudio 4.0.0 sat
+# unproposed for a week and was bumped by hand on 2026-08-22. GitHub's own docs
+# read the other way, so DON'T reorder or re-pattern these groups on a guess —
+# settle it from the Dependabot job log first. See docs/future-ideas.md,
+# "Does Dependabot's `nuget-major` group ever fire?".
+#
 # Central Package Management is on: every version lives in the root
 # Directory.Packages.props and csproj files carry no Version attribute. The
 # per-project `directories` list is how Dependabot finds the projects that
@@ -49,7 +58,7 @@ updates:
     ignore:
       # NOT independently upgradable, so it gets `ignore` rather than a group.
       # SkiaSharp must stay at or above the floor PDFtoImage declares
-      # (5.3.0 asks for [4.150.1, )) and is meant to track the version
+      # (5.4.0 asks for [4.150.1, )) and is meant to track the version
       # PDFtoImage was actually built against; the test-side decoder asserting
       # on rendered PDF pages is the same assembly as the renderer's, so the
       # pin is about matching PDFtoImage, not about SkiaSharp's own releases.

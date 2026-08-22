@@ -329,6 +329,62 @@ plans transfer — but nothing has re-measured this against a v12 database with
 real data, and the only honest confirmation is doing so on the next corpus
 refresh.
 
+## Does Dependabot's `nuget-major` group ever fire?
+
+> **Status 2026-08-22: OPEN — evidence gathered, cause not established.** Not a
+> proposal; a question with one hard data point behind it. Cheap to answer, and
+> the failure mode if the answer is "no" is silent — which is why it is written
+> down rather than left as a hunch.
+
+**What was observed.** `xunit.runner.visualstudio` 4.0.0 was published
+2026-08-15. The weekly NuGet run on 2026-08-22 (06:22-06:26Z) opened exactly one
+PR — #27, under `nuget-minor-patch`, carrying the PDFtoImage bump. Nothing was
+opened for the 4.0.0 major: not grouped, not standalone. Searching the repo's
+full PR history turns up **no `nuget-major` PR that has ever existed**. The bump
+was applied by hand on 2026-08-22 instead.
+
+**What it is not.** The innocent explanation — Dependabot declining an update it
+considers inapplicable — does not hold. 4.0.0 ships `net8.0` (and `net472`),
+which a `net10.0` project consumes normally, and the package still declares
+support for xUnit v1/v2/v3, so our xunit 2.9.3 is in range. The open-PR limit is
+not it either (default 5; one nuget PR was open at the time). And the major had
+been available for a full week, so it is not a timing miss like PdfPig 0.1.16,
+which landed 95 minutes *after* that same run and duly appeared the week after.
+
+**The two readings.** `.github/dependabot.yml` declares `nuget-minor-patch`
+(`update-types: ["minor","patch"]`, no `patterns`) *before* `nuget-major`
+(`update-types: ["major"]`, no `patterns`).
+
+- **The file's own model says `nuget-major` is dead code.** Its header states
+  that Dependabot "assigns each dependency to the FIRST group whose patterns
+  match". An omitted `patterns` matches everything, so `nuget-minor-patch`
+  claims every dependency, and a dependency whose only available update is a
+  major then sits in a group that will never ship it.
+- **GitHub's documentation reads the other way** — `update-types` participates in
+  the match, so a major-only update should fall through to `nuget-major`, or at
+  worst out of grouping and into an individual PR. Under this reading the group
+  should have fired and something else suppressed it.
+
+Both cannot be right, and the repo has been asserting the first reading in its
+comments while assuming the second in its behaviour.
+
+**Why it matters.** If the first reading holds, majors have been invisible for as
+long as these groups have existed, while the config *reads* as though they are
+covered. That is the same "configured but not actually covering the thing"
+failure `.github/dependabot.yml` already records for the `docker` ecosystem and
+the cloudflared pin, which sat unbumped from 2026-08-03 to 2026-08-15 behind a
+comment implying it was maintained. An ecosystem that silently declines to report
+majors is worse than one that reports nothing, because it silences the question.
+
+**How to settle it.** Insights -> Dependency graph -> Dependabot -> the nuget
+job's "Last checked" log lists per-dependency outcomes and skip reasons, and
+names the group each candidate was assigned to. Decisive, and a minute's work.
+If that log is unavailable, the fallback experiment is to give both groups an
+explicit `patterns: ["*"]`, or reorder them, then trigger a run and see whether a
+major appears. **Don't reorder pre-emptively as a "fix"**: until the semantics
+are known there is no way to tell a fix from a coincidence, and a config change
+made on a guess is how the current ambiguity got here.
+
 ## Still open (small)
 
 Carried forward from the original design doc — none are committed work, all gated on a problem actually being observed:
