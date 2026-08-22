@@ -80,9 +80,17 @@
          non-blank / per-region content for the PDF page-image tool. NOT an
          independent pin — CPM means this one version IS the SkiaSharp the
          renderer uses too, so it must stay at or above the floor PDFtoImage
-         declares (5.3.0 asks for [4.150.1, )) and should track what PDFtoImage
+         declares (5.4.0 asks for [4.150.1, )) and should track what PDFtoImage
          was built against. Bump it with PDFtoImage, not on SkiaSharp's own
-         cadence; .github/dependabot.yml ignores it for exactly that reason. -->
+         cadence; .github/dependabot.yml ignores it for exactly that reason.
+         The floor is not the ceiling, and the gap is real rather than
+         theoretical: observed 2026-08-22, SkiaSharp 4.151.1 has been out since
+         2026-08-05 and we deliberately stay at 4.150.1, because 4.150.1 is
+         what PDFtoImage 5.4.0 was built against. An outdated-package report
+         will keep flagging this pin as behind; that is the invariant holding,
+         not a bump anyone forgot. (Careful with wording here: an XML comment
+         cannot contain a double hyphen, so the flag name for that report
+         can't be written out in this file.) -->
     <PackageVersion Include="SkiaSharp"                         Version="4.150.1" />
   </ItemGroup>
 
