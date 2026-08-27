@@ -86,9 +86,10 @@ public static class ServiceHeartbeat
     /// Exists to make a duplicate worker VISIBLE. Nothing serializes two
     /// indexers against one database and Maildir — the coalescing channel in
     /// <c>MessageIngestService</c> is process-local — and two overlapping scans
-    /// can soft-delete live messages, because each stamps every seen file's
-    /// <c>sync_state.last_seen_at</c> to its own start time and then reconciles
-    /// deletions against it. Compose won't start two of a service and this
+    /// can soft-delete live messages, because each reconciles deletions against
+    /// the set of paths its own walk enumerated, so mail arriving mid-scan is
+    /// missing from the older walk's set and reads as deleted. Compose won't
+    /// start two of a service and this
     /// machine runs none, so the reachable case is a macOS launchd install plus
     /// a <c>dotnet run</c> alongside it.
     ///

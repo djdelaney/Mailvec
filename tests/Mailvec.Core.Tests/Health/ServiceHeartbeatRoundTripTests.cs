@@ -133,9 +133,10 @@ public class ServiceHeartbeatRoundTripTests
     //
     // Nothing serializes two indexers against one database and Maildir — the
     // coalescing channel in MessageIngestService is process-local — and two
-    // overlapping scans can soft-delete live messages, because each stamps every
-    // seen file's sync_state.last_seen_at to its own start time and reconciles
-    // deletions against it. These tests cover making that VISIBLE, which is the
+    // overlapping scans can soft-delete live messages, because each reconciles
+    // deletions against the set of paths its own walk enumerated, so mail
+    // arriving mid-scan is missing from the older walk's set and reads as
+    // deleted. These tests cover making that VISIBLE, which is the
     // deliberate scope: detection, not exclusion.
 
     private static HeartbeatService Detector(TempDatabase db) =>
