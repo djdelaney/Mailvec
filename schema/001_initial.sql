@@ -193,6 +193,13 @@ CREATE VIRTUAL TABLE chunk_embeddings USING vec0(
 CREATE TABLE sync_state (
     maildir_full_path TEXT PRIMARY KEY,
     message_id        TEXT,
+    -- When this ROW was last WRITTEN, not when the file was last seen. The
+    -- scanner writes nothing for a file it walks and finds unchanged, so a live
+    -- file's row routinely carries a timestamp weeks old. Deletion detection
+    -- does NOT read this column (it diffs the tracked paths against the ones
+    -- the walk enumerated — SyncStateRepository.EntriesNotObserved); restamping
+    -- every seen row to prove liveness is what made an idle indexer write the
+    -- whole corpus once a minute. The name is kept only to avoid a migration.
     last_seen_at      TEXT NOT NULL,
     content_hash      TEXT,
     folder            TEXT,
@@ -206,7 +213,7 @@ CREATE TABLE sync_state (
 );
 
 -- Serves both the folder-membership EXISTS probe in SearchFilterSql and the
--- scanner's rename-repair lookup (FreshPathForMessageId).
+-- scanner's rename/survivor lookup (PathsForMessageId).
 CREATE INDEX idx_sync_state_message_folder ON sync_state(message_id, folder);
 
 -- Schema + embedding-model metadata. Seeded by the migration runner; the

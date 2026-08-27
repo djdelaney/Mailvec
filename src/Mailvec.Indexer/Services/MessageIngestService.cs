@@ -16,11 +16,16 @@ namespace Mailvec.Indexer.Services;
 /// Scans are serialized. The watcher pulse and the periodic timer are both
 /// producers into a coalescing single-slot channel; one consumer runs
 /// <see cref="MaildirScanner.ScanAll"/>. Two scans must never overlap: each
-/// scan stamps every seen file's <c>sync_state.last_seen_at</c> to its own
-/// start time (last-writer-wins) and reconciles deletions against that same
-/// start time, so a slower older scan overwriting a file's timestamp after a
-/// newer scan already recorded it makes the newer scan's reconciliation treat
-/// the live file as stale and soft-delete it. Serializing also removes the
+/// scan reconciles deletions against the set of paths ITS OWN walk enumerated,
+/// so an older scan still running when a newer one ingests a just-arrived file
+/// will not have that file in its set and soft-deletes the live message it
+/// just gained. (The hazard predates the observed-paths set — it was
+/// last-writer-wins on <c>sync_state.last_seen_at</c> before, with the roles
+/// reversed: the slower scan re-stamped an old time and the newer scan's
+/// cutoff read live files as stale. Same conclusion, different mechanism.)
+/// Note that a spurious soft-delete is sticky: the file is still on disk and
+/// unchanged, so every later scan takes the fast path and never clears
+/// <c>deleted_at</c>. Serializing also removes the
 /// doubled attachment-extraction cost and the write-lock contention two
 /// concurrent scans would otherwise create. The bounded/drop-write channel
 /// coalesces a burst of triggers arriving mid-scan into exactly one follow-up

@@ -525,10 +525,16 @@ public class MaildirScannerTests : IDisposable
 
         // Inject a persistent write failure for this file's sync_state row:
         // both the ingest attempt AND the catch handler's refresh now fail,
-        // mimicking sustained SQLITE_BUSY / I/O trouble. The row goes stale,
-        // so without the reconciliation guard the live message would be
-        // soft-deleted this scan (and purge-able).
+        // mimicking sustained SQLITE_BUSY / I/O trouble.
         Exec($"CREATE TRIGGER wedge_guard BEFORE UPDATE ON sync_state WHEN new.maildir_full_path = '{path}' BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+
+        // The file must actually CHANGE for the scan to attempt a sync_state
+        // write at all — an unchanged file takes the fast path, which writes
+        // nothing and so cannot fail. (Before that write was removed, the
+        // trigger fired on the fast path's own refresh and this rewrite wasn't
+        // needed. The guard under test is unchanged; only the way to provoke
+        // it is.)
+        WriteEml("INBOX", "cur", "wedge.host:2,S", "wedge body, rewritten and longer", "wedge@x");
 
         var failing = _scanner.ScanAll();
         failing.FailedToParse.ShouldBe(1);
@@ -541,6 +547,354 @@ public class MaildirScannerTests : IDisposable
         recovered.FailedToParse.ShouldBe(0);
         recovered.SoftDeleted.ShouldBe(0);
         _messages.GetByMessageId("wedge@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
+    // ---------------------------------------------------------------------
+    // Steady-state write volume. An idle indexer used to rewrite every
+    // sync_state row on every scan just to restamp last_seen_at — 82K rows,
+    // one SQLite page each, once a minute, measured at 467 GB/day into the WAL
+    // on the author's deployment. These pin the two halves of the fix: the
+    // scan writes nothing, and it still notices everything.
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public void An_unchanged_rescan_writes_nothing()
+    {
+        for (var i = 0; i < 40; i++)
+            WriteEml("INBOX", "cur", $"{i}.host:2,S", $"body {i}", $"msg-{i}@x");
+
+        var first = _scanner.ScanAll();
+        first.Upserted.ShouldBe(40);
+        first.Unchanged.ShouldBe(0);
+
+        CheckpointWal();
+        var walPath = _dbPath + "-wal";
+        new FileInfo(walPath).Length.ShouldBe(0);
+        var mainDbWrittenAt = File.GetLastWriteTimeUtc(_dbPath);
+
+        var second = _scanner.ScanAll();
+
+        // The acceptance criterion from the bug report: seen stays at the full
+        // corpus count, upserted collapses to zero.
+        second.Seen.ShouldBe(40);
+        second.Upserted.ShouldBe(0);
+        second.Unchanged.ShouldBe(40);
+        second.FailedToParse.ShouldBe(0);
+        second.SoftDeleted.ShouldBe(0);
+
+        // And the bytes, which is what the report was actually about. Asserted
+        // as an exact zero rather than a budget: any per-file write that
+        // creeps back in is multiplied by the corpus size and by 1440 scans a
+        // day, so "small" is not a safe threshold here.
+        new FileInfo(walPath).Length.ShouldBe(0);
+        File.GetLastWriteTimeUtc(_dbPath).ShouldBe(mainDbWrittenAt);
+    }
+
+    [Fact]
+    public void Real_mail_still_lands_on_an_otherwise_unchanged_scan()
+    {
+        for (var i = 0; i < 10; i++)
+            WriteEml("INBOX", "cur", $"{i}.host:2,S", $"body {i}", $"msg-{i}@x");
+        _scanner.ScanAll();
+
+        WriteEml("INBOX", "new", "fresh.host", "just arrived", "fresh@x");
+
+        var result = _scanner.ScanAll();
+        result.Seen.ShouldBe(11);
+        // Only the real delta — not the whole corpus, and not zero.
+        result.Upserted.ShouldBe(1);
+        result.Unchanged.ShouldBe(10);
+        _messages.GetByMessageId("fresh@x").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Deletion_is_still_detected_after_many_unchanged_scans()
+    {
+        var path = WriteEml("INBOX", "cur", "doomed.host:2,S", "doomed body", "doomed@x");
+        WriteEml("INBOX", "cur", "keeper.host:2,S", "keeper body", "keeper@x");
+        _scanner.ScanAll();
+
+        // Each of these leaves last_seen_at untouched, so by the end the rows
+        // look ancient. Deletion detection must not care: it is now "tracked
+        // but not walked", not "tracked and stale".
+        for (var i = 0; i < 5; i++) _scanner.ScanAll();
+
+        File.Delete(path);
+        var result = _scanner.ScanAll();
+
+        result.SoftDeleted.ShouldBe(1);
+        _messages.GetByMessageId("doomed@x").ShouldNotBeNull().DeletedAt.ShouldNotBeNull();
+        _messages.GetByMessageId("keeper@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_surviving_copy_is_still_recognised_after_many_unchanged_scans()
+    {
+        // The same Message-ID in two folders (Fastmail labels). Both rows are
+        // written by the first scan and never restamped again.
+        var inboxCopy = WriteEml("INBOX", "cur", "dup.host:2,S", "dup body", "dup@x");
+        WriteEml("Archive.2024", "cur", "dup.host:2,S", "dup body", "dup@x");
+        _scanner.ScanAll();
+
+        for (var i = 0; i < 5; i++) _scanner.ScanAll();
+
+        // Delete one copy. The message survives at the other path — which the
+        // scan must establish WITHOUT asking whether the survivor's row was
+        // stamped recently, because it wasn't. Reading survivorship out of
+        // last_seen_at here would soft-delete live mail.
+        File.Delete(inboxCopy);
+        var result = _scanner.ScanAll();
+
+        result.SoftDeleted.ShouldBe(0);
+        var msg = _messages.GetByMessageId("dup@x").ShouldNotBeNull();
+        msg.DeletedAt.ShouldBeNull();
+        // ...and the row is repointed at the copy that still exists.
+        File.Exists(Path.Combine(_root, msg.MaildirPath, msg.MaildirFilename)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void An_mbsync_rename_after_many_unchanged_scans_is_not_a_deletion()
+    {
+        var newPath = WriteEml("INBOX", "new", "renamed.host", "renamed body", "renamed@x");
+        _scanner.ScanAll();
+        for (var i = 0; i < 5; i++) _scanner.ScanAll();
+
+        var curPath = Path.Combine(_root, "INBOX", "cur", "renamed.host:2,S");
+        Directory.CreateDirectory(Path.GetDirectoryName(curPath)!);
+        File.Move(newPath, curPath);
+
+        var result = _scanner.ScanAll();
+
+        result.SoftDeleted.ShouldBe(0);
+        _messages.CountAll().ShouldBe(1);
+        var msg = _messages.GetByMessageId("renamed@x").ShouldNotBeNull();
+        msg.DeletedAt.ShouldBeNull();
+        msg.MaildirPath.ShouldBe("INBOX/cur");
+    }
+
+    [Fact]
+    public void A_row_missing_its_file_identity_records_one_and_then_goes_quiet()
+    {
+        var path = WriteEml("INBOX", "cur", "legacy.host:2,S", "legacy body", "legacy@x");
+        _scanner.ScanAll();
+
+        // Simulate a row written before migration 009. The fast path matches
+        // such a row through the legacy `mtime <= last_seen_at` fallback — the
+        // very hole 009 closed — so it MUST still take the one write that
+        // records the real identity. With last_seen_at also frozen now, a row
+        // left on that fallback would never converge.
+        Exec($"UPDATE sync_state SET file_mtime_utc = NULL, file_size = NULL WHERE maildir_full_path = '{path}'");
+
+        _scanner.ScanAll().Unchanged.ShouldBe(1);
+        Scalar($"SELECT file_mtime_utc FROM sync_state WHERE maildir_full_path = '{path}'").ShouldNotBeNull();
+        Scalar($"SELECT file_size FROM sync_state WHERE maildir_full_path = '{path}'").ShouldNotBeNull();
+
+        // Convergence is one-shot: the next scan is back to writing nothing.
+        CheckpointWal();
+        _scanner.ScanAll();
+        new FileInfo(_dbPath + "-wal").Length.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_row_missing_its_folder_records_one_and_then_goes_quiet()
+    {
+        var path = WriteEml("Archive.2024", "cur", "nofolder.host:2,S", "body", "nofolder@x");
+        _scanner.ScanAll();
+
+        // sync_state IS the folder-membership table that search's EXISTS probe
+        // and FolderStats read, so a pre-008 NULL here silently shrinks what
+        // folder filters match. The skip-the-write fast path must not leave it
+        // that way.
+        Exec($"UPDATE sync_state SET folder = NULL WHERE maildir_full_path = '{path}'");
+
+        _scanner.ScanAll().Unchanged.ShouldBe(1);
+        Scalar($"SELECT folder FROM sync_state WHERE maildir_full_path = '{path}'").ShouldBe("Archive.2024");
+
+        CheckpointWal();
+        _scanner.ScanAll();
+        new FileInfo(_dbPath + "-wal").Length.ShouldBe(0);
+    }
+
+    [Fact]
+    public void An_unchanged_scan_leaves_the_writer_lock_free()
+    {
+        // Removing the fast path's write removes its ctx.NoteWrite() too, and
+        // NoteWrite is what used to commit the rolling transaction every
+        // BatchSize rows. The read at the top of TryIngest still asks
+        // ScanContext for a transaction, and that property BEGINs one on first
+        // touch — BEGIN IMMEDIATE, which takes SQLite's single writer slot. So
+        // "writes nothing" is not the same as "blocks nobody": an idle scan
+        // could hold the writer lock across the entire 82K-file walk, with the
+        // embedder, the OCR write-back, every maintenance command and MCP's
+        // startup migration queued behind it. Zero WAL bytes the whole time.
+        //
+        // The probe takes the writer lock from an independent connection while
+        // the walk is in flight. It runs once, on the first file, with a short
+        // busy timeout so a regression is fast and red rather than a 30-second
+        // stall.
+        for (var i = 0; i < 20; i++)
+            WriteEml("INBOX", "cur", $"{i}.host:2,S", $"body {i}", $"msg-{i}@x");
+        _scanner.ScanAll();
+
+        var probed = false;
+        var writerLockWasFree = true;
+        _scanner.OnFileWalked = () =>
+        {
+            if (probed) return;
+            probed = true;
+            writerLockWasFree = TryTakeWriterLock();
+        };
+
+        try
+        {
+            var result = _scanner.ScanAll();
+            result.Unchanged.ShouldBe(20);
+            result.Upserted.ShouldBe(0);
+        }
+        finally
+        {
+            _scanner.OnFileWalked = null;
+        }
+
+        probed.ShouldBeTrue("the probe must actually have run, or this proves nothing");
+        writerLockWasFree.ShouldBeTrue(
+            "an unchanged scan held SQLite's writer lock across the walk, blocking every other writer");
+    }
+
+    [Fact]
+    public void An_unchanged_scan_never_takes_the_writer_lock_at_all()
+    {
+        // The companion to the probe test, and strictly sharper. Flushing
+        // promptly bounds how LONG the lock is held; it does not stop the scan
+        // taking it. If the per-file sync_state read asks ScanContext for a
+        // transaction rather than for the one already open, every unchanged
+        // file BEGINs IMMEDIATE and commits again — 82K writer-lock
+        // acquisitions per scan on a real corpus — and nothing else here can
+        // see it: the probe between files finds the lock free, and an empty
+        // transaction dirties no pages so the WAL stays at zero.
+        for (var i = 0; i < 20; i++)
+            WriteEml("INBOX", "cur", $"{i}.host:2,S", $"body {i}", $"msg-{i}@x");
+
+        _scanner.ScanAll();
+        _scanner.LastScanTransactionsBegun.ShouldBeGreaterThan(0, "the first scan writes, so it must open transactions");
+
+        var second = _scanner.ScanAll();
+        second.Unchanged.ShouldBe(20);
+        _scanner.LastScanTransactionsBegun.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_scan_that_writes_releases_the_writer_lock_once_the_writes_stop()
+    {
+        // Same hazard from the other side. A scan that ingests one new message
+        // opens the rolling transaction for its sync_state write; if nothing
+        // ever commits it, the lock is held from that file to the end of the
+        // walk. Under the old code the following files' own fast-path writes
+        // reached BatchSize and flushed it; they no longer write at all.
+        for (var i = 0; i < 20; i++)
+            WriteEml("INBOX", "cur", $"{i}.host:2,S", $"body {i}", $"msg-{i}@x");
+        _scanner.ScanAll();
+
+        // Sorts first in the directory listing, so the write happens early in
+        // the walk and most of the walk follows it.
+        WriteEml("INBOX", "cur", "0000-new.host", "just arrived", "arrived@x");
+
+        var probes = 0;
+        var writerLockWasFree = true;
+        _scanner.OnFileWalked = () =>
+        {
+            // Probe on the LAST file, by which point the earlier write's
+            // transaction must have been committed.
+            if (++probes != 21) return;
+            writerLockWasFree = TryTakeWriterLock();
+        };
+
+        try
+        {
+            var result = _scanner.ScanAll();
+            result.Upserted.ShouldBe(1);
+            result.Unchanged.ShouldBe(20);
+        }
+        finally
+        {
+            _scanner.OnFileWalked = null;
+        }
+
+        probes.ShouldBe(21);
+        writerLockWasFree.ShouldBeTrue(
+            "the rolling transaction outlived the writes it was batching and held the writer lock for the rest of the walk");
+    }
+
+    /// <summary>
+    /// Try to take SQLite's writer lock from a connection of our own. False if
+    /// something else is holding it.
+    /// </summary>
+    /// <remarks>
+    /// A raw connection rather than the shared ConnectionFactory, purely so the
+    /// timeouts can be short: the factory waits 30 s, which would turn a
+    /// regression into a stalled test run rather than a quick red one. Both
+    /// knobs are needed — the busy_timeout pragma sleeps inside a single
+    /// statement step, while Default Timeout bounds Microsoft.Data.Sqlite's
+    /// own retry loop around it, and that is the one that actually decides how
+    /// long a blocked BEGIN IMMEDIATE waits.
+    /// </remarks>
+    private bool TryTakeWriterLock()
+    {
+        try
+        {
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={_dbPath};Default Timeout=1");
+            conn.Open();
+            using (var pragma = conn.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA busy_timeout = 200;";
+                pragma.ExecuteScalar();
+            }
+            using var tx = conn.BeginTransaction(); // BEGIN IMMEDIATE
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "UPDATE metadata SET value = value WHERE key = 'schema_version'";
+            cmd.ExecuteNonQuery();
+            tx.Commit();
+            return true;
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Truncate the WAL so a following scan's writes are the only bytes in it.
+    /// </summary>
+    /// <remarks>
+    /// <para>ExecuteScalar, not ExecuteNonQuery: <c>wal_checkpoint</c> returns a
+    /// row, and Microsoft.Data.Sqlite silently no-ops result-returning pragmas
+    /// under ExecuteNonQuery — the same trap that left the schema's
+    /// <c>journal_mode = WAL</c> not actually applying. A silently skipped
+    /// checkpoint here would leave the WAL non-empty and quietly defeat the
+    /// measurement.</para>
+    ///
+    /// <para>TRUNCATE rather than PASSIVE, and the callers assert the resulting
+    /// zero as a precondition rather than assuming it. SQLite reuses WAL frames
+    /// in place after a checkpoint, so on a merely-checkpointed WAL a real write
+    /// need not grow the file at all — measuring a delta against a non-zero
+    /// baseline could read a full-corpus rewrite as zero bytes.</para>
+    /// </remarks>
+    private void CheckpointWal()
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+        cmd.ExecuteScalar();
+    }
+
+    private object? Scalar(string sql)
+    {
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var value = cmd.ExecuteScalar();
+        return value is DBNull ? null : value;
     }
 
     private void Exec(string sql)

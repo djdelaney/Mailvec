@@ -5,6 +5,14 @@ namespace Mailvec.Core.Data;
 public sealed record SyncStateEntry(
     string MaildirFullPath,
     string? MessageId,
+    // When this ROW was last written — NOT when the file was last seen, despite
+    // the column name (renaming it would cost a migration for no behavioural
+    // gain). A scan that walks a file and finds it unchanged writes nothing, so
+    // a live file's row can carry a timestamp from weeks ago. Nothing outside
+    // the scanner reads it, and the scanner uses it only to order candidate
+    // paths in PathsForMessageId and as the pre-009 identity fallback (which
+    // every row leaves behind after one scan). Deletion detection is NOT based
+    // on it — see EntriesNotObserved.
     DateTimeOffset LastSeenAt,
     string? ContentHash,
     string? Folder = null,
@@ -27,7 +35,17 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     /// avoids the per-Open extension-load + PRAGMA overhead that dominated
     /// indexer CPU when this used its own connection internally.
     /// </summary>
-    public SyncStateEntry? Get(SqliteConnection conn, SqliteTransaction tx, string maildirFullPath)
+    /// <remarks>
+    /// <paramref name="tx"/> is nullable and callers should pass the
+    /// transaction that is ALREADY open, never one begun on demand. This is a
+    /// read; beginning a transaction for it takes SQLite's single writer slot
+    /// (Microsoft.Data.Sqlite issues BEGIN IMMEDIATE) and the scanner calls
+    /// this once per file, so a lazily-created transaction here is held across
+    /// the whole walk. Passing null when none is open runs the read on its own
+    /// implicit transaction, which is what a scan wants — it has no need of a
+    /// consistent snapshot across the walk, and never had one.
+    /// </remarks>
+    public SyncStateEntry? Get(SqliteConnection conn, SqliteTransaction? tx, string maildirFullPath)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
@@ -95,23 +113,63 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         cmd.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<SyncStateEntry> StaleEntries(DateTimeOffset olderThan)
+    /// <summary>
+    /// How many paths sync_state currently tracks. The scanner uses it only to
+    /// pre-size the set it collects the walk into — an estimate is fine, and a
+    /// stale one costs at most some rehashing.
+    /// </summary>
+    public int TrackedPathCount()
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sync_state";
+        return Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
+    }
+
+    /// <summary>
+    /// Tracked paths the caller did NOT observe on its walk — the scanner's
+    /// deletion-reconciliation candidates.
+    /// </summary>
+    /// <remarks>
+    /// <para>This replaces a <c>WHERE last_seen_at &lt; $scanStart</c> query, and
+    /// the swap is what lets an unchanged scan write nothing at all. Under the
+    /// timestamp scheme "we still see this file" was expressed by RE-STAMPING
+    /// the row, so proving 82K files were alive cost 82K row rewrites — one
+    /// SQLite page each, every scan, forever (measured at 467 GB/day on the
+    /// author's deployment). The set of paths the walk just enumerated carries
+    /// exactly the same information and costs nothing to write down.</para>
+    ///
+    /// <para>The semantics are deliberately identical to what the cutoff query
+    /// meant: <b>tracked but not walked this scan</b>. Not "tracked but absent
+    /// from disk" — a file the walk never reached (an unreadable directory, a
+    /// folder whose name collides with a Maildir internal) must keep counting
+    /// as unwalked, because that is the condition the caller's reconciliation
+    /// veto is written against. Swapping in a <c>File.Exists</c> probe here
+    /// would quietly change which of those cases soft-deletes.</para>
+    ///
+    /// <para>Filtering happens while the reader streams, so the returned list
+    /// holds only the misses — zero rows on a steady-state scan — rather than
+    /// materialising the whole table. The scan is a full pass over
+    /// <c>sync_state</c> either way: <c>last_seen_at</c> has no index, so the
+    /// query this replaces was also a full scan.</para>
+    /// </remarks>
+    public IReadOnlyList<SyncStateEntry> EntriesNotObserved(IReadOnlySet<string> observedPaths)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT maildir_full_path, message_id, last_seen_at, content_hash, folder
             FROM sync_state
-            WHERE last_seen_at < $cutoff
             """;
-        cmd.Parameters.AddWithValue("$cutoff", olderThan.ToString("O"));
 
         var list = new List<SyncStateEntry>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var path = reader.GetString(0);
+            if (observedPaths.Contains(path)) continue;
             list.Add(new SyncStateEntry(
-                MaildirFullPath: reader.GetString(0),
+                MaildirFullPath: path,
                 MessageId: reader.IsDBNull(1) ? null : reader.GetString(1),
                 LastSeenAt: DateTimeOffset.Parse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture),
                 ContentHash: reader.IsDBNull(3) ? null : reader.GetString(3),
@@ -121,44 +179,43 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     }
 
     /// <summary>
-    /// Message-IDs whose sync_state row was refreshed at or after the cutoff.
-    /// Used by the scanner to distinguish "file was renamed" (still has a
-    /// fresh row at a new path) from "file was deleted" (no fresh row).
+    /// Every tracked path recorded for a Message-ID, most recently written
+    /// first. The scanner intersects this with the paths it actually walked to
+    /// answer both halves of one question about a vanished copy: does the
+    /// message survive somewhere else (a rename, or one copy of a multi-folder
+    /// message being removed), and if so, which live path should the messages
+    /// row be repointed at?
     /// </summary>
-    public HashSet<string> FreshMessageIds(DateTimeOffset since)
-    {
-        using var conn = connections.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT DISTINCT message_id
-            FROM sync_state
-            WHERE last_seen_at >= $cutoff AND message_id IS NOT NULL
-            """;
-        cmd.Parameters.AddWithValue("$cutoff", since.ToString("O"));
-
-        var set = new HashSet<string>(StringComparer.Ordinal);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) set.Add(reader.GetString(0));
-        return set;
-    }
-
-    /// <summary>
-    /// The most recently seen live path for a Message-ID (fresh as of the
-    /// cutoff), or null. Used by the scanner's reconciliation to repair a
-    /// messages row that still points at a just-deleted duplicate copy.
-    /// </summary>
-    public string? FreshPathForMessageId(SqliteConnection conn, string messageId, DateTimeOffset since)
+    /// <remarks>
+    /// Replaces a <c>FreshMessageIds</c> set built from
+    /// <c>last_seen_at &gt;= $scanStart</c> plus a per-entry
+    /// <c>FreshPathForMessageId</c>. Both read freshness out of a column the
+    /// scanner no longer restamps on an unchanged file, so both would now read
+    /// every surviving copy as absent and soft-delete live mail. Asking for the
+    /// copies by Message-ID and letting the caller test them against the walk
+    /// is the same question without the timestamp.
+    ///
+    /// <para>Called once per stale entry rather than once per scan — normally
+    /// zero times, and the <c>(message_id, folder)</c> index makes each lookup
+    /// a point query even when a bulk server-side archive stales thousands at
+    /// once. Ordering by <c>last_seen_at</c> preserves the old
+    /// most-recently-written preference when a message has several live
+    /// copies.</para>
+    /// </remarks>
+    public IReadOnlyList<string> PathsForMessageId(SqliteConnection conn, string messageId)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT maildir_full_path FROM sync_state
-            WHERE message_id = $mid AND last_seen_at >= $cutoff
+            WHERE message_id = $mid
             ORDER BY last_seen_at DESC
-            LIMIT 1
             """;
         cmd.Parameters.AddWithValue("$mid", messageId);
-        cmd.Parameters.AddWithValue("$cutoff", since.ToString("O"));
-        return cmd.ExecuteScalar() as string;
+
+        var list = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) list.Add(reader.GetString(0));
+        return list;
     }
 
     /// <summary>

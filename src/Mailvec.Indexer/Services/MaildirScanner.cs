@@ -26,26 +26,94 @@ public sealed class MaildirScanner(
     // inside an inter-batch gap within ~milliseconds.
     private const int BatchSize = 1000;
 
-    public sealed record ScanResult(int Seen, int Upserted, int FailedToParse, int SoftDeleted);
+    /// <summary>
+    /// Test seam: invoked once per walked file, after its ingest attempt.
+    /// Exists so a test can probe for SQLite's writer lock from an independent
+    /// connection while a scan is mid-walk — the one property of this loop that
+    /// cannot be observed from its return value or from the database afterwards.
+    /// </summary>
+    internal Action? OnFileWalked { get; set; }
+
+    /// <summary>
+    /// Test seam: how many transactions the last <see cref="ScanAll"/> BEGAN.
+    /// On a scan over an unchanged corpus this must be ZERO.
+    /// </summary>
+    /// <remarks>
+    /// Bounding how LONG the writer lock is held is not the same as not taking
+    /// it. A read that reaches for the transaction-creating property issues
+    /// BEGIN IMMEDIATE per file and commits it again moments later, so an idle
+    /// scan acquires and releases SQLite's single writer slot once per message
+    /// — 82K times a minute on a real corpus — while a probe between files sees
+    /// it free and the WAL stays empty (an empty transaction dirties no pages).
+    /// Neither the lock probe nor the zero-WAL assertion can see that; counting
+    /// the BEGINs can.
+    /// </remarks>
+    internal int LastScanTransactionsBegun { get; private set; }
+
+    /// <summary>
+    /// <paramref name="Seen"/> is every file the walk enumerated.
+    /// <paramref name="Upserted"/> counts only the files that were actually
+    /// parsed and written through <c>MessageRepository.Upsert</c>;
+    /// <paramref name="Unchanged"/> counts the files the fast path recognised
+    /// and skipped. Seen == Upserted + Unchanged + FailedToParse.
+    /// </summary>
+    /// <remarks>
+    /// Upserted used to include the fast-path skips, which made it read
+    /// <c>upserted == seen</c> on every steady-state scan and cost a real
+    /// investigation into a full-corpus re-parse that was never happening. The
+    /// number that was genuinely proportional to the corpus was the WRITE
+    /// volume, not the parse volume, and the counter pointed away from it.
+    /// </remarks>
+    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted);
 
     /// <summary>
     /// Walks every Maildir subfolder under MaildirRoot, parses messages, and
-    /// reconciles deletions: any sync_state row not refreshed during this scan
-    /// is treated as a removed message.
+    /// reconciles deletions: any sync_state row whose path this scan did not
+    /// walk is treated as a removed message.
     /// </summary>
+    /// <remarks>
+    /// A scan over an unchanged corpus writes NOTHING. Every file takes the
+    /// fast path in <see cref="TryIngest"/>, which stats the file, matches it
+    /// against the recorded identity and returns without touching the
+    /// database; liveness is carried by the in-memory observedPaths set rather
+    /// than by re-stamping each row. Keep it that way — this loop runs once a
+    /// minute over the whole corpus, so any per-file write added here is
+    /// multiplied by the corpus size and by 1440.
+    /// </remarks>
     public ScanResult ScanAll(CancellationToken cancellationToken = default)
     {
         if (!Directory.Exists(_maildirRoot))
         {
             logger.LogWarning("Maildir root {Path} does not exist; nothing to scan.", _maildirRoot);
-            return new ScanResult(0, 0, 0, 0);
+            return new ScanResult(0, 0, 0, 0, 0);
         }
 
         var scanStart = DateTimeOffset.UtcNow;
         var seen = 0;
         var upserted = 0;
+        var unchanged = 0;
         var failed = 0;
         var unrefreshed = 0;
+        // Every Maildir file this walk enumerated. This is the deletion
+        // reconciliation input, replacing the last_seen_at restamp that used
+        // to record the same fact one row-write at a time (see
+        // SyncStateRepository.EntriesNotObserved).
+        //
+        // A path is added the moment the walk reaches it, BEFORE the ingest is
+        // attempted, so a parse failure cannot make a live file look deleted —
+        // that used to depend on the catch handler's sync_state refresh
+        // succeeding, which is why IngestOutcome still carries
+        // FailedAndUnrefreshed.
+        //
+        // Ordinal, matching sync_state's BINARY primary key and the fact that
+        // these strings and the stored ones come from the same walk. Sized
+        // from the tracked-row count so the steady-state scan does not rehash
+        // its way up from 16 buckets every minute. Costs roughly 15 MB at the
+        // author's 82K-message corpus and grows linearly; the alternative,
+        // probing File.Exists per tracked row at reconciliation time, trades
+        // that for a second stat() of the whole corpus per scan AND changes
+        // which unwalked-but-present files soft-delete.
+        var observedPaths = new HashSet<string>(syncState.TrackedPathCount(), StringComparer.Ordinal);
         // Directories we couldn't enumerate (permissions, I/O). Any skipped
         // directory means the files inside it never got their sync_state
         // refreshed this scan, so — like `unrefreshed` — it must veto the
@@ -62,6 +130,7 @@ public sealed class MaildirScanner(
         // connection still gets regular write-lock windows.
         using var conn = connectionFactory.Open();
         using var ctx = new ScanContext(conn, BatchSize);
+        LastScanTransactionsBegun = 0;
 
         try
         {
@@ -98,11 +167,15 @@ public sealed class MaildirScanner(
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         seen++;
+                        observedPaths.Add(file);
 
                         switch (TryIngest(ctx, file, folderName, scanStart))
                         {
-                            case IngestOutcome.Ok:
+                            case IngestOutcome.Upserted:
                                 upserted++;
+                                break;
+                            case IngestOutcome.Unchanged:
+                                unchanged++;
                                 break;
                             case IngestOutcome.Failed:
                                 failed++;
@@ -112,6 +185,8 @@ public sealed class MaildirScanner(
                                 unrefreshed++;
                                 break;
                         }
+
+                        OnFileWalked?.Invoke();
                     }
                 }
             }
@@ -122,24 +197,37 @@ public sealed class MaildirScanner(
             ctx.Abandon();
             throw;
         }
+        LastScanTransactionsBegun = ctx.TransactionsBegun;
 
         if (unrefreshed > 0 || enumerationFailures > 0)
         {
-            // At least one live file's sync_state row could not be refreshed
-            // (its ingest + refresh both failed, or its whole directory
-            // couldn't be enumerated), so the deletion-reconciliation pass
-            // would see it as stale and soft-delete a message whose file is
-            // alive on disk. Skip reconciliation entirely this scan —
-            // genuinely deleted files are simply caught one scan later.
+            // A directory that could not be enumerated is the load-bearing
+            // half: its files were never walked, so they are absent from
+            // observedPaths and reconciliation would soft-delete every message
+            // in that directory while the files sit alive on disk. Skip
+            // reconciliation entirely — genuinely deleted files are caught one
+            // scan later.
+            //
+            // `unrefreshed` no longer implies that hazard. Under the
+            // last_seen_at scheme a live file's row went stale whenever its
+            // catch-handler refresh failed to WRITE; now the walk records the
+            // path in observedPaths before the ingest is even attempted, so a
+            // failed refresh cannot make the file look deleted. It is kept as
+            // a veto anyway: a sync_state write failing at all means the
+            // scan's connection is in trouble, which is the wrong moment to
+            // start soft-deleting rows on the strength of what it just read.
             logger.LogWarning(
                 "MaildirScanner: {Unrefreshed} file(s) failed ingest+refresh and {EnumFailures} director(ies) could not be enumerated; " +
                 "skipping deletion reconciliation this scan to avoid soft-deleting live messages. " +
-                "seen={Seen} upserted={Upserted} parseFailed={Failed}",
-                unrefreshed, enumerationFailures, seen, upserted, failed);
-            return new ScanResult(seen, upserted, failed, 0);
+                "seen={Seen} upserted={Upserted} unchanged={Unchanged} parseFailed={Failed}",
+                unrefreshed, enumerationFailures, seen, upserted, unchanged, failed);
+            return new ScanResult(seen, upserted, unchanged, failed, 0);
         }
 
-        var stale = syncState.StaleEntries(olderThan: scanStart);
+        // Tracked paths this walk never enumerated. Under the old scheme this
+        // was `last_seen_at < scanStart`, which is why every seen file had to
+        // be restamped; observedPaths carries the identical fact for free.
+        var stale = syncState.EntriesNotObserved(observedPaths);
 
         if (seen == 0 && stale.Count > 0)
         {
@@ -156,22 +244,44 @@ public sealed class MaildirScanner(
                 "skipping deletion reconciliation (empty/vanished Maildir root?). " +
                 "If the mailbox was genuinely emptied, reconciliation resumes when any file appears.",
                 _maildirRoot, stale.Count);
-            return new ScanResult(0, upserted, failed, 0);
+            return new ScanResult(0, upserted, unchanged, failed, 0);
         }
-        // A message-id with a fresh sync_state row (this scan's pass) was just
-        // re-seen at a new path — treat it as a rename, not a deletion.
-        var freshMessageIds = syncState.FreshMessageIds(since: scanStart);
-        var staleByMessageId = stale
-            .Where(e => e.MessageId is not null && !freshMessageIds.Contains(e.MessageId))
-            .Select(e => e.MessageId!)
-            .Distinct()
-            .ToList();
+
+        // Sort each vanished path into "the message is gone" and "the message
+        // survives at another path this scan walked" (an mbsync new/ -> cur/
+        // rename, or one copy of a multi-folder message being removed).
+        //
+        // The survivor test is `another recorded path for this Message-ID that
+        // the walk just enumerated`. It used to be `another sync_state row for
+        // this Message-ID stamped at or after scanStart` — the same question
+        // asked of last_seen_at, which the fast path no longer restamps. Left
+        // alone, that would have read every surviving copy as absent and soft-
+        // deleted the live message on the first scan after this change.
+        var deletedMessageIds = new List<string>();
+        var repointCandidates = new List<(SyncStateEntry Entry, string SurvivingPath)>();
+        foreach (var entry in stale)
+        {
+            if (entry.MessageId is null) continue;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var survivingPath = syncState
+                .PathsForMessageId(conn, entry.MessageId)
+                .FirstOrDefault(p =>
+                    !string.Equals(p, entry.MaildirFullPath, StringComparison.Ordinal)
+                    && observedPaths.Contains(p));
+
+            if (survivingPath is null) deletedMessageIds.Add(entry.MessageId);
+            else repointCandidates.Add((entry, survivingPath));
+        }
+        // Distinct: a message with several vanished copies must not be
+        // looked up (or marked) once per copy.
+        var goneMessageIds = deletedMessageIds.Distinct().ToList();
 
         var softDeleted = 0;
-        if (staleByMessageId.Count > 0)
+        if (goneMessageIds.Count > 0)
         {
-            var idsToMark = new List<long>(staleByMessageId.Count);
-            foreach (var mid in staleByMessageId)
+            var idsToMark = new List<long>(goneMessageIds.Count);
+            foreach (var mid in goneMessageIds)
             {
                 // Reuse the scan's connection (ctx is flushed — no tx open):
                 // a bulk server-side archive can stale thousands of entries,
@@ -188,28 +298,23 @@ public sealed class MaildirScanner(
             }
         }
 
-        // Stale entries whose Message-ID IS fresh are renames or deleted
-        // duplicate copies — the message stays live via another path. But the
-        // messages row may still point at the path that just vanished: the
+        // Stale entries whose message survives elsewhere are renames or
+        // deleted duplicate copies — the message stays live via another path.
+        // But the messages row may still point at the path that vanished: the
         // surviving copy rides the mtime fast-path and never re-upserts, so
         // the dangling path would persist forever (view_attachment fails, the
         // OCR pass re-selects and skips those attachments every cycle).
         // Repoint the row at a live fresh path for the same Message-ID.
         var repaired = 0;
-        foreach (var entry in stale)
+        foreach (var (entry, freshPath) in repointCandidates)
         {
-            if (entry.MessageId is null || !freshMessageIds.Contains(entry.MessageId)) continue;
-
             cancellationToken.ThrowIfCancellationRequested();
-            var msg = messages.GetByMessageId(conn, entry.MessageId);
+            var msg = messages.GetByMessageId(conn, entry.MessageId!);
             if (msg is null || msg.DeletedAt is not null) continue;
 
             var currentAbs = Path.Combine(_maildirRoot, msg.MaildirPath, msg.MaildirFilename);
             if (!string.Equals(Path.GetFullPath(currentAbs), Path.GetFullPath(entry.MaildirFullPath), StringComparison.Ordinal))
                 continue; // row already points at a different (live) copy
-
-            var freshPath = syncState.FreshPathForMessageId(conn, entry.MessageId, since: scanStart);
-            if (freshPath is null) continue;
 
             var folderDir = Path.GetDirectoryName(Path.GetDirectoryName(freshPath));
             if (folderDir is null) continue;
@@ -257,15 +362,21 @@ public sealed class MaildirScanner(
         }
 
         logger.LogInformation(
-            "MaildirScanner: seen={Seen} upserted={Upserted} parseFailed={Failed} softDeleted={SoftDeleted}",
-            seen, upserted, failed, softDeleted);
+            "MaildirScanner: seen={Seen} upserted={Upserted} unchanged={Unchanged} parseFailed={Failed} softDeleted={SoftDeleted}",
+            seen, upserted, unchanged, failed, softDeleted);
 
-        return new ScanResult(seen, upserted, failed, softDeleted);
+        return new ScanResult(seen, upserted, unchanged, failed, softDeleted);
     }
 
     private enum IngestOutcome
     {
-        Ok,
+        /// <summary>Parsed and written through MessageRepository.Upsert.</summary>
+        Upserted,
+        /// <summary>
+        /// Recognised by the fast path as the file we already ingested. In the
+        /// steady state this is every file in the corpus and it writes nothing.
+        /// </summary>
+        Unchanged,
         Failed,
         /// <summary>
         /// Ingest failed AND the catch handler's sync_state refresh also
@@ -309,18 +420,70 @@ public sealed class MaildirScanner(
             // blip) on a *changed* file would record the new file's identity
             // as though it had been ingested, and the change would be skipped
             // on every future scan — permanently masking the new content.
-            prior = syncState.Get(ctx.Connection, ctx.Transaction, filePath);
+            // CurrentTransaction, not Transaction: this is a read, and the
+            // creating property would BEGIN IMMEDIATE on the first file and
+            // hold the writer lock for the entire walk now that unchanged
+            // files no longer write (and so no longer reach the NoteWrite that
+            // used to commit the batch). Enlist in a transaction that is
+            // already open; otherwise run outside one.
+            prior = syncState.Get(ctx.Connection, ctx.CurrentTransaction, filePath);
             var info = new FileInfo(filePath);
             var mtimeUtc = info.LastWriteTimeUtc;
             var sizeBytes = info.Length;
             if (prior is { MessageId: not null, ContentHash: not null }
                 && FileIdentityUnchanged(prior, mtimeUtc, sizeBytes))
             {
-                syncState.Upsert(
-                    ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash, folderName,
-                    fileMtimeUtc: mtimeUtc, fileSize: sizeBytes);
-                ctx.NoteWrite();
-                return IngestOutcome.Ok;
+                // NOTHING TO WRITE. The file is the one this row already
+                // describes, so the row is already correct — and re-stamping it
+                // to say "still here" is what made an idle indexer rewrite the
+                // entire corpus once per scan: 82K rows, one SQLite page each,
+                // 467 GB/day into the WAL, which in turn kept the checkpointer
+                // running continuously against the 4.5 GB main file. Liveness
+                // is recorded in the caller's observedPaths set instead.
+                //
+                // Don't reintroduce a write here "so last_seen_at stays
+                // fresh". Nothing outside this class reads that column, and
+                // deletion detection no longer consults it.
+                //
+                // The exception is a row that is genuinely out of date in a
+                // way a LATER scan or a search depends on. Both cases are
+                // one-time convergence after a schema upgrade, not per-scan
+                // work:
+                //
+                //   * file identity NULL (pre-009 row). FileIdentityUnchanged
+                //     matched via its legacy `mtime <= last_seen_at` fallback,
+                //     which is exactly the preserved-mtime hole 009 exists to
+                //     close. Record the real identity now — otherwise, with
+                //     last_seen_at also frozen, the row would sit on that
+                //     fallback forever instead of converging after one scan.
+                //   * folder NULL or wrong (pre-008 row). sync_state IS the
+                //     folder-membership table for search, so leaving it stale
+                //     silently shrinks what folder filters match.
+                var rowIsCurrent =
+                    prior.FileMtimeUtc is not null
+                    && string.Equals(prior.Folder, folderName, StringComparison.Ordinal);
+                if (!rowIsCurrent)
+                {
+                    syncState.Upsert(
+                        ctx.Connection, ctx.Transaction, filePath, prior.MessageId, indexedAt, prior.ContentHash, folderName,
+                        fileMtimeUtc: mtimeUtc, fileSize: sizeBytes);
+                    ctx.NoteWrite();
+                }
+                else
+                {
+                    // This file needs no write, so there is nothing to batch —
+                    // commit whatever an earlier run of writes left open rather
+                    // than holding the writer lock across the rest of the walk.
+                    // A no-op when no transaction is open, which in the steady
+                    // state is every file.
+                    //
+                    // BatchSize still does its job where it matters: during a
+                    // bulk convergence pass consecutive files all write, so
+                    // they batch, and only a file that needs nothing breaks the
+                    // run.
+                    ctx.Flush();
+                }
+                return IngestOutcome.Unchanged;
             }
 
             // Parse path: messages.Upsert opens its own connection. Release
@@ -354,16 +517,19 @@ public sealed class MaildirScanner(
                 ctx.Connection, ctx.Transaction, filePath, parsed.MessageId, indexedAt, parsed.ContentHash, folderName,
                 fileMtimeUtc: mtimeUtc, fileSize: sizeBytes);
             ctx.NoteWrite();
-            return IngestOutcome.Ok;
+            return IngestOutcome.Upserted;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to parse {Path}", filePath);
-            // Refresh last_seen_at so we don't treat the file as deleted next
-            // pass, but PRESERVE the prior message_id. Nulling message_id
-            // would drop this path out of the deletion-reconciliation mapping
-            // (it filters on message_id != null), so if the file is later
-            // removed, its message would be stranded "live" forever.
+            // PRESERVE the prior message_id. Nulling it would drop this path
+            // out of the deletion-reconciliation mapping (it filters on
+            // message_id != null), so if the file is later removed, its
+            // message would be stranded "live" forever.
+            //
+            // This write is no longer what keeps the file from being treated
+            // as deleted — the walk already recorded the path in
+            // observedPaths. It is here to leave the retry marker below.
             //
             // content_hash is deliberately NULLed as a "retry me" marker: the
             // mtime fast path requires a non-null hash, so the next scan
@@ -511,6 +677,14 @@ public sealed class MaildirScanner(
 /// lock still held its BEGIN IMMEDIATE would block for the full busy_timeout
 /// on every parsed file. Don't remove that Flush(), and don't assume an open
 /// tx here is lock-free.
+///
+/// Two consequences of unchanged files no longer writing, both load-bearing:
+/// TryIngest reads through <see cref="CurrentTransaction"/> rather than
+/// <see cref="Transaction"/>, and it calls <see cref="Flush"/> on any file
+/// that needs no write. NoteWrite no longer fires on every file, so
+/// <c>_batchSize</c> alone no longer bounds how long a transaction stays open;
+/// without both of those an idle scan holds the writer lock across the entire
+/// walk while writing nothing at all.
 /// </summary>
 internal sealed class ScanContext : IDisposable
 {
@@ -527,7 +701,39 @@ internal sealed class ScanContext : IDisposable
 
     public SqliteConnection Connection => _connection;
 
-    public SqliteTransaction Transaction => _tx ??= _connection.BeginTransaction();
+    /// <summary>
+    /// The rolling transaction, BEGINNING one if none is open. Write paths
+    /// only — see <see cref="CurrentTransaction"/>.
+    /// </summary>
+    public SqliteTransaction Transaction
+    {
+        get
+        {
+            if (_tx is null)
+            {
+                _tx = _connection.BeginTransaction();
+                TransactionsBegun++;
+            }
+            return _tx;
+        }
+    }
+
+    /// <summary>
+    /// How many transactions this context has BEGUN. See
+    /// <c>MaildirScanner.LastScanTransactionsBegun</c>.
+    /// </summary>
+    public int TransactionsBegun { get; private set; }
+
+    /// <summary>
+    /// The transaction currently open, or null. Never begins one.
+    /// </summary>
+    /// <remarks>
+    /// Reads must use this. <see cref="Transaction"/> begins BEGIN IMMEDIATE on
+    /// first touch, so a read that reaches for it takes the writer lock — and
+    /// the scanner's per-file <c>sync_state</c> lookup would then hold that
+    /// lock for the whole walk, writing nothing the entire time.
+    /// </remarks>
+    public SqliteTransaction? CurrentTransaction => _tx;
 
     public void NoteWrite()
     {
