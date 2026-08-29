@@ -389,6 +389,15 @@ exempt, which is exactly what the `docker compose exec` check above proves.
   endpoint match**, and a stdio command ≠ an `https://` URL, so two Mailvecs
   would *not* dedupe. Disambiguate by display name if that ever happens.
 
+- **The connector enable/disable toggle is account-synced, not per-device.**
+  Reported by the account owner 2026-08-29; still undocumented by Anthropic,
+  whose only *documented* granularity remains per-conversation (`+` →
+  Connectors). This settles what the gotcha above leaves hanging: client-side
+  toggling is not a scoping lever, because disabling a second, differently
+  scoped Mailvec endpoint on one surface disables it on all of them. Two
+  endpoints with different reach would have to be separated by identity at the
+  Access policy, not by turning one off per device.
+
 - **Latency is fine and not worth optimising.** Cloudflare overhead is ~30–70 ms
   on top of client RTT, and `search_emails` is Ollama-bound anyway. Now that
   Desktop routes through the tunnel too, this is the only path — the old
@@ -402,12 +411,7 @@ exempt, which is exactly what the `docker compose exec` check above proves.
 
 ## Still open
 
-1. **Is the connector enable/disable toggle per-device or account-synced?**
-   Undocumented as of 2026-07; the only documented granularity is
-   **per-conversation** (`+` → Connectors). Now largely academic — every
-   surface intentionally uses the same remote connector — but it would matter
-   again if a second, differently-scoped Mailvec endpoint were ever added.
-2. **Do the dashboard path rules match exactly or as regex?** Undocumented for
+1. **Do the dashboard path rules match exactly or as regex?** Undocumented for
    remotely-managed tunnels. The external `curl -i` checks confirm the current
    rules behave; the semantics are still unpinned, so prefer the
    tunnel-configurations API over the dashboard field when editing them, and
