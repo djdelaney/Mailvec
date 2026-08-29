@@ -136,9 +136,16 @@ The Claude Desktop extension is removed from Claude Desktop's Settings → Exten
 Operations and dev:
 
 - **[docs/imap-setup.md](docs/imap-setup.md)** — mbsync config, Keychain, first-sync, Fastmail label-filtering gotcha
+- **[docs/install-macos.md](docs/install-macos.md)** — what the launchd install actually does: the ops scripts, the `mailvec` CLI shim, why published binaries lag the working tree, log rotation
 - **[docs/dev-walkthrough.md](docs/dev-walkthrough.md)** — point the pipeline at a throwaway DB for debugging without touching production
 - **[docs/logs.md](docs/logs.md)** — log paths, rotation, dev overrides
 - **[ops/export-db.sh](ops/export-db.sh)** / **[ops/import-db.sh](ops/import-db.sh)** — consistent archive snapshots for backup / machine migration (see "Backup & moving machines" above)
+
+Deployment (what the author runs, and where deployment issues surface first):
+
+- **[docs/deploy-docker.md](docs/deploy-docker.md)** — the Proxmox homelab stack: container/compose strategy, external Ollama, GHCR image pins, archive migration
+- **[docs/remote-access-cloudflare.md](docs/remote-access-cloudflare.md)** — the as-built public MCP exposure: Cloudflare Tunnel + Access Managed OAuth
+- **[docs/monitoring-uptime-kuma.md](docs/monitoring-uptime-kuma.md)** — verifying live monitor state (`/up` vs `/health`)
 
 Client wiring:
 
@@ -146,7 +153,7 @@ Client wiring:
 - **[docs/attachments.md](docs/attachments.md)** — reading attachments three ways (`view_attachment` inline image/text, `get_attachment_text`, `get_attachment_page_image`)
 - **[docs/fastmail-deep-links.md](docs/fastmail-deep-links.md)** — optional `webmailUrl` field
 - **[docs/security.md](docs/security.md)** — threat model: what's exposed, what's accepted, what's out of scope
-- **[docs/future-ideas.md](docs/future-ideas.md)** — deferred work (cloud-LLM access, tailnet/remote access)
+- **[docs/future-ideas.md](docs/future-ideas.md)** — deferred work and open questions (cross-vendor cloud access, multi-user identity, a GUI, packaged distribution, i18n), each with the reasoning that deferred it
 
 Project:
 
