@@ -466,7 +466,7 @@ services:
     # nothing is bumping it. To bump by hand, resolve the digest and confirm it
     # matches the version tag you intend:
     #   docker buildx imagetools inspect cloudflare/cloudflared:<version>
-    image: cloudflare/cloudflared:2026.8.2@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+    image: cloudflare/cloudflared:2026.8.3@sha256:51c9cefcb4569df44e1ad403ab1d3d8065aa8e84339bcfc6aee75502e1140339
     restart: unless-stopped
     # This container holds the tunnel credential and can reach the
     # unauthenticated mcp origin, which makes it the highest-value target in the
