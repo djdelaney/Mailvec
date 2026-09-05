@@ -15,7 +15,7 @@
     <PackageVersion Include="MimeKit"                           Version="4.17.0" />
 
     <!-- HTML parsing for HTML-to-text conversion -->
-    <PackageVersion Include="AngleSharp"                        Version="1.7.2" />
+    <PackageVersion Include="AngleSharp"                        Version="1.7.3" />
 
     <!-- Attachment text extraction (PDF + DOCX). Pure-managed; no native deps. -->
     <PackageVersion Include="PdfPig"                            Version="0.1.16" />
