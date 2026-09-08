@@ -35,12 +35,24 @@ tests are *invoked* (`dotnet test` in MTP mode), not just which version is pinne
 Two things to carry into that change:
 
 - **The counts are the test.** A runner swap can silently discover fewer tests and
-  still report success. When 3.1.5 -> 4.0.0 landed, per-assembly counts were
-  compared on both runners and matched exactly (41 / 91 / 209 / 246 / 687 = 1274).
-  Do that A/B rather than trusting a green run — 4.0.0's own release notes
-  describe a bug where assemblies could *appear* to pass when a foreground thread
-  was left running, which is exactly what a total-count check catches and a green
-  tick does not.
+  still report success. Do an A/B of per-assembly counts across the change rather
+  than trusting a green run — 4.0.0's own release notes describe a bug where
+  assemblies could *appear* to pass when a foreground thread was left running,
+  which is exactly what a total-count check catches and a green tick does not.
+
+  **Observed 2026-09-08** on `xunit.runner.visualstudio` 4.0.0, SDK 10.0.401 —
+  Cli 246, Core 687, Embedder 91, Indexer 51, Mcp 209, **total 1284**. Name the
+  assemblies when you record this; the counts alone were once written as a bare
+  ascending list, which reads as an order nothing actually produces. This is a
+  measurement, not a target: the suite grows, so **re-derive it immediately
+  before the swap** and A/B against that, never against the number written here.
+
+  ```sh
+  dotnet test -c Release 2>&1 | grep -E 'Passed!.*Total:'
+  ```
+
+  (The 3.1.5 -> 4.0.0 A/B that established this practice matched exactly at a
+  total of 1274, on the assemblies as they stood 2026-08-15.)
 - **CI is what has to keep working, not the IDE.** `.github/workflows/ci.yml` runs
   `dotnet test` on macOS and Linux; that invocation is what an MTP move rewrites.
 
