@@ -331,12 +331,12 @@ refresh.
 
 ## Does Dependabot's `nuget-major` group ever fire?
 
-> **Status 2026-08-22: OPEN — evidence gathered, cause not established.** Not a
-> proposal; a question with one hard data point behind it. Cheap to answer, and
-> the failure mode if the answer is "no" is silent — which is why it is written
-> down rather than left as a hunch.
+> **Status 2026-09-12: OPEN — evidence gathered twice, cause not established.**
+> Not a proposal; a question with two hard data points behind it. Cheap to
+> answer, and the failure mode if the answer is "no" is silent — which is why
+> it is written down rather than left as a hunch.
 
-**What was observed.** `xunit.runner.visualstudio` 4.0.0 was published
+**What was observed (2026-08-22).** `xunit.runner.visualstudio` 4.0.0 was published
 2026-08-15. The weekly NuGet run on 2026-08-22 (06:22-06:26Z) opened exactly one
 PR — #27, under `nuget-minor-patch`, carrying the PDFtoImage bump. Nothing was
 opened for the 4.0.0 major: not grouped, not standalone. Searching the repo's
@@ -375,6 +375,52 @@ failure `.github/dependabot.yml` already records for the `docker` ecosystem and
 the cloudflared pin, which sat unbumped from 2026-08-03 to 2026-08-15 behind a
 comment implying it was maintained. An ecosystem that silently declines to report
 majors is worse than one that reports nothing, because it silences the question.
+
+**New evidence 2026-09-12: one dependency was claimed by two groups in the same
+run, which the first reading forbids.** That morning's NuGet run opened #33 at
+06:27Z under `dotnet-and-mcp`, carrying `Microsoft.Extensions.Http.Resilience`
+10.9.0 -> 10.10.0 on its own. Seven minutes later it opened #34 under
+`nuget-minor-patch` carrying four updates — AngleSharp, Test.Sdk,
+System.CommandLine, **and the same Http.Resilience bump**. #33 was closed at
+06:34:33Z, four seconds after #34 was created, as superseded; the bump reached
+`main` inside #34.
+
+Under the first reading that cannot happen. `Http.Resilience` matches
+`Microsoft.Extensions.*` in `dotnet-and-mcp`, which is declared *first*, so
+first-match-wins would claim it there and leave it invisible to the catch-all.
+Instead both groups produced a PR for it from one run. So assignment is **not** a
+single exclusive first-match pass over the ordered group list — or, if it is, it
+runs once per entry in `directories` rather than once per ecosystem, with
+de-duplication happening at PR level by superseding rather than at assignment
+time. The directory fanout is a live possibility here and not a tidy separation:
+`Http.Resilience` is referenced by `src/Mailvec.Core` and `src/Mailvec.Embedder`
+while AngleSharp is referenced by `src/Mailvec.Core`, so a single directory's run
+holds members of both groups.
+
+**What this does not settle.** It weakens the "`nuget-minor-patch` claims
+everything, therefore `nuget-major` is dead code" argument — if one dependency
+can be claimed by two groups, a major-only update is not obviously locked out of
+`nuget-major`. But it explains nothing about why `xunit.runner.visualstudio`
+4.0.0 produced no PR at all, so the original question stands and arguably gets
+harder: under non-exclusive assignment there is *less* reason for the 2026-08-22
+silence, not more. The instruction below not to reorder on a guess applies to
+this data point too.
+
+**A second, separate reporting defect in the same run — read the branch, not the
+body.** #34's body claimed four updates; its branch carried three.
+`System.CommandLine` stayed pinned at 2.0.11 while the body announced 2.0.12.
+Nothing was wrong with 2.0.12: published 2026-09-08 (four days before the run),
+listed, dependency surface identical to 2.0.11, and — verified afterwards — a
+clean Release build with the full suite green at 1284 tests. #31 and #32 from the
+same morning both carry "Cooldown could not be applied because no publication
+date was available from the registry", and **no Dependabot PR before 2026-09-12
+carries that warning**, so a cooldown appears to have been enabled recently and
+somewhere other than `.github/dependabot.yml`, which declares none. A cooldown
+would explain *withholding* a four-day-old release; it does not explain
+*announcing it as applied*. Taken by hand in "Take System.CommandLine 2.0.12".
+Treat a group PR's body as a statement of intent and diff the branch before
+believing it — a body that overstates what it changed is the same
+"reads as maintained but is not" failure this section already turns on.
 
 **How to settle it.** Insights -> Dependency graph -> Dependabot -> the nuget
 job's "Last checked" log lists per-dependency outcomes and skip reasons, and
