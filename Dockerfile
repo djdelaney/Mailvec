@@ -23,7 +23,7 @@
 # enabled and bumps these weekly. If Dependabot is ever turned off, go back to
 # tags rather than sitting on a frozen base.
 #   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:096ca98743616ccfa14dccaa2a86615fd7345bd0c4535445226e98dbd46af2b5 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:2fa828c68761b1b8c23d7662dc134421b9d3b59fe1425fdbc80804e390cdb24d AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
@@ -253,7 +253,7 @@ RUN chmod +x /usr/local/bin/mbsync-loop
 CMD ["mbsync-loop"]
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:3a494b8a73ec3248c237c9438592ff1e04587edf65863212bc1027e54dcb6f36 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:6a94333d37514e385650a3c81a55e5350b67253dbe136e9cf17e499c35606a8c AS runtime
 # curl is for the compose healthcheck against /health.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
