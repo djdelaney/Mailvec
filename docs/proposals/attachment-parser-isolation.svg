@@ -1,0 +1,230 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="940" viewBox="0 0 1280 940" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#1F2937">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#B45309"/>
+    </marker>
+    <style>
+      .title { font-size: 20px; font-weight: 700; }
+      .sub   { font-size: 12px; fill: #6B7280; }
+      .band  { font-size: 12px; font-weight: 700; fill: #334155; }
+      .ext   { font-size: 11.5px; font-weight: 600; fill: #334155; }
+      .extsub{ font-size: 10px; fill: #6B7280; }
+      .cardT { font-size: 14px; font-weight: 700; }
+      .cardS { font-size: 10.5px; fill: #6B7280; }
+      .row   { font-size: 11px; }
+      .mono  { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 10.5px; }
+      .none  { fill: #15803D; font-weight: 700; }
+      .warn  { fill: #9A3412; font-weight: 600; }
+      .muted { fill: #6B7280; }
+      .note  { font-size: 10.5px; fill: #475569; }
+      .new   { font-size: 10px; font-weight: 700; fill: #FFFFFF; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="940" fill="#FFFFFF"/>
+
+  <!-- Title -->
+  <text x="40" y="40" class="title">Mailvec compose stack — isolation boundaries (proposed)</text>
+  <text x="40" y="60" class="sub">Each rounded band is a Docker network. Each card lists what a process running there can reach. Dashed boxes are outside the compose project.</text>
+
+  <!-- External row -->
+  <g stroke="#94A3B8" stroke-dasharray="5 3" fill="#F8FAFC">
+    <rect x="60"  y="88" width="200" height="52" rx="6"/>
+    <rect x="290" y="88" width="200" height="52" rx="6"/>
+    <rect x="520" y="88" width="200" height="52" rx="6"/>
+    <rect x="750" y="88" width="200" height="52" rx="6"/>
+  </g>
+  <text x="160" y="110" text-anchor="middle" class="ext">Fastmail</text>
+  <text x="160" y="126" text-anchor="middle" class="extsub">IMAPS · source of truth for mail</text>
+  <text x="390" y="110" text-anchor="middle" class="ext">Cloudflare edge ⇄ Claude clients</text>
+  <text x="390" y="126" text-anchor="middle" class="extsub">Access (OAuth) is the identity gate</text>
+  <text x="620" y="110" text-anchor="middle" class="ext">Ollama (LAN VM)</text>
+  <text x="620" y="126" text-anchor="middle" class="extsub">used by mcp (queries) + embedder</text>
+  <text x="850" y="110" text-anchor="middle" class="ext">Hosted APIs</text>
+  <text x="850" y="126" text-anchor="middle" class="extsub">Fireworks embed · Mistral OCR (opt-in)</text>
+
+  <!-- Band 1: default network -->
+  <rect x="40" y="168" width="940" height="296" rx="12" fill="#EEF3FB" stroke="#7A9CC6" stroke-width="1.5"/>
+  <text x="56" y="190" class="band">default network — egress allowed</text>
+
+  <!-- arrows from cards to external -->
+  <g stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+    <line x1="160" y1="200" x2="160" y2="142"/>
+    <line x1="620" y1="200" x2="620" y2="142"/>
+    <line x1="850" y1="200" x2="850" y2="142"/>
+  </g>
+  <line x1="390" y1="200" x2="390" y2="142" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text x="168" y="166" class="note">IMAP pull</text>
+  <text x="398" y="166" class="note">outbound tunnel dial</text>
+  <text x="628" y="166" class="note">embed / vision calls</text>
+  <text x="858" y="166" class="note">bearer-key calls</text>
+
+  <!-- ===== Card: mbsync ===== -->
+  <g>
+    <rect x="60" y="200" width="200" height="244" rx="8" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+    <rect x="60" y="200" width="200" height="42" rx="8" fill="#F1F5F9"/>
+    <rect x="60" y="230" width="200" height="12" fill="#F1F5F9"/>
+    <line x1="60" y1="242" x2="260" y2="242" stroke="#CBD5E1"/>
+    <text x="72" y="219" class="cardT">mbsync</text>
+    <text x="72" y="234" class="cardS">IMAP pull sidecar (alpine image)</text>
+    <text x="72" y="262" class="row">root · 1 GB · 128 pids</text>
+    <text x="72" y="282" class="row"><tspan class="mono">/mail</tspan> rw — it writes the Maildir</text>
+    <text x="72" y="302" class="row">secret: <tspan class="mono">fastmail_password</tspan></text>
+    <text x="72" y="322" class="row">egress: Fastmail only</text>
+    <text x="72" y="342" class="row">no database, no SQLite</text>
+    <text x="72" y="372" class="row">parser code: <tspan class="none">none</tspan></text>
+    <text x="72" y="392" class="row muted">writes heartbeat + sync marker files</text>
+    <text x="72" y="408" class="row muted">beside the Maildir root</text>
+  </g>
+
+  <!-- ===== Card: cloudflared ===== -->
+  <g>
+    <rect x="290" y="200" width="200" height="244" rx="8" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+    <rect x="290" y="200" width="200" height="42" rx="8" fill="#F1F5F9"/>
+    <rect x="290" y="230" width="200" height="12" fill="#F1F5F9"/>
+    <line x1="290" y1="242" x2="490" y2="242" stroke="#CBD5E1"/>
+    <text x="302" y="219" class="cardT">cloudflared</text>
+    <text x="302" y="234" class="cardS">outbound tunnel (profile: tunnel)</text>
+    <text x="302" y="262" class="row">root · 256 MB · 256 pids</text>
+    <text x="302" y="282" class="row">no volumes</text>
+    <text x="302" y="302" class="row">secret: <tspan class="mono">TUNNEL_TOKEN</tspan> (env)</text>
+    <text x="302" y="322" class="row">egress: Cloudflare edge</text>
+    <text x="302" y="342" class="row">ingress: forwards to <tspan class="mono">mcp:3333</tspan></text>
+    <text x="302" y="372" class="row">parser code: <tspan class="none">none</tspan></text>
+    <text x="302" y="392" class="row muted">the only ingress to the stack;</text>
+    <text x="302" y="408" class="row muted">no host port is published</text>
+  </g>
+
+  <!-- ingress arrow cloudflared -> mcp -->
+  <line x1="490" y1="300" x2="518" y2="300" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ===== Card: mcp ===== -->
+  <g>
+    <rect x="520" y="200" width="200" height="244" rx="8" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+    <rect x="520" y="200" width="200" height="42" rx="8" fill="#F1F5F9"/>
+    <rect x="520" y="230" width="200" height="12" fill="#F1F5F9"/>
+    <line x1="520" y1="242" x2="720" y2="242" stroke="#CBD5E1"/>
+    <text x="532" y="219" class="cardT">mcp</text>
+    <text x="532" y="234" class="cardS">MCP server · :3333 · read-only tools</text>
+    <text x="532" y="262" class="row">root · 3 GB · 512 pids</text>
+    <text x="532" y="282" class="row"><tspan class="mono">/data</tspan> rw · <tspan class="mono">/mail</tspan> ro · <tspan class="mono">/logs</tspan></text>
+    <text x="532" y="302" class="row">secret: <tspan class="mono">embedding_api_key</tspan></text>
+    <text x="532" y="322" class="row">egress: Ollama, hosted embed</text>
+    <text x="532" y="342" class="row">networks: default + parse</text>
+    <text x="532" y="372" class="row">parser code: <tspan class="none">NONE</tspan> <tspan class="muted">(stripped)</tspan></text>
+    <text x="532" y="392" class="row muted">view_attachment / page image now</text>
+    <text x="532" y="408" class="row muted">send .eml bytes to parse ↓</text>
+  </g>
+
+  <!-- ===== Card: embedder ===== -->
+  <g>
+    <rect x="750" y="200" width="200" height="244" rx="8" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+    <rect x="750" y="200" width="200" height="42" rx="8" fill="#F1F5F9"/>
+    <rect x="750" y="230" width="200" height="12" fill="#F1F5F9"/>
+    <line x1="750" y1="242" x2="950" y2="242" stroke="#CBD5E1"/>
+    <text x="762" y="219" class="cardT">embedder</text>
+    <text x="762" y="234" class="cardS">embedding + OCR worker</text>
+    <text x="762" y="262" class="row">root · 2 GB · 512 pids</text>
+    <text x="762" y="282" class="row"><tspan class="mono">/data</tspan> rw · <tspan class="mono">/mail</tspan> ro · <tspan class="mono">/logs</tspan></text>
+    <text x="762" y="302" class="row">secrets: <tspan class="mono">embedding_api_key</tspan>,</text>
+    <text x="762" y="316" class="row">mistral key (env)</text>
+    <text x="762" y="336" class="row">egress: Ollama, Fireworks, Mistral</text>
+    <text x="762" y="354" class="row">networks: default + parse</text>
+    <text x="762" y="378" class="row">parser code: <tspan class="none">NONE</tspan> <tspan class="muted">(stripped)</tspan></text>
+    <text x="762" y="398" class="row muted">OCR pass sends .eml bytes to</text>
+    <text x="762" y="412" class="row muted">parse, gets JPEG pages back ↓</text>
+  </g>
+
+  <!-- ===== parse network bus ===== -->
+  <line x1="620" y1="520" x2="1110" y2="520" stroke="#B45309" stroke-width="4" stroke-linecap="round"/>
+  <g stroke="#B45309" stroke-width="2">
+    <line x1="620"  y1="444" x2="620"  y2="520"/>
+    <line x1="850"  y1="444" x2="850"  y2="520"/>
+    <line x1="620"  y1="520" x2="620"  y2="596"/>
+    <line x1="1110" y1="520" x2="1110" y2="580"/>
+  </g>
+  <g fill="#B45309">
+    <circle cx="620" cy="520" r="4.5"/>
+    <circle cx="850" cy="520" r="4.5"/>
+    <circle cx="1110" cy="520" r="4.5"/>
+  </g>
+  <text x="870" y="507" class="band" fill="#9A3412">parse network — internal: true, no egress</text>
+  <text x="870" y="540" class="note">.eml bytes in → ParsedMessage / text / JPEG / decoded part out</text>
+
+  <!-- ===== Band 3: isolated network (indexer) ===== -->
+  <rect x="500" y="556" width="240" height="322" rx="12" fill="#ECFDF5" stroke="#34A26F" stroke-width="1.5"/>
+  <text x="512" y="576" class="band" fill="#166534">isolated network</text>
+  <text x="512" y="590" class="note">internal: true — indexer only</text>
+
+  <!-- ===== Card: indexer ===== -->
+  <g>
+    <rect x="520" y="600" width="200" height="262" rx="8" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+    <rect x="520" y="600" width="200" height="42" rx="8" fill="#F1F5F9"/>
+    <rect x="520" y="630" width="200" height="12" fill="#F1F5F9"/>
+    <line x1="520" y1="642" x2="720" y2="642" stroke="#CBD5E1"/>
+    <text x="532" y="619" class="cardT">indexer</text>
+    <text x="532" y="634" class="cardS">Maildir scan → SQLite</text>
+    <text x="532" y="662" class="row">root · 1 GB <tspan class="muted">(was 2)</tspan> · 512 pids</text>
+    <text x="532" y="682" class="row"><tspan class="mono">/data</tspan> rw · <tspan class="mono">/mail</tspan> ro · <tspan class="mono">/logs</tspan></text>
+    <text x="532" y="702" class="row">no secrets</text>
+    <text x="532" y="722" class="row">no egress</text>
+    <text x="532" y="742" class="row">networks: isolated + parse</text>
+    <text x="532" y="772" class="row">parser code: <tspan class="none">NONE</tspan> <tspan class="muted">(stripped)</tspan></text>
+    <text x="532" y="792" class="row muted">reads .eml, sends bytes to parse,</text>
+    <text x="532" y="806" class="row muted">writes the returned record.</text>
+    <text x="532" y="826" class="row muted">unchanged files never leave</text>
+    <text x="532" y="840" class="row muted">the mtime fast path (no call)</text>
+  </g>
+
+  <!-- ===== Card: parse (NEW) ===== -->
+  <g>
+    <rect x="990" y="580" width="250" height="298" rx="8" fill="#FFF7ED" stroke="#B45309" stroke-width="2"/>
+    <rect x="990" y="580" width="250" height="42" rx="8" fill="#FFEDD5"/>
+    <rect x="990" y="610" width="250" height="12" fill="#FFEDD5"/>
+    <line x1="990" y1="622" x2="1240" y2="622" stroke="#FDBA74"/>
+    <text x="1002" y="599" class="cardT" fill="#7C2D12">parse</text>
+    <rect x="1050" y="587" width="36" height="16" rx="8" fill="#B45309"/>
+    <text x="1068" y="599" text-anchor="middle" class="new">NEW</text>
+    <text x="1002" y="614" class="cardS">the one process that eats untrusted bytes</text>
+    <text x="1002" y="642" class="row"><tspan class="warn">uid 65534 (nobody)</tspan> · 2 GB · 128 pids</text>
+    <text x="1002" y="662" class="row"><tspan class="warn">no volumes</tspan> · <tspan class="warn">no secrets</tspan></text>
+    <text x="1002" y="682" class="row"><tspan class="warn">no egress</tspan> — parse network only</text>
+    <text x="1002" y="702" class="row">read-only rootfs · tmpfs /tmp noexec</text>
+    <text x="1002" y="722" class="row">exits on request timeout and</text>
+    <text x="1002" y="736" class="row">after N requests (bounded lifetime)</text>
+    <text x="1002" y="762" class="row">carries: <tspan class="warn">MimeKit · PdfPig · OpenXml</tspan></text>
+    <text x="1002" y="776" class="row warn">AngleSharp · PDFium · SkiaSharp · LibTiff</text>
+    <text x="1002" y="800" class="row muted">a compromise gets: the documents in</text>
+    <text x="1002" y="814" class="row muted">flight, and the ability to return lying</text>
+    <text x="1002" y="828" class="row muted">output for them. Nothing else.</text>
+    <text x="1002" y="852" class="row muted">the only /app dir in the image that</text>
+    <text x="1002" y="866" class="row muted">still contains a parser library</text>
+  </g>
+
+  <!-- ===== Host box ===== -->
+  <g>
+    <rect x="60" y="580" width="400" height="298" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.2" stroke-dasharray="5 3"/>
+    <text x="76" y="602" class="band">Docker host — bind mounts and files</text>
+    <text x="76" y="618" class="note">root on the VM is out of scope: it reads the archive directly</text>
+    <line x1="60" y1="628" x2="460" y2="628" stroke="#E2E8F0"/>
+    <text x="76" y="652" class="row"><tspan class="mono">./mail</tspan>   Maildir. mbsync rw; indexer, embedder, mcp ro</text>
+    <text x="76" y="674" class="row"><tspan class="mono">./data</tspan>   <tspan class="mono">archive.sqlite</tspan> — the whole indexed mailbox</text>
+    <text x="76" y="696" class="row"><tspan class="mono">./logs</tspan>   per-service rolling logs (may hold sender/subject)</text>
+    <text x="76" y="718" class="row"><tspan class="mono">secrets/</tspan> <tspan class="mono">fastmail_password</tspan>, <tspan class="mono">embedding_api_key</tspan></text>
+    <text x="76" y="740" class="row"><tspan class="mono">.env</tspan>     <tspan class="mono">TUNNEL_TOKEN</tspan>, mistral key, hostnames, Ollama URL</text>
+    <line x1="60" y1="756" x2="460" y2="756" stroke="#E2E8F0"/>
+    <text x="76" y="780" class="row">Mounted into <tspan class="warn">parse</tspan>: <tspan class="none">nothing</tspan>.</text>
+    <text x="76" y="800" class="row muted">Every other service holds the whole mailbox by design;</text>
+    <text x="76" y="814" class="row muted">this diagram is about what a parser bug adds to that.</text>
+    <text x="76" y="840" class="row muted">All five: cap_drop ALL · no-new-privileges.</text>
+    <text x="76" y="854" class="row muted">Mailvec-image services add read_only rootfs, tmpfs /tmp</text>
+    <text x="76" y="868" class="row muted">(noexec, 64 MB), pids_limit, mem_limit.</text>
+  </g>
+
+  <!-- Footer: today vs proposed -->
+  <text x="40" y="912" class="note"><tspan font-weight="700">Today, before this proposal:</tspan> there is no parse service. mcp and embedder carry PDFium, SkiaSharp and MimeKit in-process; the indexer carries MimeKit, PdfPig, OpenXml and AngleSharp — each with the mounts, secrets and network shown on its card.</text>
+  <text x="40" y="928" class="note">macOS launchd / MCPB installs keep everything in-process (Parser:Mode=inprocess) and are not drawn here.</text>
+</svg>
