@@ -9,6 +9,7 @@ using Mailvec.Embedder.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SkiaSharp;
+using Mailvec.Parsing;
 
 namespace Mailvec.Embedder.Tests;
 
@@ -54,6 +55,7 @@ public class AttachmentOcrServiceTests : IDisposable
     private AttachmentOcrService Build(IVisionClient vision, EmbedderOptions? opts = null) =>
         new(_messages,
             new MaildirAttachmentReader(Options.Create(new IngestOptions { MaildirRoot = _maildirRoot })),
+            new InProcessParser(extractor: null),
             vision,
             Options.Create(opts ?? new EmbedderOptions()),
             NullLogger<AttachmentOcrService>.Instance);
@@ -62,6 +64,7 @@ public class AttachmentOcrServiceTests : IDisposable
     private AttachmentOcrService BuildWithMetadata(IVisionClient vision, EmbedderOptions? opts = null) =>
         new(_messages,
             new MaildirAttachmentReader(Options.Create(new IngestOptions { MaildirRoot = _maildirRoot })),
+            new InProcessParser(extractor: null),
             vision,
             Options.Create(opts ?? new EmbedderOptions()),
             NullLogger<AttachmentOcrService>.Instance,

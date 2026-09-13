@@ -12,6 +12,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Mailvec.Core.Parsing;
+using Mailvec.Parsing;
 
 var builder = Host.CreateApplicationBuilder(args);
 // Single source of truth for DB / Ollama config. See SharedConfig.
@@ -32,6 +34,10 @@ builder.Services.AddSingleton<MetadataRepository>();
 builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<ChunkingService>();
 builder.Services.AddSingleton<MaildirAttachmentReader>();
+// The parser seam (ParserRegistration): the OCR pass gets its page renders and
+// image decodes through IMailParser, never from a renderer of its own.
+builder.Services.AddMailvecParser(builder.Configuration,
+    (sp, settings) => new InProcessParser(settings, sp.GetRequiredService<ILoggerFactory>()));
 
 // Centralized provider selection (EmbeddingRegistration): identical profile
 // resolution in Embedder, MCP and CLI, so this process can never write a

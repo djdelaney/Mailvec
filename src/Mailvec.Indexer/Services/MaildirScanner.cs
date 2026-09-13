@@ -2,6 +2,7 @@ using Mailvec.Core;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,7 +11,7 @@ namespace Mailvec.Indexer.Services;
 
 public sealed class MaildirScanner(
     IOptions<IngestOptions> ingestOptions,
-    MessageParser parser,
+    IMailParser parser,
     MessageRepository messages,
     ChunkRepository chunks,
     SyncStateRepository syncState,
@@ -492,7 +493,7 @@ public sealed class MaildirScanner(
             // ours (single-writer in WAL mode).
             ctx.Flush();
 
-            var parsed = parser.ParseFile(filePath);
+            var parsed = parser.ParseMessage(File.ReadAllBytes(filePath), extractAttachmentText: true);
             var relPath = MaildirPaths.RelativeFolderPath(_maildirRoot, filePath);
             var fileName = Path.GetFileName(filePath);
 

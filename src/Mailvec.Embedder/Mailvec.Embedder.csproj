@@ -12,10 +12,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The OCR pass's vision-health probe image (see AttachmentOcrService._probeJpeg). -->
+    <EmbeddedResource Include="Resources\ocr-probe-48x48.jpg" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Mailvec.Core\Mailvec.Core.csproj" />
     <!-- PDF page rasterisation for the scanned-PDF OCR pass (PDFium + SkiaSharp,
          native). Same isolated project the MCP server uses. -->
-    <ProjectReference Include="..\Mailvec.Pdf\Mailvec.Pdf.csproj" />
+    <ProjectReference Include="..\Mailvec.Parsing\Mailvec.Parsing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

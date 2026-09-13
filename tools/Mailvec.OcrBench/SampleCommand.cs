@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
 using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
+using Mailvec.Parsing;
 
 namespace Mailvec.OcrBench;
 
@@ -167,7 +168,7 @@ internal static class SampleCommand
     {
         // No cap: we want the document whatever its size, and the harness is
         // interactive rather than an unattended service.
-        var bytes = reader.ReadBytes(c.Message, PartIndexOf(c), maxBytes: null);
+        var bytes = MimePartDecoder.Decode(reader.ReadEml(c.Message), PartIndexOf(c), maxBytes: null).Bytes;
 
         var pdfRel = Path.Combine("docs", $"a{c.AttachmentId}.pdf");
         File.WriteAllBytes(Path.Combine(workDir, pdfRel), bytes);

@@ -3,6 +3,7 @@ using Mailvec.Core.Attachments;
 using Mailvec.Core.Models;
 using McpOptions = Mailvec.Core.Options.McpOptions;
 using IngestOptions = Mailvec.Core.Options.IngestOptions;
+using Mailvec.Parsing;
 
 namespace Mailvec.Core.Tests.Attachments;
 
@@ -42,7 +43,7 @@ public class AttachmentExtractorBranchTests : IDisposable
             AttachmentDownloadDir = _downloadDir,
             AttachmentInlineTextMaxBytes = inlineTextMax,
         });
-        return new AttachmentExtractor(ingest, mcp);
+        return new AttachmentExtractor(ingest, mcp, new InProcessParser(extractor: null));
     }
 
     private Message StageEml(string fileName, string emlBody, long messageId)

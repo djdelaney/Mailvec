@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Mailvec.Core\Mailvec.Core.csproj" />
+    <!-- For Parser:Mode=inprocess (the in-process factory passed to AddMailvecParser). -->
+    <ProjectReference Include="..\Mailvec.Parsing\Mailvec.Parsing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

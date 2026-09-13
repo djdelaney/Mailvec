@@ -5,6 +5,9 @@ using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Mailvec.Parsing;
+using Mailvec.Parsing.Contracts;
+using Microsoft.Extensions.Logging;
 
 namespace Mailvec.Cli.Tests;
 
@@ -42,7 +45,9 @@ public class BackfillInlineImagesCommandTests : IDisposable
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
         services.AddSingleton<MessageRepository>();
-        services.AddSingleton<AttachmentTextExtractor>();
+        services.AddSingleton(sp => new AttachmentTextExtractor(
+            new IndexerOptions().AttachmentMaxBytes, sp.GetRequiredService<ILogger<AttachmentTextExtractor>>()));
+        services.AddSingleton<IMailParser>(sp => new InProcessParser(sp.GetRequiredService<AttachmentTextExtractor>()));
         var sp = services.BuildServiceProvider();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         return sp;

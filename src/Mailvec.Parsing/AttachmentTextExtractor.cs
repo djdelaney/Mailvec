@@ -4,9 +4,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using A = DocumentFormat.OpenXml.Drawing;
 using P = DocumentFormat.OpenXml.Presentation;
 using S = DocumentFormat.OpenXml.Spreadsheet;
-using Mailvec.Core.Options;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using MimeKit;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
@@ -53,16 +51,16 @@ namespace Mailvec.Core.Attachments;
 /// code has one implementation — do not add another.
 /// </remarks>
 public class AttachmentTextExtractor(
-    IOptions<IndexerOptions> indexerOptions,
+    long attachmentMaxBytes,
     ILogger<AttachmentTextExtractor> logger)
 {
-    public const string StatusDone = "done";
-    public const string StatusNoText = "no_text";
-    public const string StatusOcr = "ocr";
-    public const string StatusUnsupported = "unsupported";
-    public const string StatusOversize = "oversize";
-    public const string StatusEncrypted = "encrypted";
-    public const string StatusFailed = "failed";
+    public const string StatusDone = ExtractionStatus.Done;
+    public const string StatusNoText = ExtractionStatus.NoText;
+    public const string StatusOcr = ExtractionStatus.Ocr;
+    public const string StatusUnsupported = ExtractionStatus.Unsupported;
+    public const string StatusOversize = ExtractionStatus.Oversize;
+    public const string StatusEncrypted = ExtractionStatus.Encrypted;
+    public const string StatusFailed = ExtractionStatus.Failed;
 
     private const int MaxExtractedTextChars = 2_000_000;
 
@@ -120,7 +118,7 @@ public class AttachmentTextExtractor(
         Windows1252 = Encoding.GetEncoding("windows-1252");
     }
 
-    private readonly long _maxBytes = indexerOptions.Value.AttachmentMaxBytes;
+    private readonly long _maxBytes = attachmentMaxBytes;
 
     public virtual ExtractionResult Extract(MimeEntity entity, string? fileName, string? contentType, long? declaredSize)
     {
@@ -939,5 +937,3 @@ public class AttachmentTextExtractor(
 
     private enum AttachmentFormat { Unsupported, Pdf, Docx, Xlsx, Pptx, Calendar, VCard, Text }
 }
-
-public sealed record ExtractionResult(string? Text, string Status);

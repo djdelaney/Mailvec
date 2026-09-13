@@ -18,10 +18,8 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using Mailvec.Core.Attachments;
-using Mailvec.Core.Options;
 using Mailvec.Pdf;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using MimeKit;
 
 return args switch
@@ -92,8 +90,7 @@ static class Child
     {
         // Raise the per-attachment ceiling so the size gate doesn't pre-empt
         // the parser — the point is to measure the parser, not the gate.
-        var opts = Options.Create(new IndexerOptions { AttachmentMaxBytes = 512L * 1024 * 1024 });
-        var extractor = new AttachmentTextExtractor(opts, NullLogger<AttachmentTextExtractor>.Instance);
+        var extractor = new AttachmentTextExtractor(512L * 1024 * 1024, NullLogger<AttachmentTextExtractor>.Instance);
         var name = Path.GetFileName(file);
         var part = new MimePart("application", "pdf")
         {

@@ -28,10 +28,13 @@ stable `attachments.extraction_status` enum:
 ## Formats we extract (indexer)
 
 Everything here is **pure-managed — no native deps, no shell-out, no OCR** in the
-indexer path. (The only native dep besides `sqlite-vec` — PDFium/SkiaSharp via
-`Mailvec.Pdf` — is referenced only by the embedder, for OCR rasterisation, and the
-MCP server, for `get_attachment_page_image` rendering and `view_attachment` image
-normalisation; never the indexer.)
+indexer path. (The only native dep besides `sqlite-vec` — PDFium/SkiaSharp, in
+`Mailvec.Parsing` behind `IMailParser` — is reached only by the embedder, for OCR
+rasterisation, and the MCP server, for `get_attachment_page_image` rendering and
+`view_attachment` image normalisation; never the indexer. "Pure-managed" is not
+"memory-safe by construction", though: MimeKit's parser core is `unsafe` pointer
+code and PdfPig/OpenXml inflate through the runtime's native zlib — see
+`docs/proposals/attachment-parser-isolation.md`.)
 
 | Format | Library | What we pull |
 |--------|---------|--------------|
@@ -153,9 +156,9 @@ The numbers above are defaults; the live values live in code:
 - `Mailvec.Core/Options/IndexerOptions.cs` → `AttachmentMaxBytes`
 - `Mailvec.Core/Options/EmbedderOptions.cs` → `ImageOcrMinBytes`,
   `ImageOcrMinDimension`, `ImageOcrMaxAspectRatio`, `ImageOcrEnabled`
-- `Mailvec.Core/Attachments/AttachmentTextExtractor.cs` → `MaxExtractedTextChars`,
+- `Mailvec.Parsing/AttachmentTextExtractor.cs` → `MaxExtractedTextChars`,
   and `ResolveFormat` (the format/routing table)
-- `Mailvec.Pdf/ImageRenderer.cs` → `MaxDecodedPixels`
+- `Mailvec.Parsing/ImageRenderer.cs` → `MaxDecodedPixels`
 - `Mailvec.Core/Data/MessageRepository.cs` → `ImageOcrMatch` (the image-OCR
   candidate gate, shared by the candidate query and the `/health` count) and
   `EnumerateImagesNeedingOcr`

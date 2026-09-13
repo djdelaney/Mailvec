@@ -12,6 +12,7 @@ using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using SkiaSharp;
 using Xunit.Abstractions;
+using Mailvec.Parsing;
 
 namespace Mailvec.Mcp.Tests.Tools;
 
@@ -57,7 +58,7 @@ public class GetAttachmentPageImageToolTests : IDisposable
         var mcp = Options.Create(new McpOptions { AttachmentDownloadDir = _downloadDir });
         return new GetAttachmentPageImageTool(
             new MessageRepository(db.Connections),
-            new AttachmentExtractor(ingest, mcp),
+            new AttachmentExtractor(ingest, mcp, new InProcessParser(extractor: null)),
             mcp,
             NullLogger<GetAttachmentPageImageTool>.Instance,
             Helpers.NoopLogger());
@@ -282,7 +283,7 @@ public class GetAttachmentPageImageToolTests : IDisposable
             Content = new MimeKit.MimeContent(new MemoryStream(pdf)),
         };
         var textExtractor = new AttachmentTextExtractor(
-            Options.Create(new IndexerOptions()), NullLogger<AttachmentTextExtractor>.Instance);
+            new IndexerOptions().AttachmentMaxBytes, NullLogger<AttachmentTextExtractor>.Instance);
         textExtractor.Extract(part, "scanned-sample.pdf", "application/pdf", pdf.LongLength)
             .Status.ShouldBe(AttachmentTextExtractor.StatusNoText);
     }
@@ -312,7 +313,7 @@ public class GetAttachmentPageImageToolTests : IDisposable
             Content = new MimeKit.MimeContent(new MemoryStream(pdf)),
         };
         var textExtractor = new AttachmentTextExtractor(
-            Options.Create(new IndexerOptions()), NullLogger<AttachmentTextExtractor>.Instance);
+            new IndexerOptions().AttachmentMaxBytes, NullLogger<AttachmentTextExtractor>.Instance);
         var extraction = textExtractor.Extract(part, "digital-table-sample.pdf", "application/pdf", pdf.LongLength);
         extraction.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
         extraction.Text.ShouldNotBeNull();

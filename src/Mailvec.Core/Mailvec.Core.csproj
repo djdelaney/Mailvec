@@ -3,10 +3,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite.Core" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
-    <PackageReference Include="MimeKit" />
-    <PackageReference Include="AngleSharp" />
-    <PackageReference Include="PdfPig" />
-    <PackageReference Include="DocumentFormat.OpenXml" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
@@ -19,6 +15,14 @@
     <PackageReference Include="Serilog.Sinks.Console" />
     <PackageReference Include="Serilog.Sinks.File" />
     <PackageReference Include="Serilog.Settings.Configuration" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core talks to a parser through the contracts only. It must never
+         reference Mailvec.Parsing or a parser package: that is what keeps
+         MimeKit / PdfPig / OpenXml / AngleSharp / PDFium / Skia out of the
+         indexer, embedder and MCP binaries in remote mode. -->
+    <ProjectReference Include="..\Mailvec.Parsing.Contracts\Mailvec.Parsing.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

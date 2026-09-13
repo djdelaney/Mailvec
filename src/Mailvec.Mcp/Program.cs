@@ -14,6 +14,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
+using Mailvec.Core.Parsing;
+using Mailvec.Parsing;
+using Microsoft.Extensions.Logging;
 
 // Two transports share the same Core wiring:
 //   --stdio  → Generic Host + StdioServerTransport (for Claude Desktop, since
@@ -321,6 +324,10 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<KeywordSearchService>();
     services.AddSingleton<VectorSearchService>();
     services.AddSingleton<HybridSearchService>();
+    // The parser seam (ParserRegistration): view_attachment and
+    // get_attachment_page_image decode and rasterise through IMailParser.
+    services.AddMailvecParser(config,
+        (sp, settings) => new InProcessParser(settings, sp.GetRequiredService<ILoggerFactory>()));
     services.AddSingleton<AttachmentExtractor>();
     // Reads mbsync's liveness beat off the Maildir mount — the sidecar can't
     // write the metadata table the other workers beat into. See

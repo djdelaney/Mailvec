@@ -4,6 +4,7 @@ using Mailvec.Core.Parsing;
 using Mailvec.Indexer.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Mailvec.Parsing;
 
 namespace Mailvec.Indexer.Tests;
 
@@ -43,7 +44,7 @@ public class MaildirScannerTests : IDisposable
         _syncState = new SyncStateRepository(_connections);
         _scanner = new MaildirScanner(
             ingestOptions,
-            new MessageParser(),
+            new InProcessParser(extractor: null),
             _messages,
             _chunks,
             _syncState,

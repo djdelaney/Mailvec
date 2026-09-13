@@ -3,12 +3,12 @@ using System.Globalization;
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Parsing.Contracts;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using MimeKit;
 
 namespace Mailvec.Cli.Commands;
 
@@ -76,7 +76,7 @@ internal static class BackfillInlineImagesCommand
             return 2;
         }
 
-        var extractor = sp.GetRequiredService<AttachmentTextExtractor>();
+        var parser = sp.GetRequiredService<IMailParser>();
         var messages = sp.GetRequiredService<MessageRepository>();
         var connections = sp.GetRequiredService<ConnectionFactory>();
 
@@ -142,11 +142,15 @@ internal static class BackfillInlineImagesCommand
 
                 if (!File.Exists(maildirFile)) { missingFiles++; continue; }
 
-                MimeMessage mime;
+                // Metadata-only parse: the attachment list with names, types and
+                // decoded sizes, no text extraction. Extraction runs below, only
+                // for the parts that have no row yet.
+                byte[] eml;
+                ParsedMessage parsed;
                 try
                 {
-                    using var stream = File.OpenRead(maildirFile);
-                    mime = MimeMessage.Load(stream);
+                    eml = File.ReadAllBytes(maildirFile);
+                    parsed = parser.ParseMessage(eml, extractAttachmentText: false);
                 }
                 catch (Exception ex)
                 {
@@ -155,27 +159,19 @@ internal static class BackfillInlineImagesCommand
                     continue;
                 }
 
-                var parts = MessageParts.Indexable(mime);
                 var existing = messages.GetAttachmentPartIndexes(msg.Id);
 
                 var toAdd = new List<ParsedAttachment>();
-                for (int i = 0; i < parts.Count; i++)
+                foreach (var att in parsed.Attachments)
                 {
-                    if (existing.Contains(i)) continue; // never disturb existing rows
-                    var entity = parts[i];
-                    var fileName = Normalize(entity.ContentDisposition?.FileName ?? entity.ContentType?.Name);
-                    var contentType = entity.ContentType?.MimeType;
-                    long? size = entity is MimePart p && p.Content is { Stream: { } s } && s.CanSeek ? s.Length : null;
+                    if (existing.Contains(att.PartIndex)) continue; // never disturb existing rows
 
-                    var result = extractor.Extract(entity, fileName, contentType, size);
-                    toAdd.Add(new ParsedAttachment(i, fileName, contentType, size, result.Text, result.Status));
+                    var result = parser.ExtractAttachmentText(eml, att.PartIndex);
+                    toAdd.Add(att with { ExtractedText = result.Text, ExtractionStatus = result.Status });
                     statusCounts.TryGetValue(result.Status, out var prior);
                     statusCounts[result.Status] = prior + 1;
                 }
 
-                if (toAdd.Count == 0) continue;
-                messagesWithNewRows++;
-                rowsAdded += toAdd.Count;
                 if (!dryRun) messages.AddInlineAttachments(msg.Id, toAdd);
 
                 if (processed % 100 == 0)

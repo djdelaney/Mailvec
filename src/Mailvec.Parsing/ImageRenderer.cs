@@ -219,6 +219,3 @@ public static class ImageRenderer
         public override void ErrorHandlerExt(Tiff tif, object clientData, string method, string format, params object[] args) { }
     }
 }
-
-/// <summary>Decoded source dimensions + the normalised OCR-ready JPEG bytes.</summary>
-public sealed record NormalizedImage(int Width, int Height, byte[] Jpeg);

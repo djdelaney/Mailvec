@@ -1,6 +1,6 @@
 # Design proposal — one process for untrusted bytes
 
-**Status:** proposed, not started.
+**Status:** phases 0 and 1 done (2026-09-13, branch `parser-isolation-phase0`, phase 1 uncommitted at the time of writing); phases 2–4 proposed.
 **Date:** 2026-09-13 (replaces an earlier review that was lost; restructured the
 same day after verifying what "managed" actually covers).
 **Scope:** the container deployment (`compose.yml`). The macOS launchd / MCPB
@@ -50,10 +50,11 @@ a week of work, and a `--patch` release when it ships.
 | AngleSharp (`HtmlToText`) | no | yes | indexer, cli (`rebuild-bodies`) | unattended, every HTML body | as indexer |
 | BitMiracle.LibTiff.NET | no | yes | embedder (TIFF only) | unattended | as embedder |
 
-Sources: [`compose.yml`](../../compose.yml), [`Mailvec.Pdf.csproj`](../../src/Mailvec.Pdf/Mailvec.Pdf.csproj),
-[`PdfRenderer.cs`](../../src/Mailvec.Pdf/PdfRenderer.cs), [`ImageRenderer.cs`](../../src/Mailvec.Pdf/ImageRenderer.cs),
-[`MessageParser.cs`](../../src/Mailvec.Core/Parsing/MessageParser.cs),
-[`AttachmentTextExtractor.cs`](../../src/Mailvec.Core/Attachments/AttachmentTextExtractor.cs),
+Sources (paths as of phase 1; before it, the parsers lived in `Mailvec.Core` and
+`Mailvec.Pdf`): [`compose.yml`](../../compose.yml),
+[`PdfRenderer.cs`](../../src/Mailvec.Parsing/PdfRenderer.cs), [`ImageRenderer.cs`](../../src/Mailvec.Parsing/ImageRenderer.cs),
+[`MessageParser.cs`](../../src/Mailvec.Parsing/MessageParser.cs),
+[`AttachmentTextExtractor.cs`](../../src/Mailvec.Parsing/AttachmentTextExtractor.cs),
 [`MaildirAttachmentReader.cs`](../../src/Mailvec.Core/Attachments/MaildirAttachmentReader.cs).
 
 ### What "managed" actually means here (verified 2026-09-13)
@@ -358,7 +359,9 @@ the process survives them; no PdfPig CPU bomb found. Phase 3's OCR-pass tests
 get a real fixture (`e-sh-20k.pdf` is 958 bytes and checks in); the scanner
 tests use fakes.
 
-**Phase 1 — the project split, in-process only (2–3 days).**
+**Phase 1 — the project split, in-process only. Done 2026-09-13** (branch `parser-isolation-phase0`; see the CHANGELOG entry). Two deviations from the plan below, both deliberate: moved types keep their original namespaces so the move is a project boundary rather than a rename (a later mechanical rename is cheap; a diff that mixed the two was not), and "every existing test runs unchanged" became "every existing test's intent is unchanged" — constructor call sites that now take an `IMailParser` or a plain `AttachmentMaxBytes` were updated, nothing else. Also folded in: `ParserBoundaryTests` asserts the assembly graph (Core references no parser and not Parsing; Parsing references no Core), which is the artefact that cannot drift quietly.
+
+Original plan:
 `Mailvec.Parsing.Contracts` and `Mailvec.Parsing` created; `Mailvec.Pdf`
 folded in; the parser, hasher, `MessageParts`, HTML/text helpers and
 `AttachmentTextExtractor` moved; `MaildirAttachmentReader` reduced to path
