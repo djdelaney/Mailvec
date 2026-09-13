@@ -7,6 +7,8 @@ using Mailvec.Core.Data;
 using Mailvec.Core.Health;
 using Mailvec.Core.Options;
 using Mailvec.Core.Vision;
+using Mailvec.Parsing.Contracts;
+using Mailvec.Core.Parsing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -268,6 +270,15 @@ internal static class DoctorCommand
         // while the error detail is what an operator actually needs, and on the
         // container the outcome question is already answered by the sync marker.
         checks.Add(InspectMbsyncStderr(InContainer()));
+
+        // ---------------------------------------------------------------
+        // Parser — where mail content gets parsed. In-process on a launchd
+        // install (this binary carries the parsers); in the container every
+        // parse crosses to the `parse` service, and while THAT is down new mail
+        // is not indexed, OCR pauses and the two attachment viewer tools fail —
+        // search keeps working. See docs/proposals/attachment-parser-isolation.md.
+        // ---------------------------------------------------------------
+        checks.Add(await CheckParserAsync(sp, skipNet, ct).ConfigureAwait(false));
 
         // ---------------------------------------------------------------
         // OCR (vision) model — when the embedder is set to OCR scanned PDFs,
@@ -1074,6 +1085,38 @@ internal static class DoctorCommand
     /// DOTNET_RUNNING_IN_CONTAINER; the marker files cover non-.NET-base and
     /// Podman cases.
     /// </summary>
+    private static async Task<DoctorCheck> CheckParserAsync(IServiceProvider sp, bool skipNet, CancellationToken ct)
+    {
+        var options = sp.GetRequiredService<IOptions<ParserOptions>>().Value;
+        IMailParser parser;
+        try
+        {
+            parser = sp.GetRequiredService<IMailParser>();
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Unknown mode, or remote without an endpoint: the same fatal
+            // misconfiguration every service would refuse to start with.
+            return DoctorCheck.Warn("Parser", ex.Message, "pipeline");
+        }
+
+        if (parser.Mode != ParserRegistration.RemoteMode)
+            return DoctorCheck.Ok("Parser", "in-process — this binary carries MimeKit, PdfPig, OpenXml and PDFium itself", "pipeline");
+
+        var endpoint = options.Endpoint ?? "?";
+        if (skipNet)
+            return DoctorCheck.Ok("Parser", $"remote at {endpoint} (not probed: --no-net)", "pipeline");
+
+        return await parser.ProbeAsync(ct).ConfigureAwait(false)
+            ? DoctorCheck.Ok("Parser", $"remote parse service at {endpoint} answers /up", "pipeline")
+            : DoctorCheck.Warn("Parser",
+                $"remote parse service at {endpoint} did not answer /up within 2s — new mail is not being indexed, OCR is paused " +
+                "and view_attachment / get_attachment_page_image fail until it is back (search still works). " +
+                "Check `docker compose ps parse` and `docker compose logs parse`; it exits on purpose after a parse " +
+                "timeout or its request budget and should be back within seconds.",
+                "pipeline");
+    }
+
     internal static bool InContainer() =>
         string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)
         || File.Exists("/.dockerenv")

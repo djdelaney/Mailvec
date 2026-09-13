@@ -1,6 +1,6 @@
 # Design proposal — one process for untrusted bytes
 
-**Status:** phases 0 and 1 done (2026-09-13, branch `parser-isolation-phase0`, phase 1 uncommitted at the time of writing); phases 2–4 proposed.
+**Status:** phases 0, 1 and 2 done (2026-09-13, branch `parser-isolation-phase0`); phases 3–4 proposed.
 **Date:** 2026-09-13 (replaces an earlier review that was lost; restructured the
 same day after verifying what "managed" actually covers).
 **Scope:** the container deployment (`compose.yml`). The macOS launchd / MCPB
@@ -378,7 +378,9 @@ tool suites and `MaildirScannerTests` runs unchanged against
 never invokes the in-process factory) and `Core.csproj` no longer listing the
 four parser packages.
 
-**Phase 2 — `Mailvec.Parse` + `RemoteParser` (2 days).**
+**Phase 2 — `Mailvec.Parse` + `RemoteParser`. Done 2026-09-13** (see the CHANGELOG entry). As planned, plus: the host answers 504 *and exits* on a timeout (an abandoned parse thread can only be reclaimed by ending the process); the request-body cap surfaces to callers as `DocumentRejected`; verified on the built image that an indexer with no parser library on disk indexes through the service and that `Parser__Mode=inprocess` in a container fails loudly. Not yet done from this phase's original list: nothing.
+
+Original plan:
 The host, `WebApplicationFactory` tests against the existing fixtures
 (`tests/Mailvec.Mcp.Tests/Fixtures/*.pdf`, `Core.Tests/Parsing/Fixtures`),
 the HTTP client, and a **contract test** that runs every fixture through both

@@ -12,4 +12,11 @@ public sealed class AttachmentTooLargeException(string describe, long limitBytes
 {
     /// <summary>The ceiling that was exceeded, in bytes.</summary>
     public long LimitBytes { get; } = limitBytes;
+
+    /// <summary>
+    /// How the part was named in the message ("'invoice.pdf'" or "the
+    /// attachment at partIndex 2"). Exposed so the remote client can rebuild
+    /// an identical exception from the wire error.
+    /// </summary>
+    public string Describe { get; } = describe;
 }

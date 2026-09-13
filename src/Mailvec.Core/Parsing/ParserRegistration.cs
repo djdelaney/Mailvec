@@ -32,6 +32,20 @@ public static class ParserRegistration
         ArgumentNullException.ThrowIfNull(inProcessFactory);
         services.Configure<ParserOptions>(config.GetSection(ParserOptions.SectionName));
 
+        // The remote client's HttpClient. Registered unconditionally (cheap,
+        // and the factory is what makes DNS re-resolution on a recreated
+        // `parse` container work); only used in remote mode.
+        services.AddHttpClient(RemoteParser.HttpClientName, (sp, client) =>
+        {
+            var options = sp.GetRequiredService<IOptions<ParserOptions>>().Value;
+            if (!string.IsNullOrWhiteSpace(options.Endpoint))
+            {
+                var endpoint = options.Endpoint.Trim();
+                client.BaseAddress = new Uri(endpoint.EndsWith('/') ? endpoint : endpoint + "/");
+            }
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.RequestTimeoutSeconds));
+        });
+
         services.AddSingleton<IMailParser>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<ParserOptions>>().Value;
@@ -48,9 +62,17 @@ public static class ParserRegistration
                     return inProcessFactory(sp, new InProcessParserSettings(indexer.AttachmentMaxBytes));
                 }
                 case RemoteMode:
-                    throw new NotSupportedException(
-                        "Parser:Mode=remote is not available yet — it lands in phase 2 of " +
-                        "docs/proposals/attachment-parser-isolation.md. Use 'inprocess'.");
+                {
+                    if (string.IsNullOrWhiteSpace(options.Endpoint))
+                        throw new InvalidOperationException(
+                            "Parser:Endpoint is required when Parser:Mode=remote (for example http://parse:3400).");
+                    if (!Uri.TryCreate(options.Endpoint.Trim(), UriKind.Absolute, out var uri)
+                        || uri.Scheme is not ("http" or "https"))
+                        throw new InvalidOperationException(
+                            $"Parser:Endpoint '{options.Endpoint}' is not an absolute http(s) URL.");
+                    var factory = sp.GetRequiredService<IHttpClientFactory>();
+                    return new RemoteParser(() => factory.CreateClient(RemoteParser.HttpClientName));
+                }
                 default:
                     throw new InvalidOperationException(
                         $"Unknown Parser:Mode '{options.Mode}'. Expected '{InProcessMode}' or '{RemoteMode}'.");
