@@ -183,10 +183,16 @@ x-mailvec: &mailvec-common
     # Refuse to start against a missing/empty archive (the expected state for
     # a snapshot-seeded deployment — see the entrypoint guard in Dockerfile).
     MAILVEC_REQUIRE_SEEDED_DB: ${MAILVEC_REQUIRE_SEEDED_DB:-1}
+    # Every mail-content parser runs in the `parse` service (below); these
+    # three processes ship bytes to it and hold no parser of their own. The
+    # image sets the same defaults; stated here so the topology is readable.
+    Parser__Mode: remote
+    Parser__Endpoint: http://parse:3400
 
 services:
   mcp:
     <<: *mailvec-common
+    networks: [default, parse]   # default for Ollama + the tunnel; parse for view_attachment / page images
     environment:
       <<: *mailvec-env
       Fastmail__AccountId: ${FASTMAIL_ACCOUNT_ID:-}
@@ -326,7 +332,7 @@ services:
     # or network-policy rules on the Docker host, which Compose cannot express.
     #
     # Validated with `--network none`, which is stricter than this.
-    networks: [isolated]
+    networks: [isolated, parse]  # still no egress: both are internal
     command: ["dotnet", "/app/indexer/Mailvec.Indexer.dll"]
     volumes:
       - ./data:/data
@@ -345,6 +351,7 @@ services:
 
   embedder:
     <<: *mailvec-common
+    networks: [default, parse]   # default for Ollama / hosted APIs; parse for the OCR pass
     command: ["dotnet", "/app/embedder/Mailvec.Embedder.dll"]
     environment:
       <<: *mailvec-env
@@ -391,6 +398,43 @@ services:
     # Chunk embedding needs the hosted key when a hosted profile is active.
     secrets:
       - embedding_api_key
+
+  # The one process that eats attacker-chosen bytes: MIME, HTML, PDF text,
+  # Office, PDF rasterisation, image decode — for the indexer, the embedder's
+  # OCR pass and the MCP viewer tools, over HTTP on the internal `parse`
+  # network. It holds NOTHING: no volumes, no secrets, no route out, and it is
+  # the first service here to run non-root (it owns no files, so there is
+  # nothing to chown). A memory-safety bug in PDFium, SkiaSharp or MimeKit's
+  # unsafe parser core now lands in a container that has nothing to read and
+  # nowhere to send it. It exits on a parse that overruns
+  # Parser__RequestTimeoutSeconds (the parse thread can only be reclaimed by
+  # ending the process — phase 0 of the proposal measured a 958-byte PDF that
+  # renders for as long as its author likes) and after
+  # Parser__MaxRequestsBeforeExit requests (bounding how long a compromised
+  # process persists); `restart: unless-stopped` brings it back in seconds,
+  # and the callers classify the gap as "unavailable", never as a fault of any
+  # document. See docs/proposals/attachment-parser-isolation.md.
+  parse:
+    <<: *mailvec-common
+    command: ["dotnet", "/app/parse/Mailvec.Parse.dll"]
+    user: "65534:65534"
+    networks: [parse]
+    # Deliberately NOT *mailvec-env: no embedding profile, no ApiKeyFile path,
+    # no Maildir root. Only what the parser itself reads.
+    environment:
+      HOME: /tmp
+      Parser__RequestTimeoutSeconds: ${MAILVEC_PARSER_TIMEOUT_SECONDS:-60}
+      Parser__MaxRequestsBeforeExit: ${MAILVEC_PARSER_MAX_REQUESTS:-500}
+      Indexer__AttachmentMaxBytes: ${MAILVEC_ATTACHMENT_MAX_BYTES:-26214400}
+    # PdfPig / OpenXml / PDFium peaks moved here from the indexer and embedder.
+    mem_limit: 2g
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3400/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   mbsync:
     # NOT read_only, deliberately. It starts, loops and writes its heartbeat
@@ -521,4 +565,8 @@ networks:
   default:
   # No gateway: containers here reach each other and nothing else.
   isolated:
+    internal: true
+  # The parser hop. Internal: the parse service can be reached from the three
+  # callers and can reach nothing else.
+  parse:
     internal: true

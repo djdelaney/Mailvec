@@ -72,6 +72,15 @@ public interface IMailParser
     /// <c>mailvec rebuild-bodies</c>: HTML → text, then reply trimming.
     /// </summary>
     string? BodyTextFromHtml(string html, string? subject);
+
+    /// <summary>
+    /// Is the parser there? For health and doctor reporting only — never a
+    /// gate in front of a parse (the parse itself answers that, and a probe
+    /// per call would couple availability the same way a network check in
+    /// every search would). In-process: trivially true. Remote: one bounded
+    /// <c>GET /up</c>. Default implementation keeps fakes compiling.
+    /// </summary>
+    Task<bool> ProbeAsync(CancellationToken ct = default) => Task.FromResult(true);
 }
 
 /// <summary>Resolved filename and content type of a part (see <c>AttachmentNaming</c>).</summary>

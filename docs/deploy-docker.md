@@ -19,13 +19,24 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
 
 ## Container strategy
 
-- **One image, four binaries** ([Dockerfile](../Dockerfile)). Multi-stage
+- **One image, five binaries** ([Dockerfile](../Dockerfile)). Multi-stage
   `dotnet/sdk:10.0` → `dotnet/aspnet:10.0`, publishing Indexer / Embedder /
-  Mcp / Cli to `/app/<svc>/`. Framework-dependent publish — the aspnet base
-  supplies the runtime for all four. Each compose service selects its binary
-  via `command:`; the image's default CMD is the MCP server. The CLI is on
-  PATH as `mailvec`, so operator commands are
+  Mcp / Cli / Parse to `/app/<svc>/`. Framework-dependent publish — the aspnet
+  base supplies the runtime for all five. Each compose service selects its
+  binary via `command:`; the image's default CMD is the MCP server. The CLI is
+  on PATH as `mailvec`, so operator commands are
   `docker compose exec mcp mailvec status|doctor|eval|checkpoint ...`.
+- **Only `/app/parse` carries a parser — enforced by the build, not the doc.**
+  After publishing, the Dockerfile deletes MimeKit, PdfPig, OpenXml,
+  AngleSharp, PDFium, SkiaSharp and LibTiff from the indexer, embedder, mcp
+  and cli directories and asserts each deletion (a sentinel `test -e` before
+  each `rm` fails the build if a package bump ever renames one). The image
+  sets `Parser__Mode=remote` + `Parser__Endpoint=http://parse:3400`, so those
+  four processes ship `.eml` bytes to the `parse` service and never parse
+  anything themselves; `Parser__Mode=inprocess` inside a container fails at
+  the first parse with `FileNotFoundException`, on purpose. See
+  [The parse service](#the-parse-service) below and
+  [docs/proposals/attachment-parser-isolation.md](proposals/attachment-parser-isolation.md).
 - **Arch handling.** BuildKit's `TARGETARCH` maps to the RID (amd64 →
   `linux-x64`, arm64 → `linux-arm64`), so `--platform linux/amd64` builds an
   x86 server image from an Apple Silicon dev machine. `ops/fetch-sqlite-vec.sh`
@@ -372,6 +383,55 @@ times this size needs a proportionally larger limit and currently has no other
 signal telling its operator so. See
 [search-performance.md](contributing/search-performance.md).
 
+## The parse service
+
+Every mail-content parser — MIME, HTML, PDF text, Office, PDF rasterisation,
+image decode — runs in one container, `parse`, that holds **no volumes, no
+secrets and no route out** (its only network is the internal `parse` network),
+runs as `nobody` (uid 65534: it owns no files, so there is nothing to chown),
+and is otherwise hardened like the other .NET services. The indexer, the
+embedder's OCR pass and the MCP viewer tools send it bytes over HTTP and get
+plain data back. A memory-safety bug in PDFium, SkiaSharp or MimeKit's
+`unsafe` parser core therefore lands in a process with nothing to read and
+nowhere to send it; a document that hangs or exhausts a parser takes down the
+parse container, not the pipeline.
+
+What to know operationally:
+
+- **It exits on purpose, twice over.** A parse that exceeds
+  `MAILVEC_PARSER_TIMEOUT_SECONDS` (60) is answered with 504 and the process
+  exits, because PDFium / PdfPig / OpenXml take no cancellation token and an
+  overrunning parse can only be reclaimed by ending the process. It also exits
+  cleanly after `MAILVEC_PARSER_MAX_REQUESTS` (500) requests, bounding how long
+  a compromised process persists. `restart: unless-stopped` brings it back in
+  seconds; `docker compose ps parse` showing a recent start time is normal.
+- **While it is down**, new mail is not indexed (the scan retries next tick),
+  the OCR pass pauses, and `view_attachment` / `get_attachment_page_image`
+  answer "parsing is temporarily unavailable". **Search keeps working** — it
+  reads the database only. The callers classify the gap as "unavailable",
+  never as a fault of any document.
+- **It never flips `/health` red.** `/health` carries a `parser` section
+  (`mode`, `endpoint`, `reachable`) and `mailvec doctor` has a `Parser` check,
+  both informational: a parse service outage is *its* outage, and restarting
+  the mcp container for it would be wrong. Monitor `parse` with its own
+  compose healthcheck (`/up`) if you want paging.
+- **The size gate travels with it.** `MAILVEC_ATTACHMENT_MAX_BYTES` (25 MB) is
+  mirrored into the parse service so it agrees with the indexer about what
+  "oversize" means.
+- **Memory.** PdfPig / OpenXml / PDFium peaks now happen here (`mem_limit: 2g`),
+  which is why the indexer dropped to 1 GB. Inside the cgroup .NET caps its
+  managed heap at 75 %, which turns PdfPig memory bombs into a caught
+  `OutOfMemoryException` and a `failed` extraction status; PDFium's native
+  allocations are what the cgroup itself bounds, and an OOM kill here is a
+  restart of this container only.
+
+**Migrating a running stack to it.** Pull or build an image at or after this
+change, then `docker compose up -d` (never `restart`, see below) so compose
+creates the `parse` service and the `parse` network and re-attaches the three
+callers. Confirm with `docker compose exec mcp mailvec doctor` (the `Parser`
+line) and `docker compose exec mcp curl -s http://parse:3400/up`. Nothing in
+the archive changes: no schema migration, no re-index, no re-embed.
+
 ## Applying a compose change to a running stack
 
 Three things that are easy to get wrong and quiet when you do. All follow from
@@ -453,7 +513,12 @@ someone has ticked off is a claim about one machine.
    explicit invalidating conditions, not an oversight. Read
    [security.md → What's accepted](security.md#whats-accepted) and decide for
    your own deployment before exposing the tunnel or publishing a host port.
-10. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
+10. **The parser boundary.** `docker compose exec mcp ls /app/mcp | grep -c MimeKit`
+    prints 0 and `docker compose exec parse ls /app/parse/libpdfium.so` exists;
+    `mailvec doctor` shows `Parser … answers /up`; and a real message indexed
+    after bring-up (`mailvec status`) proves the round trip. See
+    [The parse service](#the-parse-service).
+11. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
     see the backup bullet above for what that does and doesn't guarantee, and
     the one storage-layout invariant it rests on.
 

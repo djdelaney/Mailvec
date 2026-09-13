@@ -79,12 +79,29 @@ public class ParserRegistrationTests
     }
 
     [Fact]
-    public void Remote_mode_is_refused_until_it_exists_rather_than_falling_back_to_in_process()
+    public void Remote_mode_resolves_the_remote_client_without_touching_the_in_process_factory()
     {
         var sp = Build(new() { ["Parser:Mode"] = "remote", ["Parser:Endpoint"] = "http://parse:3400" }, out _);
 
-        var ex = Should.Throw<NotSupportedException>(() => sp.GetRequiredService<IMailParser>());
-        ex.Message.ShouldContain("remote");
+        sp.GetRequiredService<IMailParser>().ShouldBeOfType<RemoteParser>().Mode.ShouldBe("remote");
+    }
+
+    [Fact]
+    public void Remote_mode_without_an_endpoint_is_fatal_rather_than_a_silent_fallback()
+    {
+        var sp = Build(new() { ["Parser:Mode"] = "remote" }, out _);
+
+        var ex = Should.Throw<InvalidOperationException>(() => sp.GetRequiredService<IMailParser>());
+        ex.Message.ShouldContain("Parser:Endpoint");
+    }
+
+    [Fact]
+    public void Remote_mode_with_a_relative_endpoint_is_fatal()
+    {
+        var sp = Build(new() { ["Parser:Mode"] = "remote", ["Parser:Endpoint"] = "parse:3400" }, out _);
+
+        Should.Throw<InvalidOperationException>(() => sp.GetRequiredService<IMailParser>())
+            .Message.ShouldContain("absolute");
     }
 
     [Fact]

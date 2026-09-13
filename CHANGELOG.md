@@ -191,6 +191,18 @@ Groundwork for moving every mail-content parser into a data-less `parse` contain
 - Phase 0's measurements (`tools/Mailvec.ParserBench`, results in the proposal's companion doc): PDFium is cgroup-OOM-killed by a 100 KB PDF and kept rendering a 958-byte shading PDF past 180 s, uncancellably, on a document PdfPig had already filed as an OCR candidate; PdfPig's memory bombs are caught by the runtime's container heap limit. That is what phases 2–3 exist to contain.
 - Tests: every existing suite runs against `InProcessParser`; new `ParserRegistrationTests` and `ParserBoundaryTests` (the assembly graph: Core references no parser, Parsing references no Core).
 
+## ✅ Parser isolation, phase 2 — the `parse` service (no schema change, 2026-09-13)
+
+The seam from phase 1 now crosses a container boundary. In the container deployment, **exactly one process parses attacker-chosen bytes, and it holds nothing.**
+
+- **`Mailvec.Parse`** (new host): a minimal Kestrel app exposing `IMailParser` over HTTP (`ParserWire` in the Contracts — routes and JSON shape compiled into both ends). References `Mailvec.Parsing` only. Every parse runs under a request timeout; on overrun it answers 504 **and exits**, because the parsers take no cancellation token and an abandoned parse thread can only be reclaimed by ending the process. Exits cleanly after N requests too, bounding a compromised process's lifetime. Every parser exception is mapped to a status + `ParseError` body.
+- **`RemoteParser`** (Core): the client. Genuinely synchronous `HttpClient.Send`. Reconstructs the SAME exception types the in-process parser throws where callers branch on them (`ArgumentOutOfRangeException`, `AttachmentTooLargeException`) and classifies everything else as `ParseException` — `Unavailable` (nobody answered: never a strike), `DocumentRejected` (422, oversize message), `Crashed` (5xx, 504, connection died mid-request). Unclassified → `Crashed`, never `DocumentRejected`.
+- **`ParserRegistration`** resolves `Parser:Mode=remote` to it; remote without an absolute http(s) `Parser:Endpoint` is fatal, never a fallback.
+- **The image enforces the boundary.** The Dockerfile publishes the fifth binary and then deletes MimeKit, PdfPig, OpenXml, AngleSharp, PDFium, SkiaSharp and LibTiff from `/app/{indexer,embedder,mcp,cli}`, asserting a sentinel before each delete (a renamed assembly fails the build) and their presence in `/app/parse` after. The image defaults to `Parser__Mode=remote`; `inprocess` in a container fails at the first parse with `FileNotFoundException` — verified.
+- **compose:** the `parse` service (no volumes, no secrets, internal `parse` network only, `user: 65534`, 2 GB), the callers attached to that network, the indexer down to 1 GB. `.env.example` gains the three parser knobs.
+- **Health / doctor:** `/health` gains a `parser` section (mode, endpoint, reachable via a bounded `/up`); `mailvec doctor` gains a `Parser` check. Informational only — a parse service outage never turns `/health` 503.
+- **Tests:** `Mailvec.Parse.Tests` (24) runs a real Kestrel host on a random port: every operation compared byte-for-byte / JSON-for-JSON against the in-process parser over the repo's PDF fixtures, the error mapping, the timeout-then-exit and the request budget. Plus remote-mode registration and `/health` parser tests. Verified end to end on the built image: an indexer with no parser library on disk indexed a message through the parse service.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
