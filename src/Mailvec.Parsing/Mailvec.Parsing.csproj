@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Every parser that touches mail content lives here and nowhere else:
+       MimeKit (MIME), AngleSharp (HTML), PdfPig / OpenXml (attachment text),
+       PDFium + SkiaSharp + LibTiff (rasterisation for OCR and the MCP viewers).
+       Absorbs the former Mailvec.Pdf project.
+
+       Rule: this project NEVER references Mailvec.Core. It sees only
+       Mailvec.Parsing.Contracts, so the future `parse` host can reference it
+       while holding no database, no config loader and no credentials. The
+       processes that hold the mailbox reference it only for
+       Parser:Mode=inprocess (the macOS launchd install); the container image
+       strips its dependencies from their directories.
+
+       Moved types keep their original namespaces (Mailvec.Core.Parsing,
+       Mailvec.Core.Attachments, Mailvec.Pdf) — the move is a project-boundary
+       change, not a rename. -->
+
+  <PropertyGroup>
+    <RootNamespace>Mailvec.Parsing</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Mailvec.Parsing.Contracts\Mailvec.Parsing.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MimeKit" />
+    <PackageReference Include="AngleSharp" />
+    <PackageReference Include="PdfPig" />
+    <PackageReference Include="DocumentFormat.OpenXml" />
+    <PackageReference Include="PDFtoImage" />
+    <PackageReference Include="SkiaSharp" />
+    <!-- Pure-managed TIFF decode; SkiaSharp ships no TIFF codec. See ImageRenderer. -->
+    <PackageReference Include="BitMiracle.LibTiff.NET" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- OfficePartLimitTests reaches AttachmentTextExtractor.OfficeOpenSettings;
+         ImageRendererTests (in the Embedder suite, where the unattended OCR pass
+         drives this code hardest) reaches the ceiling-injecting TryNormalize. -->
+    <InternalsVisibleTo Include="Mailvec.Core.Tests" />
+    <InternalsVisibleTo Include="Mailvec.Embedder.Tests" />
+  </ItemGroup>
+
+</Project>

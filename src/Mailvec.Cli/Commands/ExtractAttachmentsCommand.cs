@@ -3,11 +3,11 @@ using System.Globalization;
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Parsing.Contracts;
 using Mailvec.Core.Options;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using MimeKit;
 
 namespace Mailvec.Cli.Commands;
 
@@ -155,7 +155,7 @@ internal static class ExtractAttachmentsCommand
             return 2;
         }
 
-        var extractor = sp.GetRequiredService<AttachmentTextExtractor>();
+        var parser = sp.GetRequiredService<IMailParser>();
         var chunks = sp.GetRequiredService<ChunkRepository>();
         var connections = sp.GetRequiredService<ConnectionFactory>();
 
@@ -267,7 +267,7 @@ internal static class ExtractAttachmentsCommand
                     continue;
                 }
 
-                var outcome = TryProcessMessage(connections, extractor, msg, maildirFile, reextractKind, !noReembed, statusCounts, err, out var newTextCount, out var attachmentsThisMessage);
+                var outcome = TryProcessMessage(connections, parser, msg, maildirFile, reextractKind, !noReembed, statusCounts, err, out var newTextCount, out var attachmentsThisMessage);
                 if (outcome == MessageOutcome.Stale) messagesSkippedStale++;
                 if (outcome == MessageOutcome.Processed)
                 {
@@ -359,7 +359,7 @@ internal static class ExtractAttachmentsCommand
     /// </summary>
     private static MessageOutcome TryProcessMessage(
         ConnectionFactory connections,
-        AttachmentTextExtractor extractor,
+        IMailParser parser,
         MessageRow msg,
         string maildirFile,
         string? reextractKind,
@@ -391,27 +391,20 @@ internal static class ExtractAttachmentsCommand
         // transaction (4) exists only to revalidate and apply already-computed
         // results. Keep it that way — if you need a new value from the
         // database mid-extraction, fetch it in stage 2, not inside the tx.
-        MimeMessage mime;
+        // The parse itself now happens inside IMailParser (per candidate part,
+        // below); stage 1 is just the bytes. part_index resolves through the
+        // parser's own MessageParts enumeration — the same one the indexer
+        // wrote with — so an inline-image row's index lands on the right part.
+        byte[] eml;
         try
         {
-            using var stream = File.OpenRead(maildirFile);
-            mime = MimeMessage.Load(stream);
+            eml = File.ReadAllBytes(maildirFile);
         }
         catch (Exception ex)
         {
-            err.WriteLine($"  msg {msg.Id}: parse failed ({ex.GetType().Name}: {ex.Message}); skipping.");
+            err.WriteLine($"  msg {msg.Id}: read failed ({ex.GetType().Name}: {ex.Message}); skipping.");
             return MessageOutcome.ParseFailed;
         }
-
-        // MessageParts.Indexable — not mime.Attachments — per the part_index
-        // invariant: the writer (MessageParser) enumerates attachments first,
-        // then appends inline images, so an inline-image row's part_index only
-        // resolves through the same enumeration. With mime.Attachments alone,
-        // any candidate row pointing at an inline part would be mis-stamped
-        // 'failed' as "part doesn't exist".
-        var entitiesByPart = MessageParts.Indexable(mime)
-            .Select((entity, index) => (PartIndex: index, Entity: entity))
-            .ToDictionary(x => x.PartIndex, x => x.Entity);
 
         // ---- Stage 2: read the candidate set. Read-only, no write lock. ----
         // The snapshot check here is a cheap early-out so we don't spend a
@@ -433,17 +426,25 @@ internal static class ExtractAttachmentsCommand
         var extracted = new List<(AttachmentCandidate Att, string Status, string? Text)>(candidates.Count);
         foreach (var att in candidates)
         {
-            if (!entitiesByPart.TryGetValue(att.PartIndex, out var entity))
+            try
+            {
+                var result = parser.ExtractAttachmentText(eml, att.PartIndex);
+                extracted.Add((att, result.Status, result.Text));
+            }
+            catch (ArgumentOutOfRangeException)
             {
                 // The DB row claims a partIndex that doesn't exist in the
                 // current MIME parse. Could happen if the .eml was rewritten
                 // post-ingest. Stamp 'failed' so we don't retry forever.
-                extracted.Add((att, AttachmentTextExtractor.StatusFailed, null));
+                extracted.Add((att, ExtractionStatus.Failed, null));
             }
-            else
+            catch (Exception ex)
             {
-                var result = extractor.Extract(entity, att.FileName, att.ContentType, att.SizeBytes);
-                extracted.Add((att, result.Status, result.Text));
+                // The .eml itself doesn't parse (MimeKit FormatException) —
+                // equally deterministic for this file. Report it, since the
+                // old parse-failed skip was visible, and retire the row.
+                err.WriteLine($"  msg {msg.Id} part {att.PartIndex}: parse failed ({ex.GetType().Name}); stamping failed.");
+                extracted.Add((att, ExtractionStatus.Failed, null));
             }
         }
 

@@ -6,6 +6,7 @@ using Mailvec.Core.Parsing;
 using Mailvec.Mcp.Tools;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
+using Mailvec.Parsing;
 
 namespace Mailvec.Mcp.Tests.Tools;
 
@@ -40,7 +41,7 @@ public class ViewAttachmentToolTests : IDisposable
         {
             AttachmentDownloadDir = _downloadDir,
         });
-        var extractor = new AttachmentExtractor(ingest, mcp);
+        var extractor = new AttachmentExtractor(ingest, mcp, new InProcessParser(extractor: null));
         return new ViewAttachmentTool(new MessageRepository(db.Connections), extractor, mcp, Helpers.NoopLogger());
     }
 

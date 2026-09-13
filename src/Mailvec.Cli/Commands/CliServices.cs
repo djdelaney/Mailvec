@@ -12,6 +12,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Mailvec.Core.Parsing;
+using Mailvec.Parsing;
 
 namespace Mailvec.Cli.Commands;
 
@@ -70,11 +72,11 @@ internal static class CliServices
         // search services; the test suite substitutes a fake to unit-test
         // EvalRunner's orchestration without a DB.
         services.AddSingleton<IEvalRankingSource, DbEvalRankingSource>();
-        // The extractor is shared between the indexer (during ingest) and the
-        // CLI's `extract-attachments` backfill command. Pure CPU work, no I/O
-        // beyond what's handed in via MimeKit, so it's safe to wire here even
-        // for commands that don't use it.
-        services.AddSingleton<AttachmentTextExtractor>();
+        // The parser seam (ParserRegistration), for extract-attachments,
+        // backfill-inline-images and rebuild-bodies. Same resolution as the
+        // indexer, embedder and MCP server.
+        services.AddMailvecParser(config,
+            (sp, settings) => new InProcessParser(settings, sp.GetRequiredService<ILoggerFactory>()));
         // HealthService computes the same DB / embedding / Ollama snapshot the
         // MCP /health endpoint returns. `mailvec doctor` reuses it so the CLI
         // and HTTP views can never disagree about what "healthy" means — which

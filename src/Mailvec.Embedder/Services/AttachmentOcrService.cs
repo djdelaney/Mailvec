@@ -5,10 +5,10 @@ using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Vision;
+using Mailvec.Parsing.Contracts;
 using Mailvec.Pdf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using SkiaSharp;
 
 namespace Mailvec.Embedder.Services;
 
@@ -29,6 +29,7 @@ namespace Mailvec.Embedder.Services;
 public sealed class AttachmentOcrService(
     MessageRepository messages,
     MaildirAttachmentReader reader,
+    IMailParser parser,
     IVisionClient vision,
     IOptions<EmbedderOptions> options,
     ILogger<AttachmentOcrService> logger,
@@ -221,14 +222,17 @@ public sealed class AttachmentOcrService(
     // from document calls by reference.
     internal static byte[] HealthProbeJpeg => _probeJpeg.Value;
 
+    // A 48x48 white JPEG, shipped as an embedded resource rather than drawn at
+    // runtime: drawing it was the embedder's only direct use of SkiaSharp, and
+    // the parser seam exists so this process links no rasteriser at all.
     private static readonly Lazy<byte[]> _probeJpeg = new(() =>
     {
-        using var bmp = new SKBitmap(48, 48);
-        using var canvas = new SKCanvas(bmp);
-        canvas.Clear(SKColors.White);
-        using var img = SKImage.FromBitmap(bmp);
-        using var data = img.Encode(SKEncodedImageFormat.Jpeg, 80);
-        return data.ToArray();
+        const string name = "Mailvec.Embedder.Resources.ocr-probe-48x48.jpg";
+        using var stream = typeof(AttachmentOcrService).Assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidOperationException($"Embedded resource '{name}' is missing.");
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        return ms.ToArray();
     });
 
     /// <summary>
@@ -554,10 +558,10 @@ public sealed class AttachmentOcrService(
         {
             ct.ThrowIfCancellationRequested();
 
-            byte[] pdf;
+            byte[] eml;
             try
             {
-                pdf = reader.ReadBytes(c.ToMessage(), c.PartIndex, _opts.OcrMaxAttachmentBytes);
+                eml = reader.ReadEml(c.ToMessage());
             }
             catch (FileNotFoundException)
             {
@@ -603,19 +607,25 @@ public sealed class AttachmentOcrService(
                 continue;
             }
 
-            int pages;
+            // One parser call renders every page we will OCR (up to _maxPages),
+            // so a remote parser is sent the document once rather than once per
+            // page, and every deterministic per-document failure surfaces here:
+            // a corrupt .eml, a stale part_index, a part over the OCR size
+            // ceiling, or a PDF PDFium can't open or render. All permanently
+            // unreadable for this file+part — mark failed so a poison PDF isn't
+            // re-selected every cycle.
+            PdfRender render;
             try
             {
-                pages = Math.Min(PdfRenderer.PageCount(pdf), _maxPages);
+                render = parser.RenderPdfPages(eml, c.PartIndex, 0, _maxPages, _opts.OcrMaxAttachmentBytes);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // PDFium can't open it -> permanently unreadable. Mark failed so
-                // we don't re-select a poison PDF every cycle.
-                logger.LogWarning(ex, "OCR: cannot open PDF for attachment {AttachmentId}; marking failed.", c.AttachmentId);
+                logger.LogWarning(ex, "OCR: cannot open or render PDF for attachment {AttachmentId}; marking failed.", c.AttachmentId);
                 messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
                 continue;
             }
+            int pages = render.Pages.Count;
 
             var sb = new StringBuilder();
             try
@@ -623,7 +633,7 @@ public sealed class AttachmentOcrService(
                 for (int page = 0; page < pages; page++)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var image = PdfRenderer.RenderPageJpeg(pdf, page);
+                    var image = render.Pages[page];
                     var pageText = await vision.OcrAsync(image, ct).ConfigureAwait(false);
                     // Each successful page-level call is model-health evidence.
                     // Count it here, not on document completion: a multi-page
@@ -772,10 +782,10 @@ public sealed class AttachmentOcrService(
         {
             ct.ThrowIfCancellationRequested();
 
-            byte[] bytes;
+            byte[] eml;
             try
             {
-                bytes = reader.ReadBytes(c.ToMessage(), c.PartIndex, _opts.OcrMaxAttachmentBytes);
+                eml = reader.ReadEml(c.ToMessage());
             }
             catch (FileNotFoundException)
             {
@@ -823,7 +833,22 @@ public sealed class AttachmentOcrService(
 
             // Decode + normalise. Null = not a decodable image (e.g. HEIC without
             // a codec, or a mislabeled binary): mark failed so it isn't retried.
-            var normalized = ImageRenderer.TryNormalize(bytes);
+            NormalizedImage? normalized;
+            try
+            {
+                normalized = parser.NormalizeImage(eml, c.PartIndex, _opts.OcrMaxAttachmentBytes);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Deterministic for this file+part (corrupt .eml, stale
+                // part_index, over the size ceiling) — same retirement as the
+                // PDF pass.
+                logger.LogWarning(ex,
+                    "Image OCR: cannot decode attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
+                    c.AttachmentId, c.MessageId);
+                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
+                continue;
+            }
             if (normalized is null)
             {
                 logger.LogInformation(

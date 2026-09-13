@@ -11,6 +11,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MimeKit;
+using Mailvec.Parsing;
+using Mailvec.Parsing.Contracts;
 
 namespace Mailvec.Cli.Tests;
 
@@ -982,7 +984,12 @@ public class ExtractAttachmentsCommandTests : IDisposable
         if (probeWriterLock)
             services.AddSingleton<AttachmentTextExtractor, WriterLockProbingExtractor>();
         else
-            services.AddSingleton<AttachmentTextExtractor>();
+            services.AddSingleton(sp => new AttachmentTextExtractor(
+                new IndexerOptions().AttachmentMaxBytes, sp.GetRequiredService<ILogger<AttachmentTextExtractor>>()));
+        // The command resolves the parser seam, not the extractor directly; the
+        // in-process parser is built over whichever extractor is registered so
+        // the writer-lock probe still sees every Extract call.
+        services.AddSingleton<IMailParser>(sp => new InProcessParser(sp.GetRequiredService<AttachmentTextExtractor>()));
         var sp = services.BuildServiceProvider();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         return sp;
@@ -995,9 +1002,8 @@ public class ExtractAttachmentsCommandTests : IDisposable
     /// </summary>
     private sealed class WriterLockProbingExtractor(
         ConnectionFactory connections,
-        IOptions<IndexerOptions> indexerOptions,
         ILogger<AttachmentTextExtractor> logger)
-        : AttachmentTextExtractor(indexerOptions, logger)
+        : AttachmentTextExtractor(new IndexerOptions().AttachmentMaxBytes, logger)
     {
         public int Calls { get; private set; }
         public bool WriterLockWasFree { get; private set; } = true;

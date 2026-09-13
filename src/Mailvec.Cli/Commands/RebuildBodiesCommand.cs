@@ -1,6 +1,7 @@
 using System.CommandLine;
 using Mailvec.Core.Data;
 using Mailvec.Core.Parsing;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Mailvec.Cli.Commands;
@@ -39,6 +40,7 @@ internal static class RebuildBodiesCommand
     internal static int Execute(IServiceProvider sp, bool reembed, TextWriter @out, TextWriter err)
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
+        var parser = sp.GetRequiredService<IMailParser>();
         using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
 
         long total = 0;
@@ -92,11 +94,7 @@ internal static class RebuildBodiesCommand
             {
                 try
                 {
-                    var newText = HtmlToText.Convert(html);
-                    if (!string.IsNullOrEmpty(newText))
-                    {
-                        newText = ReplyTrimmer.Trim(newText, subject);
-                    }
+                    var newText = parser.BodyTextFromHtml(html, subject);
                     converted.Add((id, newText));
                 }
                 catch (Exception ex)

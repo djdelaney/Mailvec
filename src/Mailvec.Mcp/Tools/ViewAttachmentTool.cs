@@ -5,7 +5,7 @@ using Mailvec.Core.Data;
 using Mailvec.Core.Models;
 using Mailvec.Core.Options;
 using Microsoft.Extensions.Options;
-using Mailvec.Pdf;
+using Mailvec.Parsing.Contracts;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -20,7 +20,7 @@ namespace Mailvec.Mcp.Tools;
 ///
 /// Images are only passed through verbatim when they're a format Claude vision
 /// accepts natively (JPEG/PNG/GIF/WebP) and small; everything else (TIFF scans,
-/// oversized photos) is normalised through <see cref="ImageRenderer"/> — the
+/// oversized photos) is normalised through the parser's image normaliser — the
 /// same white-flatten / ≤1536px / JPEG-q85 path the OCR pass uses — because a
 /// raw 15 MB photo base64s to ~20 MB (clients reject it, and vision downsamples
 /// to ~1568px anyway) and a TIFF/SVG/HEIC ImageContentBlock is rejected as an
@@ -186,7 +186,7 @@ public sealed class ViewAttachmentTool(
                 imageBytes = att.Bytes;
                 imageMime = att.ContentType;
             }
-            else if (ImageRenderer.TryNormalize(att.Bytes) is { } normalized)
+            else if (extractor.NormalizeImage(msg, partIndex, _mcp.AttachmentInlineMaxBytes) is { } normalized)
             {
                 imageBytes = normalized.Jpeg;
                 imageMime = "image/jpeg";
@@ -291,7 +291,7 @@ public sealed class ViewAttachmentTool(
         var header = $"'{att.FileName}' ({att.ContentType}, {FormatSize(att.SizeBytes)})";
         if (imageInlined)
             return imageTranscoded
-                ? $"{header} — shown inline below, re-encoded as JPEG (long edge capped at {PdfRenderer.MaxEdgePx}px) for client compatibility and size."
+                ? $"{header} — shown inline below, re-encoded as JPEG (long edge capped at {RasterLimits.MaxEdgePx}px) for client compatibility and size."
                 : $"{header} — shown inline below.";
         if (isImage)
             return

@@ -25,7 +25,7 @@ namespace Mailvec.Core.Tests.Attachments;
 public class OfficePartLimitTests
 {
     private static AttachmentTextExtractor Extractor() =>
-        new(Microsoft.Extensions.Options.Options.Create(new IndexerOptions()), NullLogger<AttachmentTextExtractor>.Instance);
+        new(new IndexerOptions().AttachmentMaxBytes, NullLogger<AttachmentTextExtractor>.Instance);
 
     private static ExtractionResult Extract(byte[] package, string fileName, string contentType)
     {
