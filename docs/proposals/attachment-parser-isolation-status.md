@@ -1,8 +1,8 @@
 # Parser isolation — status and handoff
 
-**As of:** 2026-09-15, branch `parser-isolation-phase0`. Phases 0–3 are on the branch; phase 3 is
-in the working tree after `2b3c1c7` (see the CHANGELOG entry for what it changed). Test state:
-**1,342 passing, 0 failing** across six projects. What remains is phase 4 (docs) at the bottom.
+**As of:** 2026-09-15, branch `parser-isolation-phase0`. Phases 0–4 are complete: phase 3 landed
+in `3092d8c`, phase 4 (docs) follows it. Test state: **1,342 passing, 0 failing** across six
+projects. Nothing remains but the release, which is proposed as `--patch` below and not cut.
 **Not merged. Not released.** No PR is open. Merging and any version bump are the owner's call
 (see `CLAUDE.md` → Releases: a release needs an explicit ask in that turn; this is a `--patch`,
 there is no schema migration and no MCP tool-surface change).
@@ -229,19 +229,25 @@ get_attachment_text."* This is a message-text change only; it is **not** a tool-
 - **The in-process parser has a test-shaped constructor** `new InProcessParser(extractor: null)`
   (no attachment-text extraction), mirroring the old `new MessageParser()`.
 
-## Phase 4 (after phase 3), smaller than the proposal lists
+## Phase 4 — done
 
-The proposal's phase 4 names five doc items. Three already landed with phases 1 and 2: the
-`CHANGELOG.md` entries (both phases), the `docs/deploy-docker.md` "The parse service" section with
-the migration steps, and the `CLAUDE.md` parser-boundary invariants. What remains:
+The proposal's phase 4 named five doc items. Three had already landed with phases 1 and 2 (the
+`CHANGELOG.md` entries, the `docs/deploy-docker.md` "The parse service" section, the `CLAUDE.md`
+invariants). The remaining two are done:
 
-- `docs/security.md` — no mention of the parse service today. Rewrite the "native parsers"
-  acceptance around "one process parses untrusted bytes and holds nothing", state the residual
-  (attacker-chosen *output* bytes), add `parse` to the hardening table as the first non-root
-  service, update the indexer's row.
-- `docs/monitoring-uptime-kuma.md` — whether to monitor `parse`'s `/up` (the proposal says: its
-  own healthcheck, never via `/health`).
-- Then propose a `--patch` release and wait.
+- `docs/security.md` — the hardening section opens with "exactly one process parses
+  attacker-chosen bytes, and it holds nothing"; the acceptance bullet states the residual
+  (attacker-chosen *output* for in-flight requests, nothing else) and gains a condition for
+  `parse` acquiring a volume, secret or route; `parse` is recorded as the first non-root service
+  and the indexer's row no longer says it parses; gVisor is listed as deferred with its trigger;
+  the loopback-install section says the parsers run in-process there.
+- `docs/monitoring-uptime-kuma.md` — "The `parse` service is not on `/up`, by design": its own
+  compose healthcheck, why routine restarts must not page, a Docker Container monitor with
+  restart-tolerant retries if paging is wanted, and a verify block.
+
+**Release: propose `--patch` and wait.** No schema migration, no MCP tool-surface change (the two
+viewer tools changed message text only; `McpSurfaceTests` is untouched). The version bump and the
+tag are the owner's call — see `CLAUDE.md` → Releases.
 
 Deferred with triggers (in the proposal): gVisor on `parse`; non-root UIDs for the other
 services; persisting the crash-strike counter.

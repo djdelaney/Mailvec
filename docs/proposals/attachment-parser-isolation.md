@@ -402,7 +402,9 @@ three-strikes degrade to a text-less parse, and the existing
 `An_unchanged_rescan_writes_nothing` family still green — the fast path must
 still never call the parser); the MCP tools' two messages.
 
-**Phase 4 — docs and the acceptance rewrite.**
+**Phase 4 — docs and the acceptance rewrite. Done 2026-09-15.** `docs/security.md` rewritten as below (the hardening section now opens with "exactly one process parses attacker-chosen bytes, and it holds nothing", the residual is stated in the acceptance, `parse` is the first non-root service and the indexer's row no longer says it parses; gVisor recorded as deferred with its trigger); `docs/monitoring-uptime-kuma.md` gained "The `parse` service is not on `/up`, by design" (its own healthcheck, a Docker Container monitor with restart-tolerant retries if paging is wanted). The CLAUDE.md invariants and the deploy-doc migration steps had already landed with phases 1–3. Release: proposed as `--patch`, not cut.
+
+Original plan:
 `docs/security.md`: the "native parsers" acceptance becomes "one process
 parses untrusted bytes and holds nothing", with the residual above stated;
 `parse` added to the hardening table as the first non-root service; the
