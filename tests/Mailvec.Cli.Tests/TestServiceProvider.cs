@@ -81,6 +81,13 @@ public sealed class TestServiceProvider : IDisposable
         return this;
     }
 
+    /// <summary>Replace the parser (last registration wins on next Rebuild).</summary>
+    public TestServiceProvider UseParser(IMailParser parser)
+    {
+        _services.AddSingleton(parser);
+        return this;
+    }
+
     /// <summary>Rebuilds the provider after additional Configure calls.</summary>
     public ServiceProvider Rebuild()
     {

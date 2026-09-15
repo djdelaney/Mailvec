@@ -41,12 +41,18 @@ public sealed class AttachmentOcrService(
     private readonly int _maxPages = Math.Max(1, options.Value.OcrMaxPagesPerPdf);
     private readonly EmbedderOptions _opts = options.Value;
 
-    // Per-attachment vision-failure counts, in-memory for this process. A vision
-    // call that fails every cycle for one document would otherwise head-of-line
+    // Per-attachment failure counts, in-memory for this process. A vision call
+    // that fails every cycle for one document would otherwise head-of-line
     // block the whole OCR queue forever (candidates are ordered by id, so the
     // same low-id poison doc is re-selected first each cycle). After this many
     // counted failures we retire it to 'failed' and move on. Only the single
     // embedder worker touches this, sequentially, so a plain dict is safe.
+    //
+    // Parser crashes (ParseFailureKind.Crashed — the parse service timed out
+    // or died on this document) share the ledger: both are "processing this
+    // document failed in a cycle where processing otherwise worked", and a
+    // document that alternates between the two is no less poison. Each source
+    // supplies its own health evidence, though — see SettleParserFailures.
     //
     // IMPORTANT: failures only COUNT toward retirement in cycles with
     // evidence the model can run — a successful vision call (page-level for
@@ -125,8 +131,19 @@ public sealed class AttachmentOcrService(
 
     // The most recent classified failure, so the end-of-cycle outcome record can
     // name a CAUSE rather than just "something failed". Unclassified exceptions
-    // stay Transient, matching how the batch loop treats them.
-    private VisionFailureKind _lastFailureKind = VisionFailureKind.Transient;
+    // stay Transient, matching how the batch loop treats them. A string, not a
+    // VisionFailureKind: the parse service is a second thing that can fail
+    // under this pass (ParserUnavailableKind / ParserCrashedKind), and "OCR is
+    // stalled because the parser is down" is exactly the kind of cause the
+    // record exists to surface.
+    private string _lastFailureKind = nameof(VisionFailureKind.Transient);
+
+    /// <summary>
+    /// Values written to <see cref="OcrHealthKeys.LastFailureKind"/> for
+    /// parser-side failures, beside the <see cref="VisionFailureKind"/> names.
+    /// </summary>
+    internal const string ParserUnavailableKind = "ParserUnavailable";
+    internal const string ParserCrashedKind = "ParserCrashed";
 
     // Resume points into the id-ordered candidate set, one per pass — the
     // liveness guarantee. Each cycle takes the page strictly after the cursor
@@ -315,13 +332,14 @@ public sealed class AttachmentOcrService(
     }
 
     /// <summary>
-    /// Record a failed vision call, carrying its <see cref="VisionFailureKind"/>
-    /// — the field that turns "OCR isn't working" into something actionable:
+    /// Record a failed cycle, carrying the kind of its last failure — a
+    /// <see cref="VisionFailureKind"/> name, or one of the parser-side kinds —
+    /// the field that turns "OCR isn't working" into something actionable:
     /// AuthFailed means fix the key, Backpressure means it will recover itself,
     /// DocumentFatal means one document was refused and the pass is otherwise
-    /// healthy.
+    /// healthy, ParserUnavailable means the parse service is down.
     /// </summary>
-    private void RecordOcrFailure(VisionFailureKind kind)
+    private void RecordOcrFailure(string kind)
     {
         if (metadata is null) return;
         try
@@ -330,7 +348,7 @@ public sealed class AttachmentOcrService(
             var next = int.TryParse(prior, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n + 1 : 1;
             metadata.Set(OcrHealthKeys.ConsecutiveFailures, next.ToString(CultureInfo.InvariantCulture));
             metadata.Set(OcrHealthKeys.LastFailureAt, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-            metadata.Set(OcrHealthKeys.LastFailureKind, kind.ToString());
+            metadata.Set(OcrHealthKeys.LastFailureKind, kind);
         }
         catch (Exception ex)
         {
@@ -403,11 +421,11 @@ public sealed class AttachmentOcrService(
     {
         if (ex is not VisionException visionEx)
         {
-            _lastFailureKind = VisionFailureKind.Transient;
+            _lastFailureKind = nameof(VisionFailureKind.Transient);
             return VisionFailureAction.CountAsTransient;
         }
 
-        _lastFailureKind = visionEx.Kind;
+        _lastFailureKind = visionEx.Kind.ToString();
 
         switch (visionEx.Kind)
         {
@@ -444,6 +462,65 @@ public sealed class AttachmentOcrService(
         }
     }
 
+    /// <summary>What the batch loop should do with a failed parser call.</summary>
+    private enum ParserFailureAction
+    {
+        /// <summary>Deterministic for this document: retire it with pipeline provenance — the historical path.</summary>
+        Retire,
+
+        /// <summary>The parser died on this document. A strike, counted only with evidence the parser is otherwise healthy.</summary>
+        CountAsStrike,
+
+        /// <summary>The parse service is down or restarting. Stop the batch; nothing counted, everything stays selectable.</summary>
+        AbortBatch,
+    }
+
+    /// <summary>
+    /// Route a parser failure by its declared cause — the parser-side twin of
+    /// <see cref="ClassifyVisionFailure"/>, and it exists for the same
+    /// destructive case. In-process, a parser exception was always a property
+    /// of the document (PDFium can't open it, the .eml is corrupt), so retiring
+    /// on any exception was right. With the parse service in its own container
+    /// the same call also fails when that container is down or restarting —
+    /// which it does on purpose, after a timeout or its request budget — and a
+    /// retirement written then stamps a perfectly good scan 'failed',
+    /// permanently, since no candidate query re-selects a failed row.
+    ///
+    /// Only <see cref="ParseException"/> carries a kind. Every other exception
+    /// is the in-process parser (or the remote client rebuilding an in-process
+    /// exception type) describing the document, and keeps today's retirement.
+    /// A retirement decided here is never attributed to the vision engine: no
+    /// provider saw the document (<see cref="OcrProvenance.PreProvider"/>).
+    /// </summary>
+    private ParserFailureAction ClassifyParserFailure(Exception ex, OcrCandidate c, string pass)
+    {
+        if (ex is not ParseException parseEx) return ParserFailureAction.Retire;
+
+        switch (parseEx.Kind)
+        {
+            case ParseFailureKind.Unavailable:
+                _lastFailureKind = ParserUnavailableKind;
+                logger.LogWarning(
+                    "{Pass}: the parse service is unavailable (attachment {AttachmentId}: {Reason}); aborting this cycle's batch. " +
+                    "Nothing retired — the next poll retries.",
+                    pass, c.AttachmentId, parseEx.Message);
+                return ParserFailureAction.AbortBatch;
+
+            case ParseFailureKind.Crashed:
+                _lastFailureKind = ParserCrashedKind;
+                logger.LogWarning(ex,
+                    "{Pass}: the parse service failed on attachment {AttachmentId}; will retry next cycle.",
+                    pass, c.AttachmentId);
+                return ParserFailureAction.CountAsStrike;
+
+            default:
+                // DocumentRejected: the parser opened it and said no. As
+                // deterministic as an in-process exception, and retired the
+                // same way by the caller.
+                return ParserFailureAction.Retire;
+        }
+    }
+
     // Returns true when this exact document has failed enough counted times to retire.
     private bool RecordVisionFailure(OcrCandidate candidate)
     {
@@ -473,16 +550,33 @@ public sealed class AttachmentOcrService(
     /// from a wedged Ollama, so nothing is counted and everything retries
     /// next cycle.
     /// </summary>
-    private void SettleVisionFailures(IReadOnlyList<OcrCandidate> failed, bool visionHealthy, string pass)
+    private void SettleVisionFailures(IReadOnlyList<OcrCandidate> failed, bool visionHealthy, string pass) =>
+        SettleFailures(failed, visionHealthy, pass, vision.ModelId, "vision call", "Ollama can't run the vision model");
+
+    /// <summary>
+    /// The same rule for parser crashes (<see cref="ParseFailureKind.Crashed"/>),
+    /// with the parser's own evidence standing in for the vision model's: a
+    /// parser call that returned this cycle, or a passing
+    /// <see cref="IMailParser.ProbeAsync"/>. A crash is a strike only when the
+    /// service is demonstrably up — otherwise "it died on this document" and
+    /// "it is restarting" are indistinguishable, and only one of them is about
+    /// the document. Retirements here carry
+    /// <see cref="OcrProvenance.PreProvider"/>: no vision engine saw the page.
+    /// </summary>
+    private void SettleParserFailures(IReadOnlyList<OcrCandidate> failed, bool parserHealthy, string pass) =>
+        SettleFailures(failed, parserHealthy, pass, OcrProvenance.PreProvider, "parser call", "the parse service is down");
+
+    private void SettleFailures(
+        IReadOnlyList<OcrCandidate> failed, bool healthy, string pass, string provenance, string what, string why)
     {
         if (failed.Count == 0) return;
 
-        if (!visionHealthy)
+        if (!healthy)
         {
             logger.LogWarning(
-                "{Pass}: every vision call this cycle failed, including the health probe ({Count} attachment(s)); " +
-                "not counting toward poison-document retirement — Ollama can't run the vision model. Will retry next cycle.",
-                pass, failed.Count);
+                "{Pass}: every {What} this cycle failed, including the health probe ({Count} attachment(s)); " +
+                "not counting toward poison-document retirement — {Why}. Will retry next cycle.",
+                pass, what, failed.Count, why);
             return;
         }
 
@@ -493,7 +587,7 @@ public sealed class AttachmentOcrService(
         {
             if (RecordVisionFailure(c))
             {
-                if (messages.MarkAttachmentOcrFailed(c, vision.ModelId) == OcrWriteOutcome.Stale)
+                if (messages.MarkAttachmentOcrFailed(c, provenance) == OcrWriteOutcome.Stale)
                 {
                     logger.LogInformation(
                         "{Pass}: attachment {AttachmentId} reached its retirement threshold but the row moved; " +
@@ -504,14 +598,14 @@ public sealed class AttachmentOcrService(
                 {
                     Increment(OcrHealthKeys.RetiredTotal, 1);
                     logger.LogWarning(
-                        "{Pass}: attachment {AttachmentId} failed {Max}x in cycles where other documents OCR'd fine; " +
+                        "{Pass}: attachment {AttachmentId} failed {Max}x in cycles where the {What} otherwise worked; " +
                         "marked failed to unblock the queue.",
-                        pass, c.AttachmentId, MaxVisionAttempts);
+                        pass, c.AttachmentId, MaxVisionAttempts, what);
                 }
             }
             else
             {
-                logger.LogWarning("{Pass}: vision call failed for attachment {AttachmentId}; will retry next cycle.", pass, c.AttachmentId);
+                logger.LogWarning("{Pass}: {What} failed for attachment {AttachmentId}; will retry next cycle.", pass, what, c.AttachmentId);
             }
         }
     }
@@ -554,6 +648,11 @@ public sealed class AttachmentOcrService(
         // this record exists to close.
         bool sawFailure = false;
         var failedThisCycle = new List<OcrCandidate>();
+        // Parser-side twin of visionSuccesses / failedThisCycle, settled
+        // separately because the evidence differs: a vision success says
+        // nothing about whether the parse service is up, and vice versa.
+        int parserSuccesses = 0;
+        var parserFailedThisCycle = new List<OcrCandidate>();
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
@@ -613,7 +712,10 @@ public sealed class AttachmentOcrService(
             // a corrupt .eml, a stale part_index, a part over the OCR size
             // ceiling, or a PDF PDFium can't open or render. All permanently
             // unreadable for this file+part — mark failed so a poison PDF isn't
-            // re-selected every cycle.
+            // re-selected every cycle. But only after ClassifyParserFailure has
+            // ruled out the two failures that are NOT about the document: the
+            // parse service being down (abort, count nothing) or having died on
+            // this document (a strike, counted only with health evidence).
             PdfRender render;
             try
             {
@@ -621,10 +723,15 @@ public sealed class AttachmentOcrService(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                var action = ClassifyParserFailure(ex, c, "OCR");
+                if (action == ParserFailureAction.AbortBatch) { sawFailure = true; break; }
+                if (action == ParserFailureAction.CountAsStrike) { sawFailure = true; parserFailedThisCycle.Add(c); continue; }
+
                 logger.LogWarning(ex, "OCR: cannot open or render PDF for attachment {AttachmentId}; marking failed.", c.AttachmentId);
                 messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
                 continue;
             }
+            parserSuccesses++;
             int pages = render.Pages.Count;
 
             var sb = new StringBuilder();
@@ -726,6 +833,14 @@ public sealed class AttachmentOcrService(
             || (failedThisCycle.Count > 0 && await ProbeVisionHealthAsync(ct).ConfigureAwait(false));
         SettleVisionFailures(failedThisCycle, visionHealthy, "OCR");
 
+        // The probe is the one place this pass may ask the parser whether it
+        // is up (IMailParser.ProbeAsync): health evidence for strikes, never a
+        // gate in front of a parse. Skipped entirely on cycles with nothing to
+        // settle.
+        bool parserHealthy = parserSuccesses > 0
+            || (parserFailedThisCycle.Count > 0 && await parser.ProbeAsync(ct).ConfigureAwait(false));
+        SettleParserFailures(parserFailedThisCycle, parserHealthy, "OCR");
+
         // Record an outcome only for a cycle that actually attempted work. An
         // idle cycle (nothing pending) must not write a failure, or a drained
         // queue would report as broken — the exact ambiguity these keys exist
@@ -778,6 +893,11 @@ public sealed class AttachmentOcrService(
         // this record exists to close.
         bool sawFailure = false;
         var failedThisCycle = new List<OcrCandidate>();
+        // Parser-side twin of visionSuccesses / failedThisCycle, settled
+        // separately because the evidence differs: a vision success says
+        // nothing about whether the parse service is up, and vice versa.
+        int parserSuccesses = 0;
+        var parserFailedThisCycle = new List<OcrCandidate>();
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
@@ -840,15 +960,21 @@ public sealed class AttachmentOcrService(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Deterministic for this file+part (corrupt .eml, stale
-                // part_index, over the size ceiling) — same retirement as the
-                // PDF pass.
+                // Same classification as the PDF pass: a parse-service outage
+                // aborts, a parser crash is a strike, and only a deterministic
+                // per-document failure (corrupt .eml, stale part_index, over
+                // the size ceiling, rejected by the parser) retires the row.
+                var action = ClassifyParserFailure(ex, c, "Image OCR");
+                if (action == ParserFailureAction.AbortBatch) { sawFailure = true; break; }
+                if (action == ParserFailureAction.CountAsStrike) { sawFailure = true; parserFailedThisCycle.Add(c); continue; }
+
                 logger.LogWarning(ex,
                     "Image OCR: cannot decode attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
                 messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
                 continue;
             }
+            parserSuccesses++;
             if (normalized is null)
             {
                 logger.LogInformation(
@@ -963,6 +1089,10 @@ public sealed class AttachmentOcrService(
         bool visionHealthy = visionSuccesses > 0
             || (failedThisCycle.Count > 0 && await ProbeVisionHealthAsync(ct).ConfigureAwait(false));
         SettleVisionFailures(failedThisCycle, visionHealthy, "Image OCR");
+
+        bool parserHealthy = parserSuccesses > 0
+            || (parserFailedThisCycle.Count > 0 && await parser.ProbeAsync(ct).ConfigureAwait(false));
+        SettleParserFailures(parserFailedThisCycle, parserHealthy, "Image OCR");
 
         // Record an outcome only for a cycle that actually attempted work. An
         // idle cycle (nothing pending) must not write a failure, or a drained

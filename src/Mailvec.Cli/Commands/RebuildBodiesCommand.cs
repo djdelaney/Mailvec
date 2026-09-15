@@ -87,6 +87,7 @@ internal static class RebuildBodiesCommand
         // interrupt between batches just means a re-run finishes the rest.
         const int BatchSize = 500;
         long updated = 0, errors = 0;
+        var parserUnavailable = false;
         foreach (var batch in rows.Chunk(BatchSize))
         {
             var converted = new List<(long Id, string? Text)>(batch.Length);
@@ -96,6 +97,15 @@ internal static class RebuildBodiesCommand
                 {
                     var newText = parser.BodyTextFromHtml(html, subject);
                     converted.Add((id, newText));
+                }
+                catch (ParseException ex) when (ex.Kind == ParseFailureKind.Unavailable)
+                {
+                    // Not this row's fault, and every remaining row would fail
+                    // the same way: commit what this batch converted so far and
+                    // stop, rather than logging one "error" per message left.
+                    err.WriteLine($"  id={id}: the parse service is unavailable ({ex.Message}); stopping after this batch.");
+                    parserUnavailable = true;
+                    break;
                 }
                 catch (Exception ex)
                 {
@@ -141,9 +151,20 @@ internal static class RebuildBodiesCommand
             tx.Commit();
 
             if (updated < total) @out.WriteLine($"  ... {updated:N0}/{total:N0}");
+            if (parserUnavailable) break;
         }
 
         @out.WriteLine($"Updated body_text on {updated:N0} messages ({errors:N0} errors).");
+
+        if (parserUnavailable)
+        {
+            // Under --reembed every updated row was already re-queued in its
+            // own batch transaction, so stopping here loses nothing; the
+            // archive-wide ClearEmbeddings below is skipped because it would
+            // re-queue the rows this run never reached.
+            @out.WriteLine("STOPPED: the parse service is unavailable. Re-run once it is back (`docker compose ps parse`) to convert the rest.");
+            return 1;
+        }
 
         if (reembed)
         {

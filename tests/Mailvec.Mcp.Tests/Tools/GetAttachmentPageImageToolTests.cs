@@ -52,16 +52,40 @@ public class GetAttachmentPageImageToolTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private GetAttachmentPageImageTool Build(TempDatabase db)
+    private GetAttachmentPageImageTool Build(TempDatabase db, Mailvec.Parsing.Contracts.IMailParser? parser = null)
     {
         var ingest = Options.Create(new IngestOptions { MaildirRoot = _maildirRoot });
         var mcp = Options.Create(new McpOptions { AttachmentDownloadDir = _downloadDir });
         return new GetAttachmentPageImageTool(
             new MessageRepository(db.Connections),
-            new AttachmentExtractor(ingest, mcp, new InProcessParser(extractor: null)),
+            new AttachmentExtractor(ingest, mcp, parser ?? new InProcessParser(extractor: null)),
             mcp,
             NullLogger<GetAttachmentPageImageTool>.Instance,
             Helpers.NoopLogger());
+    }
+
+    [Fact]
+    public void A_parse_service_outage_says_retry_rather_than_calling_the_pdf_corrupt()
+    {
+        // Phase 3 of the parser isolation. In the container the render crosses
+        // to the parse service; while it restarts, the generic catch below the
+        // render used to answer "encrypted or corrupt" — sending the caller
+        // away from a document it could render a moment later. Message text
+        // only: no tool name, parameter or response field changes.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = StagePdf(repo, MinimalPdf(pages: 1));
+        var parser = new FaultingParser
+        {
+            Fault = op => op == nameof(FaultingParser.RenderPdfPages) ? FaultingParser.Unavailable() : null,
+        };
+
+        var ex = Should.Throw<McpException>(() => Build(db, parser).GetAttachmentPageImage(partIndex: 0, id: id));
+
+        ex.Message.ShouldContain("temporarily unavailable");
+        ex.Message.ShouldContain("get_attachment_text");
+        ex.Message.ShouldNotContain("corrupt");
+        ex.Message.ShouldNotContain("connection refused", Case.Sensitive, "transport detail stays in the log");
     }
 
     [Fact]

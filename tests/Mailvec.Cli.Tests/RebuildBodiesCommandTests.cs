@@ -2,6 +2,7 @@ using Mailvec.Cli.Commands;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
 using Mailvec.Core.Parsing;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Mailvec.Cli.Tests;
@@ -19,6 +20,45 @@ public class RebuildBodiesCommandTests
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("No messages with body_html");
+    }
+
+    [Fact]
+    public void A_parser_outage_stops_the_run_instead_of_logging_an_error_per_message()
+    {
+        // Phase 3 of the parser isolation. BodyTextFromHtml crosses to the
+        // parse service in the container; when it is down every remaining row
+        // would fail identically, and "N errors" would misreport an outage as
+        // N bad messages. Rows converted before the outage stay committed.
+        using var ctx = new TestServiceProvider();
+        ctx.UseParser(new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.BodyTextFromHtml) ? FaultingParser.Unavailable() : null,
+        }).Rebuild();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        foreach (var id in new[] { "a@x", "b@x", "c@x" })
+        {
+            messages.Upsert(
+                new ParsedMessage(
+                    MessageId: id, ThreadId: id, Subject: "Hi",
+                    FromAddress: "alice@example.com", FromName: null,
+                    ToAddresses: [], CcAddresses: [],
+                    DateSent: DateTimeOffset.UtcNow,
+                    BodyText: "stale plaintext",
+                    BodyHtml: "<html><body><p>Fresh</p></body></html>",
+                    RawHeaders: $"Message-ID: <{id}>\r\n",
+                    SizeBytes: 100, ContentHash: "h-" + id, Attachments: []),
+                "INBOX", "INBOX/cur", id, DateTimeOffset.UtcNow);
+        }
+        var writer = new StringWriter();
+        var err = new StringWriter();
+
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+
+        exit.ShouldBe(1);
+        writer.ToString().ShouldContain("STOPPED");
+        writer.ToString().ShouldContain("(0 errors)", Case.Sensitive, "an outage is not a conversion error");
+        err.ToString().Split("unavailable").Length.ShouldBe(2, "reported once, not per row");
+        messages.GetByMessageId("a@x")!.BodyText.ShouldBe("stale plaintext");
     }
 
     [Fact]

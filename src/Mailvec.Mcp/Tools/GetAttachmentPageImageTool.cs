@@ -91,6 +91,11 @@ public sealed class GetAttachmentPageImageTool(
         {
             throw new McpException(ex.Message);
         }
+        catch (ParseException ex) when (ParserAvailability.IsOutage(ex))
+        {
+            logger.LogWarning(ex, "Parse service unavailable describing message {MessageId} partIndex {PartIndex}", msg.Id, partIndex);
+            throw new McpException(ParserAvailability.Message);
+        }
 
         if (!IsPdf(info.ContentType, info.FileName))
             throw new McpException(
@@ -113,6 +118,15 @@ public sealed class GetAttachmentPageImageTool(
         catch (FileNotFoundException ex)
         {
             throw new McpException(ex.Message);
+        }
+        catch (ParseException ex) when (ParserAvailability.IsOutage(ex))
+        {
+            // The service is down or restarting — a retry is the right
+            // answer, unlike the corrupt-PDF message below, which would send
+            // the caller away from a document it could render in a moment.
+            logger.LogWarning(ex, "Parse service unavailable rendering message {MessageId} partIndex {PartIndex} page {Page}",
+                msg.Id, partIndex, page);
+            throw new McpException(ParserAvailability.Message);
         }
         catch (Exception ex)
         {

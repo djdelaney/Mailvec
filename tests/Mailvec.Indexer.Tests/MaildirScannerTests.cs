@@ -4,7 +4,10 @@ using Mailvec.Core.Parsing;
 using Mailvec.Indexer.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Mailvec.Core.Attachments;
 using Mailvec.Parsing;
+using Mailvec.Parsing.Contracts;
+using Mailvec.Pdf;
 
 namespace Mailvec.Indexer.Tests;
 
@@ -62,6 +65,41 @@ public class MaildirScannerTests : IDisposable
         }
         try { Directory.Delete(Path.GetDirectoryName(_root)!, recursive: true); }
         catch (IOException) { /* best effort */ }
+    }
+
+    /// <summary>The same scanner over the same database, with a parser the test controls.</summary>
+    private MaildirScanner BuildScanner(IMailParser parser) =>
+        new(Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = _root }),
+            parser, _messages, _chunks, _syncState, _connections, NullLogger<MaildirScanner>.Instance);
+
+    /// <summary>A message carrying one text attachment, so a parse has attachment text to extract (or give up on).</summary>
+    private string WriteEmlWithAttachment(string folder, string subdir, string filename, string messageId)
+    {
+        var dir = Path.Combine(_root, folder, subdir);
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, filename);
+        File.WriteAllText(path, $"""
+            Message-ID: <{messageId}>
+            Date: Mon, 13 Jan 2025 10:15:00 -0500
+            From: alice@example.com
+            To: bob@example.com
+            Subject: With attachment
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="b"
+
+            --b
+            Content-Type: text/plain; charset=utf-8
+
+            Body.
+            --b
+            Content-Type: text/plain; name="notes.txt"
+            Content-Disposition: attachment; filename="notes.txt"
+
+            Attachment text.
+            --b--
+
+            """);
+        return path;
     }
 
     private string WriteEml(string folder, string subdir, string filename, string body, string messageId)
@@ -1040,5 +1078,184 @@ public class MaildirScannerTests : IDisposable
         second.SoftDeleted.ShouldBe(0);
         _messages.CountAll().ShouldBe(1);
         _messages.GetByMessageId("rename@x").ShouldNotBeNull().MaildirPath.ShouldBe("INBOX/cur");
+    }
+
+    // ── Parser failures (phase 3 of the parser isolation) ──────────────────
+    //
+    // In the container every ParseMessage crosses to the parse service, which
+    // restarts on purpose after a timeout or its request budget. The scanner's
+    // catch already leaves a safe retry marker for any failure; these pin the
+    // two refinements on top: an outage abandons the walk WITHOUT reconciling
+    // (a partial observedPaths would soft-delete every message the walk never
+    // reached), and a file that keeps crashing the parser is eventually indexed
+    // without its attachment text instead of taking the service down forever.
+
+    [Fact]
+    public void A_parser_outage_mid_scan_deletes_nothing()
+    {
+        // Two folders, all indexed. Then one file is genuinely removed, new
+        // mail arrives in both folders, and the parse service goes down. The
+        // outage scan must soft-delete NOTHING — not the removed file's message
+        // either, because it cannot tell "removed" from "not reached" — and
+        // the first scan after the service returns must catch up on both the
+        // new mail and the deletion.
+        WriteEml("INBOX", "cur", "1.host:2,S", "one", "one@x");
+        var removed = WriteEml("INBOX", "cur", "2.host:2,S", "two", "two@x");
+        WriteEml("Archive", "cur", "3.host:2,S", "three", "three@x");
+        var parser = new FaultingParser();
+        var scanner = BuildScanner(parser);
+        scanner.ScanAll();
+        _messages.CountAll().ShouldBe(3);
+
+        File.Delete(removed);
+        WriteEml("INBOX", "new", "4.host", "four", "four@x");
+        WriteEml("Archive", "new", "5.host", "five", "five@x");
+        parser.Fault = (_, _) => new ParseException(ParseFailureKind.Unavailable, "connection refused");
+
+        var outage = scanner.ScanAll();
+
+        outage.Incomplete.ShouldBeTrue();
+        outage.SoftDeleted.ShouldBe(0);
+        foreach (var id in new[] { "one@x", "two@x", "three@x" })
+        {
+            _messages.GetByMessageId(id).ShouldNotBeNull().DeletedAt.ShouldBeNull(
+                $"{id} must not be soft-deleted by a scan that never finished its walk");
+        }
+
+        parser.Fault = (_, _) => null;
+        var recovered = scanner.ScanAll();
+
+        recovered.Incomplete.ShouldBeFalse();
+        recovered.Upserted.ShouldBe(2);
+        recovered.SoftDeleted.ShouldBe(1);
+        _messages.GetByMessageId("two@x").ShouldNotBeNull().DeletedAt.ShouldNotBeNull("the real deletion is reconciled once the walk completes");
+        _messages.GetByMessageId("four@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+        _messages.GetByMessageId("five@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_parser_outage_abandons_the_walk_after_one_failure_and_writes_no_markers()
+    {
+        // During a bulk ingest with the service down, the old catch would have
+        // written one "retry me" sync_state row and one warning per new file.
+        // The outage is not a property of any file: stop at the first one.
+        WriteEml("INBOX", "cur", "1.host:2,S", "one", "one@x");
+        WriteEml("INBOX", "cur", "2.host:2,S", "two", "two@x");
+        WriteEml("INBOX", "cur", "3.host:2,S", "three", "three@x");
+        var parser = new FaultingParser
+        {
+            Fault = (_, _) => new ParseException(ParseFailureKind.Unavailable, "connection refused"),
+        };
+
+        var result = BuildScanner(parser).ScanAll();
+
+        parser.ParseCalls.ShouldBe(1);
+        result.Incomplete.ShouldBeTrue();
+        result.FailedToParse.ShouldBe(1);
+        _syncState.TrackedPathCount().ShouldBe(0, "no retry marker: nothing about these files was learned");
+        _messages.CountAll().ShouldBe(0);
+    }
+
+    [Fact]
+    public void An_unchanged_corpus_scans_to_completion_while_the_parser_is_down()
+    {
+        // The mtime fast path never calls the parser, so a parse-service outage
+        // costs exactly the mail that arrived during it — an unchanged corpus
+        // still reconciles normally. (This is also why the outage is cheap to
+        // wait out rather than something to route around.)
+        WriteEml("INBOX", "cur", "1.host:2,S", "one", "one@x");
+        WriteEml("INBOX", "cur", "2.host:2,S", "two", "two@x");
+        var parser = new FaultingParser();
+        var scanner = BuildScanner(parser);
+        scanner.ScanAll();
+        parser.ParseCalls.ShouldBe(2);
+
+        parser.Fault = (_, _) => new ParseException(ParseFailureKind.Unavailable, "connection refused");
+        var result = scanner.ScanAll();
+
+        result.Incomplete.ShouldBeFalse();
+        result.Unchanged.ShouldBe(2);
+        parser.ParseCalls.ShouldBe(2, "the fast path never reached the parser");
+    }
+
+    [Fact]
+    public void A_file_that_keeps_crashing_the_parser_is_indexed_without_attachment_text_after_three_strikes()
+    {
+        // The 958-byte shading PDF from phase 0, as the indexer sees it: the
+        // parse host times out extracting the attachment, answers 504 and
+        // exits, and the file is re-parsed next scan — forever, taking the
+        // service down once a minute. After Parser:MaxCrashesPerFile (3) the
+        // scanner asks for metadata only and indexes the message with its
+        // attachments at 'failed': searchable by body, one document's text
+        // given up, nothing wedged.
+        WriteEmlWithAttachment("INBOX", "cur", "poison.host:2,S", "poison@x");
+        WriteEml("INBOX", "cur", "fine.host:2,S", "fine", "fine@x");
+        var parser = new FaultingParser
+        {
+            Fault = (eml, extractText) =>
+                extractText && System.Text.Encoding.ASCII.GetString(eml).Contains("poison@x")
+                    ? new ParseException(ParseFailureKind.Crashed, "504: the parse service timed out on this document")
+                    : null,
+        };
+        var scanner = BuildScanner(parser);
+
+        for (var strike = 1; strike <= 3; strike++)
+        {
+            var r = scanner.ScanAll();
+            r.FailedToParse.ShouldBe(1, $"strike {strike}: still asking for text, still crashing");
+            r.Incomplete.ShouldBeFalse("a crash is about the file, not the service; the walk continues");
+            _messages.GetByMessageId("poison@x").ShouldBeNull();
+        }
+        _messages.GetByMessageId("fine@x").ShouldNotBeNull("a crash on one file never blocks the rest of the walk");
+
+        var degraded = scanner.ScanAll();
+
+        degraded.FailedToParse.ShouldBe(0);
+        degraded.Upserted.ShouldBe(1);
+        parser.LastExtractFlag.ShouldBe(false, "the fourth attempt asked for metadata only");
+        var msg = _messages.GetByMessageId("poison@x").ShouldNotBeNull();
+        msg.DeletedAt.ShouldBeNull();
+        var att = msg.Attachments.ShouldHaveSingleItem();
+        att.ExtractionStatus.ShouldBe(ExtractionStatus.Failed, "not NULL: the default extract-attachments predicate must not walk back into the crash");
+        att.ExtractedText.ShouldBeNull();
+
+        // Steady state: the fast path recognises the file and the parser is
+        // never asked again.
+        var calls = parser.ParseCalls;
+        scanner.ScanAll().Unchanged.ShouldBe(2);
+        parser.ParseCalls.ShouldBe(calls);
+    }
+
+    /// <summary>
+    /// The in-process parser with a fault injected into <see cref="ParseMessage"/>
+    /// — the one call the scanner makes. The fault sees the bytes and the
+    /// extract-text flag, so a test can crash "this file, with extraction" the
+    /// way a poison attachment does.
+    /// </summary>
+    private sealed class FaultingParser : IMailParser
+    {
+        private readonly IMailParser _inner = new InProcessParser(extractor: null);
+
+        public Func<byte[], bool, Exception?> Fault { get; set; } = (_, _) => null;
+        public int ParseCalls { get; private set; }
+        public bool? LastExtractFlag { get; private set; }
+
+        public string Mode => _inner.Mode;
+
+        public ParsedMessage ParseMessage(byte[] eml, bool extractAttachmentText)
+        {
+            ParseCalls++;
+            LastExtractFlag = extractAttachmentText;
+            if (Fault(eml, extractAttachmentText) is { } ex) throw ex;
+            return _inner.ParseMessage(eml, extractAttachmentText);
+        }
+
+        public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex) => _inner.ExtractAttachmentText(eml, partIndex);
+        public PartInfo DescribePart(byte[] eml, int partIndex) => _inner.DescribePart(eml, partIndex);
+        public DecodedPart DecodePart(byte[] eml, int partIndex, long? maxBytes) => _inner.DecodePart(eml, partIndex, maxBytes);
+        public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes) =>
+            _inner.RenderPdfPages(eml, partIndex, firstPage, maxPages, maxBytes);
+        public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes) => _inner.NormalizeImage(eml, partIndex, maxBytes);
+        public string? BodyTextFromHtml(string html, string? subject) => _inner.BodyTextFromHtml(html, subject);
     }
 }

@@ -391,7 +391,9 @@ and `MaxRequestsBeforeExit` tested at the host level. Dockerfile publish + the
 strip-and-assert block; compose service and network; `.env.example`;
 health/doctor reporting.
 
-**Phase 3 — failure handling in the callers (1–2 days).**
+**Phase 3 — failure handling in the callers. Done 2026-09-15** (see the CHANGELOG entry and [the status doc](attachment-parser-isolation-status.md)). As planned, with these decisions made concrete: the scanner's crash strikes are keyed on the fast path's `(path, mtime, size)` and the degraded parse stamps every attachment `failed` (open question 5 below, resolved as written there); the OCR pass shares one strike ledger between vision and parser failures but settles each with its own health evidence; the CLI backfills stop with exit 1 on an outage and report crashes as `PARSER n`; `ScanResult` gained `Incomplete`. Nothing from the original list below was skipped.
+
+Original plan:
 The three classification tables above, with fakes: the OCR pass
 (`Unavailable` never retires, `Crashed` counts only when the probe passes,
 `DocumentRejected` retires with `PreProvider` provenance); the scanner

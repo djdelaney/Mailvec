@@ -1,7 +1,8 @@
-# Parser isolation — status and handoff for phase 3
+# Parser isolation — status and handoff
 
-**As of:** 2026-09-15, branch `parser-isolation-phase0` at `a99da58`, pushed to origin. This file
-was written after that commit and is not yet on the branch; commit it alongside phase 3 or on its own.
+**As of:** 2026-09-15, branch `parser-isolation-phase0`. Phases 0–3 are on the branch; phase 3 is
+in the working tree after `2b3c1c7` (see the CHANGELOG entry for what it changed). Test state:
+**1,342 passing, 0 failing** across six projects. What remains is phase 4 (docs) at the bottom.
 **Not merged. Not released.** No PR is open. Merging and any version bump are the owner's call
 (see `CLAUDE.md` → Releases: a release needs an explicit ask in that turn; this is a `--patch`,
 there is no schema migration and no MCP tool-surface change).
@@ -85,7 +86,16 @@ point; it is not required for phase 3.
 **Do not** run `ops/install.sh` or start agents on the author's Mac — see the frozen-corpus
 block at the top of `CLAUDE.md`. Everything above runs from the working tree and in Docker.
 
-## Phase 3 — what it is and why it is not optional
+## Phase 3 — done; what it was and why it was not optional
+
+> Landed 2026-09-15. The sections below are kept as the record of the plan; every item in them
+> is implemented and each named test exists. Deviations from the plan, all deliberate: the OCR pass
+> shares its strike ledger between vision and parser failures (each settled with its own health
+> evidence); `ScanResult` gained an `Incomplete` flag rather than a new `IngestOutcome` being
+> surfaced; the CLI backfills stop with exit 1 and a `STOPPED` line on an outage; the scanner's
+> degraded parse stamps every attachment `failed` (the proposal's open question 5, resolved as
+> written there). `docs/deploy-docker.md`'s "While it is down" bullet already described this
+> behaviour — it was written in phase 2 ahead of the code.
 
 Phase 2 made every parse call in the container cross to the `parse` service. What it did **not**
 do is teach the callers that a parse can now fail for reasons that have nothing to do with the

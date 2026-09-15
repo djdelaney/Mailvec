@@ -969,7 +969,7 @@ public class ExtractAttachmentsCommandTests : IDisposable
         return ms.ToArray();
     }
 
-    private ServiceProvider BuildProvider(string maildirRoot, bool probeWriterLock = false)
+    private ServiceProvider BuildProvider(string maildirRoot, bool probeWriterLock = false, FaultingParser? parser = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -989,11 +989,108 @@ public class ExtractAttachmentsCommandTests : IDisposable
         // The command resolves the parser seam, not the extractor directly; the
         // in-process parser is built over whichever extractor is registered so
         // the writer-lock probe still sees every Extract call.
-        services.AddSingleton<IMailParser>(sp => new InProcessParser(sp.GetRequiredService<AttachmentTextExtractor>()));
+        services.AddSingleton<IMailParser>(sp =>
+        {
+            var real = new InProcessParser(sp.GetRequiredService<AttachmentTextExtractor>());
+            return parser is null ? real : new FaultingParser(real) { Fault = parser.Fault };
+        });
         var sp = services.BuildServiceProvider();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         return sp;
     }
+
+    // ── Parser failures (phase 3 of the parser isolation) ──────────────────
+
+    /// <summary>One NULL-status text attachment, staged the way Backfill_runs_extractor_and_stamps_status does.</summary>
+    private void StagePendingTextAttachment(IServiceProvider sp, string id, string file)
+    {
+        File.WriteAllText(Path.Combine(_maildirRoot, "INBOX", "cur", file), $"""
+            Message-ID: <{id}>
+            From: alice@example.com
+            To: bob@example.com
+            Subject: Test
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="b"
+
+            --b
+            Content-Type: text/plain
+
+            Body.
+            --b
+            Content-Type: text/plain; name="notes.txt"
+            Content-Disposition: attachment; filename="notes.txt"
+
+            Notes.
+            --b--
+            """);
+        sp.GetRequiredService<MessageRepository>().Upsert(
+            new ParsedMessage(
+                MessageId: id, ThreadId: id, Subject: "Test",
+                FromAddress: "alice@example.com", FromName: null,
+                ToAddresses: [], CcAddresses: [],
+                DateSent: DateTimeOffset.UtcNow,
+                BodyText: "Body.", BodyHtml: null,
+                RawHeaders: $"Message-ID: <{id}>\r\n",
+                SizeBytes: 200, ContentHash: "h-" + id,
+                Attachments: [new ParsedAttachment(0, "notes.txt", "text/plain", 50L, ExtractedText: null, ExtractionStatus: null)]),
+            "INBOX", "INBOX/cur", file, DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public void A_parser_outage_stops_the_run_and_stamps_nothing()
+    {
+        // The parse service restarts on purpose after a timeout or its request
+        // budget. Before phase 3 this was `catch (Exception) → stamp failed`:
+        // every candidate the run reached during those seconds was stamped
+        // 'failed' — permanently, since the default predicate never revisits
+        // a stamped row — and the run reported them as processed. Same shape
+        // of silent loss the missing-source rule exists to prevent.
+        using var sp = BuildProvider(maildirRoot: _maildirRoot, parser: new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.ExtractAttachmentText) ? FaultingParser.Unavailable() : null,
+        });
+        StagePendingTextAttachment(sp, "a@x", "1.eml");
+        StagePendingTextAttachment(sp, "b@x", "2.eml");
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
+
+        exit.ShouldBe(1, "an aborted run must not read as a clean one");
+        writer.ToString().ShouldContain("STOPPED");
+        StatusOf(sp, "a@x").ShouldBeNull("nothing stamped: the outage says nothing about the document");
+        StatusOf(sp, "b@x").ShouldBeNull();
+        err.ToString().ShouldContain("unavailable");
+        err.ToString().Split("unavailable").Length.ShouldBe(2, "reported once, not once per remaining candidate");
+    }
+
+    [Fact]
+    public void A_parser_crash_skips_the_message_reports_it_and_stamps_nothing()
+    {
+        // The service died on this part (504-and-exit). Possibly the
+        // document's doing, possibly a neighbour's memory pressure — not
+        // certain enough to stamp, so the message is left for a later run
+        // and the summary says so, the way MISSING and REFUSED do.
+        var parser = new FaultingParser();
+        using var sp = BuildProvider(maildirRoot: _maildirRoot, parser: parser);
+        StagePendingTextAttachment(sp, "crash@x", "1.eml");
+        StagePendingTextAttachment(sp, "fine@x", "2.eml");
+        parser.Fault = op => op == nameof(IMailParser.ExtractAttachmentText) && !crashedOnce ? Crash() : null;
+
+        var writer = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, new StringWriter());
+
+        exit.ShouldBe(0, "a per-message skip is not a failed run");
+        writer.ToString().ShouldContain("PARSER 1 message(s)");
+        // The messages are visited in id order, so the crash lands on the first
+        // one and the second extracts normally — one skipped, one done.
+        StatusOf(sp, "crash@x").ShouldBeNull();
+        StatusOf(sp, "fine@x").ShouldBe("done");
+
+        Exception Crash() { crashedOnce = true; return FaultingParser.Crashed(); }
+    }
+
+    private bool crashedOnce;
 
     /// <summary>
     /// Extractor that, from inside Extract, tries to take SQLite's writer lock
