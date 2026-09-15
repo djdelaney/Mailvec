@@ -32,4 +32,15 @@ public sealed class ParserOptions
     /// against nothing.
     /// </summary>
     public int RequestTimeoutSeconds { get; set; } = 90;
+
+    /// <summary>
+    /// How many times one file (same path, mtime and size) may crash the
+    /// parser (<c>ParseFailureKind.Crashed</c>: a timeout-and-exit, an OOM
+    /// kill, a 5xx) before the indexer stops asking for its attachment text
+    /// and indexes the message with its attachments at
+    /// <c>extraction_status='failed'</c>. Counted in memory by
+    /// <c>MaildirScanner</c>, so a restart grants another round; the message
+    /// is indexed either way, only the poison document's text is given up.
+    /// </summary>
+    public int MaxCrashesPerFile { get; set; } = 3;
 }

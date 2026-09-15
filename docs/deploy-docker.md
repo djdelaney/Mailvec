@@ -409,7 +409,17 @@ What to know operationally:
   the OCR pass pauses, and `view_attachment` / `get_attachment_page_image`
   answer "parsing is temporarily unavailable". **Search keeps working** — it
   reads the database only. The callers classify the gap as "unavailable",
-  never as a fault of any document.
+  never as a fault of any document; the CLI backfills stop with exit 1 and a
+  `STOPPED` line rather than stamping anything.
+- **A document that keeps crashing it is given up on, not the service.** A
+  504-and-exit on one document is a strike against that document. The OCR
+  pass retires it after five strikes counted while the service was otherwise
+  answering; the indexer, after `Parser__MaxCrashesPerFile` (3) on the same
+  file, parses it metadata-only and indexes the message with its attachments
+  at `failed` — searchable by body, one document's text given up, and the
+  service no longer restarted once a minute by it. `mailvec extract-attachments
+  --reextract-*` revisits those once the parser is fixed. The counters are in
+  memory, so a container restart grants another round.
 - **It never flips `/health` red.** `/health` carries a `parser` section
   (`mode`, `endpoint`, `reachable`) and `mailvec doctor` has a `Parser` check,
   both informational: a parse service outage is *its* outage, and restarting

@@ -204,6 +204,8 @@ internal static class ExtractAttachmentsCommand
         long messagesSkippedStale = 0;
         long messagesSkippedMissing = 0;
         long messagesSkippedRefused = 0;
+        long messagesSkippedParserCrash = 0;
+        var parserUnavailable = false;
         var statusCounts = new Dictionary<string, long>(StringComparer.Ordinal);
 
         // Cursor pagination by messages.id (rowid-ordered). We don't OFFSET
@@ -269,6 +271,16 @@ internal static class ExtractAttachmentsCommand
 
                 var outcome = TryProcessMessage(connections, parser, msg, maildirFile, reextractKind, !noReembed, statusCounts, err, out var newTextCount, out var attachmentsThisMessage);
                 if (outcome == MessageOutcome.Stale) messagesSkippedStale++;
+                if (outcome == MessageOutcome.ParserCrashed) messagesSkippedParserCrash++;
+                if (outcome == MessageOutcome.ParserUnavailable)
+                {
+                    // Not about this message, and not about the next one
+                    // either: stop the run rather than report one skip per
+                    // remaining candidate. Nothing was stamped for it.
+                    messagesProcessed--;
+                    parserUnavailable = true;
+                    break;
+                }
                 if (outcome == MessageOutcome.Processed)
                 {
                     attachmentsExtracted += attachmentsThisMessage;
@@ -303,6 +315,7 @@ internal static class ExtractAttachmentsCommand
                     @out.WriteLine($"  ... {messagesProcessed:N0}/{ceiling:N0} messages, {attachmentsExtracted:N0} attachments stamped");
                 }
             }
+            if (parserUnavailable) break;
         }
 
         @out.WriteLine();
@@ -334,6 +347,18 @@ internal static class ExtractAttachmentsCommand
                 $"REFUSED {messagesSkippedRefused:N0} message(s) whose recorded location resolves outside the Maildir root. " +
                 "This is a database problem, not a transient one — a re-run will refuse them again. Investigate before re-running.");
         }
+        if (messagesSkippedParserCrash > 0)
+        {
+            // Left untouched like the missing-source skips: the parse service
+            // died on one of these messages' parts (a timeout-and-exit, an OOM
+            // kill), which says nothing certain about the document, so nothing
+            // was stamped and a re-run retries them. Reported because each
+            // costs the service a restart, and a document that does this every
+            // run is the indexer's three-strikes case — see MaildirScanner.
+            @out.WriteLine(
+                $"PARSER {messagesSkippedParserCrash:N0} message(s) the parse service crashed on. " +
+                "Their attachments are untouched; a re-run retries them.");
+        }
         if (statusCounts.Count > 0)
         {
             @out.WriteLine("Status breakdown:");
@@ -346,6 +371,12 @@ internal static class ExtractAttachmentsCommand
         {
             @out.WriteLine();
             @out.WriteLine($"Cleared chunks/embedded_at for {messagesWithNewText:N0} message(s). The embedder picks up cleared messages on its next poll — no need to run `reindex` separately.");
+        }
+        if (parserUnavailable)
+        {
+            @out.WriteLine();
+            @out.WriteLine("STOPPED: the parse service is unavailable. Everything above this point was committed; nothing was stamped for the rest. Re-run once it is back (`docker compose ps parse`).");
+            return 1;
         }
         return 0;
     }
@@ -438,11 +469,31 @@ internal static class ExtractAttachmentsCommand
                 // post-ingest. Stamp 'failed' so we don't retry forever.
                 extracted.Add((att, ExtractionStatus.Failed, null));
             }
+            catch (ParseException ex) when (ex.Kind == ParseFailureKind.Unavailable)
+            {
+                // The parse service is down or restarting. Not a property of
+                // this document, so stamping 'failed' would be the silent loss
+                // the missing-source rule exists to prevent — permanent, since
+                // the default predicate never revisits a stamped row.
+                err.WriteLine($"  msg {msg.Id}: the parse service is unavailable ({ex.Message}); stopping.");
+                return MessageOutcome.ParserUnavailable;
+            }
+            catch (ParseException ex) when (ex.Kind == ParseFailureKind.Crashed)
+            {
+                // The service died on this part. Possibly the document's
+                // doing, possibly not (memory pressure from a neighbour);
+                // either way not certain enough to stamp. Skip the whole
+                // message — a partial stamp would leave the rest for a re-run
+                // that then re-crashes on the same part — and report it.
+                err.WriteLine($"  msg {msg.Id} part {att.PartIndex}: the parse service crashed ({ex.Message}); skipping this message (left for a later run).");
+                return MessageOutcome.ParserCrashed;
+            }
             catch (Exception ex)
             {
-                // The .eml itself doesn't parse (MimeKit FormatException) —
-                // equally deterministic for this file. Report it, since the
-                // old parse-failed skip was visible, and retire the row.
+                // The .eml itself doesn't parse (MimeKit FormatException), or
+                // the parser opened the part and rejected it — equally
+                // deterministic for this file. Report it, since the old
+                // parse-failed skip was visible, and retire the row.
                 err.WriteLine($"  msg {msg.Id} part {att.PartIndex}: parse failed ({ex.GetType().Name}); stamping failed.");
                 extracted.Add((att, ExtractionStatus.Failed, null));
             }
@@ -649,7 +700,7 @@ internal static class ExtractAttachmentsCommand
     }
 
     /// <summary>What one message's pass did — see <see cref="MessageSnapshotUnchanged"/> for Stale.</summary>
-    private enum MessageOutcome { Processed, ParseFailed, Stale }
+    private enum MessageOutcome { Processed, ParseFailed, Stale, ParserCrashed, ParserUnavailable }
 
     private sealed record MessageRow(long Id, string MaildirPath, string MaildirFilename, string? ContentHash);
     private sealed record AttachmentCandidate(long Id, int PartIndex, string? FileName, string? ContentType, long? SizeBytes);

@@ -160,6 +160,12 @@ public sealed class ViewAttachmentTool(
         {
             throw new McpException(ex.Message);
         }
+        catch (ParseException ex) when (ParserAvailability.IsOutage(ex))
+        {
+            // The service is down or restarting: unlike every other branch
+            // here, a retry is the right answer.
+            throw new McpException(ParserAvailability.Message);
+        }
         catch (AttachmentTooLargeException ex)
         {
             // Not an error the model should retry: the size is a property of
@@ -186,11 +192,23 @@ public sealed class ViewAttachmentTool(
                 imageBytes = att.Bytes;
                 imageMime = att.ContentType;
             }
-            else if (extractor.NormalizeImage(msg, partIndex, _mcp.AttachmentInlineMaxBytes) is { } normalized)
+            else
             {
-                imageBytes = normalized.Jpeg;
-                imageMime = "image/jpeg";
-                imageTranscoded = true;
+                Mailvec.Pdf.NormalizedImage? normalized;
+                try
+                {
+                    normalized = extractor.NormalizeImage(msg, partIndex, _mcp.AttachmentInlineMaxBytes);
+                }
+                catch (ParseException ex) when (ParserAvailability.IsOutage(ex))
+                {
+                    throw new McpException(ParserAvailability.Message);
+                }
+                if (normalized is not null)
+                {
+                    imageBytes = normalized.Jpeg;
+                    imageMime = "image/jpeg";
+                    imageTranscoded = true;
+                }
             }
         }
 
