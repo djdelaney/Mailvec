@@ -374,7 +374,7 @@ it sits at `known:false` forever (no prior beat to go stale from). In practice:
   `known:false` indefinitely and the `stale` checks miss it.
 
 To cover that case, either add a Kuma **Docker Container** monitor (via the
-Docker socket) watching the four containers are running, or add a monitor on
+Docker socket) watching the five long-running containers, or add a monitor on
 e.g. `services[service='indexer'].known` expecting `true` **with 2–3 retries**
 (the retries ride out the normal startup window where `known` is briefly false).
 
@@ -387,6 +387,51 @@ stopped." Same remedy if you want it covered — monitor `mail.known` expecting
 exist because reporting absence-of-signal as failure puts every fresh install
 and every local dev machine permanently red, which is what teaches an operator
 to ignore the indicator.
+
+## The `parse` service is not on `/up`, by design
+
+The `parse` container (every mail-content parser runs there — see
+[deploy-docker.md](deploy-docker.md#the-parse-service)) has **no field in
+`/up`** and never flips it to 503. Two reasons, both deliberate:
+
+- A parse outage is *its* outage. Search keeps working (it reads the database
+  only); what pauses is new-mail ingest and OCR, and the callers classify the
+  gap as "unavailable" rather than stamping anything. Paging on `/up` for it
+  would restart-loop a working mcp container under a compose healthcheck that
+  keyed on it.
+- **Frequent restarts are its normal operation.** It answers 504 *and exits*
+  when a document overruns `MAILVEC_PARSER_TIMEOUT_SECONDS`, and exits cleanly
+  after `MAILVEC_PARSER_MAX_REQUESTS`; `restart: unless-stopped` brings it back
+  in seconds. A monitor that fires on "restarted recently" or on a single
+  failed probe would page on the design working.
+
+What exists instead:
+
+- **Its own compose healthcheck**, `curl http://127.0.0.1:3400/up` inside the
+  container (30 s interval, 3 retries). `docker compose ps parse` shows
+  `healthy` / `unhealthy`, and that is the state a Docker Container monitor
+  reads.
+- **`/health`'s `parser` section** (`mode`, `endpoint`, `reachable`) and the
+  `Parser` check in `mailvec doctor` — informational, and `/health` is
+  loopback-only, so neither is reachable from Kuma through the tunnel.
+
+If you want it paged, add a Kuma **Docker Container** monitor on `parse` with
+**retries generous enough to ride out a restart** (the healthcheck's
+`start_period` is 15 s; three retries at a 60 s interval is comfortable), so it
+fires on "down and staying down" — the image failing to start, or a crash loop
+— and not on the routine exit. Don't expect the existing monitors to catch it
+for you: the indexer keeps beating during a parse outage (it is alive, and
+correctly so), and `ocr.stalled` only trips once its window elapses. There is
+no `/up` signal that names the parse service; the container monitor is the
+only direct one.
+
+Verify (from the Docker host):
+
+```sh
+docker compose ps parse                                   # State running, healthy
+docker compose exec mcp curl -s http://parse:3400/up      # {"ok":true} from inside the compose network
+docker compose exec mcp mailvec doctor | grep -i parser         # the Parser check: "answers /up"
+```
 
 ## Complementary native signal: Cloudflare tunnel health
 

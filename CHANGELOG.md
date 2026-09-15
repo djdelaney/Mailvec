@@ -213,6 +213,8 @@ Phase 2 made every parse in the container cross to the `parse` service; phase 3 
 - **MCP viewers**: `view_attachment` and `get_attachment_page_image` answer "Attachment parsing is temporarily unavailable; retry in a moment, or call get_attachment_text" on `Unavailable` instead of "encrypted or corrupt". Message text only — no tool name, parameter or response field changed.
 - New: `Parser:MaxCrashesPerFile`. Tests: 18 across the four callers (fault-injecting `IMailParser` fakes; the OCR ones mirror the vision taxonomy tests).
 
+**Phase 4 (docs, same day)**: `docs/security.md`'s container-hardening section and the native-parser acceptance are rewritten around the boundary that now exists — one data-less, non-root process parses attacker-chosen bytes, and the accepted residual is attacker-chosen *output* for in-flight requests, nothing more; `docs/monitoring-uptime-kuma.md` explains why `parse` has no `/up` field and how to watch it without paging on its routine restarts. This closes the parser isolation work; no release cut.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
