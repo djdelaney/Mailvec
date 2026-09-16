@@ -97,7 +97,14 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   Bind mounts `./data` (SQLite) and `./mail` (Maildir) must be **VM-local
   disk**: SQLite WAL needs real POSIX locking; never NFS/SMB. Multi-container
   WAL sharing on one local bind mount is the same multi-process pattern as
-  the macOS launchd services.
+  the macOS launchd services. **On a developer Mac, never open the database
+  from the host while containers have it** — Docker Desktop's bind mount does
+  not share the WAL index (`-shm`) coherently across the VM boundary, so a
+  host-side `sqlite3`/python read sees a stale view and its close can
+  checkpoint that view over the containers' frames (observed 2026-09-15 during
+  the parser-isolation smoke: two freshly indexed messages vanished, WAL
+  truncated to 0 bytes). Query through a container instead:
+  `docker run --rm -v ./data:/data <image> dotnet /app/cli/Mailvec.Cli.dll status`.
 - **Ollama**: external over LAN. If you already run an instance for a macOS
   install, reuse it — its bind address, version floor, and pulled models
   (embedding + vision) are then already proven, and the compose `.env` takes

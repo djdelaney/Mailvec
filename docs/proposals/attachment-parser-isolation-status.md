@@ -1,9 +1,38 @@
 # Parser isolation — status and handoff
 
-**As of:** 2026-09-15, branch `parser-isolation-phase0`. Phases 0–4 are complete: phase 3 landed
-in `3092d8c`, phase 4 (docs) follows it. Test state: **1,342 passing, 0 failing** across six
-projects. Nothing remains but the release, which is proposed as `--patch` below and not cut.
-**Not merged. Not released.** No PR is open. Merging and any version bump are the owner's call
+**As of:** 2026-09-16, branch `parser-isolation-phase0`, six commits ahead of `main`, pushed to
+origin. **Phases 0–4 are complete and smoke-tested in Docker** (results below, dated). Test state:
+**1,342 passing, 0 failing** across six projects. **Not merged. Not released.** No PR is open.
+
+## Next stage — what the next agent does
+
+The code is done; what remains is getting it to the homelab. In order:
+
+1. **Open a PR from `parser-isolation-phase0` to `main` and merge it.** Six commits, all
+   reviewed against `dotnet test Mailvec.slnx` and the Docker smoke below. Nothing on the
+   branch is a schema migration or an MCP tool-surface change (the two viewer tools changed
+   message text only; `McpSurfaceTests` is untouched), so a squash or a merge are both fine.
+   CI must be green before anything else — the frozen-corpus / release-approval block check
+   and the version-lockstep check both run there.
+2. **Propose the release and wait.** `ops/release.sh --patch` is the right part; do **not** run
+   it, bump `<Version>`, or push a `v*` tag unless the owner says so in that turn
+   (`CLAUDE.md` → Releases). The tag push is what publishes the GHCR images the homelab pins.
+3. **Deploy to the homelab** ([`docs/deploy-docker.md`](../deploy-docker.md), "The parse
+   service" — the migration steps are there: `compose.yml` already declares the `parse` service
+   and the `parse` network, and the image defaults to `Parser__Mode=remote`, so a pull + `up -d`
+   creates the service and re-attaches the three callers). Verify with
+   `docker compose ps parse`, `docker compose exec mcp curl -s http://parse:3400/up` and
+   `docker compose exec mcp mailvec doctor` (the `Parser` line). Expect `parse` to show recent
+   start times; that is its design. Then **watch the first few scans and the OCR pass** in the
+   indexer and embedder logs for `ParserUnavailable` / `ParserCrashed` — the amd64 VM is the
+   first place the real corpus meets the timeouts (open questions 1–2 below).
+4. **Optional, worth doing:** script the Docker smoke below under `ops/` so the next change to
+   the parser path has a repeatable end-to-end check. The procedure is written out; it is a
+   shell script waiting to happen.
+
+Things a new agent must not do: run `ops/install.sh` or any agent on the author's Mac (frozen
+corpus — top of `CLAUDE.md`); read `archive.sqlite` from the macOS host while a container has it
+(see "Things learned the hard way"); cut a release unasked. Merging and any version bump are the owner's call
 (see `CLAUDE.md` → Releases: a release needs an explicit ask in that turn; this is a `--patch`,
 there is no schema migration and no MCP tool-surface change).
 
@@ -14,19 +43,20 @@ The design, the measurements and the rationale live in
 for whoever picks the work up: what is on the branch, how to prove it, and exactly what phase 3
 has to change and why.
 
-## The three commits
+## The six commits
 
 | Commit | Phase | What it did |
 | --- | --- | --- |
 | `1d5f909` | 0 | The proposal, the diagram, `tools/Mailvec.ParserBench` and the measured results. |
 | `3c49336` | 1 | `IMailParser` seam. `Mailvec.Parsing.Contracts` (interface + plain-data records, no packages) and `Mailvec.Parsing` (every parser; absorbed `Mailvec.Pdf`; never references Core). Core dropped MimeKit/AngleSharp/PdfPig/OpenXml. All four hosts resolve the parser through `ParserRegistration.AddMailvecParser`. |
 | `a99da58` | 2 | The `parse` container. `Mailvec.Parse` host, `RemoteParser` client, `ParserWire` (routes + JSON compiled into both ends), Dockerfile strip-and-assert, compose service + internal network, `/health` `parser` section, `mailvec doctor` Parser check. |
+| `2b3c1c7` | — | This handoff document. |
+| `3092d8c` | 3 | Every caller branches on `ParseException.Kind`: `Unavailable` aborts and counts nothing (OCR batch, scanner walk with `ScanResult.Incomplete` and no reconciliation, CLI runs with exit 1, MCP viewers answer "retry"); `Crashed` is a strike (OCR pass with parser health evidence; scanner per `(path, mtime, size)` with `Parser:MaxCrashesPerFile` then a metadata-only parse and attachments at `failed`); `DocumentRejected` retires as before. 18 tests. |
+| `2f8ea24` | 4 | `docs/security.md` acceptance rewritten around "one data-less process parses attacker bytes" with the residual stated; `docs/monitoring-uptime-kuma.md` on why `parse` is not on `/up`. |
 
-Test state at `a99da58`: **1,324 passing, 0 failing** across six projects
-(`dotnet test Mailvec.slnx`). The Docker image was built locally (linux/arm64) and smoke-tested:
-an indexer with **no parser library on disk** indexed a message through the parse service;
-`Parser__Mode=inprocess` inside the container fails at the first parse with
-`FileNotFoundException`, as designed.
+Test state at `2f8ea24`: **1,342 passing, 0 failing** across six projects
+(`dotnet test Mailvec.slnx`). The Docker image was built locally (linux/arm64) and smoke-tested
+as described under "How to verify the branch".
 
 ## What exists now (the map)
 
@@ -73,15 +103,47 @@ Rules that must hold (each has a test):
 ```sh
 git checkout parser-isolation-phase0
 dotnet build Mailvec.slnx
-dotnet test Mailvec.slnx                       # expect 1,324 passing
-docker build -t mailvec:phase2 --target runtime .   # ~4 min; the strip assertions run here
-docker run --rm mailvec:phase2 sh -c 'ls /app/mcp | grep -c MimeKit; ls /app/parse/libpdfium.so'   # 0, then the path
+dotnet test Mailvec.slnx                       # expect 1,342 passing
+docker build -t mailvec:phase3 --target runtime .   # ~4 min; the strip assertions run here
+docker run --rm mailvec:phase3 sh -c 'ls /app/indexer | grep -c MimeKit; ls /app/parse/libpdfium.so'   # 0, then the path
 ```
 
-The end-to-end smoke (a parse container + an indexer container sharing a network, one `.eml`
-indexed across the boundary, `mailvec doctor` showing `Parser … answers /up`) is in the
-conversation that produced the branch, not scripted. It is worth scripting under `ops/` at some
-point; it is not required for phase 3.
+### The Docker smoke (run 2026-09-15 on Docker Desktop 29.8, linux/arm64 — observed, not scripted)
+
+Everything below runs from a scratch directory with plain `docker run`; nothing touches compose
+or the frozen corpus. **Query the database only through a container** (the `cli` function) —
+never from the host; see "Things learned the hard way".
+
+```sh
+SM=$(mktemp -d)/smoke; mkdir -p "$SM"/mail/INBOX/{cur,new,tmp} "$SM"/data "$SM"/logs
+chmod a+rwX "$SM"/data "$SM"/logs            # the image runs the CLI as the container's user
+# write one multipart .eml with a text attachment into $SM/mail/INBOX/cur/1.host:2,S (Message-ID <one@smoke>)
+docker network create mv-smoke
+cli() { docker run --rm --network mv-smoke -v "$SM/data:/data" -v "$SM/mail:/mail:ro" -v "$SM/logs:/logs" \
+         mailvec:phase3 dotnet /app/cli/Mailvec.Cli.dll "$@"; }
+docker run -d --name mv-parse --network mv-smoke --network-alias parse --user 65534:65534 -e HOME=/tmp \
+         mailvec:phase3 dotnet /app/parse/Mailvec.Parse.dll
+docker run -d --name mv-indexer --network mv-smoke -v "$SM/data:/data" -v "$SM/mail:/mail:ro" -v "$SM/logs:/logs" \
+         -e Indexer__ScanIntervalSeconds=10 mailvec:phase3 dotnet /app/indexer/Mailvec.Indexer.dll
+docker run -d --name mv-mcp --network mv-smoke -v "$SM/data:/data" -v "$SM/mail:/mail:ro" -v "$SM/logs:/logs" mailvec:phase3
+```
+
+| Step | Observed 2026-09-15 |
+| --- | --- |
+| Initial scan | indexer log `POST http://parse:3400/v1/message` → 200; `seen=1 upserted=1`; `cli status` → 1 message. The indexer directory has no parser library. |
+| `docker stop mv-parse`, drop a second `.eml` | every scan (watcher pulse + 10 s timer) logs `the parse service is unavailable; scan abandoned after 1 file(s) … Nothing reconciled`; `cli status` stays `1 total, 0 deleted`; no sync_state marker written. |
+| Drop a third `.eml`, `docker start mv-parse` | next scan `seen=3 upserted=2 unchanged=1 softDeleted=0`; `cli status` → `3 total, 0 deleted`; `cli get '<two@smoke>'` shows the attachment `[done]`. |
+| `/health` from inside `mv-mcp` (`docker exec mv-mcp curl -s 127.0.0.1:3333/health`) | `parser: {mode: remote, endpoint: http://parse:3400, reachable: true}`, then `reachable: false` with parse stopped. `status` is `degraded` throughout because there is no Ollama — expected. |
+| `cli doctor` with parse stopped | `⚠ Parser  remote parse service … did not answer /up within 2s — new mail is not being indexed, OCR is paused …` |
+| Churn: parse restarted with `-e Parser__MaxRequestsBeforeExit=1 --restart unless-stopped`, five new `.eml`s | each scan indexes one message, then `scan abandoned after N file(s) (upserted=1 …)`; after five parse restarts `cli status` → `8 total, 0 deleted`. |
+
+**Not covered by the smoke, and why:** the `Crashed` classification and the scanner's
+three-strikes degrade. The only known parser-hanging fixture (`e-sh-20k.pdf`, phase 0) hangs
+PDFium, which the indexer never calls, and reaching the OCR pass's render step needs a vision
+model. Both are unit-tested (`MaildirScannerTests.A_file_that_keeps_crashing_the_parser_…`,
+`AttachmentOcrServiceTests.Parser_crash_…`). The first real exercise will be the homelab VM.
+
+Teardown: `docker rm -f mv-parse mv-indexer mv-mcp; docker network rm mv-smoke`.
 
 **Do not** run `ops/install.sh` or start agents on the author's Mac — see the frozen-corpus
 block at the top of `CLAUDE.md`. Everything above runs from the working tree and in Docker.
@@ -209,6 +271,13 @@ get_attachment_text."* This is a message-text change only; it is **not** a tool-
 
 ## Things learned the hard way (so you don't)
 
+- **Never open the bind-mounted `archive.sqlite` from the macOS host while a container has it.**
+  Docker Desktop does not share the WAL index (`-shm`) across the VM boundary; a host-side
+  python/`sqlite3` read sees a stale view and its close can checkpoint that view over the
+  containers' frames. Observed 2026-09-15: two freshly indexed messages vanished and the WAL
+  truncated to 0 bytes, and it looked like a scanner bug for one round. Query via the CLI in a
+  container. Now in `docs/deploy-docker.md`.
+
 - **xunit 2.9 `IAsyncLifetime` returns `Task`**, not `ValueTask`.
 - **`WebApplication.StopAsync` takes a `CancellationToken`**, not a `TimeSpan`.
 - **Don't use `TestServer` for the parse host tests.** `RemoteParser` uses the synchronous
@@ -255,8 +324,13 @@ services; persisting the crash-strike counter.
 ## Open questions carried forward
 
 1. Bulk-ingest throughput over HTTP (82k messages ≈ 82k calls) — expected to be lost in the
-   noise against parse time, but unmeasured on the amd64 VM.
+   noise against parse time, but unmeasured on the amd64 VM. Only the initial bulk ingest and a
+   `reindex` pay it; the steady state is the mtime fast path, which never calls the parser.
 2. `MaxRequestsBeforeExit` default (500) and `RequestTimeoutSeconds` (60) — both guesses with a
-   measured floor; re-measure on the VM before lowering.
-3. The three-strikes fallback for a file that keeps crashing the parser (phase 3, item 2): what
-   status its attachments should carry and whether `extract-attachments` should ever revisit them.
+   measured floor; re-measure on the VM before lowering. The smoke's churn row above is what a
+   too-low budget looks like in the logs: one message per scan, an abandon per restart.
+3. ~~The three-strikes fallback~~ **Resolved in phase 3:** attachments go to `failed` (not NULL),
+   so the default `extract-attachments` predicate never walks back into the crash;
+   `--reextract-*` revisits them once the parser is fixed. Documented in `CLAUDE.md` and
+   `docs/deploy-docker.md`.
+4. The end-to-end smoke is a procedure, not a script (above). Worth an `ops/smoke-parse.sh`.
