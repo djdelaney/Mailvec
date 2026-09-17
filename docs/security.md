@@ -174,7 +174,8 @@ All six services therefore run with:
 | Control | What it buys |
 | --- | --- |
 | `cap_drop: [ALL]` | No Linux capabilities. Removes `DAC_OVERRIDE` (bypassing file permission bits), `FOWNER`, `NET_RAW` (raw sockets / spoofing), `SETUID`, and the rest. Nothing here needs any: the .NET services bind 3333 (unprivileged), mbsync makes outbound TLS connections, cloudflared dials out. |
-| `security_opt: [no-new-privileges:true]` | A setuid binary can't raise privileges — so a dropped capability stays dropped, and this holds even after the services move to a non-root UID. |
+| `user: 10001:10001` (`parse`: `nobody`) | Non-root inside the container. A compromised process holds no root-only powers and, with `cap_drop`, no way back to them; it can touch only what its uid owns — the mounts the operator handed it, and nothing in the image. The uid is a fixed high number with no passwd entry; every mounted path must be owned by it, and the entrypoint refuses to start otherwise. |
+| `security_opt: [no-new-privileges:true]` | A setuid binary can't raise privileges — so a dropped capability stays dropped, and a dropped uid stays dropped. |
 | `mem_limit` | Caps blast radius per service (mcp 3g, parse 2g, indexer/embedder 2g, mbsync 512m, cloudflared 256m). A decode bomb or a parser leak kills **one container** — and since the parsers moved, that container is `parse`, which holds nothing — instead of the Docker VM. |
 | `pids_limit` | Bounds task count (512 .NET / 256 cloudflared / 128 mbsync) so a fork bomb can't exhaust the VM's pid space. The cgroup controller counts threads, not just processes. |
 
@@ -207,15 +208,6 @@ archive", and that combination is what the split removed.
 
 **Not yet done**, and each for a stated reason rather than oversight:
 
-- **Non-root UIDs for the four services that mount something.** `parse` runs
-  as `nobody` and is the proof the image works unprivileged; it could go first
-  because it mounts nothing. For the others the blocker is validation, not
-  code: Docker Desktop on macOS virtualises bind-mount ownership (a uid-1000
-  process writes happily to a mount the container reports as `0:0`), so the
-  exact failure this would hit on the Linux VM — root-owned `./data` unwritable
-  by a non-root service — is invisible on a developer machine. Needs a Linux
-  host to verify, plus a migration plan for the existing root-owned `./data`
-  and `./logs`.
 - **gVisor (`runtime: runsc`) on `parse`.** The strongest isolation available
   for the one process that needs it most, and a one-line addition once the
   Docker VM has gVisor installed — an ops change outside this repo. Trigger:
@@ -231,11 +223,19 @@ archive", and that combination is what the split removed.
 - **A read-only database connection for mcp**, which today needs write access
   because `SchemaMigrator.EnsureUpToDate` runs at startup.
 
-So a compromised indexer, embedder or mcp process still runs as root inside its
-container and can still write `./data` — these controls narrow the exit routes,
-they don't remove them. What changed is which process an attacker's bytes reach
+So a compromised indexer, embedder or mcp process can still write `./data` —
+that is what those services are for — but it does so as uid 10001 with no
+capabilities, no writable rootfs, and (since 2026-09-17) no root to fall back
+on; these controls narrow the exit routes, they don't remove them. What
+changed with the parser split is which process an attacker's bytes reach
 first: the parsers, the likeliest way in, now run where there is nothing to
-write.
+write. Non-root was deferred for a while on the grounds that the failure it
+introduces — root-owned mounts unwritable by the service — could not be
+reproduced on a developer Mac (Docker Desktop virtualises bind-mount
+ownership). It was reproduced instead on named volumes, which have real
+ownership semantics, and the entrypoint now turns that failure into a refusal
+with the fix in it; the migration is one chown, in
+[deploy-docker.md](deploy-docker.md#moving-to-non-root).
 
 ## Executable supply chain
 
@@ -605,7 +605,7 @@ These are explicit decisions, not oversights:
 - **Encrypted-at-rest archive.** `archive.sqlite` and the Maildir are plain files at rest on the host's local disk, protected by unix permissions and whatever disk encryption the host and hypervisor provide. Per-application encryption isn't built.
 - **User-facing data policy** — retention, deletion, export, consent-at-onboarding, breach response. These presuppose data subjects other than the operator. Mailvec has exactly one user, who is also the person who runs it; a privacy policy addressed to yourself is paperwork, not a control. This becomes in scope the moment a second identity is admitted — at which point it arrives together with the multi-tenancy work above, not before it.
 - **Container image / filesystem scanning and publish-approval gates in CI.** Both produce artifacts whose value is having someone to show them to: a scan report gated on severity needs a reviewer with authority to accept an exception, and an environment approval needs a second person to approve. On a single-owner homelab, the operator builds, reviews, and deploys — so these add ceremony without adding a decision-maker. The NuGet vulnerability gate above is deliberately *not* in this category: it's an automated check with a real pass/fail, not a report.
-- **An external penetration test.** Disproportionate for one mailbox behind a single-identity Access policy, and the likely finding set is what's already written down here — no rate limiting, root containers for the four services that mount something, native parsers fed attacker bytes (in one data-less container). Revisit if a second identity is ever admitted, which is the same trigger as the data-policy item.
+- **An external penetration test.** Disproportionate for one mailbox behind a single-identity Access policy, and the likely finding set is what's already written down here — no rate limiting, native parsers fed attacker bytes (in one data-less container). Revisit if a second identity is ever admitted, which is the same trigger as the data-policy item.
 
 > **What is *not* out of scope, and is genuinely untested: whether the
 > hostile-content framing works.** [The framing above](#hostile-mail-content-indirect-prompt-injection)

@@ -215,6 +215,14 @@ Phase 2 made every parse in the container cross to the `parse` service; phase 3 
 
 **Phase 4 (docs, same day)**: `docs/security.md`'s container-hardening section and the native-parser acceptance are rewritten around the boundary that now exists — one data-less, non-root process parses attacker-chosen bytes, and the accepted residual is attacker-chosen *output* for in-flight requests, nothing more; `docs/monitoring-uptime-kuma.md` explains why `parse` has no `/up` field and how to watch it without paging on its routine restarts. This closes the parser isolation work; no release cut.
 
+## ✅ Non-root containers (no schema change, 2026-09-17)
+
+Every service now runs as a non-root uid: mcp, indexer, embedder and mbsync as `MAILVEC_UID:MAILVEC_GID` (default `10001:10001`, a fixed high number that collides with no real host account), `parse` as `nobody` as before. The uid has no passwd entry in the image; `HOME=/tmp` (the compose tmpfs) is baked in. mbsync's config moves to `/etc/mbsyncrc` and the loop passes `mbsync -c`.
+
+- **A missed chown is a loud refusal, not a silent degradation.** Both entrypoints check every mounted path for the running uid before exec — `/data` and the archive file, the log directory, the Maildir root, each `/run/secrets/*` — and print the exact `sudo chown -R 10001:10001 …` to run. Before this the same mistakes surfaced as a bare SQLite `unable to open database file`, a Serilog that silently wrote nothing, or an API key that read as empty.
+- **Migration is one chown** (`docs/deploy-docker.md` "Moving to non-root"); the compose header and the seeding steps say `10001:10001` where they said `0:0`, and the log directories are now to be created and chowned rather than left for Docker to create root-owned.
+- **Validated on named volumes rather than a Linux host.** The item had been deferred because Docker Desktop virtualises bind-mount ownership, hiding the failure; named volumes have real ownership semantics, so a data / logs / mail / secrets set populated by the old root-running image reproduced every refusal, and after the chown all four services ran under the full hardening posture. `docs/security.md` moves the item from "not yet done" to the hardening table.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

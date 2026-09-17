@@ -228,11 +228,12 @@ ops/export-db.sh --to you@docker-vm:
 mkdir -p data
 mv ~/mailvec-archive-snapshot.sqlite data/archive.sqlite
 chmod 600 data/archive.sqlite
-# The chown is REQUIRED, not tidiness: the services run cap_drop: [ALL], so
-# container-root has no DAC_OVERRIDE and cannot read a 0600 file owned by the
-# host user who scp'd it. Skipping this fails at startup with a bare SQLite
-# "unable to open database file" that names no permission problem.
-sudo chown 0:0 data/archive.sqlite
+# The chown is REQUIRED, not tidiness: the services run as uid 10001 with
+# cap_drop: [ALL], so nothing bypasses permission bits, and a 0600 file owned
+# by the host user who scp'd it is unreadable to them. The entrypoint checks
+# this and refuses to start with the chown to run; before the check existed
+# the symptom was a bare SQLite "unable to open database file".
+sudo chown -R 10001:10001 data
 
 # 3. Bring the stack up. MAILVEC_REQUIRE_SEEDED_DB=1 (the default) makes the
 #    entrypoint refuse to start if the seed didn't land where expected.
@@ -254,8 +255,8 @@ docker compose exec mcp mailvec doctor
   `-shm`** — those sidecars belong to the container's previous run, and a
   stale WAL applied onto the new main file corrupts it. This is the same
   footgun `ops/import-db.sh` handles on macOS; here it's manual. **Re-do the
-  `chown 0:0`** — the replacement file carries the copying user's ownership,
-  and the first run recreates the sidecars itself.
+  `chown -R 10001:10001 data`** — the replacement file carries the copying
+  user's ownership, and the first run recreates the sidecars itself.
 - **After parity holds**, stop the macOS pipeline (`ops/install.sh --uninstall`)
   — its archive keeps diverging from the VM's the moment you export, so
   treat the macOS copy as a frozen rollback, not a peer. (Point your clients at
@@ -395,8 +396,9 @@ signal telling its operator so. See
 Every mail-content parser — MIME, HTML, PDF text, Office, PDF rasterisation,
 image decode — runs in one container, `parse`, that holds **no volumes, no
 secrets and no route out** (its only network is the internal `parse` network),
-runs as `nobody` (uid 65534: it owns no files, so there is nothing to chown),
-and is otherwise hardened like the other .NET services. The indexer, the
+runs as `nobody` (uid 65534: it owns no files, so there is nothing to chown;
+the other services run as 10001 — see "Moving to non-root"), and is otherwise
+hardened like the other .NET services. The indexer, the
 embedder's OCR pass and the MCP viewer tools send it bytes over HTTP and get
 plain data back. A memory-safety bug in PDFium, SkiaSharp or MimeKit's
 `unsafe` parser core therefore lands in a process with nothing to read and
@@ -469,30 +471,75 @@ docker inspect mailvec-mcp-1 --format \
   'CapDrop={{.HostConfig.CapDrop}} Mem={{.HostConfig.Memory}} Pids={{.HostConfig.PidsLimit}}'
 ```
 
-**Check bind-mount ownership before recreating.** `cap_drop: [ALL]` removes
-`DAC_OVERRIDE`, so container-root no longer bypasses file permission bits.
-Anything under `./data`, `./mail` or `./logs` created *by the containers* is
-root-owned and fine; anything copied in by a host user is not:
+**Check bind-mount ownership before recreating.** The services run as uid
+10001 with `cap_drop: [ALL]`, so nothing bypasses file permission bits and
+every mounted path must be owned by that uid:
 
 ```sh
-sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/
+sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/    # expect 10001 throughout
 ```
 
-Anything with a non-zero UID/GID whose mode denies "other" needs
-`sudo chown 0:0 <path>`. Two bite hardest, and neither says "permission":
+Anything owned by another uid whose mode denies "other" needs
+`sudo chown -R 10001:10001 <path>`. The entrypoint now checks each mounted path
+at startup and refuses to start with the exact command, so these no longer
+fail silently — but they used to, and the two that bit hardest are worth
+knowing:
 
-- **`data/archive.sqlite`** — a snapshot copied in at `0600` by your own user
-  fails the whole stack with a bare SQLite `unable to open database file`. The
-  `MAILVEC_REQUIRE_SEEDED_DB` guard can't catch it either: it uses `[ -s ]`,
-  which stats rather than opens, so an unreadable-but-present file passes.
-- **`mbsyncrc`** — bind-mounted to `/root/.mbsyncrc`. Unreadable means IMAP sync
-  stops while every other service stays green.
+- **`data/archive.sqlite`** — a snapshot copied in at `0600` by your own user,
+  or by root under the pre-non-root convention, failed the whole stack with a
+  bare SQLite `unable to open database file`. The `MAILVEC_REQUIRE_SEEDED_DB`
+  guard can't catch it: it uses `[ -s ]`, which stats rather than opens.
+- **`mbsyncrc`** — bind-mounted to `/etc/mbsyncrc`. Unreadable meant IMAP sync
+  stopped while every other service stayed green.
 
-Let Docker create the `./logs/<service>` bind sources rather than pre-creating
-them: Docker makes them root-owned, which container-root can write and chmod to
-0700. A directory you created is one the container cannot write, and Serilog's
-failure there is silent — see the log-permissions note in
-[logs.md](logs.md).
+**Create the `./logs/<service>` bind sources yourself and chown them**, as in
+the compose header. This is the reverse of the old advice: Docker creates a
+missing bind source root-owned, which the container can no longer write, and
+Serilog's failure there is silent — see the log-permissions note in
+[logs.md](logs.md). The entrypoint catches the case, so a missed directory is a
+refusal rather than a silently logless service.
+
+## Moving to non-root
+
+Stacks stood up before 2026-09-17 ran every service as container-root; the
+image and compose now run mcp, indexer, embedder and mbsync as
+`MAILVEC_UID:MAILVEC_GID` (default `10001:10001`, a fixed high number chosen to
+collide with no real account on the host) and `parse` as `nobody`. The uid has
+no passwd entry in the image and needs none (`HOME=/tmp` is baked in). The
+one-time migration is a chown of everything the containers mount:
+
+```sh
+docker compose down
+sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
+sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/    # everything 10001; secrets and mbsyncrc still -rw-------
+docker compose --profile tunnel up -d --build       # or pull, for a GHCR image
+docker compose ps                                   # all running; none restarting
+```
+
+A path you missed is a **loud refusal at startup**, not a degraded service:
+the entrypoint prints `mailvec: /data is not writable by uid 10001 … sudo chown
+-R 10001:10001 ./data` and exits, and the mbsync sidecar does the same for
+`./mail`, `mbsyncrc` and its secret. `restart: unless-stopped` will loop it
+until the chown is done; `docker compose logs <service>` shows the line.
+
+What changed with it, in case you have tooling around the old layout:
+
+- `mbsyncrc` is mounted at `/etc/mbsyncrc` (the loop passes `mbsync -c`), no
+  longer `/root/.mbsyncrc`.
+- `./logs/<service>` and `./data` become `0700 10001:10001` (the services
+  harden them on open, as before). Tailing from the host still needs `sudo`.
+- `docker compose exec mcp mailvec …` runs as 10001; it could read and write
+  everything it could before.
+- Re-seeding the archive: chown to `10001:10001`, not `0:0`.
+
+Validated 2026-09-17 on Docker Desktop (linux/arm64) against **named volumes**,
+which have real ownership semantics unlike Docker Desktop bind mounts: a data /
+logs / mail / secrets set populated by the old root-running image made every
+non-root service refuse with the messages above; after the chown all four ran
+under the full hardening posture (read-only rootfs, tmpfs `/tmp`, `cap_drop
+ALL`) — scans, WAL writes, log files, `/health`, the mbsync loop and the CLI.
+Not validated here: the host-side chown on the VM itself, which is the one
+line above.
 
 ## Rollout checklist
 
