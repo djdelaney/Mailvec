@@ -61,7 +61,7 @@ The launchd install's scripts (`install.sh`, `redeploy.sh`, `stop.sh`, `export-d
 
 ## Architecture
 
-Four .NET services, communicating only through the filesystem (Maildir) and the SQLite database. The processes are independent — each can be restarted or replaced without affecting the others; keep this isolation when extending.
+Four .NET services, communicating only through the filesystem (Maildir) and the SQLite database — plus a fifth, `Mailvec.Parse`, which holds neither: in the container deployment it is the one process that parses mail content, and the indexer, embedder and MCP server reach it over HTTP through `IMailParser` (in-process on the macOS install). The processes are independent — each can be restarted or replaced without affecting the others; keep this isolation when extending.
 
 **There is no GUI.** A SwiftUI menu-bar tray app and the plain-REST `/tray/*` surface it polled were removed once the container became the only deployment in use; `Mcp:EnableTrayEndpoints` and `TrayExposureGuard` went with them. Don't reintroduce an unauthenticated mail-bearing HTTP surface — see `docs/future-ideas.md` "A GUI, if one is ever wanted again" for what it would actually cost.
 
@@ -215,7 +215,7 @@ Before any change that could shift retrieval ranking (chunk size, RRF k, embeddi
 > Propose the release **and** the part to bump, then wait. `--patch` for anything; `--minor` for an MCP tool-surface change or a schema migration, where the version is the "back up first" signal in the tag name.
 <!-- END release-approval -->
 
-Source-of-truth for version: the repo-wide `<Version>` in [Directory.Build.props](Directory.Build.props) — one version stamps all four .NET binaries, kept in lockstep with `manifest.json` by `ops/release.sh`, the only sanctioned bump path (`ops/build-mcpb.sh --bump` delegates to it; the non-bump MCPB build fails on drift). Read at runtime via `Assembly.GetEntryAssembly().GetName().Version` in `Program.cs::ConfigureServerInfo`; printed by `mailvec status`. Tag releases `v<version>` after the bump commit. `SchemaMigrator.EnsureUpToDate` refuses to run an older binary against a newer DB (downgrade guard) — don't weaken it to a warning; the older binary silently lacks newer invariants (e.g. pre-v7 never bumps `embed_epoch`).
+Source-of-truth for version: the repo-wide `<Version>` in [Directory.Build.props](Directory.Build.props) — one version stamps all five .NET binaries, kept in lockstep with `manifest.json` by `ops/release.sh`, the only sanctioned bump path (`ops/build-mcpb.sh --bump` delegates to it; the non-bump MCPB build fails on drift). Read at runtime via `Assembly.GetEntryAssembly().GetName().Version` in `Program.cs::ConfigureServerInfo`; printed by `mailvec status`. Tag releases `v<version>` after the bump commit. `SchemaMigrator.EnsureUpToDate` refuses to run an older binary against a newer DB (downgrade guard) — don't weaken it to a warning; the older binary silently lacks newer invariants (e.g. pre-v7 never bumps `embed_epoch`).
 
 The sequence, once approved: `ops/release.sh --patch|--minor` (bumps both carriers, commits) → push `main` → **wait for green CI** → `git tag -a v<version>` + `git push origin v<version>`, which is what publishes the images. Tagging ahead of CI works and is exactly the mistake the ordering exists to prevent: a `v*` push publishes regardless of whether the suite passed.
 
