@@ -1,14 +1,16 @@
 # Parser isolation — status and handoff
 
-**As of:** 2026-09-16, branch `parser-isolation-phase0`, six commits ahead of `main`, pushed to
-origin. **Phases 0–4 are complete and smoke-tested in Docker** (results below, dated). Test state:
-**1,342 passing, 0 failing** across six projects. **Not merged. Not released.** No PR is open.
+**As of:** 2026-09-17, branch `parser-isolation-phase0`, nine commits ahead of `main`, pushed to
+origin. **Phases 0–4 are complete and smoke-tested in Docker** (results below, dated), and the
+branch also carries the **non-root containers** change (`210097b`, validated the same way).
+Test state: **1,342 passing, 0 failing** across six projects. **Not merged. Not released.** No PR
+is open.
 
 ## Next stage — what the next agent does
 
 The code is done; what remains is getting it to the homelab. In order:
 
-1. **Open a PR from `parser-isolation-phase0` to `main` and merge it.** Six commits, all
+1. **Open a PR from `parser-isolation-phase0` to `main` and merge it.** Nine commits, all
    reviewed against `dotnet test Mailvec.slnx` and the Docker smoke below. Nothing on the
    branch is a schema migration or an MCP tool-surface change (the two viewer tools changed
    message text only; `McpSurfaceTests` is untouched), so a squash or a merge are both fine.
@@ -17,15 +19,28 @@ The code is done; what remains is getting it to the homelab. In order:
 2. **Propose the release and wait.** `ops/release.sh --patch` is the right part; do **not** run
    it, bump `<Version>`, or push a `v*` tag unless the owner says so in that turn
    (`CLAUDE.md` → Releases). The tag push is what publishes the GHCR images the homelab pins.
-3. **Deploy to the homelab** ([`docs/deploy-docker.md`](../deploy-docker.md), "The parse
-   service" — the migration steps are there: `compose.yml` already declares the `parse` service
-   and the `parse` network, and the image defaults to `Parser__Mode=remote`, so a pull + `up -d`
-   creates the service and re-attaches the three callers). Verify with
-   `docker compose ps parse`, `docker compose exec mcp curl -s http://parse:3400/up` and
-   `docker compose exec mcp mailvec doctor` (the `Parser` line). Expect `parse` to show recent
-   start times; that is its design. Then **watch the first few scans and the OCR pass** in the
-   indexer and embedder logs for `ParserUnavailable` / `ParserCrashed` — the amd64 VM is the
-   first place the real corpus meets the timeouts (open questions 1–2 below).
+3. **Deploy to the homelab — and this deploy is NOT a plain pull + `up -d`.** The branch also
+   moves every service to uid 10001 (`210097b`), so the stack **refuses to start** until the
+   mounts are chowned. Do, in this order, from
+   [`docs/deploy-docker.md`](../deploy-docker.md):
+   1. "Moving to non-root": `docker compose down`, then
+      `sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*`, and check with
+      `sudo ls -ln`. A missed path is a loud refusal naming the chown, looping under
+      `restart: unless-stopped` until fixed — downtime, not corruption.
+   2. "The parse service": `compose.yml` already declares the `parse` service and network and
+      the image defaults to `Parser__Mode=remote`, so the pull + `up -d` that follows creates
+      the service and re-attaches the three callers.
+   3. Verify: `docker compose ps` (all running, none restarting),
+      `docker compose exec mcp curl -s http://parse:3400/up`,
+      `docker compose exec mcp mailvec doctor` (the `Parser` line), and
+      `sudo ls -ln logs/*` showing fresh log files owned by 10001 (Serilog's failure is
+      silent, so check). Expect `parse` to show recent start times; that is its design.
+   4. **Watch the first few scans and the OCR pass** in the indexer and embedder logs for
+      `ParserUnavailable` / `ParserCrashed` — the amd64 VM is the first place the real corpus
+      meets the timeouts (open questions 1–2 below).
+
+   The host-side chown on the VM is the one step nothing on the branch could validate from a
+   Mac; everything else in "Moving to non-root" was reproduced on named volumes.
 4. **Optional, worth doing:** script the Docker smoke below under `ops/` so the next change to
    the parser path has a repeatable end-to-end check. The procedure is written out; it is a
    shell script waiting to happen.
@@ -43,7 +58,7 @@ The design, the measurements and the rationale live in
 for whoever picks the work up: what is on the branch, how to prove it, and exactly what phase 3
 has to change and why.
 
-## The six commits
+## The nine commits
 
 | Commit | Phase | What it did |
 | --- | --- | --- |
@@ -53,8 +68,11 @@ has to change and why.
 | `2b3c1c7` | — | This handoff document. |
 | `3092d8c` | 3 | Every caller branches on `ParseException.Kind`: `Unavailable` aborts and counts nothing (OCR batch, scanner walk with `ScanResult.Incomplete` and no reconciliation, CLI runs with exit 1, MCP viewers answer "retry"); `Crashed` is a strike (OCR pass with parser health evidence; scanner per `(path, mtime, size)` with `Parser:MaxCrashesPerFile` then a metadata-only parse and attachments at `failed`); `DocumentRejected` retires as before. 18 tests. |
 | `2f8ea24` | 4 | `docs/security.md` acceptance rewritten around "one data-less process parses attacker bytes" with the residual stated; `docs/monitoring-uptime-kuma.md` on why `parse` is not on `/up`. |
+| `0661502` | — | This document updated with the Docker smoke and the next stage. |
+| `210097b` | — | **Non-root containers** (not part of the isolation proposal, but the `parse` service was its proof): mcp, indexer, embedder, mbsync as `MAILVEC_UID` (10001); `HOME=/tmp`; mbsync config at `/etc/mbsyncrc`; both entrypoints check every mounted path and refuse with the chown to run. Validated on named volumes (real ownership) against data/logs/mail/secrets populated by the old root-running image. **Changes the deploy procedure — see step 3 above.** |
+| (this) | — | This document updated for the non-root deploy step. |
 
-Test state at `2f8ea24`: **1,342 passing, 0 failing** across six projects
+Test state at `210097b`: **1,342 passing, 0 failing** across six projects
 (`dotnet test Mailvec.slnx`). The Docker image was built locally (linux/arm64) and smoke-tested
 as described under "How to verify the branch".
 
