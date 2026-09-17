@@ -417,7 +417,7 @@ by design.* `CHANGELOG.md` entry. Then propose a `--patch` release and wait.
 
 **Deferred, with triggers.**
 - gVisor on `parse`. Trigger: the Docker VM gets gVisor for any other reason.
-- Non-root UIDs for the other four services. `parse` is the proof the image
+- ~~Non-root UIDs for the other four services.~~ Done 2026-09-17 (`MAILVEC_UID`, default 10001; see `docs/deploy-docker.md` "Moving to non-root"). Original note: `parse` is the proof the image
   runs as `nobody`; the others need a `chown` story for `./data` and `./mail`
   first.
 - Persisting the crash-strike counter. Trigger: a poison file observed

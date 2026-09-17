@@ -31,7 +31,15 @@
 #   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot — see
 #      "Migrating the archive from the Mac" in docs/deploy-docker.md
 #      (or set MAILVEC_REQUIRE_SEEDED_DB=0 in .env for a from-scratch build).
-#   5. docker compose --profile tunnel up -d --build
+#   5. Hand the mounts to the container uid. The services run as 10001 (not
+#      root — see MAILVEC_UID below) with no capability to bypass permission
+#      bits, so every path they mount must be OWNED by that uid. Create the
+#      directories yourself rather than letting Docker create them root-owned:
+#      mkdir -p data logs/mcp logs/indexer logs/embedder mail
+#      sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
+#      (the files keep their 0600; chown changes owner, not mode). A missed
+#      path is a loud refusal at startup with this exact command in it.
+#   6. docker compose --profile tunnel up -d --build
 #      (--profile tunnel starts cloudflared, the only ingress to mcp; a plain
 #      `up -d` runs the pipeline but leaves it unreachable. Omit it only for
 #      a deliberately local/LAN-only bring-up.)
@@ -103,12 +111,18 @@ x-mailvec: &mailvec-common
   # pass feeds it to PDFium/SkiaSharp unattended. See docs/security.md
   # "Container hardening".
   #
+  # Non-root. Every .NET service runs as MAILVEC_UID:MAILVEC_GID (default
+  # 10001, a fixed high number so it collides with no real account on the
+  # host); parse overrides to nobody because it owns nothing. The uid has no
+  # passwd entry in the image and needs none — HOME=/tmp is baked in.
+  #
   # cap_drop ALL removes DAC_OVERRIDE and FOWNER along with everything else, so
-  # container-root no longer bypasses file permission bits. Steady state is fine
-  # (everything under ./data and ./mail is created by these containers, so root
-  # owns it), but a SEEDED archive.sqlite copied in by a non-root host user
-  # becomes unreadable — chown it to 0:0. See the seeding steps in
-  # docs/deploy-docker.md.
+  # nothing bypasses file permission bits: everything under ./data, ./logs and
+  # ./mail, plus mbsyncrc and secrets/*, must be OWNED by this uid. The
+  # entrypoint checks each mounted path at startup and refuses to start with
+  # the exact chown to run; a stack that ran as root before this needs the
+  # one-time migration in docs/deploy-docker.md "Moving to non-root".
+  user: "${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001}"
   logging: *mailvec-logging
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
@@ -461,6 +475,11 @@ services:
     # WRITABLE Maildir mount, so a compromise here is worth bounding even though
     # it parses nothing untrusted itself. Needs no capabilities: it makes
     # outbound TLS connections and writes files it owns.
+    #
+    # Same uid as the readers of ./mail (indexer, embedder, mcp): it is the one
+    # writer of that tree, and its preflight refuses to loop if ./mail, the
+    # config or the secret are not owned by it.
+    user: "${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001}"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     mem_limit: 1g
@@ -468,6 +487,7 @@ services:
     pids_limit: 128
     environment:
       MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-60}
+      HOME: /tmp
       # Liveness beat (read by mcp's /health via MbsyncHeartbeatFile) lands at
       # dirname(MBSYNC_MAILDIR)/.mailvec-mbsync-heartbeat. MBSYNC_MAILDIR
       # defaults to /mail/Fastmail (Dockerfile), so the beat is /mail/... and
@@ -477,7 +497,9 @@ services:
       # as "unknown" on /health forever (a path mismatch, not a real outage).
     volumes:
       - ./mail:/mail
-      - ./mbsyncrc:/root/.mbsyncrc:ro
+      # /etc/mbsyncrc, not /root/.mbsyncrc: the sidecar no longer runs as root
+      # and the loop passes the path explicitly (mbsync -c).
+      - ./mbsyncrc:/etc/mbsyncrc:ro
       # No ./logs mount here on purpose: MAILVEC_LOG_DIR and Serilog exist
       # only in the runtime stage. This image is Alpine + the mbsync-loop sh
       # script, whose output is stderr (docker logs) and the heartbeat file
