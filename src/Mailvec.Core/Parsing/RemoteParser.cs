@@ -50,9 +50,18 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
     public DecodedPart DecodePart(byte[] eml, int partIndex, long? maxBytes) =>
         PostEml<DecodedPart>(Query(ParserWire.PartBytes(partIndex), ("maxBytes", maxBytes)), eml)!;
 
-    public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes) =>
-        PostEml<PdfRender>(Query(ParserWire.PartPdfPages(partIndex),
+    public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes)
+    {
+        var render = PostEml<PdfRender>(Query(ParserWire.PartPdfPages(partIndex),
             ("first", firstPage), ("max", maxPages), ("maxBytes", maxBytes)), eml)!;
+        // Shape guard covers the count in bulk; this is the per-operation
+        // invariant — we asked for at most maxPages, and a service that
+        // answers with more is not our service.
+        if (render.Pages.Count > Math.Max(0, maxPages) || render.PageCount < 0)
+            throw new ParseException(ParseFailureKind.Crashed,
+                $"The parse service returned {render.Pages.Count} page(s) where at most {maxPages} were requested.");
+        return render;
+    }
 
     public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes) =>
         PostEml<NormalizedImage>(Query(ParserWire.PartImage(partIndex), ("maxBytes", maxBytes)), eml, allowNoContent: true);
@@ -135,19 +144,25 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
                     if (allowNoContent) return default;
                     throw new ParseException(ParseFailureKind.Crashed, "The parse service returned no content where a result was required.");
                 }
-                using var stream = response.Content.ReadAsStream();
+                // Already buffered (ResponseContentRead, under MaxResponseBytes),
+                // so this is the buffer, not a second read. The shape pre-scan
+                // runs over it BEFORE deserialization — the byte ceiling bounds
+                // the wire, ResponseShape bounds what materializing it costs.
+                var body = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+                ResponseShape.Check(body);
                 T? result;
                 try
                 {
-                    result = JsonSerializer.Deserialize<T>(stream, ParserWire.Json);
+                    result = JsonSerializer.Deserialize<T>(body, ParserWire.Json);
                 }
                 catch (JsonException ex)
                 {
-                    // A 200 whose body is not our JSON describes the service
-                    // (a proxy page, a truncated write, a contract mismatch),
-                    // never the document — and an unclassified exception is
-                    // read by every caller as a document verdict, i.e. a
-                    // permanent retirement of a healthy attachment.
+                    // A 200 whose body is not our JSON — malformed, or (with
+                    // ParserWire.Json's required/nullable enforcement) missing
+                    // a member the record declares — describes the service,
+                    // never the document. An unclassified exception is read by
+                    // every caller as a document verdict, i.e. a permanent
+                    // retirement of a healthy attachment.
                     throw new ParseException(ParseFailureKind.Crashed,
                         "The parse service answered with a body that is not a parse result.", ex);
                 }

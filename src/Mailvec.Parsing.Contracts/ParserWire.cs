@@ -43,7 +43,20 @@ public static class ParserWire
     /// One serializer configuration for both ends. Web defaults: camelCase,
     /// case-insensitive, records bound through their constructors.
     /// </summary>
-    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        // A response is only a parse result if it carries every member the
+        // record declares, with nulls only where the record allows them. Web
+        // defaults enforce neither: `{}` deserialized to a ParsedMessage with
+        // null collections, a DecodedPart with null Bytes, and — the one that
+        // was silent data loss — an HtmlResponse whose null Text
+        // `rebuild-bodies` wrote over a real body. With these, a missing
+        // constructor parameter or a null in a non-nullable member is a
+        // JsonException, which the client classifies as Crashed. An explicit
+        // `"text": null` on a nullable member is still exactly that.
+        RespectRequiredConstructorParameters = true,
+        RespectNullableAnnotations = true,
+    };
 }
 
 /// <summary>
