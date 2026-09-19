@@ -446,6 +446,7 @@ services:
       HOME: /tmp
       Parser__RequestTimeoutSeconds: ${MAILVEC_PARSER_TIMEOUT_SECONDS:-60}
       Parser__MaxRequestsBeforeExit: ${MAILVEC_PARSER_MAX_REQUESTS:-500}
+      Parser__MaxConcurrentParses: ${MAILVEC_PARSER_MAX_CONCURRENT:-4}
       Indexer__AttachmentMaxBytes: ${MAILVEC_ATTACHMENT_MAX_BYTES:-26214400}
     # PdfPig / OpenXml / PDFium peaks moved here from the indexer and embedder.
     mem_limit: 2g

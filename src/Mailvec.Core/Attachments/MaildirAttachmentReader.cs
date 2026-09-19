@@ -35,7 +35,7 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
 
     /// <summary>
     /// Resolve the source and confirm it is still there, throwing exactly what
-    /// <see cref="Read"/> would — without parsing or decoding anything.
+    /// <see cref="ReadEml"/> would — without parsing or decoding anything.
     /// </summary>
     /// <remarks>
     /// For callers that can answer from stored metadata and skip the read
@@ -91,7 +91,7 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
     /// <remarks>
     /// Public and static because the guard has to be reachable from callers that
     /// read the whole <c>.eml</c> rather than one part, and so can't go through
-    /// <see cref="Read"/> — the <c>mailvec extract-attachments</c> and
+    /// <see cref="ReadEml"/> — the <c>mailvec extract-attachments</c> and
     /// <c>backfill-inline-images</c> CLI backfills. Both used to build the path
     /// with a bare <c>Path.Combine</c> and open it directly, which quietly
     /// exempted them from the invariant stated below. Any new Maildir read must

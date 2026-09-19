@@ -40,11 +40,12 @@ public sealed class ParseHostFixture : IAsyncDisposable
     /// Built through <see cref="ParserHttp"/>, the same way the DI registration
     /// builds the real one, so those tests exercise the shipped handler.
     /// </summary>
-    public RemoteParser RemoteFor(string baseAddress, int timeoutSeconds = 30, long? maxResponseBytes = null)
+    public RemoteParser RemoteFor(string baseAddress, int timeoutSeconds = 30, long? maxResponseBytes = null, long? maxRequestBodyBytes = null)
     {
         var options = new Mailvec.Core.Options.ParserOptions { Endpoint = baseAddress, RequestTimeoutSeconds = timeoutSeconds };
         if (maxResponseBytes is { } max) options.MaxResponseBytes = max;
-        return new RemoteParser(() => ParserHttp.CreateClient(options));
+        if (maxRequestBodyBytes is { } cap) options.MaxRequestBodyBytes = cap;
+        return new RemoteParser(() => ParserHttp.CreateClient(options), options.MaxRequestBodyBytes);
     }
 
     public async Task<bool> WaitForStopAsync(TimeSpan timeout)

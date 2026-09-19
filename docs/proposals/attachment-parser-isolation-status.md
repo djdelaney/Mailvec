@@ -1,10 +1,11 @@
 # Parser isolation — status and handoff
 
-**As of:** 2026-09-17, branch `parser-isolation-phase0`, nine commits ahead of `main`, pushed to
-origin. **Phases 0–4 are complete and smoke-tested in Docker** (results below, dated), and the
-branch also carries the **non-root containers** change (`210097b`, validated the same way).
-Test state: **1,342 passing, 0 failing** across six projects. **Not merged. Not released.** No PR
-is open.
+**As of:** 2026-09-19, branch `parser-isolation-phase0`, fifteen commits ahead of `main`. **Phases
+0–4 are complete and smoke-tested in Docker** (results below, dated); the branch also carries the
+**non-root containers** change (`210097b`) and four rounds of independent review fixes
+([review 1–3](attachment-parser-isolation-review.md), [review 4](attachment-parser-isolation-review-2026-09-19.md)).
+Test state: **1,404 passing, 0 failing** across six projects. **PR #35 is open against `main`;
+not merged, not released.**
 
 ## Next stage — what the next agent does
 
@@ -354,6 +355,10 @@ services; persisting the crash-strike counter.
 1. Bulk-ingest throughput over HTTP (82k messages ≈ 82k calls) — expected to be lost in the
    noise against parse time, but unmeasured on the amd64 VM. Only the initial bulk ingest and a
    `reindex` pay it; the steady state is the mtime fast path, which never calls the parser.
+   Review 4's F5 adds the multiplier: the backfills ship the whole `.eml` once per candidate
+   part (`ExtractAttachmentText(eml, partIndex)`), and the viewer tools twice per call. If the
+   measurement says it matters, a batch part-text route (one POST, a list of part indexes) is
+   the fix; correctness is unaffected either way.
 2. `MaxRequestsBeforeExit` default (500) and `RequestTimeoutSeconds` (60) — both guesses with a
    measured floor; re-measure on the VM before lowering. The smoke's churn row above is what a
    too-low budget looks like in the logs: one message per scan, an abandon per restart.

@@ -13,8 +13,8 @@ namespace Mailvec.Parsing.Contracts;
 /// live in a different process from the caller.
 ///
 /// Two implementations: <c>InProcessParser</c> (Mailvec.Parsing — today's code
-/// behind the interface; the macOS launchd install) and, from phase 2 of
-/// docs/proposals/attachment-parser-isolation.md, a remote client to the
+/// behind the interface; the macOS launchd install) and, in the container
+/// deployment (docs/proposals/attachment-parser-isolation.md), a remote client to the
 /// <c>parse</c> container. Callers resolve whichever is configured through
 /// <c>ParserRegistration.AddMailvecParser</c>; nothing else may choose.
 ///

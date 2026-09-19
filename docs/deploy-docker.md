@@ -414,6 +414,17 @@ What to know operationally:
   cleanly after `MAILVEC_PARSER_MAX_REQUESTS` (500) requests, bounding how long
   a compromised process persists. `restart: unless-stopped` brings it back in
   seconds; `docker compose ps parse` showing a recent start time is normal.
+- **It admits a bounded number of parses** (`MAILVEC_PARSER_MAX_CONCURRENT`, 4).
+  A request that cannot get a slot within the request timeout is answered
+  503, which the callers treat as "wait and retry", never as a fault of the
+  document. Raise it only with the `mem_limit` — each slot can hold a whole
+  decoded message.
+- **A caller disconnecting does not restart it.** Stopping the indexer
+  mid-parse, or a cancelled tool call, leaves the parse to finish within its
+  own timeout; only a genuine overrun exits. A message over the request-body
+  cap (`48 MB`) is refused by the *caller* before it is sent, as a property of
+  the message; keep `Parser__MaxRequestBodyBytes` on the callers in step with
+  the service's cap if you change either.
 - **While it is down**, new mail is not indexed (the scan retries next tick),
   the OCR pass pauses, and `view_attachment` / `get_attachment_page_image`
   answer "parsing is temporarily unavailable". **Search keeps working** — it

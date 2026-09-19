@@ -31,10 +31,12 @@ namespace Mailvec.Core.Parsing;
 /// with strikes), never to <see cref="ParseFailureKind.DocumentRejected"/>
 /// (retire) — the same rule as <c>VisionFailureKind</c>.</para>
 /// </summary>
-public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
+public sealed class RemoteParser(Func<HttpClient> clientFactory, long? maxRequestBodyBytes = null) : IMailParser
 {
     /// <summary>The named <see cref="HttpClient"/> <c>ParserRegistration</c> configures for this class.</summary>
     public const string HttpClientName = "mailvec-parser";
+
+    private readonly long _maxRequestBodyBytes = maxRequestBodyBytes ?? new Options.ParserOptions().MaxRequestBodyBytes;
 
     public string Mode => ParserRegistration.RemoteMode;
 
@@ -130,11 +132,24 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
     private T? PostEml<T>(string pathAndQuery, byte[] eml, bool allowNoContent = false)
     {
         ArgumentNullException.ThrowIfNull(eml);
+        // Over the host's cap is a property of the message, decided here
+        // without a network call: the host's 413 arrives mid-upload and the
+        // send fails before the client reads it, which used to classify a
+        // merely-large message as Crashed (a strike; then, in the indexer,
+        // every attachment stamped failed). Same wording the host uses.
+        if (eml.LongLength > _maxRequestBodyBytes)
+            throw new ParseException(ParseFailureKind.DocumentRejected,
+                $"The message ({eml.LongLength / (1024 * 1024)} MB) is larger than the parse service accepts ({_maxRequestBodyBytes / (1024 * 1024)} MB).");
+
         using var request = new HttpRequestMessage(HttpMethod.Post, pathAndQuery)
         {
             Content = new ByteArrayContent(eml),
         };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue(ParserWire.EmlContentType);
+        // Backstop for a drifted mirror: with Expect: 100-continue the host
+        // refuses an over-cap Content-Length at the headers and the 413 is
+        // read normally, instead of the upload racing a mid-body reset.
+        request.Headers.ExpectContinue = true;
         return Send<T>(request, allowNoContent);
     }
 

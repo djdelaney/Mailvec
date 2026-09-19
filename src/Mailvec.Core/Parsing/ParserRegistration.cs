@@ -66,7 +66,7 @@ public static class ParserRegistration
                         throw new InvalidOperationException(
                             $"Parser:Endpoint '{options.Endpoint}' is not an absolute http(s) URL.");
                     var factory = sp.GetRequiredService<IHttpClientFactory>();
-                    return new RemoteParser(() => factory.CreateClient(RemoteParser.HttpClientName));
+                    return new RemoteParser(() => factory.CreateClient(RemoteParser.HttpClientName), options.MaxRequestBodyBytes);
                 }
                 default:
                     throw new InvalidOperationException(
