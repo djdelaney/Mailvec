@@ -12,10 +12,10 @@
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3"     Version="3.0.5" />
 
     <!-- MIME parsing -->
-    <PackageVersion Include="MimeKit"                           Version="4.17.0" />
+    <PackageVersion Include="MimeKit"                           Version="4.18.0" />
 
     <!-- HTML parsing for HTML-to-text conversion -->
-    <PackageVersion Include="AngleSharp"                        Version="1.8.1" />
+    <PackageVersion Include="AngleSharp"                        Version="1.8.2" />
 
     <!-- Attachment text extraction (PDF + DOCX). Pure-managed; no native deps. -->
     <PackageVersion Include="PdfPig"                            Version="0.1.16" />
@@ -71,7 +71,7 @@
 
     <!-- Testing -->
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing"  Version="10.0.12" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk"            Version="18.10.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk"            Version="18.10.1" />
     <PackageVersion Include="xunit"                             Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio"         Version="4.0.0" />
     <PackageVersion Include="Shouldly"                          Version="4.3.0" />
