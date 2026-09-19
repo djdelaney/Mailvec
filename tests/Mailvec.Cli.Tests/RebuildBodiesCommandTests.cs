@@ -1,6 +1,7 @@
 using Mailvec.Cli.Commands;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
+using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,6 +31,7 @@ public class RebuildBodiesCommandTests
         // would fail identically, and "N errors" would misreport an outage as
         // N bad messages. Rows converted before the outage stay committed.
         using var ctx = new TestServiceProvider();
+        ctx.AddOption<ParserOptions>(o => o.UnavailableWaitSeconds = 0); // stay down: no wait
         ctx.UseParser(new FaultingParser
         {
             Fault = op => op == nameof(IMailParser.BodyTextFromHtml) ? FaultingParser.Unavailable() : null,
@@ -59,6 +61,48 @@ public class RebuildBodiesCommandTests
         writer.ToString().ShouldContain("(0 errors)", Case.Sensitive, "an outage is not a conversion error");
         err.ToString().Split("unavailable").Length.ShouldBe(2, "reported once, not per row");
         messages.GetByMessageId("a@x")!.BodyText.ShouldBe("stale plaintext");
+    }
+
+    [Fact]
+    public void A_rebuild_spanning_a_parse_host_recycle_converts_every_row()
+    {
+        // Review finding 5, the case that made this command unfinishable: it
+        // re-selects every row each run, so a stop at the host's request
+        // budget restarted from row one forever. The recycle lands mid-batch
+        // (second row); with the wait, the run converts all three.
+        var calls = 0;
+        using var ctx = new TestServiceProvider();
+        ctx.AddOption<ParserOptions>(o => o.UnavailableWaitSeconds = 30);
+        ctx.UseParser(new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.BodyTextFromHtml) && ++calls == 2 ? FaultingParser.Unavailable() : null,
+        }).Rebuild();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        foreach (var id in new[] { "a@x", "b@x", "c@x" })
+        {
+            messages.Upsert(
+                new ParsedMessage(
+                    MessageId: id, ThreadId: id, Subject: "Hi",
+                    FromAddress: "alice@example.com", FromName: null,
+                    ToAddresses: [], CcAddresses: [],
+                    DateSent: DateTimeOffset.UtcNow,
+                    BodyText: "stale plaintext",
+                    BodyHtml: "<html><body><p>Fresh</p></body></html>",
+                    RawHeaders: $"Message-ID: <{id}>\r\n",
+                    SizeBytes: 100, ContentHash: "h-" + id, Attachments: []),
+                "INBOX", "INBOX/cur", id, DateTimeOffset.UtcNow);
+        }
+        var writer = new StringWriter();
+        var err = new StringWriter();
+
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldContain("Updated body_text on 3 messages (0 errors)");
+        writer.ToString().ShouldNotContain("STOPPED");
+        err.ToString().ShouldContain("parse service is back");
+        foreach (var id in new[] { "a@x", "b@x", "c@x" })
+            messages.GetByMessageId(id)!.BodyText.ShouldNotBeNull().ShouldContain("Fresh");
     }
 
     [Fact]

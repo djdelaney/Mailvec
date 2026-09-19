@@ -418,8 +418,10 @@ What to know operationally:
   the OCR pass pauses, and `view_attachment` / `get_attachment_page_image`
   answer "parsing is temporarily unavailable". **Search keeps working** — it
   reads the database only. The callers classify the gap as "unavailable",
-  never as a fault of any document; the CLI backfills stop with exit 1 and a
-  `STOPPED` line rather than stamping anything.
+  never as a fault of any document; the CLI backfills wait for it to return
+  (probing `/up` for up to `Parser:UnavailableWaitSeconds`, 60 s, which rides
+  out the routine recycle below) and stop with exit 1 and a `STOPPED` line only
+  if it stays down, never stamping anything.
 - **A document that keeps crashing it is given up on, not the service.** A
   504-and-exit on one document is a strike against that document. The OCR
   pass retires it after five strikes counted while the service was otherwise

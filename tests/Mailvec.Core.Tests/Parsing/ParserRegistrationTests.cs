@@ -112,4 +112,40 @@ public class ParserRegistrationTests
         var ex = Should.Throw<InvalidOperationException>(() => sp.GetRequiredService<IMailParser>());
         ex.Message.ShouldContain("sidecar");
     }
+
+    // ── The client the remote parser is handed (ParserHttp) ──────────────────
+
+    [Fact]
+    public void The_registered_client_carries_the_response_ceiling_and_the_timeout()
+    {
+        // The named client is what the callers actually send through; if the
+        // registration ever stops going through ParserHttp, this is the pin.
+        var sp = Build(new()
+        {
+            ["Parser:Mode"] = "remote",
+            ["Parser:Endpoint"] = "http://parse:3400",
+            ["Parser:MaxResponseBytes"] = "1048576",
+            ["Parser:RequestTimeoutSeconds"] = "7",
+        }, out _);
+
+        using var client = sp.GetRequiredService<IHttpClientFactory>().CreateClient(RemoteParser.HttpClientName);
+
+        client.MaxResponseContentBufferSize.ShouldBe(1048576);
+        client.Timeout.ShouldBe(TimeSpan.FromSeconds(7));
+        client.BaseAddress.ShouldBe(new Uri("http://parse:3400/"));
+    }
+
+    [Fact]
+    public void The_parser_handler_never_follows_redirects_or_a_proxy()
+    {
+        // A redirect would resend the whole .eml to a Location the parse
+        // service chose; a proxy from the environment would route every
+        // message through it. Behaviour is pinned end to end in
+        // Mailvec.Parse.Tests.RogueServiceTests; this pins the knob.
+        using var handler = ParserHttp.CreateHandler();
+
+        handler.AllowAutoRedirect.ShouldBeFalse();
+        handler.UseProxy.ShouldBeFalse();
+        handler.UseCookies.ShouldBeFalse();
+    }
 }

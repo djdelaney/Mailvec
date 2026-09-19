@@ -136,7 +136,22 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
                     throw new ParseException(ParseFailureKind.Crashed, "The parse service returned no content where a result was required.");
                 }
                 using var stream = response.Content.ReadAsStream();
-                return JsonSerializer.Deserialize<T>(stream, ParserWire.Json)
+                T? result;
+                try
+                {
+                    result = JsonSerializer.Deserialize<T>(stream, ParserWire.Json);
+                }
+                catch (JsonException ex)
+                {
+                    // A 200 whose body is not our JSON describes the service
+                    // (a proxy page, a truncated write, a contract mismatch),
+                    // never the document — and an unclassified exception is
+                    // read by every caller as a document verdict, i.e. a
+                    // permanent retirement of a healthy attachment.
+                    throw new ParseException(ParseFailureKind.Crashed,
+                        "The parse service answered with a body that is not a parse result.", ex);
+                }
+                return result
                     ?? throw new ParseException(ParseFailureKind.Crashed, "The parse service returned an empty result.");
             }
 
@@ -182,10 +197,20 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
                     error?.Message ?? "The parse service timed out on this document and is restarting.");
             case >= 500:
                 return new ParseException(ParseFailureKind.Crashed, message);
+            case >= 300 and < 400:
+                // Never followed (ParserHttp turns automatic redirects off):
+                // the body a redirect would resend is the whole .eml, to a
+                // destination the service chose. A service that redirects is
+                // not our service.
+                return new ParseException(ParseFailureKind.Crashed,
+                    $"The parse service answered {(int)status} with a redirect, which is refused.");
             default:
                 // A 4xx we don't speak: a contract mismatch between this client
-                // and the host, i.e. a deployment bug, not a document property.
-                return new InvalidOperationException($"The parse service rejected the request: {(int)status} {message}");
+                // and the host, i.e. a deployment bug, not a document property
+                // — so Crashed (retry with strikes), never an unclassified
+                // exception the callers would retire the document on.
+                return new ParseException(ParseFailureKind.Crashed,
+                    $"The parse service rejected the request: {(int)status} {message}");
         }
     }
 

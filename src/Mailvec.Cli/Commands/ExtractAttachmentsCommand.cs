@@ -5,6 +5,7 @@ using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Parsing.Contracts;
 using Mailvec.Core.Options;
+using Mailvec.Core.Parsing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -155,7 +156,11 @@ internal static class ExtractAttachmentsCommand
             return 2;
         }
 
-        var parser = sp.GetRequiredService<IMailParser>();
+        // Rides out the parse host's routine recycle (it exits every
+        // MaxRequestsBeforeExit requests); a service that stays down still
+        // stops the run below.
+        var parser = RetryOnUnavailable.Wrap(
+            sp.GetRequiredService<IMailParser>(), sp.GetRequiredService<IOptions<ParserOptions>>().Value, err);
         var chunks = sp.GetRequiredService<ChunkRepository>();
         var connections = sp.GetRequiredService<ConnectionFactory>();
 
