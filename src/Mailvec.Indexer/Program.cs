@@ -9,6 +9,8 @@ using Mailvec.Core.Parsing;
 using Mailvec.Indexer.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Mailvec.Parsing;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = Host.CreateApplicationBuilder(args);
 // Single source of truth for DB / Maildir / Ollama config. Inserted
@@ -32,8 +34,10 @@ builder.Services.AddSingleton<MetadataRepository>();
 builder.Services.AddSingleton<MessageRepository>();
 builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<SyncStateRepository>();
-builder.Services.AddSingleton<AttachmentTextExtractor>();
-builder.Services.AddSingleton<MessageParser>();
+// The parser seam (ParserRegistration): in-process here, remote in the
+// container from phase 2 of docs/proposals/attachment-parser-isolation.md.
+builder.Services.AddMailvecParser(builder.Configuration,
+    (sp, settings) => new InProcessParser(settings, sp.GetRequiredService<ILoggerFactory>()));
 builder.Services.AddSingleton<MaildirScanner>();
 builder.Services.AddSingleton<MaildirWatcher>();
 

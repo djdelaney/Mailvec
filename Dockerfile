@@ -34,17 +34,51 @@ RUN set -eux; \
         *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     ./ops/fetch-sqlite-vec.sh "${RID}"; \
-    for svc in Indexer Embedder Mcp Cli; do \
+    for svc in Indexer Embedder Mcp Cli Parse; do \
         out="/app/$(echo "${svc}" | tr '[:upper:]' '[:lower:]')"; \
         dotnet publish "src/Mailvec.${svc}/Mailvec.${svc}.csproj" \
             -c Release -r "${RID}" --self-contained false -o "${out}"; \
         # Arch-agnostic extension path: Archive__SqliteVecExtensionPath below
         # says ./vec0.so regardless of RID, resolved against each binary's dir.
-        cp "${out}/runtimes/${RID}/native/vec0.so" "${out}/vec0.so"; \
+        # (Not for parse: it references no Core, so no SQLite and no vec0.)
+        if [ -f "${out}/runtimes/${RID}/native/vec0.so" ]; then \
+            cp "${out}/runtimes/${RID}/native/vec0.so" "${out}/vec0.so"; \
+        fi; \
+    done; \
+    # ------------------------------------------------------------------
+    # The isolation boundary, enforced in the image rather than described.
+    # Only /app/parse may carry a parser. The indexer, embedder, mcp and cli
+    # binaries still LINK Mailvec.Parsing.dll (for Parser:Mode=inprocess on a
+    # macOS install), so every library it depends on is deleted from their
+    # directories: MimeKit, PdfPig, OpenXml, AngleSharp, PDFium, SkiaSharp,
+    # LibTiff. With those gone, Parser:Mode=inprocess in a container fails
+    # loudly (FileNotFoundException at the first parse) instead of silently
+    # widening the attack surface back to every privileged process. The
+    # sentinel `test -e` BEFORE each delete is the guard against a package
+    # bump renaming an assembly: a rename would leave a parser in a
+    # privileged directory with nothing failing, so the build fails instead.
+    # ------------------------------------------------------------------
+    for svc in indexer embedder mcp cli; do \
+        for sentinel in MimeKit.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so Mailvec.Parsing.dll; do \
+            test -e "/app/${svc}/${sentinel}" || { echo "expected /app/${svc}/${sentinel} before stripping; a package bump may have renamed it" >&2; exit 1; }; \
+        done; \
+        rm -f "/app/${svc}/MimeKit.dll" "/app/${svc}/BouncyCastle.Cryptography.dll" \
+              "/app/${svc}"/UglyToad.PdfPig*.dll \
+              "/app/${svc}"/DocumentFormat.OpenXml*.dll "/app/${svc}/System.IO.Packaging.dll" \
+              "/app/${svc}/AngleSharp.dll" \
+              "/app/${svc}/PDFtoImage.dll" "/app/${svc}/SkiaSharp.dll" "/app/${svc}/BitMiracle.LibTiff.NET.dll" \
+              "/app/${svc}/libpdfium.so" "/app/${svc}/libSkiaSharp.so"; \
+        for gone in MimeKit.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so; do \
+            test ! -e "/app/${svc}/${gone}"; \
+        done; \
+    done; \
+    # And the one directory that must still carry them.
+    for keep in MimeKit.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so; do \
+        test -e "/app/parse/${keep}" || { echo "/app/parse/${keep} missing" >&2; exit 1; }; \
     done
 
 
-# Pull-only IMAP sync sidecar. Config comes from a bind-mounted /root/.mbsyncrc
+# Pull-only IMAP sync sidecar. Config comes from a bind-mounted /etc/mbsyncrc
 # (see ops/mbsyncrc.container.example); the Fastmail app password from a
 # compose file-secret the config's PassCmd cats.
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS mbsync
@@ -84,6 +118,25 @@ RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 set -u
 : "${MBSYNC_INTERVAL_SECONDS:=60}"
 : "${MBSYNC_MAILDIR:=/mail/Fastmail}"
+: "${MBSYNC_CONFIG:=/etc/mbsyncrc}"
+
+# Permission preflight. This sidecar runs as a non-root uid (compose
+# MAILVEC_UID, default 10001) with cap_drop ALL, so nothing bypasses the
+# permission bits: a Maildir, config or secret the host user chowned to root
+# (the pre-non-root convention) is simply unreadable/unwritable, and the
+# symptoms are far from the cause — a config "not found", a sync that fails
+# every interval while the heartbeat stays fresh. Say what is wrong and how to
+# fix it, then refuse to loop.
+uid="$(id -u)"; gid="$(id -g)"; fail=0
+say() { echo "mbsync: $*" >&2; }
+[ -d /mail ] && [ ! -w /mail ] && { say "/mail is not writable by uid ${uid}. On the host: sudo chown -R ${uid}:${gid} ./mail"; fail=1; }
+[ -r "${MBSYNC_CONFIG}" ] || { say "${MBSYNC_CONFIG} is missing or not readable by uid ${uid}. On the host: sudo chown ${uid}:${gid} ./mbsyncrc (keep it 0600)"; fail=1; }
+for s in /run/secrets/*; do
+    [ -e "$s" ] || continue
+    [ -r "$s" ] || { say "$s is not readable by uid ${uid}. On the host: sudo chown ${uid}:${gid} ./secrets/$(basename "$s") (keep it 0600)"; fail=1; }
+done
+[ "$fail" -eq 0 ] || exit 1
+
 mkdir -p "${MBSYNC_MAILDIR}"
 
 # Validate the interval before it can be used as a sleep duration.
@@ -233,7 +286,7 @@ beat
 ( while :; do sleep "${MBSYNC_BEAT_SECONDS}"; beat; done ) & beater=$!
 
 while :; do
-    mbsync -a & child=$!
+    mbsync -c "${MBSYNC_CONFIG}" -a & child=$!
     # Capture the status explicitly rather than reading $? inside a branch.
     # It happens to survive both `|| cmd` and an if/else today, but it is one
     # inserted command away from silently reporting the wrong exit code, and a
@@ -275,6 +328,39 @@ if [ "${MAILVEC_REQUIRE_SEEDED_DB:-0}" = "1" ] && [ ! -s "${db}" ]; then
     echo "mailvec: seed the data volume from an ops/export-db.sh snapshot, or set MAILVEC_REQUIRE_SEEDED_DB=0 to allow a fresh empty archive." >&2
     exit 1
 fi
+
+# Permission preflight. The services run as a non-root uid (compose
+# MAILVEC_UID, default 10001) with cap_drop ALL, so nothing bypasses the
+# permission bits. Bind sources created by an older, root-running stack are
+# root-owned and the failures they cause name no permission problem: SQLite
+# says "unable to open database file", Serilog fails SILENTLY (the mail
+# pipeline runs on with no log files), an unreadable secret reads as an
+# empty key. Check each mounted path for the running uid and say exactly
+# what to chown. Only mounted paths are checked, so a service that mounts
+# nothing (parse) passes trivially.
+uid="$(id -u)"; gid="$(id -g)"; fail=0
+say() { echo "mailvec: $*" >&2; }
+mounted() { grep -qs " $1 " /proc/mounts; }
+fix() { echo "On the host, from the compose directory: sudo chown -R ${uid}:${gid} $1"; }
+if mounted /data; then
+    [ -w /data ] || { say "/data is not writable by uid ${uid} (SQLite needs to create -wal/-shm beside the archive). $(fix ./data)"; fail=1; }
+    if [ -e "${db}" ] && { [ ! -r "${db}" ] || [ ! -w "${db}" ]; }; then
+        say "${db} is not readable and writable by uid ${uid} — a seeded snapshot keeps the copying user's ownership. $(fix ./data)"; fail=1
+    fi
+fi
+logdir="${MAILVEC_LOG_DIR:-/logs}"
+if mounted "${logdir}" && [ ! -w "${logdir}" ]; then
+    say "${logdir} is not writable by uid ${uid}; Serilog would fail silently and this service would run with no log files. $(fix './logs/<service>')"; fail=1
+fi
+mailroot="${Ingest__MaildirRoot:-/mail}"
+if mounted /mail && [ -e "${mailroot}" ] && { [ ! -r "${mailroot}" ] || [ ! -x "${mailroot}" ]; }; then
+    say "${mailroot} is not readable by uid ${uid}. $(fix ./mail)"; fail=1
+fi
+for s in /run/secrets/*; do
+    [ -e "$s" ] || continue
+    [ -r "$s" ] || { say "$s is not readable by uid ${uid}; the key would read as empty. On the host: sudo chown ${uid}:${gid} ./secrets/$(basename "$s") (keep it 0600)"; fail=1; }
+done
+[ "$fail" -eq 0 ] || exit 1
 exec "$@"
 EOF
 RUN chmod +x /usr/local/bin/mailvec-entrypoint
@@ -283,9 +369,19 @@ RUN chmod +x /usr/local/bin/mailvec-entrypoint
 # highest-precedence config source, so these beat the appsettings.json values
 # published alongside each binary. MAILVEC_LAUNCHD is deliberately NOT set:
 # the Serilog console sink is what feeds `docker logs`.
-ENV Archive__DatabasePath=/data/archive.sqlite \
+#
+# Parser__Mode=remote is the IMAGE default, not just compose's: the parser
+# libraries were stripped from every directory but /app/parse above, so an
+# in-process default here would be a container that fails at its first parse.
+# HOME=/tmp: the services run as a uid with no passwd entry, so nothing else
+# sets HOME, and .NET probes $HOME for per-user state (ASP.NET's DataProtection
+# key fallback, $HOME/.dotnet). /tmp is the compose tmpfs — writable, ephemeral.
+ENV HOME=/tmp \
+    Archive__DatabasePath=/data/archive.sqlite \
     Archive__SqliteVecExtensionPath=./vec0.so \
     Ingest__MaildirRoot=/mail \
+    Parser__Mode=remote \
+    Parser__Endpoint=http://parse:3400 \
     Mcp__BindAddress=0.0.0.0 \
     Mcp__AttachmentDownloadDir=/data/downloads \
     MAILVEC_LOG_DIR=/logs

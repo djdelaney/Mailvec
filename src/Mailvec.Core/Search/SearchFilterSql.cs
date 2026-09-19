@@ -82,7 +82,7 @@ internal static class SearchFilterSql
                 // and name files freely, so either signal alone under-matches.
                 var match = new StringBuilder("LOWER(att.filename) LIKE $att_ext ESCAPE '\\'");
                 cmd.Parameters.AddWithValue("$att_ext", "%." + EscapeLike(token));
-                if (Attachments.AttachmentExtractor.MimeForExtension("." + token) is { } mime)
+                if (Attachments.AttachmentNaming.MimeForExtension("." + token) is { } mime)
                 {
                     match.Append(" OR LOWER(att.content_type) = $att_mime");
                     cmd.Parameters.AddWithValue("$att_mime", mime);

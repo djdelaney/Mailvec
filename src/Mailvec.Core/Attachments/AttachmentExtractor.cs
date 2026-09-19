@@ -1,18 +1,20 @@
 using System.Text;
 using Mailvec.Core.Models;
 using Mailvec.Core.Options;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.Options;
-using MimeKit;
 
 namespace Mailvec.Core.Attachments;
 
 /// <summary>
-/// Decodes an attachment from its Maildir source file. Two entry points:
+/// The Core-side facade over "which file" (<see cref="MaildirAttachmentReader"/>:
+/// path resolution, containment guard, existence) and "what is inside it"
+/// (<see cref="IMailParser"/>: MIME decode, rasterisation). Two entry points:
 ///
 /// <list type="bullet">
 /// <item><see cref="ExtractInMemory"/> returns the decoded bytes + metadata and
 /// touches no disk — the path the read-only MCP tools use to inline an image /
-/// small text file or rasterise a PDF page. Nothing is persisted.</item>
+/// small text file. Nothing is persisted.</item>
 /// <item><see cref="Extract"/> additionally writes the bytes to a user-visible
 /// download directory (~/Downloads/mailvec/ by default) and returns the path.
 /// Reserved for the explicit, user-initiated download path —
@@ -21,25 +23,20 @@ namespace Mailvec.Core.Attachments;
 /// on disk.</item>
 /// </list>
 ///
-/// This is (with <see cref="MaildirAttachmentReader"/>) the only place outside
-/// the indexer that reads from the Maildir, so it owns the small architectural
-/// break of "MCP must know MaildirRoot". See CLAUDE.md (Attachment-extraction
-/// gotchas) for the rationale.
+/// The MCP viewer tools get their rasterised output through here too
+/// (<see cref="RenderPdfPages"/>, <see cref="NormalizeImage"/>), so no tool
+/// holds a reader and a parser of its own. This is (with the reader) the only
+/// place outside the indexer that reads from the Maildir, so it owns the small
+/// architectural break of "MCP must know MaildirRoot".
 /// </summary>
 public sealed class AttachmentExtractor(
     IOptions<IngestOptions> ingestOptions,
-    IOptions<McpOptions> mcpOptions)
+    IOptions<McpOptions> mcpOptions,
+    IMailParser parser)
 {
     private readonly MaildirAttachmentReader _reader = new(ingestOptions);
     private readonly string _downloadDir = PathExpansion.Expand(mcpOptions.Value.AttachmentDownloadDir);
     private readonly int _inlineTextMaxBytes = mcpOptions.Value.AttachmentInlineTextMaxBytes;
-
-    private static readonly HashSet<string> InlineTextContentTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "application/json", "application/xml", "application/yaml", "application/x-yaml",
-        "application/javascript", "application/x-sh", "application/sql",
-        "application/csv", "application/x-csv",
-    };
 
     public string DownloadDir => _downloadDir;
 
@@ -48,6 +45,55 @@ public sealed class AttachmentExtractor(
     /// See <see cref="MaildirAttachmentReader.EnsureSourceExists"/>.
     /// </summary>
     public void EnsureSourceExists(Message message) => _reader.EnsureSourceExists(message);
+
+    /// <summary>
+    /// Decode the attachment at <paramref name="partIndex"/> entirely in memory —
+    /// no bytes are written to disk. Returns the resolved filename / content type /
+    /// size, the decoded bytes, and (for small text-ish files) the decoded UTF-8
+    /// text. Throws <see cref="FileNotFoundException"/> when the Maildir source is
+    /// missing and <see cref="ArgumentOutOfRangeException"/> when the part doesn't
+    /// exist — same as <see cref="Extract"/>.
+    /// </summary>
+    /// <param name="maxBytes">
+    /// Ceiling on the decoded size, or null for none — see
+    /// <see cref="IMailParser.DecodePart"/>. Throws
+    /// <see cref="AttachmentTooLargeException"/> above it.
+    /// </param>
+    public InlineAttachment ExtractInMemory(Message message, int partIndex, long? maxBytes)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        var part = parser.DecodePart(_reader.ReadEml(message), partIndex, maxBytes);
+        var inlineText = TryDecodeInlineText(part.Bytes, part.ContentType);
+
+        return new InlineAttachment(
+            FileName: part.FileName,
+            ContentType: part.ContentType,
+            SizeBytes: part.Bytes.LongLength,
+            Bytes: part.Bytes,
+            InlineText: inlineText);
+    }
+
+    /// <summary>Resolved name and type of a part, without decoding it. Same exceptions as <see cref="ExtractInMemory"/>.</summary>
+    public PartInfo Describe(Message message, int partIndex)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        return parser.DescribePart(_reader.ReadEml(message), partIndex);
+    }
+
+    /// <summary>Rasterise PDF pages of a part — see <see cref="IMailParser.RenderPdfPages"/>.</summary>
+    public PdfRender RenderPdfPages(Message message, int partIndex, int firstPage, int maxPages, long? maxBytes)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        return parser.RenderPdfPages(_reader.ReadEml(message), partIndex, firstPage, maxPages, maxBytes);
+    }
+
+    /// <summary>Decode and normalise an image part for vision — see <see cref="IMailParser.NormalizeImage"/>.</summary>
+    public Pdf.NormalizedImage? NormalizeImage(Message message, int partIndex, long? maxBytes)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        return parser.NormalizeImage(_reader.ReadEml(message), partIndex, maxBytes);
+    }
 
     /// <summary>
     /// Decode the attachment at <paramref name="partIndex"/> and write the
@@ -65,37 +111,6 @@ public sealed class AttachmentExtractor(
     /// <see cref="ArgumentOutOfRangeException"/> when the requested part
     /// doesn't exist on the message.
     /// </summary>
-    /// <summary>
-    /// Decode the attachment at <paramref name="partIndex"/> entirely in memory —
-    /// no bytes are written to disk. Returns the resolved filename / content type /
-    /// size, the decoded bytes, and (for small text-ish files) the decoded UTF-8
-    /// text. Throws <see cref="FileNotFoundException"/> when the Maildir source is
-    /// missing and <see cref="ArgumentOutOfRangeException"/> when the part doesn't
-    /// exist — same as <see cref="Extract"/>.
-    /// </summary>
-    /// <param name="maxBytes">
-    /// Ceiling on the decoded size, or null for none — see
-    /// <see cref="MaildirAttachmentReader.Read"/>. Throws
-    /// <see cref="AttachmentTooLargeException"/> above it.
-    /// </param>
-    public InlineAttachment ExtractInMemory(Message message, int partIndex, long? maxBytes)
-    {
-        ArgumentNullException.ThrowIfNull(message);
-
-        var data = _reader.Read(message, partIndex, maxBytes);
-        var entity = data.Entity;
-        var safeName = ResolveSafeFileName(entity, partIndex);
-        var contentType = ResolveContentType(entity, safeName);
-        var inlineText = TryDecodeInlineText(data.Bytes, contentType);
-
-        return new InlineAttachment(
-            FileName: safeName,
-            ContentType: contentType,
-            SizeBytes: data.Bytes.LongLength,
-            Bytes: data.Bytes,
-            InlineText: inlineText);
-    }
-
     public ExtractResult Extract(Message message, int partIndex)
     {
         // No ceiling: this path only runs because a user explicitly asked for
@@ -171,8 +186,8 @@ public sealed class AttachmentExtractor(
             throw new ArgumentException("Output name is empty or contains null bytes.", nameof(outputName));
 
         // outputName has already had directory components stripped by
-        // ResolveSafeFileName, but defend in depth: refuse anything with a
-        // separator or that resolves to a parent.
+        // AttachmentNaming.ResolveFileName, but defend in depth: refuse anything
+        // with a separator or that resolves to a parent.
         if (outputName.Contains('/') || outputName.Contains('\\') || outputName == ".." || outputName.StartsWith(".."))
             throw new ArgumentException($"Output name '{outputName}' looks like a path component, not a filename.", nameof(outputName));
 
@@ -240,123 +255,20 @@ public sealed class AttachmentExtractor(
     }
 
     /// <summary>
-    /// Pulls a safe filename out of the MIME entity. Strips path separators
-    /// (a malicious / careless filename like "../../etc/passwd" could otherwise
-    /// land outside the download directory). Falls back to a synthesized name
-    /// when the part has no Content-Disposition filename / Content-Type name.
+    /// Name resolution from stored column values. Forwards to
+    /// <see cref="AttachmentNaming"/>, which the parser also uses, so the
+    /// row-based short-circuit in <c>view_attachment</c> produces the SAME name
+    /// the file-reading path would.
     /// </summary>
-    private static string ResolveSafeFileName(MimeEntity entity, int partIndex) =>
-        ResolveFileName(entity.ContentDisposition?.FileName ?? entity.ContentType?.Name,
-            entity.ContentType?.MimeType, partIndex);
+    public static string ResolveFileName(string? rawName, string? declaredContentType, int partIndex) =>
+        AttachmentNaming.ResolveFileName(rawName, declaredContentType, partIndex);
 
-    /// <summary>
-    /// The same resolution as <see cref="ResolveSafeFileName"/>, from stored
-    /// column values instead of a live MIME entity.
-    /// </summary>
-    /// <remarks>
-    /// Public because <c>view_attachment</c> decides from the attachments row
-    /// whether a part could be inlined at all, and only opens the Maildir when
-    /// the answer might be yes. That decision has to produce the SAME name and
-    /// type the file-reading path would, or the short-circuit changes behaviour
-    /// instead of just skipping work — so both paths route through here rather
-    /// than through two lookalike implementations.
-    /// </remarks>
-    public static string ResolveFileName(string? rawName, string? declaredContentType, int partIndex)
-    {
-        if (string.IsNullOrWhiteSpace(rawName))
-            return $"attachment-{partIndex}{ExtensionFromContentType(declaredContentType)}";
+    /// <summary>Content-type resolution from a stored value — see <see cref="AttachmentNaming.ResolveContentType"/>.</summary>
+    public static string ResolveContentType(string? declaredContentType, string fileName) =>
+        AttachmentNaming.ResolveContentType(declaredContentType, fileName);
 
-        var safe = Path.GetFileName(rawName).Replace('\0', '_').Trim();
-        return string.IsNullOrEmpty(safe)
-            ? $"attachment-{partIndex}{ExtensionFromContentType(declaredContentType)}"
-            : safe;
-    }
-
-    /// <summary>
-    /// Resolve the most specific content type we can. Many mail clients attach
-    /// PDFs / docs / images with `Content-Type: application/octet-stream` and
-    /// rely on the filename extension for type info. The text response and
-    /// image-detection branch both benefit from a real MIME, so substitute
-    /// when we recognise the extension.
-    /// </summary>
-    private static string ResolveContentType(MimeEntity entity, string fileName) =>
-        ResolveContentType(entity.ContentType?.MimeType, fileName);
-
-    /// <summary>
-    /// The same resolution from a stored content_type value. Public for the
-    /// same reason as <see cref="ResolveFileName"/> — and load-bearing for it:
-    /// mail clients routinely send PDFs and photos as
-    /// <c>application/octet-stream</c>, so a short-circuit reading the raw
-    /// column would classify a JPEG as un-inlineable binary and quietly stop
-    /// showing images that work today.
-    /// </summary>
-    public static string ResolveContentType(string? declaredContentType, string fileName)
-    {
-        var declared = declaredContentType;
-        if (string.IsNullOrEmpty(declared)) declared = "application/octet-stream";
-
-        var isGeneric = string.Equals(declared, "application/octet-stream", StringComparison.OrdinalIgnoreCase)
-                     || string.Equals(declared, "binary/octet-stream", StringComparison.OrdinalIgnoreCase);
-        if (!isGeneric) return declared;
-
-        var fromExt = MimeFromExtension(fileName);
-        return fromExt ?? declared;
-    }
-
-    private static string? MimeFromExtension(string fileName) =>
-        MimeForExtension(Path.GetExtension(fileName).ToLowerInvariant());
-
-    /// <summary>
-    /// Known MIME for a lowercase filename extension including the leading dot
-    /// ('.pdf'), or null. Also consumed by SearchFilterSql's attachmentType
-    /// filter so "pdf" matches correctly-typed attachments with odd filenames.
-    /// </summary>
-    internal static string? MimeForExtension(string ext) => ext switch
-    {
-        ".pdf" => "application/pdf",
-        ".png" => "image/png",
-        ".jpg" or ".jpeg" => "image/jpeg",
-        ".gif" => "image/gif",
-        ".webp" => "image/webp",
-        ".svg" => "image/svg+xml",
-        ".heic" => "image/heic",
-        ".tiff" or ".tif" => "image/tiff",
-        ".bmp" => "image/bmp",
-        ".txt" => "text/plain",
-        ".csv" => "text/csv",
-        ".html" or ".htm" => "text/html",
-        ".xml" => "application/xml",
-        ".json" => "application/json",
-        ".yaml" or ".yml" => "application/yaml",
-        ".md" => "text/markdown",
-        ".zip" => "application/zip",
-        ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ".doc" => "application/msword",
-        ".xls" => "application/vnd.ms-excel",
-        ".ppt" => "application/vnd.ms-powerpoint",
-        ".mp3" => "audio/mpeg",
-        ".mp4" => "video/mp4",
-        ".mov" => "video/quicktime",
-        ".wav" => "audio/wav",
-        _ => null,
-    };
-
-    private static string ExtensionFromContentType(string? contentType) => contentType?.ToLowerInvariant() switch
-    {
-        "application/pdf" => ".pdf",
-        "application/zip" => ".zip",
-        "application/json" => ".json",
-        "application/xml" or "text/xml" => ".xml",
-        "text/plain" => ".txt",
-        "text/csv" or "application/csv" or "application/x-csv" => ".csv",
-        "text/html" => ".html",
-        "image/jpeg" => ".jpg",
-        "image/png" => ".png",
-        "image/gif" => ".gif",
-        _ => string.Empty,
-    };
+    /// <summary>See <see cref="AttachmentNaming.MimeForExtension"/>.</summary>
+    internal static string? MimeForExtension(string ext) => AttachmentNaming.MimeForExtension(ext);
 
     private string? TryDecodeInlineText(byte[] bytes, string contentType)
     {
@@ -378,11 +290,8 @@ public sealed class AttachmentExtractor(
     /// Whether <see cref="TryDecodeInlineText"/> would attempt this type at all.
     /// Public so view_attachment's pre-read check asks the same question.
     /// </summary>
-    public static bool IsTextLikeContentType(string contentType)
-    {
-        if (contentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)) return true;
-        return InlineTextContentTypes.Contains(contentType);
-    }
+    public static bool IsTextLikeContentType(string contentType) =>
+        AttachmentNaming.IsTextLikeContentType(contentType);
 }
 
 public sealed record ExtractResult(

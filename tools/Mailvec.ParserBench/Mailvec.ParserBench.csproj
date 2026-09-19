@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Phase-0 measurement harness for docs/proposals/attachment-parser-isolation.md.
+       Deliberately NOT in Mailvec.slnx (same treatment as tests/Mailvec.CloudSmoke.Tests):
+       it generates adversarial PDFs and runs the real parsers on them, which is a
+       one-off measurement, not a CI check.
+
+         dotnet run - -  gen <outdir>              # write the fixtures
+         dotnet run - -  run <outdir> [timeoutSec] # run every (fixture, op) in a child
+                                                   # process; results.md lands in outdir -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Mailvec.ParserBench</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Mailvec.Core\Mailvec.Core.csproj" />
+    <ProjectReference Include="..\..\src\Mailvec.Parsing\Mailvec.Parsing.csproj" />
+  </ItemGroup>
+
+</Project>

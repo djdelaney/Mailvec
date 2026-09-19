@@ -5,6 +5,9 @@ using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Mailvec.Parsing;
+using Mailvec.Parsing.Contracts;
+using Microsoft.Extensions.Logging;
 
 namespace Mailvec.Cli.Tests;
 
@@ -33,19 +36,68 @@ public class BackfillInlineImagesCommandTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private ServiceProvider BuildProvider()
+    private ServiceProvider BuildProvider(FaultingParser? parser = null, int unavailableWaitSeconds = 0)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.Configure<ArchiveOptions>(o => o.DatabasePath = _dbPath);
+        services.Configure<ParserOptions>(o => o.UnavailableWaitSeconds = unavailableWaitSeconds);
         services.Configure<IngestOptions>(o => o.MaildirRoot = _maildirRoot);
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
         services.AddSingleton<MessageRepository>();
-        services.AddSingleton<AttachmentTextExtractor>();
+        services.AddSingleton(sp => new AttachmentTextExtractor(
+            new IndexerOptions().AttachmentMaxBytes, sp.GetRequiredService<ILogger<AttachmentTextExtractor>>()));
+        services.AddSingleton<IMailParser>(sp =>
+        {
+            var real = new InProcessParser(sp.GetRequiredService<AttachmentTextExtractor>());
+            return parser is null ? real : new FaultingParser(real) { Fault = parser.Fault };
+        });
         var sp = services.BuildServiceProvider();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         return sp;
+    }
+
+    [Fact]
+    public void A_routine_parse_host_recycle_is_ridden_out()
+    {
+        // Review finding 5: the first ParseMessage hits the host's exit,
+        // the probe passes, the retry lands the row. No STOPPED, exit 0.
+        var calls = 0;
+        var parser = new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.ParseMessage) && ++calls == 1 ? FaultingParser.Unavailable() : null,
+        };
+        using var sp = BuildProvider(parser, unavailableWaitSeconds: 30);
+        long id = StageInlineOnlyMessage(sp, "inline@x");
+        var writer = new StringWriter();
+
+        var exit = BackfillInlineImagesCommand.Execute(sp, limit: null, batch: 100, dryRun: false, messageId: null, writer, new StringWriter());
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldNotContain("STOPPED");
+        sp.GetRequiredService<MessageRepository>().GetById(id)!.Attachments.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public void A_parser_outage_stops_the_run_and_adds_nothing()
+    {
+        // Phase 3 of the parser isolation: the service being down is not a
+        // parse failure of this message, so it must not be counted as one per
+        // remaining candidate — and the run must not read as complete.
+        using var sp = BuildProvider(new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.ParseMessage) ? FaultingParser.Unavailable() : null,
+        });
+        long id = StageInlineOnlyMessage(sp, "inline@x");
+        var writer = new StringWriter();
+
+        var exit = BackfillInlineImagesCommand.Execute(sp, limit: null, batch: 100, dryRun: false, messageId: null, writer, new StringWriter());
+
+        exit.ShouldBe(1);
+        writer.ToString().ShouldContain("STOPPED");
+        writer.ToString().ShouldNotContain("failed to parse", Case.Insensitive);
+        sp.GetRequiredService<MessageRepository>().GetById(id)!.Attachments.ShouldBeEmpty();
     }
 
     // A message the indexer would have recorded with has_attachments=0: its HTML
@@ -135,6 +187,35 @@ public class BackfillInlineImagesCommandTests : IDisposable
         err.ToString().ShouldContain("refusing to read");
         writer.ToString().ShouldContain("REFUSED 1");
         repo.GetById(id)!.Attachments.ShouldBeEmpty(); // nothing was read, so nothing was added
+    }
+
+    [Fact]
+    public void The_summary_counts_the_rows_it_added()
+    {
+        // The counters were dropped in a refactor and every run reported
+        // "added 0 inline-image row(s)" while adding rows; nothing asserted
+        // the summary, so it stayed that way for two phases.
+        using var sp = BuildProvider();
+        StageInlineOnlyMessage(sp, "inline@x");
+        var writer = new StringWriter();
+
+        BackfillInlineImagesCommand.Execute(sp, limit: null, batch: 100, dryRun: false, messageId: null, writer, new StringWriter());
+
+        writer.ToString().ShouldContain("added 1 inline-image row(s) across 1 message(s)");
+        writer.ToString().ShouldContain("image-OCR pass will process them");
+    }
+
+    [Fact]
+    public void A_dry_run_reports_what_it_would_add()
+    {
+        using var sp = BuildProvider();
+        StageInlineOnlyMessage(sp, "inline@x");
+        var writer = new StringWriter();
+
+        BackfillInlineImagesCommand.Execute(sp, limit: null, batch: 100, dryRun: true, messageId: null, writer, new StringWriter());
+
+        writer.ToString().ShouldContain("would add 1 inline-image row(s) across 1 message(s)");
+        writer.ToString().ShouldNotContain("image-OCR pass will process them");
     }
 
     [Fact]

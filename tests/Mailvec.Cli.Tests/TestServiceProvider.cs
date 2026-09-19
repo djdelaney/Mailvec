@@ -1,6 +1,8 @@
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Search;
+using Mailvec.Parsing;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -37,6 +39,9 @@ public sealed class TestServiceProvider : IDisposable
         _services.AddSingleton<MessageRepository>();
         _services.AddSingleton<MetadataRepository>();
         _services.AddSingleton<ChunkRepository>();
+        // The parser seam, in-process and without attachment-text extraction
+        // (the CLI commands under test that need extraction wire their own).
+        _services.AddSingleton<IMailParser>(new InProcessParser(extractor: null));
         _services.AddSingleton<KeywordSearchService>();
         // Legacy-shaped resolved profile derived from whatever OllamaOptions
         // the test configures (factory registration so AddOption + Rebuild
@@ -73,6 +78,13 @@ public sealed class TestServiceProvider : IDisposable
     public TestServiceProvider UseProfile(Mailvec.Core.Embedding.ResolvedEmbeddingProfile profile)
     {
         _services.AddSingleton(profile);
+        return this;
+    }
+
+    /// <summary>Replace the parser (last registration wins on next Rebuild).</summary>
+    public TestServiceProvider UseParser(IMailParser parser)
+    {
+        _services.AddSingleton(parser);
         return this;
     }
 
