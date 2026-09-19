@@ -36,6 +36,7 @@ public static class ParseHost
 
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<RequestBudget>();
+        builder.Services.AddSingleton(new ParseGate(Math.Max(1, options.MaxConcurrentParses)));
         if (parser is not null)
             builder.Services.AddSingleton(parser);
         else
@@ -50,10 +51,11 @@ public static class ParseHost
         {
             var addresses = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses;
             app.Logger.LogInformation(
-                "parse: listening on {Addresses}; request timeout {Timeout}s, exit after {MaxRequests} requests, body cap {BodyCap} MB, attachment gate {AttachmentGate} MB, parser {Mode}",
+                "parse: listening on {Addresses}; request timeout {Timeout}s, exit after {MaxRequests} requests, body cap {BodyCap} MB, attachment gate {AttachmentGate} MB, {Concurrency} concurrent parse(s), parser {Mode}",
                 addresses is null ? "?" : string.Join(", ", addresses),
                 options.RequestTimeoutSeconds, options.MaxRequestsBeforeExit,
                 options.MaxRequestBodyBytes / (1024 * 1024), attachmentMaxBytes / (1024 * 1024),
+                Math.Max(1, options.MaxConcurrentParses),
                 app.Services.GetRequiredService<IMailParser>().Mode);
         });
 

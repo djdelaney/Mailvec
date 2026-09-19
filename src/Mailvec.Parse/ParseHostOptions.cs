@@ -47,5 +47,18 @@ public sealed class ParseHostOptions
     /// </summary>
     public long MaxRequestBodyBytes { get; set; } = 48L * 1024 * 1024;
 
+    /// <summary>
+    /// How many parses may run at once. Kestrel accepts every connection and
+    /// each parse decodes a whole message (PdfPig and OpenXml peaks are the
+    /// reason this container has its own <c>mem_limit</c>), so without a gate
+    /// a bulk-ingest scan, an OCR render batch and a tool call could hold
+    /// several decoded documents at once and be OOM-killed together — a
+    /// <c>Crashed</c> strike against every innocent document in flight. A
+    /// request that cannot take the gate within the request timeout is
+    /// answered 503 (<c>Unavailable</c> to the caller: wait, not a strike).
+    /// The three callers run one parse each in steady state; 4 leaves room.
+    /// </summary>
+    public int MaxConcurrentParses { get; set; } = 4;
+
     public TimeSpan RequestTimeout => TimeSpan.FromSeconds(Math.Max(1, RequestTimeoutSeconds));
 }

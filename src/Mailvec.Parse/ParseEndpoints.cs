@@ -69,7 +69,28 @@ internal static class ParseEndpoints
     {
         var options = ctx.RequestServices.GetRequiredService<ParseHostOptions>();
         var budget = ctx.RequestServices.GetRequiredService<RequestBudget>();
+        var gate = ctx.RequestServices.GetRequiredService<ParseGate>();
         var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Parse");
+
+        // Admission control (ParseGate). Full is not a fault of the document
+        // or the service: 503, which the caller classifies as Unavailable and
+        // waits out. A caller that gives up while queued just leaves.
+        bool admitted;
+        try
+        {
+            admitted = await gate.TryEnterAsync(options.RequestTimeout, ctx.RequestAborted);
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
+        }
+        if (!admitted)
+        {
+            logger.LogWarning("parse: {Path} could not get one of {Slots} parse slot(s) within {Timeout}s; answering 503.",
+                ctx.Request.Path, gate.Slots, options.RequestTimeoutSeconds);
+            return Error(StatusCodes.Status503ServiceUnavailable, ParseErrorTypes.Busy,
+                $"The parse service is at its concurrency limit ({gate.Slots}); retry shortly.");
+        }
 
         // The parsers take no cancellation token, so the work runs on its own
         // thread and the request merely stops WAITING for it. An overrun is a
@@ -77,15 +98,34 @@ internal static class ParseEndpoints
         // as long as its author likes), and the only way to reclaim the thread
         // is to let the process die: answer 504 so the caller can classify it
         // as a strike against that document, then exit.
-        var task = Task.Run(work);
-        var completed = await Task.WhenAny(task, Task.Delay(options.RequestTimeout, ctx.RequestAborted));
+        //
+        // The wait is NOT tied to RequestAborted. A caller that disconnects
+        // (an indexer restart, a cancelled tool call) says nothing about the
+        // document: the parse is left to finish within the same timeout, its
+        // slot released when it does, and only a genuine overrun exits the
+        // host. Tying the two together made every client disconnect a host
+        // restart for every other caller.
+        var task = Task.Run(() => { try { return work(); } finally { gate.Exit(); } });
+        var completed = await Task.WhenAny(task, Task.Delay(options.RequestTimeout));
         if (completed != task)
         {
-            logger.LogError("parse: {Path} exceeded the {Timeout}s request timeout; answering 504 and exiting so the parse thread is reclaimed.",
-                ctx.Request.Path, options.RequestTimeoutSeconds);
+            logger.LogError("parse: {Path} exceeded the {Timeout}s request timeout{Detail}; answering 504 and exiting so the parse thread is reclaimed.",
+                ctx.Request.Path, options.RequestTimeoutSeconds,
+                ctx.RequestAborted.IsCancellationRequested ? " (the caller had already disconnected)" : "");
             budget.StopAfterResponse(ctx, "a parse exceeded Parser:RequestTimeoutSeconds");
             return Error(StatusCodes.Status504GatewayTimeout, ParseErrorTypes.Timeout,
                 $"The parse exceeded the service's {options.RequestTimeoutSeconds}s timeout; the service is restarting.");
+        }
+
+        if (ctx.RequestAborted.IsCancellationRequested)
+        {
+            // Finished within the timeout after the caller left: nothing to
+            // answer, nothing wrong with the host, the slot is already free.
+            // Counts toward the budget like any other completed parse.
+            logger.LogInformation("parse: {Path} completed after its caller disconnected; result discarded.", ctx.Request.Path);
+            budget.RequestCompleted(ctx);
+            try { await task; } catch (Exception) { /* the caller is gone; the outcome is nobody's */ }
+            return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
         }
 
         try
@@ -113,6 +153,18 @@ internal static class ParseEndpoints
             // (which can quote document bytes) travels only to our own caller
             // over the internal network, and the MCP tools already replace it
             // with stable text before anything reaches a remote client.
+            //
+            // An accepted asymmetry, stated rather than hidden: EVERY parser
+            // exception lands here as 422 DocumentRejected, including one that
+            // is a bug in parser code (a NullReferenceException in new
+            // extraction logic) rather than the document's doing — where the
+            // client side maps its own unclassified failures to Crashed so a
+            // bug retries rather than retires. This matches the in-process
+            // precedent, where any exception out of the parser was a document
+            // fault, and the parser libraries throw too many exception types
+            // for a "document fault" allowlist to be honest. The cost is that
+            // a parser bug can retire documents; the remedy is `extract-
+            // attachments --reextract-*` / `reocr` once it is fixed.
             budget.RequestCompleted(ctx);
             logger.LogWarning("parse: {Path} rejected the document: {Type}", ctx.Request.Path, ex.GetType().Name);
             return Error(StatusCodes.Status422UnprocessableEntity, ParseErrorTypes.DocumentRejected,

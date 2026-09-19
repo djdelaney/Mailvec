@@ -34,6 +34,15 @@ public sealed class MaildirScanner(
     private readonly Dictionary<(string Path, DateTime MtimeUtc, long Size), int> _parserCrashes = new();
     private const int MaxTrackedCrashes = 4096;
 
+    // Files that crashed the parser MaxCrashesPerFile times WITH attachment
+    // text and then MaxCrashesPerFile times WITHOUT — so the MIME structure
+    // itself is what the host cannot survive, and no degraded parse will
+    // help. Never sent to the parser again in this process; a restart or an
+    // edit to the file (new identity) grants another round. Without this the
+    // degraded retry, a full MimeKit parse, took the service down every scan
+    // interval forever. Bounded like _parserCrashes.
+    private readonly HashSet<(string Path, DateTime MtimeUtc, long Size)> _unparseable = new();
+
     // How many fast-path sync_state writes accumulate before we commit. Smaller
     // batches mean more fsyncs (slower scan) but tighter windows for the
     // embedder's separate connection to grab the write lock; 1000 is well
@@ -435,6 +444,19 @@ public sealed class MaildirScanner(
         }
         var n = _parserCrashes.GetValueOrDefault(key) + 1;
         _parserCrashes[key] = n;
+        if (n >= 2 * _maxCrashesPerFile)
+        {
+            // Crashed the degraded parse as many times as the full one: the
+            // MIME structure is the problem. Stop feeding it to the service.
+            _parserCrashes.Remove(key);
+            if (_unparseable.Count >= MaxTrackedCrashes) _unparseable.Remove(_unparseable.First());
+            _unparseable.Add(key);
+            logger.LogError(
+                "{Path} crashed the parser {Crashes}x, half of them on a metadata-only parse; giving up on this file " +
+                "until the indexer restarts or the file changes. It is NOT indexed. Inspect it by hand.",
+                filePath, n);
+            return;
+        }
         logger.LogWarning(
             "{Path} crashed the parser ({Crashes}/{Max}); will retry next scan{Degrade}.",
             filePath, n, _maxCrashesPerFile,
@@ -582,6 +604,13 @@ public sealed class MaildirScanner(
             // them once the parser is fixed. Nothing else is inferred: which
             // part is the poison one is unknowable from a whole-message parse.
             var identity = (filePath, mtimeUtc, sizeBytes);
+            if (_unparseable.Contains(identity))
+            {
+                // Given up (see _unparseable): not a parser call, not a
+                // marker write. Failed, so the scan's count is honest.
+                logger.LogDebug("{Path} is unparseable (gave up after repeated parser crashes); skipping until restart or the file changes.", filePath);
+                return IngestOutcome.Failed;
+            }
             var degraded = _parserCrashes.TryGetValue(identity, out var crashes) && crashes >= _maxCrashesPerFile;
             var parsed = parser.ParseMessage(File.ReadAllBytes(filePath), extractAttachmentText: !degraded);
             if (degraded)

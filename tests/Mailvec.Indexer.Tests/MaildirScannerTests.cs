@@ -1226,6 +1226,37 @@ public class MaildirScannerTests : IDisposable
         parser.ParseCalls.ShouldBe(calls);
     }
 
+    [Fact]
+    public void A_file_that_crashes_the_degraded_parse_too_is_given_up_on()
+    {
+        // The fourth review's F4: the degraded retry is still a full MimeKit
+        // parse, so a MIME structure the host cannot survive crashed it every
+        // scan interval forever. After MaxCrashesPerFile crashes on the
+        // metadata-only parse as well, the file is never sent again in this
+        // process — no parser call, no marker write — and the rest of the
+        // Maildir keeps indexing.
+        WriteEmlWithAttachment("INBOX", "cur", "mime-bomb.host:2,S", "bomb@x");
+        WriteEml("INBOX", "cur", "fine.host:2,S", "fine", "fine@x");
+        var parser = new FaultingParser
+        {
+            Fault = (eml, _) => System.Text.Encoding.ASCII.GetString(eml).Contains("bomb@x")
+                ? new ParseException(ParseFailureKind.Crashed, "504: the parse service timed out on this document")
+                : null,
+        };
+        var scanner = BuildScanner(parser);
+
+        for (var scan = 1; scan <= 6; scan++) scanner.ScanAll(); // 3 with text, 3 without
+        var callsAfterGivingUp = parser.ParseCalls;
+
+        var later = scanner.ScanAll();
+
+        parser.ParseCalls.ShouldBe(callsAfterGivingUp, "given up: the parser is never asked about this file again");
+        later.FailedToParse.ShouldBe(1, "still reported as a failure, honestly");
+        later.Incomplete.ShouldBeFalse();
+        _messages.GetByMessageId("bomb@x").ShouldBeNull();
+        _messages.GetByMessageId("fine@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
     /// <summary>
     /// The in-process parser with a fault injected into <see cref="ParseMessage"/>
     /// — the one call the scanner makes. The fault sees the bytes and the

@@ -47,6 +47,20 @@ public sealed class ParserOptions
     public long MaxResponseBytes { get; set; } = 64L * 1024 * 1024;
 
     /// <summary>
+    /// The parse host's request-body cap, mirrored on the caller (host side:
+    /// <c>ParseHostOptions.MaxRequestBodyBytes</c>, same default). A message
+    /// over it is refused as <c>DocumentRejected</c> before a byte is sent.
+    /// The mirror exists because the host's own 413 cannot be relied on to
+    /// arrive: Kestrel answers it mid-upload and the client's send fails
+    /// first, which classified an over-cap message as <c>Crashed</c> — a
+    /// strike, then a degraded index with every attachment stamped
+    /// <c>failed</c>, for a message that was merely large. Keep the two in
+    /// step; <c>Expect: 100-continue</c> on every send is the backstop when
+    /// they drift.
+    /// </summary>
+    public long MaxRequestBodyBytes { get; set; } = 48L * 1024 * 1024;
+
+    /// <summary>
     /// How long the CLI backfills (<c>extract-attachments</c>,
     /// <c>backfill-inline-images</c>, <c>rebuild-bodies</c>) wait for the
     /// parse service to come back after an <c>Unavailable</c> before giving

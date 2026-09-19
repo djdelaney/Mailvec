@@ -83,6 +83,9 @@ public static class ParseErrorTypes
 
     /// <summary>504 — the parse exceeded the host's timeout; the host exits after answering.</summary>
     public const string Timeout = "timeout";
+
+    /// <summary>503 — every parse slot is taken (<c>Parser:MaxConcurrentParses</c>); the caller waits and retries.</summary>
+    public const string Busy = "busy";
 }
 
 public sealed record HtmlRequest(string Html, string? Subject);
