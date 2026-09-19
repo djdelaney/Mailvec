@@ -73,6 +73,19 @@ public class ErrorMappingTests
     }
 
     [Fact]
+    public async Task An_html_body_over_the_cap_is_DocumentRejected_without_being_sent()
+    {
+        // /v1/html builds its own request; the fifth pass's A4 noted it had
+        // neither guard PostEml has.
+        await using var host = await ParseHostFixture.StartAsync();
+        var nobody = host.RemoteFor("http://127.0.0.1:1/", timeoutSeconds: 5, maxRequestBodyBytes: 2048);
+
+        var ex = Should.Throw<ParseException>(() => nobody.BodyTextFromHtml(new string('x', 4096), null));
+
+        ex.Kind.ShouldBe(ParseFailureKind.DocumentRejected);
+    }
+
+    [Fact]
     public async Task A_message_over_the_host_cap_but_under_the_mirror_is_still_DocumentRejected()
     {
         // The fourth review's reproduction: 8 MB against a 4 MB host cap. The
