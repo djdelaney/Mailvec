@@ -191,6 +191,20 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task The_deny_list_reads_resolved_options_not_the_builder_snapshot()
+    {
+        // The rule in Mailvec.Mcp/CLAUDE.md, and the review's follow-up F3:
+        // a deny-list applied through the options pipeline (PostConfigure —
+        // the shape of override an operator reaches for) was ignored because
+        // the guard read the builder-time snapshot. Origin auth once shipped
+        // inert the same way.
+        using var factory = new RemoteCallerFactory(remoteIp: "172.18.0.7", postConfiguredDeniedNetwork: "172.18.0.0/24");
+        using var client = factory.CreateClient();
+
+        (await client.GetAsync("/up")).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
     public async Task A_caller_outside_the_denied_networks_is_served_as_before()
     {
         // cloudflared arrives from the default network, one subnet over.
@@ -527,13 +541,21 @@ public sealed class RemoteCallerFactory : WebApplicationFactory<Program>
 
     /// <param name="remoteIp">Where the simulated caller is; a compose-network-looking address by default.</param>
     /// <param name="deniedNetwork">A CIDR for Mcp:DeniedNetworks, or null for none.</param>
-    public RemoteCallerFactory(bool restrictHealth = true, string remoteIp = "172.18.0.7", string? deniedNetwork = null)
+    private readonly string? _postConfiguredDeniedNetwork;
+
+    /// <param name="postConfiguredDeniedNetwork">
+    /// Like <paramref name="deniedNetwork"/> but applied through
+    /// <c>PostConfigure&lt;McpOptions&gt;</c> — invisible to the builder-time
+    /// configuration snapshot, visible only to resolved options.
+    /// </param>
+    public RemoteCallerFactory(bool restrictHealth = true, string remoteIp = "172.18.0.7", string? deniedNetwork = null, string? postConfiguredDeniedNetwork = null)
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "mailvec-remote-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
         _restrictHealth = restrictHealth;
         _remoteIp = remoteIp;
         _deniedNetwork = deniedNetwork;
+        _postConfiguredDeniedNetwork = postConfiguredDeniedNetwork;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -553,7 +575,11 @@ public sealed class RemoteCallerFactory : WebApplicationFactory<Program>
         // doesn't matter to most tests; "not loopback" does — except for the
         // NetworkGuard ones, which choose a side of the denied range.
         builder.ConfigureTestServices(services =>
-            services.AddSingleton<IStartupFilter>(new RemoteIpStartupFilter(IPAddress.Parse(_remoteIp))));
+        {
+            services.AddSingleton<IStartupFilter>(new RemoteIpStartupFilter(IPAddress.Parse(_remoteIp)));
+            if (_postConfiguredDeniedNetwork is { } cidr)
+                services.PostConfigure<Mailvec.Core.Options.McpOptions>(o => o.DeniedNetworks = [cidr]);
+        });
     }
 
     protected override void Dispose(bool disposing)

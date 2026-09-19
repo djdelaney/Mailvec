@@ -70,7 +70,79 @@ public class RogueServiceTests
         var ex = Should.Throw<ParseException>(() => host.RemoteFor(rogue.BaseAddress).DescribePart(TextEml(), 0));
 
         ex.Kind.ShouldBe(ParseFailureKind.Crashed);
-        ex.InnerException.ShouldBeOfType<System.Text.Json.JsonException>();
+        ex.InnerException.ShouldBeAssignableTo<System.Text.Json.JsonException>();
+    }
+
+    // ---- Follow-up F2: incomplete-but-valid JSON is not a parse result ----
+
+    [Fact]
+    public async Task An_empty_object_is_not_a_body_text_result()
+    {
+        // `{}` used to deserialize to HtmlResponse(Text: null), which
+        // rebuild-bodies then wrote over the real body_text — silent data
+        // loss from a service that answered nothing.
+        await using var rogue = await RogueServer.StartAsync(async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync("{}"); });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        var ex = Should.Throw<ParseException>(() => host.RemoteFor(rogue.BaseAddress).BodyTextFromHtml("<p>x</p>", null));
+
+        ex.Kind.ShouldBe(ParseFailureKind.Crashed);
+    }
+
+    [Fact]
+    public async Task An_explicit_null_on_a_nullable_member_is_still_a_valid_answer()
+    {
+        // The other half of required/nullable enforcement: HtmlResponse.Text
+        // IS nullable, and "no text" is a real answer the host gives.
+        await using var rogue = await RogueServer.StartAsync(async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync("{\"text\":null}"); });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        host.RemoteFor(rogue.BaseAddress).BodyTextFromHtml("<p></p>", null).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"fileName\":\"a.bin\",\"contentType\":\"application/octet-stream\"}")]          // bytes missing
+    [InlineData("{\"fileName\":\"a.bin\",\"contentType\":\"application/octet-stream\",\"bytes\":null}")] // bytes null
+    public async Task A_decoded_part_without_its_bytes_is_Crashed(string body)
+    {
+        await using var rogue = await RogueServer.StartAsync(async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(body); });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        Should.Throw<ParseException>(() => host.RemoteFor(rogue.BaseAddress).DecodePart(TextEml(), 0, null))
+            .Kind.ShouldBe(ParseFailureKind.Crashed);
+    }
+
+    [Fact]
+    public async Task More_pages_than_were_requested_is_Crashed()
+    {
+        await using var rogue = await RogueServer.StartAsync(async ctx =>
+        {
+            ctx.Response.ContentType = "application/json";
+            await ctx.Response.WriteAsync("{\"pageCount\":3,\"pages\":[\"AAAA\",\"AAAA\",\"AAAA\"]}");
+        });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        Should.Throw<ParseException>(() => host.RemoteFor(rogue.BaseAddress).RenderPdfPages(TextEml(), 0, 0, maxPages: 1, maxBytes: null))
+            .Kind.ShouldBe(ParseFailureKind.Crashed);
+    }
+
+    // ---- Follow-up F1: a compact response must not expand into gigabytes ----
+
+    [Fact]
+    public async Task A_compact_response_with_an_oversized_collection_is_refused_before_deserialization()
+    {
+        // 100,000 empty attachment objects: ~300 KB on the wire, well under the
+        // byte ceiling, ~15 MB once deserialized. Refused by the shape scan;
+        // ResponseShapeTests pins that the refusal itself allocates nothing.
+        var body = "{\"attachments\":[" + string.Join(",", Enumerable.Repeat("{}", 100_000)) + "]}";
+        await using var rogue = await RogueServer.StartAsync(async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(body); });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        var ex = Should.Throw<ParseException>(() => host.RemoteFor(rogue.BaseAddress).ParseMessage(TextEml(), extractAttachmentText: false));
+
+        ex.Kind.ShouldBe(ParseFailureKind.Crashed);
+        ex.Message.ShouldContain("array longer than");
     }
 
     [Fact]

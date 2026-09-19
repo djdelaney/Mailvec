@@ -127,7 +127,7 @@ static async Task RunHttp(string[] args)
     // the caller cannot influence: HostGuard reads a header the parse service
     // would set to `mcp` (allowlisted), and Access validation is off by
     // default. Loopback is never denied. See NetworkGuard.
-    var deniedNetworks = NetworkGuard.Parse(mcpOpts.DeniedNetworks);
+    var deniedNetworks = NetworkGuard.Parse(resolvedMcpOpts.DeniedNetworks);
     if (deniedNetworks.Count > 0)
     {
         app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Mcp.Startup").LogInformation(

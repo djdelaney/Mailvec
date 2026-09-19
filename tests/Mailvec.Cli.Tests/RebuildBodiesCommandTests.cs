@@ -106,6 +106,39 @@ public class RebuildBodiesCommandTests
     }
 
     [Fact]
+    public void A_row_the_parser_fails_on_keeps_its_body_text()
+    {
+        // Review follow-up F2's caller-level half: with required-member
+        // enforcement on the wire, an incomplete response is a Crashed
+        // exception rather than a null result, and this command's per-row
+        // catch counts it as an error and writes nothing for that row.
+        using var ctx = new TestServiceProvider();
+        ctx.AddOption<ParserOptions>(o => o.UnavailableWaitSeconds = 0);
+        ctx.UseParser(new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.BodyTextFromHtml) ? FaultingParser.Crashed() : null,
+        }).Rebuild();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        long id = messages.Upsert(
+            new ParsedMessage(
+                MessageId: "keep@x", ThreadId: "keep@x", Subject: "Hi",
+                FromAddress: "alice@example.com", FromName: null,
+                ToAddresses: [], CcAddresses: [],
+                DateSent: DateTimeOffset.UtcNow,
+                BodyText: "the real body", BodyHtml: "<p>Fresh</p>",
+                RawHeaders: "Message-ID: <keep@x>\r\n",
+                SizeBytes: 100, ContentHash: "h", Attachments: []),
+            "INBOX", "INBOX/cur", "keep", DateTimeOffset.UtcNow);
+        var writer = new StringWriter();
+
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, new StringWriter());
+
+        exit.ShouldBe(1, "one error");
+        writer.ToString().ShouldContain("(1 errors)");
+        messages.GetById(id)!.BodyText.ShouldBe("the real body");
+    }
+
+    [Fact]
     public void Rebuilds_body_text_from_stored_body_html()
     {
         using var ctx = new TestServiceProvider();
