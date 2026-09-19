@@ -169,6 +169,19 @@ compromised instance has a bounded lifetime. This is the boundary the rest of
 this section used to lack: a decode bomb or a memory-safety bug in a parser now
 lands in a process that can reach neither the archive nor the mailbox.
 
+One wrinkle had to be closed for that sentence to be true. mcp joins the
+`parse` network to *call* the parse service, and Docker networks are
+symmetric — so the parse service could call `mcp:3333` back, present an
+allowlisted `Host: mcp`, and with origin validation off, read the mailbox
+through `search_emails`. An independent review reproduced it. The `parse`
+network's subnet is therefore pinned in compose (`MAILVEC_PARSE_SUBNET`) and
+mcp refuses every request from it before any route (`Mcp:DeniedNetworks`,
+`NetworkGuard`), loopback excepted; the indexer and embedder listen on
+nothing. `Mcp:Access` origin validation, where a tunnel exists, is the
+stronger layer on top — it demands proof of identity rather than denying one
+known network — and the two compose. The deny-list is what holds in the
+default posture, with no Cloudflare in the picture.
+
 All six services therefore run with:
 
 | Control | What it buys |
@@ -176,6 +189,7 @@ All six services therefore run with:
 | `cap_drop: [ALL]` | No Linux capabilities. Removes `DAC_OVERRIDE` (bypassing file permission bits), `FOWNER`, `NET_RAW` (raw sockets / spoofing), `SETUID`, and the rest. Nothing here needs any: the .NET services bind 3333 (unprivileged), mbsync makes outbound TLS connections, cloudflared dials out. |
 | `user: 10001:10001` (`parse`: `nobody`) | Non-root inside the container. A compromised process holds no root-only powers and, with `cap_drop`, no way back to them; it can touch only what its uid owns — the mounts the operator handed it, and nothing in the image. The uid is a fixed high number with no passwd entry; every mounted path must be owned by it, and the entrypoint refuses to start otherwise. |
 | `security_opt: [no-new-privileges:true]` | A setuid binary can't raise privileges — so a dropped capability stays dropped, and a dropped uid stays dropped. |
+| `Mcp__DeniedNetworks__0` = the pinned `parse` subnet (mcp only) | The parse service cannot call mcp back over the network they share. Without it, a compromised parser reaches the mail tools and the "holds nothing" claim above is false. Verified by a container on the `parse` network getting 403 on `/up` and on a tool call. |
 | `mem_limit` | Caps blast radius per service (mcp 3g, parse 2g, indexer/embedder 2g, mbsync 512m, cloudflared 256m). A decode bomb or a parser leak kills **one container** — and since the parsers moved, that container is `parse`, which holds nothing — instead of the Docker VM. |
 | `pids_limit` | Bounds task count (512 .NET / 256 cloudflared / 128 mbsync) so a fork bomb can't exhaust the VM's pid space. The cgroup controller counts threads, not just processes. |
 
@@ -558,7 +572,7 @@ These are explicit decisions, not oversights:
 - **No per-tool authorization.** Any caller that clears the Access gate and can invoke `search_emails` can also invoke `view_attachment`. Trivially simple while every tool is read-only and every caller that clears the gate is owner-equivalent — which means the Claude Code service token as well as the owner's OAuth session, so it's a property of the Access policy rather than of the number of humans involved ([above](#up-and-health)). Revisit if a write tool ever lands, or if a caller who *shouldn't* be owner-equivalent is admitted (sending mail is out of scope, but the principle applies if anything in that direction ever gets considered).
 - **Untrusted mail is parsed by one process that holds nothing, and the two tools that drive it on demand are exposed over the tunnel.** PDFtoImage/PDFium (PDF rasterisation) and SkiaSharp (image decode) are native C++ libraries, so a malicious PDF/image is a memory-safety attack surface the managed extractors (`PdfPig` / `OpenXml`) aren't — and those managed parsers have their own unbounded-work failures (phase 0 of the [isolation proposal](proposals/attachment-parser-isolation.md) measured PDFium OOM-killed by a 100 KB PDF and a 958-byte PDF rendering past 180 s, uncancellably). Parsing is triggered in **two** places: `get_attachment_page_image` / `view_attachment` (on demand, via MCP) and the **embedder's OCR pass**, which renders scanned PDFs and images *automatically and unattended* for every such attachment that arrives by mail — plus every message the indexer ingests.
 
-  **In the container, all of it runs in the `parse` service** ([above](#container-hardening)): no volume, no secret, no egress, non-root, a bounded lifetime. The accepted **residual** is precise. Code execution inside `parse` yields the document being parsed and any others in flight, and the ability to return **attacker-chosen output** for those requests — a lying `ParsedMessage` (wrong sender, planted body text, fabricated attachment text), a JPEG the vision model or Claude then sees, a wrong page count — and nothing else. The lying-output channel is real, but it is the channel an attacker already has by writing the email that way: parser output is untrusted content to every tool description and to the indexer's storage. What the split removes is the lie being *written into the archive directly*, and the parser's crash or hang taking the archive-holding process down with it — a wedge that, before, stopped all indexing for anyone who could send mail.
+  **In the container, all of it runs in the `parse` service** ([above](#container-hardening)): no volume, no secret, no egress, non-root, a bounded lifetime. The accepted **residual** is precise. Code execution inside `parse` yields the document being parsed and any others in flight, and the ability to return **attacker-chosen output** for those requests — a lying `ParsedMessage` (wrong sender, planted body text, fabricated attachment text), a JPEG the vision model or Claude then sees, a wrong page count — and nothing else. The lying-output channel is real, but it is the channel an attacker already has by writing the email that way: parser output is untrusted content to every tool description and to the indexer's storage. What the split removes is the lie being *written into the archive directly*, and the parser's crash or hang taking the archive-holding process down with it — a wedge that, before, stopped all indexing for anyone who could send mail. "Nothing else" includes the mail tools: mcp refuses the parse network outright (`Mcp:DeniedNetworks`, [above](#container-hardening)), so the shared network is a one-way road, and the client that sends the parser bytes follows no redirect and buffers no response over `Parser:MaxResponseBytes`, so the parser cannot turn its callers into an exfiltration path or exhaust them either.
 
   `Mcp:DisabledTools` (which drops tools from both tools/list and tools/call at the server) is staged-but-**commented** in compose.yml, so the on-demand pair stays reachable through the tunnel. That's a deliberate call, resting on two things:
 
@@ -580,7 +594,8 @@ These are explicit decisions, not oversights:
   - the root application admits a service token that **isn't** owner-equivalent. Two shapes to watch for: the policy reverting to `Any Access Service Token` (which admits every token in the account, so it widens by *creating a token anywhere*, with no edit to Mailvec's policy and no signal here), or a scoped credential — the monitor's — being re-authorized on the root app instead of its path-scoped one;
   - the tunnel's ingress rules stop 404-ing the unauthenticated surfaces;
   - a mutating tool lands, changing what a parser compromise gets you;
-  - `parse` gains a volume, a secret, a non-internal network, or `Parser__Mode=inprocess` is set on any other container (the image build's strip-and-assert makes the last one a loud failure, not a quiet regression).
+  - `parse` gains a volume, a secret, a non-internal network, or `Parser__Mode=inprocess` is set on any other container (the image build's strip-and-assert makes the last one a loud failure, not a quiet regression);
+  - `Mcp__DeniedNetworks__0` stops matching the `parse` network's subnet — both read `MAILVEC_PARSE_SUBNET`, so changing one in compose without the other, or a second network that mcp and parse share, reopens the return path. A malformed entry is fatal at startup, but a *wrong* subnet is not detectable by the server; the verification is a container on the parse network getting 403.
 
   See [remote-access-cloudflare.md](remote-access-cloudflare.md) and [Future ideas](future-ideas.md).
 - **No rate limiting.** A chatty agent can burn VM CPU on SQLite reads and GPU-VM time on embedding queries. SQLite WAL handles concurrent readers fine and Ollama is the natural bottleneck on the embedding leg, so the worst case is "the homelab slows down briefly." The Access gate bounds who can do this to owner-equivalent callers; Cloudflare's edge absorbs unauthenticated flood traffic before it reaches the tunnel.

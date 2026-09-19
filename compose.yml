@@ -219,6 +219,13 @@ services:
       Mcp__AllowedHosts__0: ${MCP_PUBLIC_HOSTNAME:-}
       Mcp__AllowedHosts__1: mcp
       Mcp__AllowedHosts__2: ${MCP_LAN_HOSTNAME:-}
+      # The parse network's pinned subnet (see `networks:` below). mcp is on it
+      # to call the parse service; this refuses the return direction, so a
+      # compromised parser — the process that eats attacker-chosen bytes —
+      # cannot call the mail tools. Loopback is never denied. Origin
+      # validation (Mcp__Access__* below) is the stronger layer where a tunnel
+      # exists; this holds without one. See docs/security.md.
+      Mcp__DeniedNetworks__0: ${MAILVEC_PARSE_SUBNET:-172.31.255.0/24}
       # Origin validation of the Cloudflare Access assertion — the second layer
       # under the tunnel. Unset (the default) leaves the origin trusting anything
       # that can reach mcp:3333, exactly as this stack has always run, with a
@@ -589,6 +596,14 @@ networks:
   isolated:
     internal: true
   # The parser hop. Internal: the parse service can be reached from the three
-  # callers and can reach nothing else.
+  # callers and can reach nothing else — except that Docker networks are
+  # symmetric, so the parse service could reach mcp:3333 on this network.
+  # The subnet is pinned so mcp can refuse it (Mcp__DeniedNetworks__0 in the
+  # mcp service, same MAILVEC_PARSE_SUBNET); the indexer and embedder listen
+  # on nothing. Change the subnet in .env if it collides with a network the
+  # host already has.
   parse:
     internal: true
+    ipam:
+      config:
+        - subnet: ${MAILVEC_PARSE_SUBNET:-172.31.255.0/24}

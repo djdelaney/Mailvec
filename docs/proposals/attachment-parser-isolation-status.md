@@ -8,21 +8,16 @@ is open.
 
 ## Next stage — what the next agent does
 
-**Before the merge — one review finding is open** (the review and per-finding status:
-[attachment-parser-isolation-review.md](attachment-parser-isolation-review.md); findings 2–6
-are fixed on the branch):
+**The review is closed** — all six findings fixed on the branch (per-finding status:
+[attachment-parser-isolation-review.md](attachment-parser-isolation-review.md)). Finding 1
+(the parser could call mcp back over the shared network) is closed by pinning the `parse`
+subnet and refusing it at the mcp origin (`Mcp:DeniedNetworks`); `Mcp:Access` is the
+documented stronger layer for tunnel deployments, which the homelab is. **Deploy note:** the
+subnet pin makes the first `up -d` recreate the `parse` network — seconds of parse outage the
+callers ride out, and the return-path check to run afterwards is in `docs/deploy-docker.md`
+"The parse service".
 
-- **Review finding 1 — the parser can reach mcp.** mcp joins the `parse` network, binds
-  `0.0.0.0`, allowlists the host name `mcp`, and origin auth is off by default; Docker networks
-  are symmetric, so a compromised parse service can call `search_emails`. Not a regression
-  (pre-split the parsers ran inside mcp) but `docs/security.md`'s residual — "in-flight
-  documents and nothing else" — is wrong as written, because one parse process serves every
-  caller. Decide the fix first: reject connections from the parse subnet at the mcp origin
-  (pin the subnet with compose `ipam`, deny it in a Kestrel connection filter / middleware),
-  or require `Mcp:Access` (built, off by default, needs the Cloudflare config). Then a
-  compose-level negative test (a container on the `parse` network gets no tool call through),
-  and correct the residual in `docs/security.md` either way.
-Then, in order:
+In order:
 
 1. **Open a PR from `parser-isolation-phase0` to `main` and merge it.** Nine commits, all
    reviewed against `dotnet test Mailvec.slnx` and the Docker smoke below. Nothing on the
@@ -167,6 +162,7 @@ docker run -d --name mv-mcp --network mv-smoke -v "$SM/data:/data" -v "$SM/mail:
 | Drop a third `.eml`, `docker start mv-parse` | next scan `seen=3 upserted=2 unchanged=1 softDeleted=0`; `cli status` → `3 total, 0 deleted`; `cli get '<two@smoke>'` shows the attachment `[done]`. |
 | `/health` from inside `mv-mcp` (`docker exec mv-mcp curl -s 127.0.0.1:3333/health`) | `parser: {mode: remote, endpoint: http://parse:3400, reachable: true}`, then `reachable: false` with parse stopped. `status` is `degraded` throughout because there is no Ollama — expected. |
 | `cli doctor` with parse stopped | `⚠ Parser  remote parse service … did not answer /up within 2s — new mail is not being indexed, OCR is paused …` |
+| Return path (2026-09-18, `mailvec:netguard`): mcp on a `--internal --subnet 172.31.255.0/24` network plus a default network, `Mcp__DeniedNetworks__0=172.31.255.0/24`; a container on the parse network curls `http://mcp:3333` with `Host: mcp` | `/up` → **403**, `tools/list` POST → **403**; the same probe from the default network → 503 (served; no Ollama), loopback → 503. Startup log: `Refusing every request from 172.31.255.0/24`. |
 | Churn: parse restarted with `-e Parser__MaxRequestsBeforeExit=1 --restart unless-stopped`, five new `.eml`s | each scan indexes one message, then `scan abandoned after N file(s) (upserted=1 …)`; after five parse restarts `cli status` → `8 total, 0 deleted`. |
 
 **Not covered by the smoke, and why:** the `Crashed` classification and the scanner's

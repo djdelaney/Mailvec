@@ -170,6 +170,39 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     // already loopback (the compose healthcheck and `mailvec doctor`), so
     // the restriction costs nothing — see McpOptions.RestrictHealthToLoopback.
 
+    // ---------- Mcp:DeniedNetworks — the parse network cannot call back ----------
+    //
+    // mcp joins the compose parse network to call the parse service; Docker
+    // networks are symmetric, so the parse service could call mcp:3333 and,
+    // with origin validation off, read the mailbox through the tools. The
+    // subnet is pinned in compose and denied here. See NetworkGuard.
+
+    [Fact]
+    public async Task A_caller_on_a_denied_network_is_refused_before_any_route()
+    {
+        using var factory = new RemoteCallerFactory(remoteIp: "172.31.255.9", deniedNetwork: "172.31.255.0/24");
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Host = "mcp"; // exactly what the parse service would send; allowlisted by HostGuard
+
+        (await client.GetAsync("/up")).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+        (await client.GetAsync("/health")).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+        using var mcp = new StringContent("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", System.Text.Encoding.UTF8, "application/json");
+        (await client.PostAsync("/", mcp)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task A_caller_outside_the_denied_networks_is_served_as_before()
+    {
+        // cloudflared arrives from the default network, one subnet over.
+        using var factory = new RemoteCallerFactory(remoteIp: "172.18.0.7", deniedNetwork: "172.31.255.0/24");
+        using var client = factory.CreateClient();
+
+        var up = await client.GetAsync("/up");
+
+        up.StatusCode.ShouldNotBe(HttpStatusCode.Forbidden);
+        up.StatusCode.ShouldBeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
+    }
+
     [Fact]
     public async Task Health_is_not_served_to_an_off_box_caller()
     {
@@ -489,12 +522,18 @@ public sealed class RemoteCallerFactory : WebApplicationFactory<Program>
 {
     private readonly string _tempDir;
     private readonly bool _restrictHealth;
+    private readonly string _remoteIp;
+    private readonly string? _deniedNetwork;
 
-    public RemoteCallerFactory(bool restrictHealth = true)
+    /// <param name="remoteIp">Where the simulated caller is; a compose-network-looking address by default.</param>
+    /// <param name="deniedNetwork">A CIDR for Mcp:DeniedNetworks, or null for none.</param>
+    public RemoteCallerFactory(bool restrictHealth = true, string remoteIp = "172.18.0.7", string? deniedNetwork = null)
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "mailvec-remote-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
         _restrictHealth = restrictHealth;
+        _remoteIp = remoteIp;
+        _deniedNetwork = deniedNetwork;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -507,12 +546,14 @@ public sealed class RemoteCallerFactory : WebApplicationFactory<Program>
                 ["Ollama:RequestTimeoutSeconds"] = "5",
                 ["Fastmail:AccountId"] = "",
                 ["Mcp:RestrictHealthToLoopback"] = _restrictHealth ? "true" : "false",
+                ["Mcp:DeniedNetworks:0"] = _deniedNetwork,
             }));
 
-        // A compose-network-looking address. The specific value doesn't matter;
-        // "not loopback" does.
+        // A compose-network-looking address by default. The specific value
+        // doesn't matter to most tests; "not loopback" does — except for the
+        // NetworkGuard ones, which choose a side of the denied range.
         builder.ConfigureTestServices(services =>
-            services.AddSingleton<IStartupFilter>(new RemoteIpStartupFilter(IPAddress.Parse("172.18.0.7"))));
+            services.AddSingleton<IStartupFilter>(new RemoteIpStartupFilter(IPAddress.Parse(_remoteIp))));
     }
 
     protected override void Dispose(bool disposing)

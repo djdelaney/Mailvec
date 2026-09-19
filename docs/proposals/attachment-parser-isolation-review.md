@@ -11,9 +11,9 @@ Comparison: `origin/main...HEAD`
 > protocol failure as `Crashed`, the inline-image counters restored — each with tests
 > (`RogueServiceTests`, `ParserRegistrationTests`, `BackfillInlineImagesCommandTests`).
 > Finding **5 is fixed** too (`RetryOnUnavailable`; it was broader than stated — every CLI
-> backfill stopped at the parse host's request budget). Finding **1 is open** and tracked in
-> the [status doc](attachment-parser-isolation-status.md) as pre-merge work: it needs a design
-> decision (reject the parse subnet at the mcp origin, or enforce `Mcp:Access`).
+> backfill stopped at the parse host's request budget), and finding **1 is fixed** by refusing
+> the pinned `parse` subnet at the mcp origin (`Mcp:DeniedNetworks`), with `Mcp:Access`
+> documented as the stronger layer on top. Nothing from this review is open.
 
 ## Assessment
 
@@ -25,7 +25,7 @@ The project split is clean: Core depends on plain parser contracts, parsing libr
 
 ### 1. [P1] The parser can call MCP and read the archive
 
-> **Open.** Valid against the residual `docs/security.md` states; one parse process serves every caller, so a document that arrives via the OCR pass also reaches mcp's tools. Not a regression (pre-split the parsers ran inside mcp), but the acceptance overclaims. Fix at the origin, plus a compose-level negative test.
+> **Fixed.** Valid against the residual `docs/security.md` stated; one parse process serves every caller, so a document that arrives via the OCR pass also reached mcp's tools. Not a regression (pre-split the parsers ran inside mcp), but the acceptance overclaimed. Closed at the origin: the `parse` network's subnet is pinned in compose (`MAILVEC_PARSE_SUBNET`) and mcp refuses it before any route (`Mcp:DeniedNetworks`, `NetworkGuard`; loopback never denied; malformed CIDR fatal). `Mcp:Access` is documented as the stronger layer on top for tunnel deployments. Tests: `NetworkGuardTests`, `ProgramHttpTests.A_caller_on_a_denied_network_is_refused_before_any_route` (with `Host: mcp`, on `/up`, `/health` and a `tools/list` POST) / `A_caller_outside_the_denied_networks_is_served_as_before`; plus the Docker negative test recorded in the status doc.
 
 **Location:** [compose.yml](compose.yml), line 209; related configuration at lines 220, 234 and 435.
 

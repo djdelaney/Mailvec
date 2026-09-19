@@ -122,6 +122,27 @@ static async Task RunHttp(string[] args)
     if (resolvedMcpOpts.Access.Validate() is { } accessConfigError)
         throw new InvalidOperationException(accessConfigError);
 
+    // Network deny-list — the compose parse network in the container. Runs
+    // FIRST, before HostGuard, because it is the cheapest check and the one
+    // the caller cannot influence: HostGuard reads a header the parse service
+    // would set to `mcp` (allowlisted), and Access validation is off by
+    // default. Loopback is never denied. See NetworkGuard.
+    var deniedNetworks = NetworkGuard.Parse(mcpOpts.DeniedNetworks);
+    if (deniedNetworks.Count > 0)
+    {
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Mcp.Startup").LogInformation(
+            "Refusing every request from {Networks} (Mcp:DeniedNetworks).", string.Join(", ", deniedNetworks));
+        app.Use(async (context, next) =>
+        {
+            if (NetworkGuard.IsDenied(context.Connection.RemoteIpAddress, deniedNetworks))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+            await next().ConfigureAwait(false);
+        });
+    }
+
     // DNS-rebinding / same-origin guard. Runs before every route (MCP, /health,
     // /up) so a browser rebound to 127.0.0.1 can't reach the MCP endpoint and
     // read mail out of a tools/call response. Loopback Host names are always

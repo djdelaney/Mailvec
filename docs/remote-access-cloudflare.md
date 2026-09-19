@@ -288,6 +288,14 @@ that not being true.
 
 ## Origin validation of the Access assertion (`Mcp:Access`)
 
+> Since 2026-09-18 this is the *second* origin-side control, not the only one:
+> mcp also refuses the compose `parse` network outright (`Mcp:DeniedNetworks`,
+> see `docs/security.md` "Container hardening"), so the parse service cannot
+> call the mail tools even with origin validation off. That deny-list holds in
+> a stack with no tunnel at all; enabling `Mcp:Access` on top is what turns
+> "one known network is refused" into "every caller proves who it is", and is
+> the recommended posture wherever Cloudflare fronts the origin.
+
 Optional second layer, **off by default**. With it configured, the MCP server
 validates the `Cf-Access-Jwt-Assertion` header itself instead of trusting
 anything that can reach `mcp:3333`. Rationale and threat model:
