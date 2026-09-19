@@ -431,11 +431,32 @@ What to know operationally:
   service no longer restarted once a minute by it. `mailvec extract-attachments
   --reextract-*` revisits those once the parser is fixed. The counters are in
   memory, so a container restart grants another round.
+- **The network it shares with mcp is one-way.** mcp joins the `parse`
+  network to call the service; Docker networks are symmetric, so the service
+  could call `mcp:3333` back. The network's subnet is pinned
+  (`MAILVEC_PARSE_SUBNET`, default `172.31.255.0/24`) and mcp refuses every
+  request from it (`Mcp__DeniedNetworks__0`, same variable) before any route,
+  loopback excepted. Change the subnet in `.env` only if it collides with a
+  network the host already has — and note the first `up -d` after this change
+  recreates the `parse` network, which is a few seconds of parse outage the
+  callers ride out. Verify from inside the stack:
+  `docker compose exec parse curl -s -o /dev/null -w '%{http_code}' http://mcp:3333/up`
+  must print `403`, while the same probe from `mcp` itself (loopback) prints
+  `200` or `503`. If `parse` has no `curl` in your image, any container you
+  attach with `--network <project>_parse` will do.
 - **It never flips `/health` red.** `/health` carries a `parser` section
   (`mode`, `endpoint`, `reachable`) and `mailvec doctor` has a `Parser` check,
   both informational: a parse service outage is *its* outage, and restarting
   the mcp container for it would be wrong. Monitor `parse` with its own
   compose healthcheck (`/up`) if you want paging.
+- **What its callers will accept from it is bounded too.** The client the
+  indexer, embedder and mcp use never follows a redirect (a 3xx is a
+  `Crashed` strike), uses no proxy, and refuses any response over
+  `Parser:MaxResponseBytes` (64 MB, sized for a decoded 25 MB attachment in
+  base64) while reading it — so a compromised service can neither turn its
+  callers into an exfiltration path nor exhaust the process holding the
+  archive. Nothing to configure; `Parser__MaxResponseBytes` exists per service
+  if a larger honest answer ever appears.
 - **The size gate travels with it.** `MAILVEC_ATTACHMENT_MAX_BYTES` (25 MB) is
   mirrored into the parse service so it agrees with the indexer about what
   "oversize" means.
@@ -543,6 +564,25 @@ ALL`) — scans, WAL writes, log files, `/health`, the mbsync loop and the CLI.
 Not validated here: the host-side chown on the VM itself, which is the one
 line above.
 
+## Origin-side security posture — the knobs, and which are on by default
+
+Everything below is enforced by the mcp container itself, so it holds
+regardless of what the tunnel's ingress rules say. The full threat model is
+[security.md](security.md); this table is the deployment view — what ships on,
+what is recommended on, and where each is set.
+
+| Control | Default | Set where | What it does / when to change |
+| --- | --- | --- | --- |
+| Non-root services (`MAILVEC_UID`, `MAILVEC_GID`) | **on** (10001) | `.env` | mcp, indexer, embedder, mbsync run unprivileged; `parse` as `nobody`. Every mount must be owned by the uid — see [Moving to non-root](#moving-to-non-root). Change only if 10001 is taken on the host. |
+| Parse-network deny-list (`MAILVEC_PARSE_SUBNET` → `Mcp__DeniedNetworks__0`) | **on** (172.31.255.0/24) | `.env` (one value feeds both the network and mcp) | mcp refuses every request from the `parse` network, so the parse service — the process that eats attacker-chosen bytes — cannot call the mail tools back. Loopback never denied. Change only on a subnet collision, and never one of the two values without the other. Verify: the `curl` in [The parse service](#the-parse-service) prints 403. |
+| `/health` loopback-only (`MCP_RESTRICT_HEALTH_TO_LOOPBACK`) | **on** | `.env` | The detailed body (archive path, counts, Ollama address) is served to loopback only; monitors use `/up`. Migrate monitors before relying on it. |
+| Parser client limits (`Parser:MaxResponseBytes`, redirects off) | **on** (64 MB) | baked in; the byte ceiling is overridable per service via `Parser__MaxResponseBytes` | The parse service cannot redirect its callers into forwarding mail, nor exhaust them with an oversized response. No reason to change. |
+| Origin validation of the Access assertion (`MCP_ACCESS_ENABLED` + team domain + audiences) | **off** | `.env` | Every caller must present a valid Cloudflare Access assertion; the origin no longer trusts anything that can reach `mcp:3333`. **Recommended on for every tunnel deployment** — it turns "one known network is refused" into "every caller proves who it is". Needs the three dashboard values; the container refuses to boot if the signing keys cannot be fetched. Setup: [remote-access-cloudflare.md → Origin validation](remote-access-cloudflare.md#origin-validation-of-the-access-assertion-mcpaccess). Not available without a tunnel. |
+| Tool-surface trim (`Mcp__DisabledTools__*`) | **off** (staged, commented) | `compose.yml` | Drops the two on-demand native-parser tools. A documented accepted risk with invalidating conditions — read [security.md → What's accepted](security.md#whats-accepted) before deciding. |
+
+The first four are what a stack with no tunnel gets. A tunnel deployment should
+add the fifth; the sixth is a judgement call the security doc lays out.
+
 ## Rollout checklist
 
 Each of these was a distinct risk when this stack was first stood up, and each
@@ -584,7 +624,25 @@ someone has ticked off is a claim about one machine.
     `mailvec doctor` shows `Parser … answers /up`; and a real message indexed
     after bring-up (`mailvec status`) proves the round trip. See
     [The parse service](#the-parse-service).
-11. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
+11. **The parse network is one-way.** From a container on the `parse` network,
+    `curl -s -o /dev/null -w '%{http_code}' -H 'Host: mcp' http://mcp:3333/up`
+    prints **403**; from `mcp` itself (loopback) it prints 200 or 503. If it does
+    not, `MAILVEC_PARSE_SUBNET` and the network's actual subnet have diverged —
+    the server cannot detect that, only this probe can. See the posture table
+    above.
+12. **Every service is non-root.** `docker compose exec mcp id -u` prints 10001
+    (or your `MAILVEC_UID`), `docker compose exec parse id -u` prints 65534, and
+    `sudo ls -ln data/ logs/ mail/` shows the uid throughout. A refusal at
+    startup naming a chown means a mount was missed — see
+    [Moving to non-root](#moving-to-non-root).
+13. **Origin validation, if you run a tunnel.** `MCP_ACCESS_ENABLED=true` with
+    the team domain and both audiences set; `docker compose logs mcp` shows
+    `Cloudflare Access assertion validation ENABLED` and the signing keys
+    loaded; a request without an assertion from the default network gets 401
+    while the loopback healthcheck stays green. Off means the origin trusts
+    anything that reaches it, which the security doc accepts only while the
+    tunnel is the sole ingress.
+14. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
     see the backup bullet above for what that does and doesn't guarantee, and
     the one storage-layout invariant it rests on.
 
