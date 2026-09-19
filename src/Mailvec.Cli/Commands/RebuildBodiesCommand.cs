@@ -1,6 +1,8 @@
 using System.CommandLine;
 using Mailvec.Core.Data;
+using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
+using Microsoft.Extensions.Options;
 using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -40,7 +42,10 @@ internal static class RebuildBodiesCommand
     internal static int Execute(IServiceProvider sp, bool reembed, TextWriter @out, TextWriter err)
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
-        var parser = sp.GetRequiredService<IMailParser>();
+        // This command re-selects every row each run, so a stop on the parse
+        // host's routine recycle meant a large archive could never finish.
+        var parser = RetryOnUnavailable.Wrap(
+            sp.GetRequiredService<IMailParser>(), sp.GetRequiredService<IOptions<ParserOptions>>().Value, err);
         using var conn = sp.GetRequiredService<ConnectionFactory>().Open();
 
         long total = 0;

@@ -969,12 +969,15 @@ public class ExtractAttachmentsCommandTests : IDisposable
         return ms.ToArray();
     }
 
-    private ServiceProvider BuildProvider(string maildirRoot, bool probeWriterLock = false, FaultingParser? parser = null)
+    private ServiceProvider BuildProvider(string maildirRoot, bool probeWriterLock = false, FaultingParser? parser = null, int unavailableWaitSeconds = 0)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.Configure<ArchiveOptions>(o => o.DatabasePath = _dbPath);
         services.Configure<IngestOptions>(o => o.MaildirRoot = maildirRoot);
+        // 0 = stop on the first Unavailable (the outage tests); the recycle
+        // test opts into the wait.
+        services.Configure<Mailvec.Core.Options.ParserOptions>(o => o.UnavailableWaitSeconds = unavailableWaitSeconds);
         services.Configure<McpOptions>(_ => { });
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
@@ -1062,6 +1065,37 @@ public class ExtractAttachmentsCommandTests : IDisposable
         StatusOf(sp, "b@x").ShouldBeNull();
         err.ToString().ShouldContain("unavailable");
         err.ToString().Split("unavailable").Length.ShouldBe(2, "reported once, not once per remaining candidate");
+    }
+
+    [Fact]
+    public void A_routine_parse_host_recycle_is_ridden_out_and_the_run_completes()
+    {
+        // Review finding 5. The parse host exits on purpose every
+        // MaxRequestsBeforeExit requests; stopping on that Unavailable turned
+        // an 82k-message backfill into ~160 reruns. The recycle here: the
+        // second extraction fails Unavailable once, the probe passes, the
+        // retry succeeds — and the run reports everything done, no STOPPED.
+        var calls = 0;
+        var parser = new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.ExtractAttachmentText) && ++calls == 2 ? FaultingParser.Unavailable() : null,
+        };
+        using var sp = BuildProvider(maildirRoot: _maildirRoot, parser: parser, unavailableWaitSeconds: 30);
+        StagePendingTextAttachment(sp, "a@x", "1.eml");
+        StagePendingTextAttachment(sp, "b@x", "2.eml");
+        StagePendingTextAttachment(sp, "c@x", "3.eml");
+
+        var writer = new StringWriter();
+        var err = new StringWriter();
+        var exit = ExtractAttachmentsCommand.Execute(sp, limit: null, batch: 100, noReembed: false, reextractKind: null, writer, err);
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldNotContain("STOPPED");
+        writer.ToString().ShouldContain("Processed 3 message");
+        err.ToString().ShouldContain("parse service is back");
+        StatusOf(sp, "a@x").ShouldBe("done");
+        StatusOf(sp, "b@x").ShouldBe("done");
+        StatusOf(sp, "c@x").ShouldBe("done");
     }
 
     [Fact]

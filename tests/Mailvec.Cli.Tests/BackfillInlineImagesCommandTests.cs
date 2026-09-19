@@ -36,11 +36,12 @@ public class BackfillInlineImagesCommandTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private ServiceProvider BuildProvider(FaultingParser? parser = null)
+    private ServiceProvider BuildProvider(FaultingParser? parser = null, int unavailableWaitSeconds = 0)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.Configure<ArchiveOptions>(o => o.DatabasePath = _dbPath);
+        services.Configure<ParserOptions>(o => o.UnavailableWaitSeconds = unavailableWaitSeconds);
         services.Configure<IngestOptions>(o => o.MaildirRoot = _maildirRoot);
         services.AddSingleton<ConnectionFactory>();
         services.AddSingleton<SchemaMigrator>();
@@ -55,6 +56,27 @@ public class BackfillInlineImagesCommandTests : IDisposable
         var sp = services.BuildServiceProvider();
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         return sp;
+    }
+
+    [Fact]
+    public void A_routine_parse_host_recycle_is_ridden_out()
+    {
+        // Review finding 5: the first ParseMessage hits the host's exit,
+        // the probe passes, the retry lands the row. No STOPPED, exit 0.
+        var calls = 0;
+        var parser = new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.ParseMessage) && ++calls == 1 ? FaultingParser.Unavailable() : null,
+        };
+        using var sp = BuildProvider(parser, unavailableWaitSeconds: 30);
+        long id = StageInlineOnlyMessage(sp, "inline@x");
+        var writer = new StringWriter();
+
+        var exit = BackfillInlineImagesCommand.Execute(sp, limit: null, batch: 100, dryRun: false, messageId: null, writer, new StringWriter());
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldNotContain("STOPPED");
+        sp.GetRequiredService<MessageRepository>().GetById(id)!.Attachments.ShouldHaveSingleItem();
     }
 
     [Fact]
@@ -165,6 +187,35 @@ public class BackfillInlineImagesCommandTests : IDisposable
         err.ToString().ShouldContain("refusing to read");
         writer.ToString().ShouldContain("REFUSED 1");
         repo.GetById(id)!.Attachments.ShouldBeEmpty(); // nothing was read, so nothing was added
+    }
+
+    [Fact]
+    public void The_summary_counts_the_rows_it_added()
+    {
+        // The counters were dropped in a refactor and every run reported
+        // "added 0 inline-image row(s)" while adding rows; nothing asserted
+        // the summary, so it stayed that way for two phases.
+        using var sp = BuildProvider();
+        StageInlineOnlyMessage(sp, "inline@x");
+        var writer = new StringWriter();
+
+        BackfillInlineImagesCommand.Execute(sp, limit: null, batch: 100, dryRun: false, messageId: null, writer, new StringWriter());
+
+        writer.ToString().ShouldContain("added 1 inline-image row(s) across 1 message(s)");
+        writer.ToString().ShouldContain("image-OCR pass will process them");
+    }
+
+    [Fact]
+    public void A_dry_run_reports_what_it_would_add()
+    {
+        using var sp = BuildProvider();
+        StageInlineOnlyMessage(sp, "inline@x");
+        var writer = new StringWriter();
+
+        BackfillInlineImagesCommand.Execute(sp, limit: null, batch: 100, dryRun: true, messageId: null, writer, new StringWriter());
+
+        writer.ToString().ShouldContain("would add 1 inline-image row(s) across 1 message(s)");
+        writer.ToString().ShouldNotContain("image-OCR pass will process them");
     }
 
     [Fact]

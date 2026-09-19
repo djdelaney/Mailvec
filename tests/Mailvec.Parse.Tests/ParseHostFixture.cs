@@ -34,9 +34,18 @@ public sealed class ParseHostFixture : IAsyncDisposable
         return fixture;
     }
 
-    /// <summary>A client for any base address — the unreachable-service test points one at a closed port.</summary>
-    public RemoteParser RemoteFor(string baseAddress, int timeoutSeconds = 30) =>
-        new(() => new HttpClient { BaseAddress = new Uri(baseAddress), Timeout = TimeSpan.FromSeconds(timeoutSeconds) });
+    /// <summary>
+    /// A client for any base address — the unreachable-service test points one
+    /// at a closed port, the rogue-service tests at a server they control.
+    /// Built through <see cref="ParserHttp"/>, the same way the DI registration
+    /// builds the real one, so those tests exercise the shipped handler.
+    /// </summary>
+    public RemoteParser RemoteFor(string baseAddress, int timeoutSeconds = 30, long? maxResponseBytes = null)
+    {
+        var options = new Mailvec.Core.Options.ParserOptions { Endpoint = baseAddress, RequestTimeoutSeconds = timeoutSeconds };
+        if (maxResponseBytes is { } max) options.MaxResponseBytes = max;
+        return new RemoteParser(() => ParserHttp.CreateClient(options));
+    }
 
     public async Task<bool> WaitForStopAsync(TimeSpan timeout)
     {

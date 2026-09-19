@@ -76,7 +76,8 @@ internal static class BackfillInlineImagesCommand
             return 2;
         }
 
-        var parser = sp.GetRequiredService<IMailParser>();
+        var parser = RetryOnUnavailable.Wrap(
+            sp.GetRequiredService<IMailParser>(), sp.GetRequiredService<IOptions<ParserOptions>>().Value, err);
         var messages = sp.GetRequiredService<MessageRepository>();
         var connections = sp.GetRequiredService<ConnectionFactory>();
 
@@ -204,7 +205,13 @@ internal static class BackfillInlineImagesCommand
                 }
                 if (parserUnavailable) { processed--; break; }
                 if (crashed) { parserCrashes++; continue; }
+                if (toAdd.Count == 0) continue;
 
+                // Counted here, after every part extracted and before the
+                // write, so a message abandoned above (outage, crash) counts
+                // nothing and a dry run counts what it would have added.
+                messagesWithNewRows++;
+                rowsAdded += toAdd.Count;
                 if (!dryRun) messages.AddInlineAttachments(msg.Id, toAdd);
 
                 if (processed % 100 == 0)

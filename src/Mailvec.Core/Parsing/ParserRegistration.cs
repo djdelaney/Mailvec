@@ -35,16 +35,11 @@ public static class ParserRegistration
         // The remote client's HttpClient. Registered unconditionally (cheap,
         // and the factory is what makes DNS re-resolution on a recreated
         // `parse` container work); only used in remote mode.
+        // Handler and client properties come from ParserHttp — the redirect,
+        // proxy and response-size rules live there, not here.
         services.AddHttpClient(RemoteParser.HttpClientName, (sp, client) =>
-        {
-            var options = sp.GetRequiredService<IOptions<ParserOptions>>().Value;
-            if (!string.IsNullOrWhiteSpace(options.Endpoint))
-            {
-                var endpoint = options.Endpoint.Trim();
-                client.BaseAddress = new Uri(endpoint.EndsWith('/') ? endpoint : endpoint + "/");
-            }
-            client.Timeout = TimeSpan.FromSeconds(Math.Max(1, options.RequestTimeoutSeconds));
-        });
+                ParserHttp.Configure(client, sp.GetRequiredService<IOptions<ParserOptions>>().Value))
+            .ConfigurePrimaryHttpMessageHandler(ParserHttp.CreateHandler);
 
         services.AddSingleton<IMailParser>(sp =>
         {

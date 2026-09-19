@@ -8,7 +8,21 @@ is open.
 
 ## Next stage — what the next agent does
 
-The code is done; what remains is getting it to the homelab. In order:
+**Before the merge — one review finding is open** (the review and per-finding status:
+[attachment-parser-isolation-review.md](attachment-parser-isolation-review.md); findings 2–6
+are fixed on the branch):
+
+- **Review finding 1 — the parser can reach mcp.** mcp joins the `parse` network, binds
+  `0.0.0.0`, allowlists the host name `mcp`, and origin auth is off by default; Docker networks
+  are symmetric, so a compromised parse service can call `search_emails`. Not a regression
+  (pre-split the parsers ran inside mcp) but `docs/security.md`'s residual — "in-flight
+  documents and nothing else" — is wrong as written, because one parse process serves every
+  caller. Decide the fix first: reject connections from the parse subnet at the mcp origin
+  (pin the subnet with compose `ipam`, deny it in a Kestrel connection filter / middleware),
+  or require `Mcp:Access` (built, off by default, needs the Cloudflare config). Then a
+  compose-level negative test (a container on the `parse` network gets no tool call through),
+  and correct the residual in `docs/security.md` either way.
+Then, in order:
 
 1. **Open a PR from `parser-isolation-phase0` to `main` and merge it.** Nine commits, all
    reviewed against `dotnet test Mailvec.slnx` and the Docker smoke below. Nothing on the
