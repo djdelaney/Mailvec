@@ -105,7 +105,23 @@ internal static class ParseEndpoints
         // slot released when it does, and only a genuine overrun exits the
         // host. Tying the two together made every client disconnect a host
         // restart for every other caller.
-        var task = Task.Run(() => { try { return work(); } finally { gate.Exit(); } });
+        Task<T> task;
+        try
+        {
+            task = Task.Run(() => { try { return work(); } finally { gate.Exit(); } });
+        }
+        catch (Exception ex)
+        {
+            // The task never started (thread injection refused under
+            // pids_limit, say), so its finally never runs: give the slot back
+            // here or four such failures leave the host answering 503 to
+            // everything forever — with /up green, since 503s don't count
+            // toward the exit budget.
+            gate.Exit();
+            logger.LogError(ex, "parse: {Path} could not start a parse thread.", ctx.Request.Path);
+            return Error(StatusCodes.Status503ServiceUnavailable, ParseErrorTypes.Busy,
+                "The parse service could not start a parse thread; retry shortly.");
+        }
         var completed = await Task.WhenAny(task, Task.Delay(options.RequestTimeout));
         if (completed != task)
         {
@@ -122,9 +138,19 @@ internal static class ParseEndpoints
             // Finished within the timeout after the caller left: nothing to
             // answer, nothing wrong with the host, the slot is already free.
             // Counts toward the budget like any other completed parse.
-            logger.LogInformation("parse: {Path} completed after its caller disconnected; result discarded.", ctx.Request.Path);
             budget.RequestCompleted(ctx);
-            try { await task; } catch (Exception) { /* the caller is gone; the outcome is nobody's */ }
+            try
+            {
+                await task;
+                logger.LogInformation("parse: {Path} completed after its caller disconnected; result discarded.", ctx.Request.Path);
+            }
+            catch (Exception ex)
+            {
+                // Nobody is waiting for the verdict, but the operator still
+                // gets the log line every other failure path writes.
+                logger.LogWarning("parse: {Path} failed after its caller disconnected: {Type}: {Message}",
+                    ctx.Request.Path, ex.GetType().Name, ex.Message);
+            }
             return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
         }
 

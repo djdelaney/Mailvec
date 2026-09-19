@@ -25,13 +25,17 @@ public sealed class ParserOptions
 
     /// <summary>
     /// Client-side ceiling on one parse call. Deliberately LONGER than the
-    /// host's own <c>RequestTimeoutSeconds</c> (60 s): the host answers 504 and
-    /// exits when a document overruns, which the client classifies as a strike
-    /// against that document; reaching this timeout instead means the host
+    /// host's own budget for one request, which is its gate wait plus its
+    /// parse timeout — up to 2 × <c>Parser:RequestTimeoutSeconds</c> on the
+    /// host (60 s each by default, so 120 s): a request may queue for a slot
+    /// for the full timeout and then parse for the full timeout, and both are
+    /// answered (503 busy, or 504 with the host exiting), which the client
+    /// classifies precisely. Reaching THIS timeout instead means the host
     /// never answered at all, which is classified as "unavailable" and counts
-    /// against nothing.
+    /// against nothing. Keep it above the host's sum, or a legitimately
+    /// queued parse reads as an outage.
     /// </summary>
-    public int RequestTimeoutSeconds { get; set; } = 90;
+    public int RequestTimeoutSeconds { get; set; } = 150;
 
     /// <summary>
     /// Ceiling on one parse response, enforced by the client while it reads

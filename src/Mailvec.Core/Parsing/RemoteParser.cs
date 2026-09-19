@@ -95,10 +95,18 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory, long? maxReques
 
     public string? BodyTextFromHtml(string html, string? subject)
     {
+        ArgumentNullException.ThrowIfNull(html);
+        // Same two guards as PostEml. A stored body_html over the cap is only
+        // possible in a macOS-seeded archive, but the mid-upload race would
+        // classify it Crashed all the same.
+        if (System.Text.Encoding.UTF8.GetByteCount(html) > _maxRequestBodyBytes)
+            throw new ParseException(ParseFailureKind.DocumentRejected,
+                $"The HTML body is larger than the parse service accepts ({_maxRequestBodyBytes / (1024 * 1024)} MB).");
         using var request = new HttpRequestMessage(HttpMethod.Post, ParserWire.Html)
         {
             Content = JsonContent.Create(new HtmlRequest(html, subject), options: ParserWire.Json),
         };
+        request.Headers.ExpectContinue = true;
         return Send<HtmlResponse>(request)!.Text;
     }
 

@@ -4,7 +4,7 @@
 0–4 are complete and smoke-tested in Docker** (results below, dated); the branch also carries the
 **non-root containers** change (`210097b`) and four rounds of independent review fixes
 ([review 1–3](attachment-parser-isolation-review.md), [review 4](attachment-parser-isolation-review-2026-09-19.md)).
-Test state: **1,404 passing, 0 failing** across six projects. **PR #35 is open against `main`;
+Test state: **1,402 passing, 0 failing** across six projects. **PR #35 is open against `main`;
 not merged, not released.**
 
 ## Next stage — what the next agent does
