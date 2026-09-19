@@ -38,8 +38,14 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
 
     public string Mode => ParserRegistration.RemoteMode;
 
-    public ParsedMessage ParseMessage(byte[] eml, bool extractAttachmentText) =>
-        PostEml<ParsedMessage>(Query(ParserWire.Message, ("extractText", extractAttachmentText ? "true" : "false")), eml)!;
+    public ParsedMessage ParseMessage(byte[] eml, bool extractAttachmentText)
+    {
+        var parsed = PostEml<ParsedMessage>(Query(ParserWire.Message, ("extractText", extractAttachmentText ? "true" : "false")), eml)!;
+        NoNullElements(parsed.ToAddresses, "toAddresses");
+        NoNullElements(parsed.CcAddresses, "ccAddresses");
+        NoNullElements(parsed.Attachments, "attachments");
+        return parsed;
+    }
 
     public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex) =>
         PostEml<ExtractionResult>(ParserWire.PartText(partIndex), eml)!;
@@ -60,7 +66,26 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory) : IMailParser
         if (render.Pages.Count > Math.Max(0, maxPages) || render.PageCount < 0)
             throw new ParseException(ParseFailureKind.Crashed,
                 $"The parse service returned {render.Pages.Count} page(s) where at most {maxPages} were requested.");
+        NoNullElements(render.Pages, "pages");
         return render;
+    }
+
+    /// <summary>
+    /// <c>RespectNullableAnnotations</c> enforces members, not collection
+    /// elements: <c>{"pages":[null]}</c> deserializes to a non-null list with
+    /// a null in it, which the page-image tool then base64-encodes outside
+    /// its parser-error handling and the OCR pass hands to the vision client
+    /// — either way an exception that is not classified as the parser's.
+    /// Bounded by the shape scan (no list here is longer than 10,000).
+    /// </summary>
+    private static void NoNullElements<T>(IReadOnlyList<T> items, string member) where T : class
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i] is null)
+                throw new ParseException(ParseFailureKind.Crashed,
+                    $"The parse service returned a null element in '{member}' (index {i}).");
+        }
     }
 
     public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes) =>

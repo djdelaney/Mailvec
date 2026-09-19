@@ -2,18 +2,16 @@
 
 - Initial review: 2026-09-18 (`fa2ac36`, `origin/main...HEAD`)
 - Follow-up review: 2026-09-19 (`823078c`, `fa2ac36..823078c`)
+- Second follow-up: 2026-09-19 (`d9aa956`, `823078c..d9aa956`)
 - Branch: `parser-isolation-phase0`
-- Latest reviewed commit: `823078c`
+- Latest reviewed commit: `d9aa956`
 
-> **Status (2026-09-19, follow-up review). Three findings remain open: F1–F3 below.**
-> Redirect protection and inline-image counters are fixed, and routine-recycle retries are
-> implemented. The response byte cap addresses buffering but does not sufficiently bound
-> deserialization allocations. Malformed JSON is classified, but missing response fields
-> are still accepted. The network guard covers compose's direct environment configuration
-> but ignores overrides applied through the options pipeline. **1,377 tests pass**; the
-> additional synthetic fixtures below reproduce gaps not covered by that suite.
+> **Current reviewer status (2026-09-19, `d9aa956`). The F1–F3 reproductions are fixed.**
+> The allocation pre-scan, required response fields, and resolved network-deny options now
+> behave as intended. **One narrower P2 validation gap remains: F4, null collection elements.**
+> All **1,391 tests pass**; the additional fixture below reproduces the remaining gap.
 
-> **Disposition (2026-09-19, after the follow-up). All three fixed on the branch**, each
+> **Implementation response (2026-09-19, before the second follow-up). All three reported fixed on the branch**, each
 > verified against the reviewer's own reproduction: F1 by a zero-allocation shape pre-scan
 > over the buffered bytes before deserialization (`ResponseShape`; the 100,000-object fixture
 > is refused with under 64 KB allocated, versus ~15 MB deserialized); F2 by enforcing
@@ -27,9 +25,52 @@
 
 The project split is clean: Core depends on plain parser contracts, parsing libraries live in a separate project, and callers select the implementation through one registration path. Keeping Maildir path resolution and containment checks in the caller is the right separation of responsibilities. The scanner's refusal to reconcile deletions after an interrupted walk also preserves an important correctness invariant.
 
-**Fix F1–F3 before merging.** The follow-up reviewed commits `59065b3` and `823078c`. The fixes improve the boundary, but callers can still allocate excessive memory from a response below the byte cap, accept incomplete responses as successful parses, and omit the network guard despite a resolved deny configuration. The initial findings are retained below as dated history, with their current disposition noted.
+**Address F4 before closing the review.** The second follow-up reviewed `d9aa956` and independently reran the previous reproductions. F1's oversized collection is refused before deserialization, F2's missing fields and null collection properties produce classified failures, and F3's resolved deny-list returns HTTP 403. The remaining gap is that nullable-annotation enforcement does not reject null elements inside collections. Earlier findings are retained below as dated history.
 
-## Open follow-up findings — 2026-09-19
+## Reviewer response to `d9aa956` — 2026-09-19
+
+The fixes resolve the previous concrete reproductions:
+
+| Finding | Recheck result |
+| --- | --- |
+| F1 — deserialization amplification | The 100,000-object fixture is rejected by `ResponseShape.Check` as `ParseException(Crashed)`. The small reproduction measured 1,784 bytes allocated during the refusal, rather than materializing the collection. |
+| F2 — incomplete response objects | `{}` for HTML conversion or attachment decoding, and `{"pageCount":1,"pages":null}`, now produce `ParseException(Crashed)`. The existing regression tests also preserve an explicitly valid `text: null`. |
+| F3 — resolved deny configuration | A `PostConfigure<McpOptions>` deny-list covering the simulated caller now produces HTTP 403 for `tools/list`. |
+
+### F4. [P2] Reject null elements inside response collections
+
+> **Fixed (2026-09-19, after the second follow-up).** `RemoteParser` checks the four collections whose element types are non-nullable after deserialization — `pages`, `attachments`, `toAddresses`, `ccAddresses` — and a null element is `ParseException(Crashed)` naming the member and index; bounded by the shape scan, so the walk is at most 10,000 elements. `DecodedPart.Bytes` and `NormalizedImage.Jpeg` are members, already covered. Tests: `RogueServiceTests.A_null_page_is_Crashed`, `A_null_element_in_a_parsed_message_collection_is_Crashed` (all three collections), `Empty_collections_are_still_a_valid_message`.
+
+**Status at the second follow-up:** Open. This is a narrower remaining response-validation gap following F2; the original missing-property reproductions are fixed.
+
+**Location:** [RemoteParser.cs](../../src/Mailvec.Core/Parsing/RemoteParser.cs), lines 60–63; related configuration in [ParserWire.cs](../../src/Mailvec.Parsing.Contracts/ParserWire.cs), lines 57–58.
+
+`RespectNullableAnnotations` enforces supported member annotations but does not enforce collection-element nullability. The `Pages` property can therefore be non-null while containing a null element, and the new count check accepts it.
+
+**Reproduction:** A synthetic HTTP 200 response with the following body was accepted by `RemoteParser.RenderPdfPages` when one page was requested:
+
+```json
+{"pageCount":1,"pages":[null]}
+```
+
+The returned list contained one null entry. This passes both the response shape scan and the per-operation page-count check.
+
+**Consequence:** [GetAttachmentPageImageTool.cs](../../src/Mailvec.Mcp/Tools/GetAttachmentPageImageTool.cs), line 161, base64-encodes that entry outside its parser-error handling and throws instead of returning the classified parser failure. The OCR pass similarly sends the null entry to vision processing, where the resulting exception is treated as a vision failure rather than a malformed parser response. Non-null collection properties alone do not make the returned result valid.
+
+**Suggested fix:** Validate non-null collection elements before returning results from the remote parser, including page images and parsed-message collections whose element types are non-nullable. Reject violations with `ParseException(Crashed)` so callers retain their established parser-failure handling.
+
+**Regression coverage:** Add a rogue-service test for `pages: [null]` and equivalent tests for non-nullable parsed-message collection elements. Valid empty collections and explicitly nullable properties should continue to work.
+
+## Second follow-up validation and scope
+
+- `dotnet test Mailvec.slnx --no-restore --verbosity quiet`: **1,391 passed, 0 failed**, across six projects at `d9aa956`.
+- Synthetic fixtures independently confirmed the F1–F3 fixes and reproduced F4.
+- No large-memory exhaustion test, Docker rebuild, or homelab deployment was performed in this follow-up.
+- Validation used temporary data and an in-memory MCP test host. The review did not change tracked files or the frozen corpus; this subsequent edit updates the review note only.
+
+## Earlier follow-up findings — 2026-09-19 at `823078c`
+
+The descriptions below record the earlier failures. Their original reproductions are now fixed at `d9aa956`; F4 above records the remaining collection-element gap.
 
 ### F1. [P1] The byte cap does not bound deserialized memory
 
@@ -47,7 +88,7 @@ The project split is clean: Core depends on plain parser contracts, parsing libr
 
 ### F2. [P1] Missing response fields are accepted as successful parsing
 
-> **Fixed.** `ParserWire.Json` sets `RespectRequiredConstructorParameters` and `RespectNullableAnnotations`, so a missing member or a null in a non-nullable member is a `JsonException` → `Crashed`; an explicit null on a nullable member (`HtmlResponse.Text`) is still the valid answer it always was. Both ends compile against the same options, and the contract tests compare every fixture across the wire, so a host that ever produced such a null would fail there first. Tests: `RogueServiceTests.An_empty_object_is_not_a_body_text_result` / `An_explicit_null_on_a_nullable_member_is_still_a_valid_answer` / `A_decoded_part_without_its_bytes_is_Crashed` (missing and null) / `More_pages_than_were_requested_is_Crashed`; caller level, `RebuildBodiesCommandTests.A_row_the_parser_fails_on_keeps_its_body_text`.
+> **Original reproductions fixed; collection elements remain open as F4.** `ParserWire.Json` sets `RespectRequiredConstructorParameters` and `RespectNullableAnnotations`, so missing required constructor parameters and null non-nullable properties produce `JsonException` → `Crashed`. An explicit null on a nullable member (`HtmlResponse.Text`) remains valid. This does not enforce collection-element nullability. Tests: `RogueServiceTests.An_empty_object_is_not_a_body_text_result` / `An_explicit_null_on_a_nullable_member_is_still_a_valid_answer` / `A_decoded_part_without_its_bytes_is_Crashed` / `More_pages_than_were_requested_is_Crashed`; caller level, `RebuildBodiesCommandTests.A_row_the_parser_fails_on_keeps_its_body_text`.
 
 **Location:** [RemoteParser.cs](../../src/Mailvec.Core/Parsing/RemoteParser.cs), lines 140–155; [ParserWire.cs](../../src/Mailvec.Parsing.Contracts/ParserWire.cs), serializer options. Follow-up to initial finding 4.
 
@@ -81,7 +122,7 @@ Compose's direct environment configuration is covered by the existing tests; thi
 
 **Regression coverage:** Add a `PostConfigure<McpOptions>` test asserting HTTP 403 for MCP requests from the configured subnet, while callers outside it remain unaffected.
 
-## Follow-up validation and scope
+## Earlier follow-up validation and scope — `823078c`
 
 - `dotnet test Mailvec.slnx --no-restore --verbosity quiet`: **1,377 passed, 0 failed**, across six projects at `823078c`.
 - Synthetic fixtures reproduced missing-field acceptance, deserialization allocation amplification, and the resolved-options network-guard bypass.
@@ -95,7 +136,7 @@ The descriptions and original line references below describe `fa2ac36`. Disposit
 
 ### 1. [P1] The parser can call MCP and read the archive
 
-> **Fixed for compose's direct configuration; F3 remains open.** The `parse` subnet is pinned in compose and denied by `NetworkGuard` before routing; malformed CIDRs fail startup and loopback remains exempt. Existing network-guard tests cover this path, and a Docker negative test is recorded in the status doc. The follow-up reproduced a bypass when the deny-list is applied through the resolved-options pipeline. `Mcp:Access` remains the stronger additional layer for tunnel deployments.
+> **Disposition at `823078c` (historical; F3 is now fixed at `d9aa956`): fixed for compose's direct configuration.** The `parse` subnet is pinned in compose and denied by `NetworkGuard` before routing; malformed CIDRs fail startup and loopback remains exempt. Existing network-guard tests cover this path, and a Docker negative test is recorded in the status doc. The follow-up reproduced a bypass when the deny-list is applied through the resolved-options pipeline. `Mcp:Access` remains the stronger additional layer for tunnel deployments.
 
 **Location:** [compose.yml](../../compose.yml), line 209; related configuration at lines 220, 234 and 435.
 
@@ -121,7 +162,7 @@ The named parser `HttpClient` retains automatic redirects. A compromised parser 
 
 ### 3. [P1] Parser responses need a practical limit before buffering
 
-> **Partially fixed; F1 remains open.** `Parser:MaxResponseBytes` (64 MB) now limits response buffering, with declared-length and chunked-body tests. Collection limits were not added. The follow-up measurements show that the byte ceiling alone still permits excessive deserialization allocations in the caller.
+> **Disposition at `823078c` (historical; F1 is now fixed at `d9aa956`): partially fixed.** `Parser:MaxResponseBytes` (64 MB) now limits response buffering, with declared-length and chunked-body tests. Collection limits were not added. The follow-up measurements show that the byte ceiling alone still permits excessive deserialization allocations in the caller.
 
 **Location:** [RemoteParser.cs](../../src/Mailvec.Core/Parsing/RemoteParser.cs), lines 110–113.
 
@@ -135,7 +176,7 @@ The parser container's memory limit and request-body cap do not bound allocation
 
 ### 4. [P2] Protocol failures can permanently retire healthy attachments
 
-> **The reported exception paths are fixed; F2 remains open.** `JsonException` on a 200 body and undefined 4xx responses now surface as `ParseException(Crashed)`, with rogue-service tests. However, incomplete but syntactically valid JSON can deserialize successfully and bypass that classification entirely, including returning a null body that `rebuild-bodies` writes back.
+> **Disposition at `823078c` (historical; F2's original reproductions are now fixed, with F4 still open): the reported exception paths are fixed.** `JsonException` on a 200 body and undefined 4xx responses now surface as `ParseException(Crashed)`, with rogue-service tests. However, incomplete but syntactically valid JSON can deserialize successfully and bypass that classification entirely, including returning a null body that `rebuild-bodies` writes back.
 
 **Location:** [RemoteParser.cs](../../src/Mailvec.Core/Parsing/RemoteParser.cs), lines 138–140 and 185–188; [AttachmentOcrService.cs](../../src/Mailvec.Embedder/Services/AttachmentOcrService.cs), line 497.
 

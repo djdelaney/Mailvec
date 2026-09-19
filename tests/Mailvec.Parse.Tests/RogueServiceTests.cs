@@ -113,6 +113,62 @@ public class RogueServiceTests
             .Kind.ShouldBe(ParseFailureKind.Crashed);
     }
 
+    // ---- Follow-up F4: null elements inside collections ----
+
+    [Fact]
+    public async Task A_null_page_is_Crashed()
+    {
+        // RespectNullableAnnotations covers members, not elements: this
+        // deserialized to a one-element list holding null, which the
+        // page-image tool base64-encoded outside its parser-error handling.
+        await using var rogue = await RogueServer.StartAsync(async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync("{\"pageCount\":1,\"pages\":[null]}"); });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        var ex = Should.Throw<ParseException>(() => host.RemoteFor(rogue.BaseAddress).RenderPdfPages(TextEml(), 0, 0, maxPages: 1, maxBytes: null));
+
+        ex.Kind.ShouldBe(ParseFailureKind.Crashed);
+        ex.Message.ShouldContain("pages");
+    }
+
+    [Theory]
+    [InlineData("attachments")]
+    [InlineData("toAddresses")]
+    [InlineData("ccAddresses")]
+    public async Task A_null_element_in_a_parsed_message_collection_is_Crashed(string member)
+    {
+        // Every constructor parameter is required on the wire, so the body
+        // carries all fourteen; only the chosen collection holds a null.
+        string list(string name) => name == member ? "[null]" : "[]";
+        var body = "{\"messageId\":\"m@x\",\"threadId\":\"m@x\",\"subject\":null,\"fromAddress\":null,\"fromName\":null," +
+                   "\"toAddresses\":" + list("toAddresses") + ",\"ccAddresses\":" + list("ccAddresses") + ",\"dateSent\":null," +
+                   "\"bodyText\":null,\"bodyHtml\":null,\"rawHeaders\":\"\",\"sizeBytes\":1,\"contentHash\":\"h\"," +
+                   "\"attachments\":" + list("attachments") + "}";
+        await using var rogue = await RogueServer.StartAsync(async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(body); });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        var ex = Should.Throw<ParseException>(() => host.RemoteFor(rogue.BaseAddress).ParseMessage(TextEml(), extractAttachmentText: false));
+
+        ex.Kind.ShouldBe(ParseFailureKind.Crashed);
+        ex.Message.ShouldContain(member);
+    }
+
+    [Fact]
+    public async Task Empty_collections_are_still_a_valid_message()
+    {
+        // The other half: the same body with every list empty is exactly what
+        // a bodiless message with no recipients looks like.
+        var body = "{\"messageId\":\"m@x\",\"threadId\":\"m@x\",\"subject\":null,\"fromAddress\":null,\"fromName\":null," +
+                   "\"toAddresses\":[],\"ccAddresses\":[],\"dateSent\":null,\"bodyText\":null,\"bodyHtml\":null," +
+                   "\"rawHeaders\":\"\",\"sizeBytes\":1,\"contentHash\":\"h\",\"attachments\":[]}";
+        await using var rogue = await RogueServer.StartAsync(async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(body); });
+        await using var host = await ParseHostFixture.StartAsync();
+
+        var parsed = host.RemoteFor(rogue.BaseAddress).ParseMessage(TextEml(), extractAttachmentText: false);
+
+        parsed.MessageId.ShouldBe("m@x");
+        parsed.Attachments.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task More_pages_than_were_requested_is_Crashed()
     {
