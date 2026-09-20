@@ -395,7 +395,9 @@ signal telling its operator so. See
 
 Every mail-content parser — MIME, HTML, PDF text, Office, PDF rasterisation,
 image decode — runs in one container, `parse`, that holds **no volumes, no
-secrets and no route out** (its only network is the internal `parse` network),
+secrets and no route out** (the networks and what each container can reach,
+one card per service: [security-boundaries.svg](security-boundaries.svg),
+dated 2026-09-19) (its only network is the internal `parse` network),
 runs as `nobody` (uid 65534: it owns no files, so there is nothing to chown;
 the other services run as 10001 — see "Moving to non-root"), and is otherwise
 hardened like the other .NET services. The indexer, the
