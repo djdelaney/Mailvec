@@ -473,8 +473,10 @@ What to know operationally:
 - **The size gate travels with it.** `MAILVEC_ATTACHMENT_MAX_BYTES` (25 MB) is
   mirrored into the parse service so it agrees with the indexer about what
   "oversize" means.
-- **Memory.** PdfPig / OpenXml / PDFium peaks now happen here (`mem_limit: 2g`),
-  which is why the indexer dropped to 1 GB. Inside the cgroup .NET caps its
+- **Memory.** PdfPig / OpenXml / PDFium peaks now happen here (`mem_limit: 2g`).
+  The indexer keeps its own 2 GB ceiling for now: `compose.yml` is the source
+  of truth for every limit, and lowering the indexer's is a change to measure
+  on the VM, not to assert here. Inside the cgroup .NET caps its
   managed heap at 75 %, which turns PdfPig memory bombs into a caught
   `OutOfMemoryException` and a `failed` extraction status; PDFium's native
   allocations are what the cgroup itself bounds, and an OOM kill here is a
@@ -545,7 +547,7 @@ no passwd entry in the image and needs none (`HOME=/tmp` is baked in). The
 one-time migration is a chown of everything the containers mount:
 
 ```sh
-docker compose down
+docker compose --profile tunnel down    # the profile matters: without it cloudflared stays up, unmanaged
 sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
 sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/    # everything 10001; secrets and mbsyncrc still -rw-------
 docker compose --profile tunnel up -d --build       # or pull, for a GHCR image
