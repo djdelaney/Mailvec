@@ -119,6 +119,31 @@ public static class Eml
     }
 }
 
+/// <summary>
+/// An IMailParser whose DescribePart signals that it has been entered and then
+/// blocks until the test releases it — for admission-control tests that must
+/// not depend on scheduling.
+/// </summary>
+public sealed class BlockingParser : IMailParser
+{
+    public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public string Mode => "blocking";
+    public PartInfo DescribePart(byte[] eml, int partIndex)
+    {
+        Entered.TrySetResult();
+        Release.Task.Wait(TimeSpan.FromSeconds(30));
+        return new PartInfo("blocked.bin", "application/octet-stream");
+    }
+    public ParsedMessage ParseMessage(byte[] eml, bool extractAttachmentText) => throw new NotSupportedException();
+    public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex) => throw new NotSupportedException();
+    public DecodedPart DecodePart(byte[] eml, int partIndex, long? maxBytes) => throw new NotSupportedException();
+    public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes) => throw new NotSupportedException();
+    public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes) => throw new NotSupportedException();
+    public string? BodyTextFromHtml(string html, string? subject) => throw new NotSupportedException();
+}
+
 /// <summary>An IMailParser whose DescribePart takes as long as you say — for the timeout test.</summary>
 public sealed class SlowParser(TimeSpan delay) : IMailParser
 {

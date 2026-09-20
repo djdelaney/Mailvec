@@ -54,11 +54,25 @@ public sealed class ParseHostOptions
     /// a bulk-ingest scan, an OCR render batch and a tool call could hold
     /// several decoded documents at once and be OOM-killed together — a
     /// <c>Crashed</c> strike against every innocent document in flight. A
-    /// request that cannot take the gate within the request timeout is
-    /// answered 503 (<c>Unavailable</c> to the caller: wait, not a strike).
+    /// request that cannot take the gate within <see cref="SlotWaitSeconds"/>
+    /// is answered 503 (<c>Unavailable</c> to the caller: wait, not a strike).
     /// The three callers run one parse each in steady state; 4 leaves room.
     /// </summary>
     public int MaxConcurrentParses { get; set; } = 4;
+
+    /// <summary>
+    /// How long a request waits for a parse slot before it is answered 503.
+    /// Short on purpose, and separate from the parse timeout: a caller told
+    /// "busy" retries on its own schedule (the CLI backfills probe and
+    /// retry, the scanner and OCR pass on their next tick), whereas a caller
+    /// queued for a whole parse timeout and then parsing for another holds
+    /// its connection for twice the budget. The host's worst case per request
+    /// is therefore this plus <see cref="RequestTimeoutSeconds"/>, and the
+    /// caller's <c>Parser:RequestTimeoutSeconds</c> must exceed that sum.
+    /// </summary>
+    public int SlotWaitSeconds { get; set; } = 10;
+
+    public TimeSpan SlotWait => TimeSpan.FromSeconds(Math.Max(1, SlotWaitSeconds));
 
     public TimeSpan RequestTimeout => TimeSpan.FromSeconds(Math.Max(1, RequestTimeoutSeconds));
 }
