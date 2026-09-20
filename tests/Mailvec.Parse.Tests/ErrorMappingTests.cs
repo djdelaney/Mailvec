@@ -145,26 +145,30 @@ public class ErrorMappingTests
     }
 
     [Fact]
-    public async Task A_parse_that_cannot_get_a_slot_within_the_timeout_is_Unavailable_not_a_strike()
+    public async Task A_parse_that_cannot_get_a_slot_within_the_slot_wait_is_Unavailable_not_a_strike()
     {
-        // One slot, two-second parses, a one-second timeout for the slot wait:
-        // the first parse holds the slot past the third caller's wait. 503 →
-        // Unavailable, which the callers wait out. Never Crashed: the service
-        // being full says nothing about the document.
+        // One slot, held by a parse that blocks until this test says so — no
+        // scheduling assumptions (the first version of this test ordered
+        // three requests with 200 ms gaps and failed on both CI runners). The
+        // second caller waits SlotWaitSeconds for the slot, gets 503 →
+        // Unavailable, which callers wait out. Never Crashed: the service
+        // being full says nothing about the document. The parse timeout is
+        // long, so releasing the blocked parse afterwards is a normal
+        // completion and the host stays up.
+        var blocking = new BlockingParser();
         await using var host = await ParseHostFixture.StartAsync(
-            parser: new SlowParser(TimeSpan.FromSeconds(2)),
-            configure: o => { o.MaxConcurrentParses = 1; o.RequestTimeoutSeconds = 3; });
-        var quick = host.RemoteFor(host.BaseAddress, timeoutSeconds: 30);
+            parser: blocking,
+            configure: o => { o.MaxConcurrentParses = 1; o.SlotWaitSeconds = 1; o.RequestTimeoutSeconds = 30; });
 
-        var first = Task.Run(() => host.Remote.DescribePart(TextEml(), 0));
-        await Task.Delay(200); // let it take the slot
-        var second = Task.Run(() => host.Remote.DescribePart(TextEml(), 0));  // waits ≤3 s, gets the slot at ~2 s
-        await Task.Delay(200);
-        var ex = Should.Throw<ParseException>(() => quick.DescribePart(TextEml(), 0)); // waits ≤3 s; slot busy until ~4 s
+        var holder = Task.Run(() => host.Remote.DescribePart(TextEml(), 0));
+        await blocking.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10)); // the slot is taken, provably
+
+        var ex = Should.Throw<ParseException>(() => host.Remote.DescribePart(TextEml(), 0));
 
         ex.Kind.ShouldBe(ParseFailureKind.Unavailable);
         ex.Message.ShouldContain("concurrency");
-        await Task.WhenAll(first, second);
+        blocking.Release.SetResult();
+        (await holder).FileName.ShouldBe("blocked.bin");
         host.StopRequested.ShouldBeFalse();
     }
 

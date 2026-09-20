@@ -78,7 +78,7 @@ internal static class ParseEndpoints
         bool admitted;
         try
         {
-            admitted = await gate.TryEnterAsync(options.RequestTimeout, ctx.RequestAborted);
+            admitted = await gate.TryEnterAsync(options.SlotWait, ctx.RequestAborted);
         }
         catch (OperationCanceledException)
         {
@@ -86,8 +86,8 @@ internal static class ParseEndpoints
         }
         if (!admitted)
         {
-            logger.LogWarning("parse: {Path} could not get one of {Slots} parse slot(s) within {Timeout}s; answering 503.",
-                ctx.Request.Path, gate.Slots, options.RequestTimeoutSeconds);
+            logger.LogWarning("parse: {Path} could not get one of {Slots} parse slot(s) within {Wait}s; answering 503.",
+                ctx.Request.Path, gate.Slots, options.SlotWaitSeconds);
             return Error(StatusCodes.Status503ServiceUnavailable, ParseErrorTypes.Busy,
                 $"The parse service is at its concurrency limit ({gate.Slots}); retry shortly.");
         }

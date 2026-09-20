@@ -62,7 +62,7 @@ body 40 MB → ParseException kind=Crashed  (same)
 
 ## F3. [P2] No admission control on the parse host
 
-> **Fixed.** `ParseGate` (a semaphore, `Parser:MaxConcurrentParses`, default 4, compose `MAILVEC_PARSER_MAX_CONCURRENT`): a request waits for a slot up to the request timeout and is answered 503 `busy` otherwise, which the client already classifies as `Unavailable` — wait and retry, never a strike. The slot is released when the parse finishes, even after its caller left. Tests: `ErrorMappingTests.Parses_beyond_the_concurrency_limit_wait_for_a_slot` / `A_parse_that_cannot_get_a_slot_within_the_timeout_is_Unavailable_not_a_strike`.
+> **Fixed.** `ParseGate` (a semaphore, `Parser:MaxConcurrentParses`, default 4, compose `MAILVEC_PARSER_MAX_CONCURRENT`): a request waits for a slot up to `Parser:SlotWaitSeconds` (10; separate from the parse timeout since the CI fix below) and is answered 503 `busy` otherwise, which the client already classifies as `Unavailable` — wait and retry, never a strike. The slot is released when the parse finishes, even after its caller left. Tests: `ErrorMappingTests.Parses_beyond_the_concurrency_limit_wait_for_a_slot` / `A_parse_that_cannot_get_a_slot_within_the_timeout_is_Unavailable_not_a_strike`.
 
 **Location:** `src/Mailvec.Parse/ParseEndpoints.cs` (`Task.Run(work)` per request); compose `mem_limit: 2g`, `pids_limit: 128`.
 
@@ -193,9 +193,12 @@ The suite totals **1,401**; the status doc header says 1,404. (F6 was about exac
 (proper project, removed afterwards). No repo files were modified by the review; no Docker build
 or homelab deployment was performed.*
 
-> **Disposition of A1–A5 (2026-09-19).** All fixed. A1: the client default is 150 s and the
-> comment states the invariant it actually rests on (above the host's gate wait plus parse
-> timeout, 120 s by default). A2: a `Task.Run` that throws releases the slot and answers 503
+> **Disposition of A1–A5 (2026-09-19).** All fixed. A1: the slot wait became its own knob
+> (`Parser:SlotWaitSeconds`, 10 s), so the host's worst case per request is 70 s, the client
+> default stays 90 s, and the comment states that invariant. (An intermediate commit had raised
+> the client to 150 s against a 120 s host sum; the split is the better shape, and it also made
+> the busy-path test deterministic — the original ordered three requests with 200 ms gaps and
+> failed on both CI runners.) A2: a `Task.Run` that throws releases the slot and answers 503
 > `busy`. A3: a parse that faults after its caller left is logged at warning with the type and
 > message. A4: `BodyTextFromHtml` has the pre-flight (UTF-8 byte count against the mirror) and
 > `Expect: 100-continue`; `ErrorMappingTests.An_html_body_over_the_cap_is_DocumentRejected_without_being_sent`.

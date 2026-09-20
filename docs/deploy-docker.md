@@ -415,9 +415,9 @@ What to know operationally:
   a compromised process persists. `restart: unless-stopped` brings it back in
   seconds; `docker compose ps parse` showing a recent start time is normal.
 - **It admits a bounded number of parses** (`MAILVEC_PARSER_MAX_CONCURRENT`, 4).
-  A request that cannot get a slot within the request timeout is answered
-  503, which the callers treat as "wait and retry", never as a fault of the
-  document. Raise it only with the `mem_limit` — each slot can hold a whole
+  A request that cannot get a slot within `Parser__SlotWaitSeconds` (10 s) is
+  answered 503, which the callers treat as "wait and retry", never as a fault
+  of the document. Raise it only with the `mem_limit` — each slot can hold a whole
   decoded message.
 - **A caller disconnecting does not restart it.** Stopping the indexer
   mid-parse, or a cancelled tool call, leaves the parse to finish within its
