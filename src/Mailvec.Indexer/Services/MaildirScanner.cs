@@ -1,7 +1,9 @@
 using Mailvec.Core;
+using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,14 +12,36 @@ namespace Mailvec.Indexer.Services;
 
 public sealed class MaildirScanner(
     IOptions<IngestOptions> ingestOptions,
-    MessageParser parser,
+    IMailParser parser,
     MessageRepository messages,
     ChunkRepository chunks,
     SyncStateRepository syncState,
     ConnectionFactory connectionFactory,
-    ILogger<MaildirScanner> logger)
+    ILogger<MaildirScanner> logger,
+    // Optional so the tests that build the scanner by hand keep compiling;
+    // the defaults are the shipped ones.
+    IOptions<ParserOptions>? parserOptions = null)
 {
     private readonly string _maildirRoot = PathExpansion.Expand(ingestOptions.Value.MaildirRoot);
+    private readonly int _maxCrashesPerFile = Math.Max(1, (parserOptions?.Value ?? new ParserOptions()).MaxCrashesPerFile);
+
+    // Parser crashes per file, keyed on the identity the fast path compares
+    // (path + mtime + size), so an edited file starts over. In memory: the
+    // counter only has to outlive a few scans, a restart granting the file
+    // another round is fine, and nothing else reads it (see the proposal's
+    // deferred list for persisting it). Bounded like the OCR pass's strike
+    // ledger — losing an entry costs at most one extra round of crashes.
+    private readonly Dictionary<(string Path, DateTime MtimeUtc, long Size), int> _parserCrashes = new();
+    private const int MaxTrackedCrashes = 4096;
+
+    // Files that crashed the parser MaxCrashesPerFile times WITH attachment
+    // text and then MaxCrashesPerFile times WITHOUT — so the MIME structure
+    // itself is what the host cannot survive, and no degraded parse will
+    // help. Never sent to the parser again in this process; a restart or an
+    // edit to the file (new identity) grants another round. Without this the
+    // degraded retry, a full MimeKit parse, took the service down every scan
+    // interval forever. Bounded like _parserCrashes.
+    private readonly HashSet<(string Path, DateTime MtimeUtc, long Size)> _unparseable = new();
 
     // How many fast-path sync_state writes accumulate before we commit. Smaller
     // batches mean more fsyncs (slower scan) but tighter windows for the
@@ -64,7 +88,12 @@ public sealed class MaildirScanner(
     /// number that was genuinely proportional to the corpus was the WRITE
     /// volume, not the parse volume, and the counter pointed away from it.
     /// </remarks>
-    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted);
+    /// <param name="Incomplete">
+    /// The walk was abandoned because the parse service was unavailable, so
+    /// <paramref name="Seen"/> is a prefix of the corpus and nothing was
+    /// reconciled. The next scan retries; see <see cref="IngestOutcome.ParserUnavailable"/>.
+    /// </param>
+    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted, bool Incomplete = false);
 
     /// <summary>
     /// Walks every Maildir subfolder under MaildirRoot, parses messages, and
@@ -120,6 +149,11 @@ public sealed class MaildirScanner(
         // deletion-reconciliation pass or every message in that directory
         // would be soft-deleted as "stale".
         var enumerationFailures = 0;
+        // Set by the first ParserUnavailable ingest; every loop level checks
+        // it, so the walk ends without visiting (and writing a retry marker
+        // for) each remaining file. A partial observedPaths is the reason
+        // reconciliation is then skipped — see the veto below.
+        var parserUnavailable = false;
 
         // One connection + a rolling transaction for the whole file walk.
         // The previous design opened a fresh connection for every Get/Upsert
@@ -141,10 +175,12 @@ public sealed class MaildirScanner(
             }))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (parserUnavailable) break;
 
                 var folderName = MaildirPaths.FolderNameFor(_maildirRoot, folderDir);
                 foreach (var subdir in new[] { "new", "cur" })
                 {
+                    if (parserUnavailable) break;
                     var sub = Path.Combine(folderDir, subdir);
                     if (!Directory.Exists(sub)) continue;
 
@@ -184,9 +220,14 @@ public sealed class MaildirScanner(
                                 failed++;
                                 unrefreshed++;
                                 break;
+                            case IngestOutcome.ParserUnavailable:
+                                failed++;
+                                parserUnavailable = true;
+                                break;
                         }
 
                         OnFileWalked?.Invoke();
+                        if (parserUnavailable) break;
                     }
                 }
             }
@@ -198,6 +239,24 @@ public sealed class MaildirScanner(
             throw;
         }
         LastScanTransactionsBegun = ctx.TransactionsBegun;
+
+        if (parserUnavailable)
+        {
+            // The walk stopped at the first file the parse service could not
+            // take, so observedPaths holds only the files before it, and
+            // reconciling against that set would soft-delete every message the
+            // walk never reached — stickily, because their unchanged files take
+            // the fast path on every later scan and nothing clears deleted_at.
+            // Finish nothing: no deletion pass, no rename repair. The mtime fast
+            // path never calls the parser, so an outage costs exactly the mail
+            // that arrived during it, and that is picked up by the first scan
+            // after the service returns. Logged once here, not once per file.
+            logger.LogWarning(
+                "MaildirScanner: the parse service is unavailable; scan abandoned after {Seen} file(s) " +
+                "(upserted={Upserted} unchanged={Unchanged}). Nothing reconciled; the next scan retries.",
+                seen, upserted, unchanged);
+            return new ScanResult(seen, upserted, unchanged, failed, 0, Incomplete: true);
+        }
 
         if (unrefreshed > 0 || enumerationFailures > 0)
         {
@@ -368,6 +427,42 @@ public sealed class MaildirScanner(
         return new ScanResult(seen, upserted, unchanged, failed, softDeleted);
     }
 
+    /// <summary>
+    /// One more crash against this file's current identity. Re-stats rather
+    /// than reusing TryIngest's locals because the crash is caught outside
+    /// the block that declared them; if the file vanished meanwhile there is
+    /// nothing to count.
+    /// </summary>
+    private void RecordParserCrash(string filePath)
+    {
+        FileInfo info = new(filePath);
+        if (!info.Exists) return;
+        var key = (filePath, info.LastWriteTimeUtc, info.Length);
+        if (_parserCrashes.Count >= MaxTrackedCrashes && !_parserCrashes.ContainsKey(key))
+        {
+            _parserCrashes.Remove(_parserCrashes.Keys.First());
+        }
+        var n = _parserCrashes.GetValueOrDefault(key) + 1;
+        _parserCrashes[key] = n;
+        if (n >= 2 * _maxCrashesPerFile)
+        {
+            // Crashed the degraded parse as many times as the full one: the
+            // MIME structure is the problem. Stop feeding it to the service.
+            _parserCrashes.Remove(key);
+            if (_unparseable.Count >= MaxTrackedCrashes) _unparseable.Remove(_unparseable.First());
+            _unparseable.Add(key);
+            logger.LogError(
+                "{Path} crashed the parser {Crashes}x, half of them on a metadata-only parse; giving up on this file " +
+                "until the indexer restarts or the file changes. It is NOT indexed. Inspect it by hand.",
+                filePath, n);
+            return;
+        }
+        logger.LogWarning(
+            "{Path} crashed the parser ({Crashes}/{Max}); will retry next scan{Degrade}.",
+            filePath, n, _maxCrashesPerFile,
+            n >= _maxCrashesPerFile ? " without attachment text" : "");
+    }
+
     private enum IngestOutcome
     {
         /// <summary>Parsed and written through MessageRepository.Upsert.</summary>
@@ -384,6 +479,12 @@ public sealed class MaildirScanner(
         /// alive, so the caller must skip deletion reconciliation.
         /// </summary>
         FailedAndUnrefreshed,
+        /// <summary>
+        /// The parse service is down or restarting
+        /// (<see cref="ParseFailureKind.Unavailable"/>). Nothing about this
+        /// file; nothing written for it. The caller abandons the walk.
+        /// </summary>
+        ParserUnavailable,
     }
 
     private IngestOutcome TryIngest(ScanContext ctx, string filePath, string folderName, DateTimeOffset indexedAt)
@@ -492,7 +593,39 @@ public sealed class MaildirScanner(
             // ours (single-writer in WAL mode).
             ctx.Flush();
 
-            var parsed = parser.ParseFile(filePath);
+            // A file that has crashed the parser MaxCrashesPerFile times (the
+            // parse host timing out and exiting on one of its attachments,
+            // every scan) is asked for metadata only, and indexed with its
+            // attachments at 'failed': the message is searchable, one
+            // document's text is given up, and the indexer stops taking the
+            // parse service down once a minute. 'failed' rather than NULL so
+            // the default `extract-attachments` predicate does not walk
+            // straight back into the same crash; `--reextract-*` can revisit
+            // them once the parser is fixed. Nothing else is inferred: which
+            // part is the poison one is unknowable from a whole-message parse.
+            var identity = (filePath, mtimeUtc, sizeBytes);
+            if (_unparseable.Contains(identity))
+            {
+                // Given up (see _unparseable): not a parser call, not a
+                // marker write. Failed, so the scan's count is honest.
+                logger.LogDebug("{Path} is unparseable (gave up after repeated parser crashes); skipping until restart or the file changes.", filePath);
+                return IngestOutcome.Failed;
+            }
+            var degraded = _parserCrashes.TryGetValue(identity, out var crashes) && crashes >= _maxCrashesPerFile;
+            var parsed = parser.ParseMessage(File.ReadAllBytes(filePath), extractAttachmentText: !degraded);
+            if (degraded)
+            {
+                logger.LogWarning(
+                    "{Path} crashed the parser {Crashes}x; indexed without attachment text (attachments marked failed).",
+                    filePath, crashes);
+                parsed = parsed with
+                {
+                    Attachments = parsed.Attachments
+                        .Select(a => a with { ExtractedText = null, ExtractionStatus = ExtractionStatus.Failed })
+                        .ToList(),
+                };
+                _parserCrashes.Remove(identity);
+            }
             var relPath = MaildirPaths.RelativeFolderPath(_maildirRoot, filePath);
             var fileName = Path.GetFileName(filePath);
 
@@ -519,8 +652,22 @@ public sealed class MaildirScanner(
             ctx.NoteWrite();
             return IngestOutcome.Upserted;
         }
+        catch (ParseException ex) when (ex.Kind == ParseFailureKind.Unavailable)
+        {
+            // Not a property of this file, so no retry marker: a new file has
+            // no row and a changed one fails the identity equality, so either
+            // is re-parsed by the next scan regardless. Writing the marker
+            // here would be one row per remaining file during an outage, on
+            // top of the warning per file — the caller abandons the walk
+            // instead and logs once.
+            return IngestOutcome.ParserUnavailable;
+        }
         catch (Exception ex)
         {
+            if (ex is ParseException { Kind: ParseFailureKind.Crashed })
+            {
+                RecordParserCrash(filePath);
+            }
             logger.LogWarning(ex, "Failed to parse {Path}", filePath);
             // PRESERVE the prior message_id. Nulling it would drop this path
             // out of the deletion-reconciliation mapping (it filters on

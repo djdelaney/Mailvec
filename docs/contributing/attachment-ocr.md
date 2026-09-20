@@ -169,6 +169,16 @@ Two consequences worth knowing before changing this:
 - **Re-baseline search eval** (`mailvec eval`) after — adding ~309 docs' worth of
   content shifts ranking.
 - **Ollama floor** gains a vision-model requirement; document in `ops/UPGRADING.md`.
+- **The render step is a second remote dependency in the container.** `RenderPdfPages` /
+  `NormalizeImage` cross to the `parse` service, which restarts on purpose after a timeout or
+  its request budget. A parser failure is classified before any retirement:
+  `ParseFailureKind.Unavailable` aborts the batch and counts nothing (the `Backpressure`
+  branch), `Crashed` is a strike counted only with parser health evidence (a parser call that
+  returned this cycle, or `IMailParser.ProbeAsync` — the one place the pass may probe it), and
+  only `DocumentRejected` or a non-`ParseException` retires the row, with `PreProvider`
+  provenance. Before this the catch stamped `failed` during every restart. See CLAUDE.md
+  ("A parse failure is not a property of the document until …") and the parser section of
+  `AttachmentOcrServiceTests`.
 
 ## Comparing engines
 

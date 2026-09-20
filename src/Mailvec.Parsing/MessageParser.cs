@@ -127,7 +127,7 @@ public sealed class MessageParser
     /// non-seekable content stream previously stored NULL and dropped the
     /// attachment out of the image-OCR gate entirely).
     /// </summary>
-    private static long DecodedContentLength(IMimeContent content)
+    internal static long DecodedContentLength(IMimeContent content)
     {
         using var stream = content.Open();
         var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(64 * 1024);
@@ -208,30 +208,3 @@ public sealed class MessageParser
     }
 
 }
-
-public sealed record ParsedMessage(
-    string MessageId,
-    string ThreadId,
-    string? Subject,
-    string? FromAddress,
-    string? FromName,
-    IReadOnlyList<EmailAddress> ToAddresses,
-    IReadOnlyList<EmailAddress> CcAddresses,
-    DateTimeOffset? DateSent,
-    string? BodyText,
-    string? BodyHtml,
-    string RawHeaders,
-    long SizeBytes,
-    string ContentHash,
-    IReadOnlyList<ParsedAttachment> Attachments)
-{
-    public bool HasAttachments => Attachments.Count > 0;
-}
-
-public sealed record ParsedAttachment(
-    int PartIndex,
-    string? FileName,
-    string? ContentType,
-    long? SizeBytes,
-    string? ExtractedText = null,
-    string? ExtractionStatus = null);

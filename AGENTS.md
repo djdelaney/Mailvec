@@ -28,8 +28,10 @@ file. CI fails if the two copies drift.
 
 ## Orientation
 
-Four .NET services sharing a SQLite archive and a Maildir, plus an MCP server
-exposing the archive to Claude. `Mailvec.slnx` (not `.sln`) is the solution.
+Four .NET services sharing a SQLite archive and a Maildir (one of them the MCP
+server exposing the archive to Claude), plus `Mailvec.Parse`, the one process
+that parses mail content in the container deployment — every parser is reached
+only through `IMailParser`. `Mailvec.slnx` (not `.sln`) is the solution.
 
 ```sh
 ./ops/fetch-sqlite-vec.sh    # one-time: native sqlite-vec loadable

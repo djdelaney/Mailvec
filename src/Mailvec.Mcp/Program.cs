@@ -14,6 +14,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
+using Mailvec.Core.Parsing;
+using Mailvec.Parsing;
+using Microsoft.Extensions.Logging;
 
 // Two transports share the same Core wiring:
 //   --stdio  → Generic Host + StdioServerTransport (for Claude Desktop, since
@@ -118,6 +121,27 @@ static async Task RunHttp(string[] args)
     // AccessOptions.Validate.
     if (resolvedMcpOpts.Access.Validate() is { } accessConfigError)
         throw new InvalidOperationException(accessConfigError);
+
+    // Network deny-list — the compose parse network in the container. Runs
+    // FIRST, before HostGuard, because it is the cheapest check and the one
+    // the caller cannot influence: HostGuard reads a header the parse service
+    // would set to `mcp` (allowlisted), and Access validation is off by
+    // default. Loopback is never denied. See NetworkGuard.
+    var deniedNetworks = NetworkGuard.Parse(resolvedMcpOpts.DeniedNetworks);
+    if (deniedNetworks.Count > 0)
+    {
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Mailvec.Mcp.Startup").LogInformation(
+            "Refusing every request from {Networks} (Mcp:DeniedNetworks).", string.Join(", ", deniedNetworks));
+        app.Use(async (context, next) =>
+        {
+            if (NetworkGuard.IsDenied(context.Connection.RemoteIpAddress, deniedNetworks))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+            await next().ConfigureAwait(false);
+        });
+    }
 
     // DNS-rebinding / same-origin guard. Runs before every route (MCP, /health,
     // /up) so a browser rebound to 127.0.0.1 can't reach the MCP endpoint and
@@ -321,6 +345,10 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddSingleton<KeywordSearchService>();
     services.AddSingleton<VectorSearchService>();
     services.AddSingleton<HybridSearchService>();
+    // The parser seam (ParserRegistration): view_attachment and
+    // get_attachment_page_image decode and rasterise through IMailParser.
+    services.AddMailvecParser(config,
+        (sp, settings) => new InProcessParser(settings, sp.GetRequiredService<ILoggerFactory>()));
     services.AddSingleton<AttachmentExtractor>();
     // Reads mbsync's liveness beat off the Maildir mount — the sidecar can't
     // write the metadata table the other workers beat into. See

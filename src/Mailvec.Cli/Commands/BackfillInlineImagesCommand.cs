@@ -3,12 +3,12 @@ using System.Globalization;
 using Mailvec.Core;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
+using Mailvec.Parsing.Contracts;
 using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using MimeKit;
 
 namespace Mailvec.Cli.Commands;
 
@@ -76,7 +76,8 @@ internal static class BackfillInlineImagesCommand
             return 2;
         }
 
-        var extractor = sp.GetRequiredService<AttachmentTextExtractor>();
+        var parser = RetryOnUnavailable.Wrap(
+            sp.GetRequiredService<IMailParser>(), sp.GetRequiredService<IOptions<ParserOptions>>().Value, err);
         var messages = sp.GetRequiredService<MessageRepository>();
         var connections = sp.GetRequiredService<ConnectionFactory>();
 
@@ -110,7 +111,8 @@ internal static class BackfillInlineImagesCommand
         @out.WriteLine(dryRun ? "Mode: DRY RUN (no writes)." : "Mode: writing new inline-image rows.");
         @out.WriteLine();
 
-        long processed = 0, messagesWithNewRows = 0, rowsAdded = 0, parseFailures = 0, missingFiles = 0, refusedPaths = 0;
+        long processed = 0, messagesWithNewRows = 0, rowsAdded = 0, parseFailures = 0, missingFiles = 0, refusedPaths = 0, parserCrashes = 0;
+        var parserUnavailable = false;
         var statusCounts = new Dictionary<string, long>(StringComparer.Ordinal);
         long cursor = 0;
 
@@ -142,11 +144,24 @@ internal static class BackfillInlineImagesCommand
 
                 if (!File.Exists(maildirFile)) { missingFiles++; continue; }
 
-                MimeMessage mime;
+                // Metadata-only parse: the attachment list with names, types and
+                // decoded sizes, no text extraction. Extraction runs below, only
+                // for the parts that have no row yet.
+                byte[] eml;
+                ParsedMessage parsed;
                 try
                 {
-                    using var stream = File.OpenRead(maildirFile);
-                    mime = MimeMessage.Load(stream);
+                    eml = File.ReadAllBytes(maildirFile);
+                    parsed = parser.ParseMessage(eml, extractAttachmentText: false);
+                }
+                catch (ParseException ex) when (ex.Kind == ParseFailureKind.Unavailable)
+                {
+                    // The service is down, not this message: stop the run
+                    // instead of counting one parse failure per candidate.
+                    err.WriteLine($"  msg {msg.Id}: the parse service is unavailable ({ex.Message}); stopping.");
+                    processed--;
+                    parserUnavailable = true;
+                    break;
                 }
                 catch (Exception ex)
                 {
@@ -155,25 +170,46 @@ internal static class BackfillInlineImagesCommand
                     continue;
                 }
 
-                var parts = MessageParts.Indexable(mime);
                 var existing = messages.GetAttachmentPartIndexes(msg.Id);
 
                 var toAdd = new List<ParsedAttachment>();
-                for (int i = 0; i < parts.Count; i++)
+                var crashed = false;
+                foreach (var att in parsed.Attachments)
                 {
-                    if (existing.Contains(i)) continue; // never disturb existing rows
-                    var entity = parts[i];
-                    var fileName = Normalize(entity.ContentDisposition?.FileName ?? entity.ContentType?.Name);
-                    var contentType = entity.ContentType?.MimeType;
-                    long? size = entity is MimePart p && p.Content is { Stream: { } s } && s.CanSeek ? s.Length : null;
+                    if (existing.Contains(att.PartIndex)) continue; // never disturb existing rows
 
-                    var result = extractor.Extract(entity, fileName, contentType, size);
-                    toAdd.Add(new ParsedAttachment(i, fileName, contentType, size, result.Text, result.Status));
+                    ExtractionResult result;
+                    try
+                    {
+                        result = parser.ExtractAttachmentText(eml, att.PartIndex);
+                    }
+                    catch (ParseException ex) when (ex.Kind == ParseFailureKind.Unavailable)
+                    {
+                        err.WriteLine($"  msg {msg.Id}: the parse service is unavailable ({ex.Message}); stopping.");
+                        parserUnavailable = true;
+                        break;
+                    }
+                    catch (ParseException ex) when (ex.Kind == ParseFailureKind.Crashed)
+                    {
+                        // Skip the whole message, adding nothing: a row added
+                        // for the parts before the crash would make the
+                        // message look done to the candidate query's eye
+                        // while the crashing part stays missing.
+                        err.WriteLine($"  msg {msg.Id} part {att.PartIndex}: the parse service crashed ({ex.Message}); skipping this message (left for a later run).");
+                        crashed = true;
+                        break;
+                    }
+                    toAdd.Add(att with { ExtractedText = result.Text, ExtractionStatus = result.Status });
                     statusCounts.TryGetValue(result.Status, out var prior);
                     statusCounts[result.Status] = prior + 1;
                 }
-
+                if (parserUnavailable) { processed--; break; }
+                if (crashed) { parserCrashes++; continue; }
                 if (toAdd.Count == 0) continue;
+
+                // Counted here, after every part extracted and before the
+                // write, so a message abandoned above (outage, crash) counts
+                // nothing and a dry run counts what it would have added.
                 messagesWithNewRows++;
                 rowsAdded += toAdd.Count;
                 if (!dryRun) messages.AddInlineAttachments(msg.Id, toAdd);
@@ -182,6 +218,7 @@ internal static class BackfillInlineImagesCommand
                     @out.WriteLine($"  ... {processed:N0}/{ceiling:N0} messages scanned, {rowsAdded:N0} inline row(s) {(dryRun ? "found" : "added")}");
             }
 
+            if (parserUnavailable) break;
             if (messageId is not null) break; // single-message mode: one page only
         }
 
@@ -195,6 +232,7 @@ internal static class BackfillInlineImagesCommand
         }
         if (missingFiles > 0) @out.WriteLine($"Skipped {missingFiles:N0} message(s) whose .eml was missing (mbsync moved it; re-run after a rescan).");
         if (parseFailures > 0) @out.WriteLine($"Skipped {parseFailures:N0} message(s) that failed to parse.");
+        if (parserCrashes > 0) @out.WriteLine($"PARSER {parserCrashes:N0} message(s) the parse service crashed on; nothing added for them, a re-run retries.");
         if (refusedPaths > 0)
         {
             // Not transient, unlike missingFiles above — a re-run refuses these
@@ -205,6 +243,11 @@ internal static class BackfillInlineImagesCommand
         }
         if (!dryRun && rowsAdded > 0)
             @out.WriteLine("\nInline images are 'unsupported'; the embedder's image-OCR pass will process them (behind its size/dimension gate) on its next cycles.");
+        if (parserUnavailable)
+        {
+            @out.WriteLine("\nSTOPPED: the parse service is unavailable. Rows added above this point are committed; re-run once it is back (`docker compose ps parse`).");
+            return 1;
+        }
         return 0;
     }
 

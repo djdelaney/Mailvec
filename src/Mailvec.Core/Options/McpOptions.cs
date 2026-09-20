@@ -17,6 +17,17 @@ public sealed class McpOptions
     public string[] AllowedHosts { get; set; } = [];
 
     /// <summary>
+    /// CIDR networks this server refuses to serve at all (403 before any
+    /// route). The container deployment lists the compose <c>parse</c>
+    /// network: mcp joins it to call the parse service, Docker networks are
+    /// symmetric, and the parse service is the process that eats
+    /// attacker-chosen bytes — without this, a compromise there could call
+    /// the mail tools. Loopback is never denied. A malformed entry is fatal
+    /// at startup. See <c>NetworkGuard</c>.
+    /// </summary>
+    public string[] DeniedNetworks { get; set; } = [];
+
+    /// <summary>
     /// Tool names to remove from this deployment's MCP surface — absent from
     /// tools/list and rejected on tools/call. Names must match the locked
     /// tool-name contract exactly; an unknown name fails startup (a typo

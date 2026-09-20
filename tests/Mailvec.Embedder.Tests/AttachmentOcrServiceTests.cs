@@ -9,6 +9,9 @@ using Mailvec.Embedder.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SkiaSharp;
+using Mailvec.Parsing;
+using Mailvec.Parsing.Contracts;
+using Mailvec.Pdf;
 
 namespace Mailvec.Embedder.Tests;
 
@@ -51,17 +54,19 @@ public class AttachmentOcrServiceTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private AttachmentOcrService Build(IVisionClient vision, EmbedderOptions? opts = null) =>
+    private AttachmentOcrService Build(IVisionClient vision, EmbedderOptions? opts = null, IMailParser? parser = null) =>
         new(_messages,
             new MaildirAttachmentReader(Options.Create(new IngestOptions { MaildirRoot = _maildirRoot })),
+            parser ?? new InProcessParser(extractor: null),
             vision,
             Options.Create(opts ?? new EmbedderOptions()),
             NullLogger<AttachmentOcrService>.Instance);
 
     /// <summary>Same service, with the batch-outcome record wired in.</summary>
-    private AttachmentOcrService BuildWithMetadata(IVisionClient vision, EmbedderOptions? opts = null) =>
+    private AttachmentOcrService BuildWithMetadata(IVisionClient vision, EmbedderOptions? opts = null, IMailParser? parser = null) =>
         new(_messages,
             new MaildirAttachmentReader(Options.Create(new IngestOptions { MaildirRoot = _maildirRoot })),
+            parser ?? new InProcessParser(extractor: null),
             vision,
             Options.Create(opts ?? new EmbedderOptions()),
             NullLogger<AttachmentOcrService>.Instance,
@@ -1191,6 +1196,228 @@ public class AttachmentOcrServiceTests : IDisposable
         cmd.Parameters.AddWithValue("$id", messageId);
         cmd.Parameters.AddWithValue("$p", partIndex);
         return cmd.ExecuteScalar() as string;
+    }
+
+    // ── Parser failures (phase 3 of the parser isolation) ──────────────────
+    //
+    // In-process, a parser exception was always a property of the document.
+    // With the parse service in its own container the same call also fails
+    // when that service is down or restarting — which it does on purpose —
+    // and a retirement written then is permanent. These pin the classification
+    // in ClassifyParserFailure the way the vision tests above pin
+    // ClassifyVisionFailure.
+
+    [Fact]
+    public async Task Parser_unavailable_never_retires_a_document()
+    {
+        // THE regression phase 3 exists for. The parse service restarts after a
+        // timeout or its request budget; for those seconds every render call
+        // fails with Unavailable. Before this classification that was
+        // `catch (Exception) → MarkAttachmentOcrFailed(PreProvider)`: a good scan
+        // stamped 'failed' because a different container was mid-restart, and
+        // nothing ever re-selects a failed row.
+        long id = StageNoTextPdf("outage@x", MinimalPdf(1));
+        var visionCalls = 0;
+        var parser = new FaultingParser(
+            fault: () => new ParseException(ParseFailureKind.Unavailable, "connection refused"),
+            healthy: () => false);
+        var svc = Build(new FakeVision(true, _ => { visionCalls++; return "TEXT"; }), parser: parser);
+
+        for (var cycle = 0; cycle < 20; cycle++) // 4x MaxVisionAttempts
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText, "still selectable; the queue drains once the service is back");
+        ModelOf(id).ShouldBeNull();
+        visionCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Parser_unavailable_stops_the_batch_rather_than_walking_into_it()
+    {
+        // Same shape as the vision Backpressure rule: the service being down
+        // is not a per-document fact, so the second and third candidates would
+        // fail identically. Stop, and let the next poll be the backoff.
+        StageNoTextPdf("a@x", MinimalPdf(1));
+        StageNoTextPdf("b@x", MinimalPdf(1));
+        StageNoTextPdf("c@x", MinimalPdf(1));
+        var parser = new FaultingParser(
+            fault: () => new ParseException(ParseFailureKind.Unavailable, "connection refused"),
+            healthy: () => false);
+
+        await Build(new FakeVision(true, _ => "TEXT"), parser: parser).ProcessBatchAsync(10, default);
+
+        parser.Calls.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Parser_crash_is_not_a_strike_while_the_parse_service_is_down()
+    {
+        // Crashed means "the service died on this document" — but a service
+        // that is dying on EVERY document (OOM-killed under memory pressure,
+        // say) looks identical per call. The strike counts only with evidence
+        // the parser is otherwise healthy: a parser call that returned this
+        // cycle, or a passing probe. Neither here, so twenty crashes retire
+        // nothing.
+        long id = StageNoTextPdf("crashing@x", MinimalPdf(1));
+        var parser = new FaultingParser(
+            fault: () => new ParseException(ParseFailureKind.Crashed, "504 and restarting"),
+            healthy: () => false);
+        var svc = Build(new FakeVision(true, _ => "TEXT"), parser: parser);
+
+        for (var cycle = 0; cycle < 20; cycle++)
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText);
+    }
+
+    [Fact]
+    public async Task Parser_crash_counts_a_strike_only_when_the_parser_is_otherwise_healthy()
+    {
+        // The 958-byte shading PDF from phase 0: PDFium renders it past the
+        // host's timeout every time, the host answers 504 and exits, and the
+        // probe passes again seconds later. With the probe as evidence that is
+        // a poison document, and it retires after MaxVisionAttempts counted
+        // cycles — with pipeline provenance, because no vision engine ever saw
+        // a page of it.
+        long id = StageNoTextPdf("shading@x", MinimalPdf(1));
+        var parser = new FaultingParser(
+            fault: () => new ParseException(ParseFailureKind.Crashed, "504 and restarting"),
+            healthy: () => true);
+        var vision = new FakeVision(true, _ => "TEXT");
+        var svc = Build(vision, parser: parser);
+
+        for (var cycle = 0; cycle < 4; cycle++)
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusNoText, "one strike short of retirement");
+
+        await svc.ProcessBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        ModelOf(id).ShouldBe(OcrProvenance.PreProvider);
+        ModelOf(id).ShouldNotBe(vision.ModelId);
+    }
+
+    [Fact]
+    public async Task Document_rejected_by_the_parser_retires_with_pipeline_provenance()
+    {
+        // The parser opened the document and said no — as deterministic as an
+        // in-process PDFium exception, and retired the same way: immediately,
+        // without aborting the batch, and attributed to the pipeline rather
+        // than to a vision engine that never saw it.
+        long first = StageNoTextPdf("rejected1@x", MinimalPdf(1));
+        long second = StageNoTextPdf("rejected2@x", MinimalPdf(1));
+        var parser = new FaultingParser(
+            fault: () => new ParseException(ParseFailureKind.DocumentRejected, "422 encrypted"),
+            healthy: () => true);
+        var vision = new FakeVision(true, _ => "SHOULD NEVER BE CALLED");
+
+        await Build(vision, parser: parser).ProcessBatchAsync(10, default);
+
+        StatusOf(first).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        StatusOf(second).ShouldBe(AttachmentTextExtractor.StatusFailed, "a rejection is per-document; the batch continues");
+        ModelOf(first).ShouldBe(OcrProvenance.PreProvider);
+        ModelOf(second).ShouldBe(OcrProvenance.PreProvider);
+        parser.Calls.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_parser_outage_is_named_in_the_cycle_outcome_record()
+    {
+        // The outcome record exists so /health and `mailvec status` can say WHY
+        // OCR is not progressing. "The parse service is down" is a cause an
+        // operator can act on, and it is not a VisionFailureKind.
+        StageNoTextPdf("outage@x", MinimalPdf(1));
+        var parser = new FaultingParser(
+            fault: () => new ParseException(ParseFailureKind.Unavailable, "connection refused"),
+            healthy: () => false);
+
+        await BuildWithMetadata(new FakeVision(true, _ => "TEXT"), parser: parser).ProcessBatchAsync(10, default);
+
+        Metadata.Get(OcrHealthKeys.LastFailureKind).ShouldBe(AttachmentOcrService.ParserUnavailableKind);
+        Metadata.Get(OcrHealthKeys.ConsecutiveFailures).ShouldBe("1");
+    }
+
+    [Fact]
+    public async Task Parser_unavailable_never_retires_an_image()
+    {
+        // The image pass has the same catch around NormalizeImage, and an
+        // order of magnitude more candidates to lose.
+        long id = StageUnsupportedImage("photo@x", MakePng(300, 300));
+        var parser = new FaultingParser(
+            fault: () => new ParseException(ParseFailureKind.Unavailable, "connection refused"),
+            healthy: () => false);
+        var svc = Build(new FakeVision(true, _ => "TEXT"), ImageGate, parser: parser);
+
+        for (var cycle = 0; cycle < 20; cycle++)
+        {
+            await svc.ProcessImageBatchAsync(10, default);
+        }
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusUnsupported);
+        ModelOf(id).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_unclassified_parser_exception_still_retires_the_document()
+    {
+        // The other half: an exception that is NOT a ParseException is the
+        // parser describing the document (in-process PDFium, or the remote
+        // client rebuilding an in-process type) and keeps the historical
+        // retirement. This is the path A_pre_provider_failure_is_not_attributed
+        // _to_the_vision_engine covers with a real corrupt PDF; here the fault
+        // is injected so the two kinds of exception are contrasted directly.
+        long id = StageNoTextPdf("plain@x", MinimalPdf(1));
+        var parser = new FaultingParser(
+            fault: () => new InvalidOperationException("PDFium: cannot open"),
+            healthy: () => true);
+
+        await Build(new FakeVision(true, _ => "TEXT"), parser: parser).ProcessBatchAsync(10, default);
+
+        StatusOf(id).ShouldBe(AttachmentTextExtractor.StatusFailed);
+        ModelOf(id).ShouldBe(OcrProvenance.PreProvider);
+    }
+
+    /// <summary>
+    /// The in-process parser with a fault injected into the two calls the OCR
+    /// passes make. <see cref="ProbeAsync"/> answers whatever the test says the
+    /// service's health is, independently of the injected fault — that
+    /// independence is exactly what the strike rule keys on.
+    /// </summary>
+    private sealed class FaultingParser(Func<Exception?> fault, Func<bool> healthy) : IMailParser
+    {
+        private readonly IMailParser _inner = new InProcessParser(extractor: null);
+
+        /// <summary>Render / normalise calls made, faulted or not.</summary>
+        public int Calls { get; private set; }
+
+        public string Mode => _inner.Mode;
+        public ParsedMessage ParseMessage(byte[] eml, bool extractAttachmentText) => _inner.ParseMessage(eml, extractAttachmentText);
+        public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex) => _inner.ExtractAttachmentText(eml, partIndex);
+        public PartInfo DescribePart(byte[] eml, int partIndex) => _inner.DescribePart(eml, partIndex);
+        public DecodedPart DecodePart(byte[] eml, int partIndex, long? maxBytes) => _inner.DecodePart(eml, partIndex, maxBytes);
+        public string? BodyTextFromHtml(string html, string? subject) => _inner.BodyTextFromHtml(html, subject);
+
+        public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes)
+        {
+            Calls++;
+            if (fault() is { } ex) throw ex;
+            return _inner.RenderPdfPages(eml, partIndex, firstPage, maxPages, maxBytes);
+        }
+
+        public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes)
+        {
+            Calls++;
+            if (fault() is { } ex) throw ex;
+            return _inner.NormalizeImage(eml, partIndex, maxBytes);
+        }
+
+        public Task<bool> ProbeAsync(CancellationToken ct = default) => Task.FromResult(healthy());
     }
 
     private sealed class FakeVision(bool available, Func<byte[], string> ocr) : IVisionClient

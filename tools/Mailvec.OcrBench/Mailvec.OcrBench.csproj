@@ -20,7 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Mailvec.Core\Mailvec.Core.csproj" />
-    <ProjectReference Include="..\..\src\Mailvec.Pdf\Mailvec.Pdf.csproj" />
+    <ProjectReference Include="..\..\src\Mailvec.Parsing\Mailvec.Parsing.csproj" />
   </ItemGroup>
 
 </Project>

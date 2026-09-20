@@ -38,15 +38,17 @@ separate host directory per service (`./logs/<service>:/logs`) so the files
 survive `docker compose up -d` recreating a container. Without the mount they
 live in the container's writable layer and are destroyed by every recreate.
 
-**Let Docker create those host directories.** It creates missing bind sources
-root-owned, which is what the container runs as, so writes and the 0700 chmod
-both succeed. A directory pre-created by your host user is one container-root
-cannot write — `cap_drop: [ALL]` removed `DAC_OVERRIDE`, so root no longer
-bypasses the permission bits — and per the section above, that failure is
-silent. If they already exist wrong: `sudo chown 0:0 logs/*`.
+**Create those host directories yourself and chown them to the container
+uid** (`sudo chown -R 10001:10001 logs`, as in the compose header). The services
+run as uid 10001 with `cap_drop: [ALL]`, so a directory Docker created
+root-owned, or one your host user created, is one they cannot write — and per
+the section above, Serilog's failure there is silent. The entrypoint now checks
+the mounted log directory at startup and refuses to start with the chown to
+run, so a missed directory is a loud refusal rather than a logless service. If
+they already exist wrong: `sudo chown -R 10001:10001 logs`.
 
 Because the chmod lands on the host directory, expect `./logs/<service>` to
-become `0700 root:root`; tailing from the host needs `sudo`.
+become `0700 10001:10001`; tailing from the host needs `sudo`.
 
 Note the console sink is also live in containers (`MAILVEC_LAUNCHD` is
 deliberately unset), so the same lines go to `docker logs`. That copy is

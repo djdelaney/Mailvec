@@ -4,6 +4,7 @@ using Mailvec.Core.Parsing;
 using Mailvec.Indexer.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Mailvec.Parsing;
 
 namespace Mailvec.Indexer.Tests;
 
@@ -179,7 +180,7 @@ public class MessageIngestServiceTests : IDisposable
 
         var scanner = new MaildirScanner(
             ingestOpts,
-            new MessageParser(),
+            new InProcessParser(extractor: null),
             _messages, chunks, syncState,
             _connections,
             NullLogger<MaildirScanner>.Instance);

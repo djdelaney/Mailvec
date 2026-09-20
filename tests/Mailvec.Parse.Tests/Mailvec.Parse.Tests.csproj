@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tests for the `parse` host and the RemoteParser client, against a REAL
+       Kestrel listener on a random loopback port (not TestServer): RemoteParser
+       uses HttpClient's synchronous Send, and the request-body cap, the timeout
+       exit and the request budget are all Kestrel/host behaviour that an
+       in-memory server would not exercise. -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\src\Mailvec.Parse\Mailvec.Parse.csproj" />
+    <ProjectReference Include="..\..\src\Mailvec.Core\Mailvec.Core.csproj" />
+    <ProjectReference Include="..\..\src\Mailvec.Parsing\Mailvec.Parsing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The MCP suite's real PDFs (a text PDF, a digital table, a scan), shared
+         rather than copied so the two suites can't drift onto different files. -->
+    <None Include="..\Mailvec.Mcp.Tests\Fixtures\*.pdf" Link="Fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
