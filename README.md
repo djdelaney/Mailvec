@@ -19,7 +19,7 @@ Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server wo
 
 ## Architecture
 
-Four .NET services, communicating only through the filesystem (Maildir) and the SQLite database.
+Four .NET services communicating only through the filesystem (Maildir) and the SQLite database — plus, in the container deployment, a fifth, `Mailvec.Parse`: the one process that parses mail content (MIME, HTML, PDF, Office, image decode). It holds no volume, no secret and no route out; the indexer, embedder and MCP server send it `.eml` bytes over an internal network and get plain data back (`docs/deploy-docker.md`, "The parse service").
 
 ```
 Fastmail (or any IMAP)

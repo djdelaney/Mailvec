@@ -38,7 +38,7 @@ public static class PdfRenderer
     /// Long-edge ceiling in pixels, just under Claude's ~1568px image cap.
     /// Rendering larger wastes payload Claude would only throw away.
     /// </summary>
-    public const int MaxEdgePx = 1536;
+    public const int MaxEdgePx = Mailvec.Parsing.Contracts.RasterLimits.MaxEdgePx;
 
     /// <summary>Number of pages in the PDF. Throws if the bytes aren't a PDF PDFium can open.</summary>
     public static int PageCount(byte[] pdf) => Conversion.GetPageCount(pdf);

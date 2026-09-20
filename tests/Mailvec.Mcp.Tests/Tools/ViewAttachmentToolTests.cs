@@ -6,6 +6,7 @@ using Mailvec.Core.Parsing;
 using Mailvec.Mcp.Tools;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
+using Mailvec.Parsing;
 
 namespace Mailvec.Mcp.Tests.Tools;
 
@@ -33,15 +34,38 @@ public class ViewAttachmentToolTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private ViewAttachmentTool Build(TempDatabase db)
+    private ViewAttachmentTool Build(TempDatabase db, Mailvec.Parsing.Contracts.IMailParser? parser = null)
     {
         var ingest = Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = _maildirRoot });
         var mcp = Microsoft.Extensions.Options.Options.Create(new McpOptions
         {
             AttachmentDownloadDir = _downloadDir,
         });
-        var extractor = new AttachmentExtractor(ingest, mcp);
+        var extractor = new AttachmentExtractor(ingest, mcp, parser ?? new InProcessParser(extractor: null));
         return new ViewAttachmentTool(new MessageRepository(db.Connections), extractor, mcp, Helpers.NoopLogger());
+    }
+
+    [Fact]
+    public void A_parse_service_outage_says_retry_or_use_get_attachment_text()
+    {
+        // Phase 3 of the parser isolation: the decode crosses to the parse
+        // service in the container, and an outage there is the one parser
+        // failure whose right answer is "try again", not a verdict on the
+        // attachment. Message text only — the tool surface is unchanged.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        // An image, not a PDF: a PDF is answered from the attachments row by
+        // the summary-only fast path and never reaches the parser at all.
+        StageImageMessage(repo, "bmp.eml", "bmp-001@example.com", "tiny.bmp", "image/bmp", MinimalBmp2X2());
+        var parser = new FaultingParser
+        {
+            Fault = op => op == nameof(FaultingParser.DecodePart) ? FaultingParser.Unavailable() : null,
+        };
+
+        var ex = Should.Throw<McpException>(() => Build(db, parser).ViewAttachment(partIndex: 0, id: 1));
+
+        ex.Message.ShouldContain("temporarily unavailable");
+        ex.Message.ShouldContain("get_attachment_text");
     }
 
     private const string PdfMessage = """

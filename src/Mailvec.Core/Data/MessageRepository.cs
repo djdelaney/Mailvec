@@ -929,7 +929,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             ORDER BY a.id
             LIMIT $limit;
             """;
-        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
+        cmd.Parameters.AddWithValue("$noText", ExtractionStatus.NoText);
         cmd.Parameters.AddWithValue("$afterId", afterId);
         cmd.Parameters.AddWithValue("$limit", batchSize);
 
@@ -992,7 +992,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             ORDER BY a.id
             LIMIT $limit;
             """;
-        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
+        cmd.Parameters.AddWithValue("$unsupported", ExtractionStatus.Unsupported);
         cmd.Parameters.AddWithValue("$minBytes", minBytes);
         cmd.Parameters.AddWithValue("$afterId", afterId);
         cmd.Parameters.AddWithValue("$limit", batchSize);
@@ -1064,9 +1064,9 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // sentinel), so it is stamped like a transcription. Without it, a
         // provider switch cannot re-examine the images the old engine passed on.
         cmd.Parameters.AddWithValue("$model", (object?)ocrModel ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
-        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
-        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
+        cmd.Parameters.AddWithValue("$noText", ExtractionStatus.NoText);
+        cmd.Parameters.AddWithValue("$failed", ExtractionStatus.Failed);
+        cmd.Parameters.AddWithValue("$unsupported", ExtractionStatus.Unsupported);
         BindOcrIdentity(cmd, candidate);
         return cmd.ExecuteNonQuery() == 0 ? OcrWriteOutcome.Stale : OcrWriteOutcome.Committed;
     }
@@ -1166,10 +1166,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
             ORDER BY {orderBy}
             LIMIT $limit;
             """;
-        cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
-        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
-        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
-        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
+        cmd.Parameters.AddWithValue("$ocr", ExtractionStatus.Ocr);
+        cmd.Parameters.AddWithValue("$noText", ExtractionStatus.NoText);
+        cmd.Parameters.AddWithValue("$unsupported", ExtractionStatus.Unsupported);
+        cmd.Parameters.AddWithValue("$failed", ExtractionStatus.Failed);
         if (engine is not null && !OcrEngineFilter.IsUnknown(engine))
             cmd.Parameters.AddWithValue("$engine", engine);
         cmd.Parameters.AddWithValue("$includeFailed", includeFailed ? 1 : 0);
@@ -1294,10 +1294,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
                    AND ({PdfOcrMatch} OR COALESCE(({ImageOcrMatch}), 0))
                    AND m.deleted_at IS NULL)
             """;
-        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
-        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
-        cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
-        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
+        cmd.Parameters.AddWithValue("$noText", ExtractionStatus.NoText);
+        cmd.Parameters.AddWithValue("$unsupported", ExtractionStatus.Unsupported);
+        cmd.Parameters.AddWithValue("$ocr", ExtractionStatus.Ocr);
+        cmd.Parameters.AddWithValue("$failed", ExtractionStatus.Failed);
         cmd.Parameters.AddWithValue("$minBytes", imageMinBytes);
         using var reader = cmd.ExecuteReader();
         reader.Read();
@@ -1354,9 +1354,9 @@ public sealed class MessageRepository(ConnectionFactory connections)
             // one didn't, which is the whole failure mode OcrIdentityMatch
             // exists to prevent.
             cmd.Parameters.AddWithValue("$model", (object?)ocrModel ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$ocr", AttachmentTextExtractor.StatusOcr);
-            cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
-            cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
+            cmd.Parameters.AddWithValue("$ocr", ExtractionStatus.Ocr);
+            cmd.Parameters.AddWithValue("$noText", ExtractionStatus.NoText);
+            cmd.Parameters.AddWithValue("$unsupported", ExtractionStatus.Unsupported);
             cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
             BindOcrIdentity(cmd, candidate);
             updated = cmd.ExecuteNonQuery();
@@ -1557,9 +1557,9 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // can be a clean read on another. Stamping it is what makes "re-try
         // everything the old engine gave up on" expressible.
         cmd.Parameters.AddWithValue("$model", (object?)ocrModel ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$failed", AttachmentTextExtractor.StatusFailed);
-        cmd.Parameters.AddWithValue("$noText", AttachmentTextExtractor.StatusNoText);
-        cmd.Parameters.AddWithValue("$unsupported", AttachmentTextExtractor.StatusUnsupported);
+        cmd.Parameters.AddWithValue("$failed", ExtractionStatus.Failed);
+        cmd.Parameters.AddWithValue("$noText", ExtractionStatus.NoText);
+        cmd.Parameters.AddWithValue("$unsupported", ExtractionStatus.Unsupported);
         BindOcrIdentity(cmd, candidate);
         return cmd.ExecuteNonQuery() == 0 ? OcrWriteOutcome.Stale : OcrWriteOutcome.Committed;
     }

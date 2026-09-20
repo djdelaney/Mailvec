@@ -1,11 +1,10 @@
 using System.ComponentModel;
-using System.Runtime.Versioning;
 using System.Text;
 using Mailvec.Core.Attachments;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.Options;
-using Mailvec.Pdf;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -21,10 +20,10 @@ namespace Mailvec.Mcp.Tools;
 /// can't read (no embedded text). One page per call keeps the vision-token
 /// cost bounded: read the text first to find the page, then render that page.
 ///
-/// Pulls the PDF bytes out of the Maildir in memory (<see cref="AttachmentExtractor.ExtractInMemory"/>
-/// — nothing is written to disk), then rasterises via <see cref="PdfRenderer"/>
-/// (PDFium). Platform-annotated because PDFium is native — the server only runs
-/// on macOS / Linux / Windows.
+/// The decode and the rasterisation both happen behind <see cref="IMailParser"/>
+/// (via <see cref="AttachmentExtractor.RenderPdfPages"/>): this process reads
+/// the <c>.eml</c> bytes and hands them over, and gets a JPEG back. Nothing is
+/// written to disk, and — in remote mode — no parser runs in this process.
 /// </summary>
 [McpServerToolType]
 public sealed class GetAttachmentPageImageTool(
@@ -38,9 +37,6 @@ public sealed class GetAttachmentPageImageTool(
     private const string ToolName = "get_attachment_page_image";
 
     [McpServerTool(Name = "get_attachment_page_image", ReadOnly = true, OpenWorld = false)]
-    [SupportedOSPlatform("macos")]
-    [SupportedOSPlatform("linux")]
-    [SupportedOSPlatform("windows")]
     [Description(
         "Render one page of a PDF attachment to a JPEG image (returned inline as an ImageContentBlock that Claude can " +
         "see). Identify the email with `id` OR `messageId`, the attachment with `partIndex` from get_email, and the page " +
@@ -80,10 +76,12 @@ public sealed class GetAttachmentPageImageTool(
         if (!msg.HasAttachments)
             throw new McpException($"Message {msg.Id} has no attachments.");
 
-        InlineAttachment att;
+        // Name and type first, without decoding: a non-PDF gets the "wrong
+        // tool" answer before any bytes are materialised.
+        PartInfo info;
         try
         {
-            att = extractor.ExtractInMemory(msg, partIndex, _mcp.AttachmentInlineMaxBytes);
+            info = extractor.Describe(msg, partIndex);
         }
         catch (ArgumentOutOfRangeException ex)
         {
@@ -93,6 +91,22 @@ public sealed class GetAttachmentPageImageTool(
         {
             throw new McpException(ex.Message);
         }
+        catch (ParseException ex) when (ParserAvailability.IsOutage(ex))
+        {
+            logger.LogWarning(ex, "Parse service unavailable describing message {MessageId} partIndex {PartIndex}", msg.Id, partIndex);
+            throw new McpException(ParserAvailability.Message);
+        }
+
+        if (!IsPdf(info.ContentType, info.FileName))
+            throw new McpException(
+                $"partIndex {partIndex} ('{info.FileName}', {info.ContentType}) is not a PDF. " +
+                "This tool only renders PDFs — use get_attachment_text for a document's text.");
+
+        PdfRender render;
+        try
+        {
+            render = extractor.RenderPdfPages(msg, partIndex, firstPage: page - 1, maxPages: 1, _mcp.AttachmentInlineMaxBytes);
+        }
         catch (AttachmentTooLargeException ex)
         {
             // No page-level escape hatch to offer: rendering any page needs the
@@ -101,25 +115,18 @@ public sealed class GetAttachmentPageImageTool(
                 $"{ex.Message} Call get_attachment_text to read its extracted text instead. " +
                 "The user can save the file itself with `mailvec extract-attachments`.");
         }
-
-        if (!IsPdf(att.ContentType, att.FileName))
-            throw new McpException(
-                $"partIndex {partIndex} ('{att.FileName}', {att.ContentType}) is not a PDF. " +
-                "This tool only renders PDFs — use get_attachment_text for a document's text.");
-
-        byte[] pdf = att.Bytes;
-        int pageCount;
-        byte[] jpeg;
-        try
+        catch (FileNotFoundException ex)
         {
-            pageCount = PdfRenderer.PageCount(pdf);
-            if (page > pageCount)
-                throw new McpException($"'{att.FileName}' has {pageCount} page(s); page {page} is out of range.");
-            jpeg = PdfRenderer.RenderPageJpeg(pdf, page - 1);
+            throw new McpException(ex.Message);
         }
-        catch (McpException)
+        catch (ParseException ex) when (ParserAvailability.IsOutage(ex))
         {
-            throw;
+            // The service is down or restarting — a retry is the right
+            // answer, unlike the corrupt-PDF message below, which would send
+            // the caller away from a document it could render in a moment.
+            logger.LogWarning(ex, "Parse service unavailable rendering message {MessageId} partIndex {PartIndex} page {Page}",
+                msg.Id, partIndex, page);
+            throw new McpException(ParserAvailability.Message);
         }
         catch (Exception ex)
         {
@@ -133,15 +140,19 @@ public sealed class GetAttachmentPageImageTool(
             logger.LogWarning(ex, "PDF render failed for message {MessageId} partIndex {PartIndex} page {Page}",
                 msg.Id, partIndex, page);
             throw new McpException(
-                $"Could not render '{att.FileName}' page {page}. " +
+                $"Could not render '{info.FileName}' page {page}. " +
                 "The PDF may be encrypted or corrupt; try get_attachment_text for any embedded text.");
         }
 
+        if (page > render.PageCount || render.Pages.Count == 0)
+            throw new McpException($"'{info.FileName}' has {render.PageCount} page(s); page {page} is out of range.");
+
+        var jpeg = render.Pages[0];
         var content = new List<ContentBlock>
         {
             new TextContentBlock
             {
-                Text = $"Rendered page {page} of {pageCount} from {att.FileName} as a JPEG image.",
+                Text = $"Rendered page {page} of {render.PageCount} from {info.FileName} as a JPEG image.",
             },
             new ImageContentBlock
             {
@@ -152,7 +163,7 @@ public sealed class GetAttachmentPageImageTool(
             },
         };
 
-        callLog.LogResult(ToolName, new { id = msg.Id, partIndex, page, pageCount, jpegBytes = jpeg.Length }, startTs);
+        callLog.LogResult(ToolName, new { id = msg.Id, partIndex, page, pageCount = render.PageCount, jpegBytes = jpeg.Length }, startTs);
         return new CallToolResult { Content = content };
     }
 

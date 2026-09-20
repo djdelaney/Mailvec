@@ -38,7 +38,11 @@ public sealed class HealthService(
     MbsyncHeartbeatFile? mbsyncHeartbeat = null,
     // Ditto for mbsync's last-successful-sync marker. Separate dep because it
     // is a separate fact written by a separate writer — see MbsyncSyncFile.
-    MbsyncSyncFile? mbsyncSync = null)
+    MbsyncSyncFile? mbsyncSync = null,
+    // Where mail content gets parsed (docs/proposals/attachment-parser-isolation.md).
+    // Optional for the same reason as the rest; null => the section is absent.
+    Mailvec.Parsing.Contracts.IMailParser? parser = null,
+    IOptions<ParserOptions>? parserOptions = null)
 {
     // The version /health reports. Core's own assembly, not the entry
     // assembly: every Mailvec assembly is stamped from the one repo-wide
@@ -155,9 +159,19 @@ public sealed class HealthService(
         var visionProbeTask = ocrEnabled && vision is not null
             ? vision.ProbeAsync(ct)
             : null;
+        // The parser's reachability is informational, like Services: a parse
+        // service that is down is ITS outage, and /health is the mcp container's
+        // own healthcheck. In-process parsers answer true without a network call.
+        // Started HERE, beside the vision probe, not awaited in sequence after
+        // the embed probe: its 2 s bound is spent in full exactly when the
+        // service is down, and serialised behind an unreachable Ollama's 7 s
+        // it pushed /health past the 10 s healthcheck budget — a restart of a
+        // working mcp container for two outages that are neither of them its own.
+        var parserProbeTask = parser?.ProbeAsync(ct);
         var (embedProbe, liveDigest) = await GetProbeCachedAsync(ct).ConfigureAwait(false);
         var ollamaReachable = embedProbe.IsAvailable;
         var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);
+        bool? parserReachable = parserProbeTask is null ? null : await parserProbeTask.ConfigureAwait(false);
 
         // Artifact-digest leg of the stability hybrid: mismatch only when
         // both sides are known — folded into the widened modelMismatch
@@ -301,7 +315,11 @@ public sealed class HealthService(
                 WireModel: embeddingProfile.WireModel,
                 Dimensions: embeddingProfile.OutputDimensions,
                 SpaceId: embeddingProfile.SpaceId,
-                ProbeStatus: embedProbe.Status.ToString()));
+                ProbeStatus: embedProbe.Status.ToString()),
+            Parser: parser is null ? null : new ParserHealth(
+                Mode: parser.Mode,
+                Endpoint: parser.Mode == Parsing.ParserRegistration.RemoteMode ? parserOptions?.Value.Endpoint : null,
+                Reachable: parserReachable));
     }
 
     /// <summary>
@@ -545,7 +563,23 @@ public sealed record HealthReport(
     IReadOnlyList<ServiceLiveness> Services,
     // Additive (phase 4): the resolved profile identity + readiness. Null
     // only in offline constructions that predate it (doctor fills it too).
-    EmbeddingProfileHealth? Profile = null);
+    EmbeddingProfileHealth? Profile = null,
+    // Additive (parser isolation, phase 2): which parser this process uses and,
+    // for the remote one, whether the parse service answered a bounded /up.
+    // Informational — never contributes to Status (see ParserHealth).
+    ParserHealth? Parser = null);
+
+/// <summary>
+/// Where this process parses mail content — <c>inprocess</c> (the launchd
+/// install) or <c>remote</c> (the container's <c>parse</c> service) — and, for
+/// remote, whether that service answered a 2 s <c>GET /up</c>. Like
+/// <see cref="ServiceLiveness"/> it never flips <see cref="HealthReport.Status"/>:
+/// a parse service that is down is its own outage (new mail waits, OCR pauses,
+/// the two attachment viewer tools fail; search keeps working), and restarting
+/// the mcp container for it would be wrong. Null <see cref="Reachable"/> means
+/// "not probed", not "down".
+/// </summary>
+public sealed record ParserHealth(string Mode, string? Endpoint, bool? Reachable);
 
 /// <summary>
 /// Outcome of the mbsync sidecar's last sync attempt — the third signal

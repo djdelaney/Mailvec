@@ -17,7 +17,7 @@ public class AttachmentTextExtractorTests
     private static AttachmentTextExtractor BuildExtractor(long maxBytes = 25 * 1024 * 1024)
     {
         var opts = Microsoft.Extensions.Options.Options.Create(new IndexerOptions { AttachmentMaxBytes = maxBytes });
-        return new AttachmentTextExtractor(opts, NullLogger<AttachmentTextExtractor>.Instance);
+        return new AttachmentTextExtractor(opts.Value.AttachmentMaxBytes, NullLogger<AttachmentTextExtractor>.Instance);
     }
 
     private static MimePart BuildMimePart(byte[] bytes, string contentType, string fileName)

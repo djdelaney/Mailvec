@@ -19,13 +19,24 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
 
 ## Container strategy
 
-- **One image, four binaries** ([Dockerfile](../Dockerfile)). Multi-stage
+- **One image, five binaries** ([Dockerfile](../Dockerfile)). Multi-stage
   `dotnet/sdk:10.0` → `dotnet/aspnet:10.0`, publishing Indexer / Embedder /
-  Mcp / Cli to `/app/<svc>/`. Framework-dependent publish — the aspnet base
-  supplies the runtime for all four. Each compose service selects its binary
-  via `command:`; the image's default CMD is the MCP server. The CLI is on
-  PATH as `mailvec`, so operator commands are
+  Mcp / Cli / Parse to `/app/<svc>/`. Framework-dependent publish — the aspnet
+  base supplies the runtime for all five. Each compose service selects its
+  binary via `command:`; the image's default CMD is the MCP server. The CLI is
+  on PATH as `mailvec`, so operator commands are
   `docker compose exec mcp mailvec status|doctor|eval|checkpoint ...`.
+- **Only `/app/parse` carries a parser — enforced by the build, not the doc.**
+  After publishing, the Dockerfile deletes MimeKit, PdfPig, OpenXml,
+  AngleSharp, PDFium, SkiaSharp and LibTiff from the indexer, embedder, mcp
+  and cli directories and asserts each deletion (a sentinel `test -e` before
+  each `rm` fails the build if a package bump ever renames one). The image
+  sets `Parser__Mode=remote` + `Parser__Endpoint=http://parse:3400`, so those
+  four processes ship `.eml` bytes to the `parse` service and never parse
+  anything themselves; `Parser__Mode=inprocess` inside a container fails at
+  the first parse with `FileNotFoundException`, on purpose. See
+  [The parse service](#the-parse-service) below and
+  [docs/proposals/attachment-parser-isolation.md](proposals/attachment-parser-isolation.md).
 - **Arch handling.** BuildKit's `TARGETARCH` maps to the RID (amd64 →
   `linux-x64`, arm64 → `linux-arm64`), so `--platform linux/amd64` builds an
   x86 server image from an Apple Silicon dev machine. `ops/fetch-sqlite-vec.sh`
@@ -86,7 +97,14 @@ cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder �
   Bind mounts `./data` (SQLite) and `./mail` (Maildir) must be **VM-local
   disk**: SQLite WAL needs real POSIX locking; never NFS/SMB. Multi-container
   WAL sharing on one local bind mount is the same multi-process pattern as
-  the macOS launchd services.
+  the macOS launchd services. **On a developer Mac, never open the database
+  from the host while containers have it** — Docker Desktop's bind mount does
+  not share the WAL index (`-shm`) coherently across the VM boundary, so a
+  host-side `sqlite3`/python read sees a stale view and its close can
+  checkpoint that view over the containers' frames (observed 2026-09-15 during
+  the parser-isolation smoke: two freshly indexed messages vanished, WAL
+  truncated to 0 bytes). Query through a container instead:
+  `docker run --rm -v ./data:/data <image> dotnet /app/cli/Mailvec.Cli.dll status`.
 - **Ollama**: external over LAN. If you already run an instance for a macOS
   install, reuse it — its bind address, version floor, and pulled models
   (embedding + vision) are then already proven, and the compose `.env` takes
@@ -210,11 +228,12 @@ ops/export-db.sh --to you@docker-vm:
 mkdir -p data
 mv ~/mailvec-archive-snapshot.sqlite data/archive.sqlite
 chmod 600 data/archive.sqlite
-# The chown is REQUIRED, not tidiness: the services run cap_drop: [ALL], so
-# container-root has no DAC_OVERRIDE and cannot read a 0600 file owned by the
-# host user who scp'd it. Skipping this fails at startup with a bare SQLite
-# "unable to open database file" that names no permission problem.
-sudo chown 0:0 data/archive.sqlite
+# The chown is REQUIRED, not tidiness: the services run as uid 10001 with
+# cap_drop: [ALL], so nothing bypasses permission bits, and a 0600 file owned
+# by the host user who scp'd it is unreadable to them. The entrypoint checks
+# this and refuses to start with the chown to run; before the check existed
+# the symptom was a bare SQLite "unable to open database file".
+sudo chown -R 10001:10001 data
 
 # 3. Bring the stack up. MAILVEC_REQUIRE_SEEDED_DB=1 (the default) makes the
 #    entrypoint refuse to start if the seed didn't land where expected.
@@ -236,8 +255,8 @@ docker compose exec mcp mailvec doctor
   `-shm`** — those sidecars belong to the container's previous run, and a
   stale WAL applied onto the new main file corrupts it. This is the same
   footgun `ops/import-db.sh` handles on macOS; here it's manual. **Re-do the
-  `chown 0:0`** — the replacement file carries the copying user's ownership,
-  and the first run recreates the sidecars itself.
+  `chown -R 10001:10001 data`** — the replacement file carries the copying
+  user's ownership, and the first run recreates the sidecars itself.
 - **After parity holds**, stop the macOS pipeline (`ops/install.sh --uninstall`)
   — its archive keeps diverging from the VM's the moment you export, so
   treat the macOS copy as a frozen rollback, not a peer. (Point your clients at
@@ -372,6 +391,104 @@ times this size needs a proportionally larger limit and currently has no other
 signal telling its operator so. See
 [search-performance.md](contributing/search-performance.md).
 
+## The parse service
+
+Every mail-content parser — MIME, HTML, PDF text, Office, PDF rasterisation,
+image decode — runs in one container, `parse`, that holds **no volumes, no
+secrets and no route out** (the networks and what each container can reach,
+one card per service: [security-boundaries.svg](security-boundaries.svg),
+dated 2026-09-19) (its only network is the internal `parse` network),
+runs as `nobody` (uid 65534: it owns no files, so there is nothing to chown;
+the other services run as 10001 — see "Moving to non-root"), and is otherwise
+hardened like the other .NET services. The indexer, the
+embedder's OCR pass and the MCP viewer tools send it bytes over HTTP and get
+plain data back. A memory-safety bug in PDFium, SkiaSharp or MimeKit's
+`unsafe` parser core therefore lands in a process with nothing to read and
+nowhere to send it; a document that hangs or exhausts a parser takes down the
+parse container, not the pipeline.
+
+What to know operationally:
+
+- **It exits on purpose, twice over.** A parse that exceeds
+  `MAILVEC_PARSER_TIMEOUT_SECONDS` (60) is answered with 504 and the process
+  exits, because PDFium / PdfPig / OpenXml take no cancellation token and an
+  overrunning parse can only be reclaimed by ending the process. It also exits
+  cleanly after `MAILVEC_PARSER_MAX_REQUESTS` (500) requests, bounding how long
+  a compromised process persists. `restart: unless-stopped` brings it back in
+  seconds; `docker compose ps parse` showing a recent start time is normal.
+- **It admits a bounded number of parses** (`MAILVEC_PARSER_MAX_CONCURRENT`, 4).
+  A request that cannot get a slot within `Parser__SlotWaitSeconds` (10 s) is
+  answered 503, which the callers treat as "wait and retry", never as a fault
+  of the document. Raise it only with the `mem_limit` — each slot can hold a whole
+  decoded message.
+- **A caller disconnecting does not restart it.** Stopping the indexer
+  mid-parse, or a cancelled tool call, leaves the parse to finish within its
+  own timeout; only a genuine overrun exits. A message over the request-body
+  cap (`48 MB`) is refused by the *caller* before it is sent, as a property of
+  the message; keep `Parser__MaxRequestBodyBytes` on the callers in step with
+  the service's cap if you change either.
+- **While it is down**, new mail is not indexed (the scan retries next tick),
+  the OCR pass pauses, and `view_attachment` / `get_attachment_page_image`
+  answer "parsing is temporarily unavailable". **Search keeps working** — it
+  reads the database only. The callers classify the gap as "unavailable",
+  never as a fault of any document; the CLI backfills wait for it to return
+  (probing `/up` for up to `Parser:UnavailableWaitSeconds`, 60 s, which rides
+  out the routine recycle below) and stop with exit 1 and a `STOPPED` line only
+  if it stays down, never stamping anything.
+- **A document that keeps crashing it is given up on, not the service.** A
+  504-and-exit on one document is a strike against that document. The OCR
+  pass retires it after five strikes counted while the service was otherwise
+  answering; the indexer, after `Parser__MaxCrashesPerFile` (3) on the same
+  file, parses it metadata-only and indexes the message with its attachments
+  at `failed` — searchable by body, one document's text given up, and the
+  service no longer restarted once a minute by it. `mailvec extract-attachments
+  --reextract-*` revisits those once the parser is fixed. The counters are in
+  memory, so a container restart grants another round.
+- **The network it shares with mcp is one-way.** mcp joins the `parse`
+  network to call the service; Docker networks are symmetric, so the service
+  could call `mcp:3333` back. The network's subnet is pinned
+  (`MAILVEC_PARSE_SUBNET`, default `172.31.255.0/24`) and mcp refuses every
+  request from it (`Mcp__DeniedNetworks__0`, same variable) before any route,
+  loopback excepted. Change the subnet in `.env` only if it collides with a
+  network the host already has — and note the first `up -d` after this change
+  recreates the `parse` network, which is a few seconds of parse outage the
+  callers ride out. Verify from inside the stack:
+  `docker compose exec parse curl -s -o /dev/null -w '%{http_code}' http://mcp:3333/up`
+  must print `403`, while the same probe from `mcp` itself (loopback) prints
+  `200` or `503`. If `parse` has no `curl` in your image, any container you
+  attach with `--network <project>_parse` will do.
+- **It never flips `/health` red.** `/health` carries a `parser` section
+  (`mode`, `endpoint`, `reachable`) and `mailvec doctor` has a `Parser` check,
+  both informational: a parse service outage is *its* outage, and restarting
+  the mcp container for it would be wrong. Monitor `parse` with its own
+  compose healthcheck (`/up`) if you want paging.
+- **What its callers will accept from it is bounded too.** The client the
+  indexer, embedder and mcp use never follows a redirect (a 3xx is a
+  `Crashed` strike), uses no proxy, and refuses any response over
+  `Parser:MaxResponseBytes` (64 MB, sized for a decoded 25 MB attachment in
+  base64) while reading it — so a compromised service can neither turn its
+  callers into an exfiltration path nor exhaust the process holding the
+  archive. Nothing to configure; `Parser__MaxResponseBytes` exists per service
+  if a larger honest answer ever appears.
+- **The size gate travels with it.** `MAILVEC_ATTACHMENT_MAX_BYTES` (25 MB) is
+  mirrored into the parse service so it agrees with the indexer about what
+  "oversize" means.
+- **Memory.** PdfPig / OpenXml / PDFium peaks now happen here (`mem_limit: 2g`).
+  The indexer keeps its own 2 GB ceiling for now: `compose.yml` is the source
+  of truth for every limit, and lowering the indexer's is a change to measure
+  on the VM, not to assert here. Inside the cgroup .NET caps its
+  managed heap at 75 %, which turns PdfPig memory bombs into a caught
+  `OutOfMemoryException` and a `failed` extraction status; PDFium's native
+  allocations are what the cgroup itself bounds, and an OOM kill here is a
+  restart of this container only.
+
+**Migrating a running stack to it.** Pull or build an image at or after this
+change, then `docker compose up -d` (never `restart`, see below) so compose
+creates the `parse` service and the `parse` network and re-attaches the three
+callers. Confirm with `docker compose exec mcp mailvec doctor` (the `Parser`
+line) and `docker compose exec mcp curl -s http://parse:3400/up`. Nothing in
+the archive changes: no schema migration, no re-index, no re-embed.
+
 ## Applying a compose change to a running stack
 
 Three things that are easy to get wrong and quiet when you do. All follow from
@@ -392,30 +509,94 @@ docker inspect mailvec-mcp-1 --format \
   'CapDrop={{.HostConfig.CapDrop}} Mem={{.HostConfig.Memory}} Pids={{.HostConfig.PidsLimit}}'
 ```
 
-**Check bind-mount ownership before recreating.** `cap_drop: [ALL]` removes
-`DAC_OVERRIDE`, so container-root no longer bypasses file permission bits.
-Anything under `./data`, `./mail` or `./logs` created *by the containers* is
-root-owned and fine; anything copied in by a host user is not:
+**Check bind-mount ownership before recreating.** The services run as uid
+10001 with `cap_drop: [ALL]`, so nothing bypasses file permission bits and
+every mounted path must be owned by that uid:
 
 ```sh
-sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/
+sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/    # expect 10001 throughout
 ```
 
-Anything with a non-zero UID/GID whose mode denies "other" needs
-`sudo chown 0:0 <path>`. Two bite hardest, and neither says "permission":
+Anything owned by another uid whose mode denies "other" needs
+`sudo chown -R 10001:10001 <path>`. The entrypoint now checks each mounted path
+at startup and refuses to start with the exact command, so these no longer
+fail silently — but they used to, and the two that bit hardest are worth
+knowing:
 
-- **`data/archive.sqlite`** — a snapshot copied in at `0600` by your own user
-  fails the whole stack with a bare SQLite `unable to open database file`. The
-  `MAILVEC_REQUIRE_SEEDED_DB` guard can't catch it either: it uses `[ -s ]`,
-  which stats rather than opens, so an unreadable-but-present file passes.
-- **`mbsyncrc`** — bind-mounted to `/root/.mbsyncrc`. Unreadable means IMAP sync
-  stops while every other service stays green.
+- **`data/archive.sqlite`** — a snapshot copied in at `0600` by your own user,
+  or by root under the pre-non-root convention, failed the whole stack with a
+  bare SQLite `unable to open database file`. The `MAILVEC_REQUIRE_SEEDED_DB`
+  guard can't catch it: it uses `[ -s ]`, which stats rather than opens.
+- **`mbsyncrc`** — bind-mounted to `/etc/mbsyncrc`. Unreadable meant IMAP sync
+  stopped while every other service stayed green.
 
-Let Docker create the `./logs/<service>` bind sources rather than pre-creating
-them: Docker makes them root-owned, which container-root can write and chmod to
-0700. A directory you created is one the container cannot write, and Serilog's
-failure there is silent — see the log-permissions note in
-[logs.md](logs.md).
+**Create the `./logs/<service>` bind sources yourself and chown them**, as in
+the compose header. This is the reverse of the old advice: Docker creates a
+missing bind source root-owned, which the container can no longer write, and
+Serilog's failure there is silent — see the log-permissions note in
+[logs.md](logs.md). The entrypoint catches the case, so a missed directory is a
+refusal rather than a silently logless service.
+
+## Moving to non-root
+
+Stacks stood up before 2026-09-17 ran every service as container-root; the
+image and compose now run mcp, indexer, embedder and mbsync as
+`MAILVEC_UID:MAILVEC_GID` (default `10001:10001`, a fixed high number chosen to
+collide with no real account on the host) and `parse` as `nobody`. The uid has
+no passwd entry in the image and needs none (`HOME=/tmp` is baked in). The
+one-time migration is a chown of everything the containers mount:
+
+```sh
+docker compose --profile tunnel down    # the profile matters: without it cloudflared stays up, unmanaged
+sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
+sudo ls -ln data/ mail/ mbsyncrc secrets/ logs/    # everything 10001; secrets and mbsyncrc still -rw-------
+docker compose --profile tunnel up -d --build       # or pull, for a GHCR image
+docker compose ps                                   # all running; none restarting
+```
+
+A path you missed is a **loud refusal at startup**, not a degraded service:
+the entrypoint prints `mailvec: /data is not writable by uid 10001 … sudo chown
+-R 10001:10001 ./data` and exits, and the mbsync sidecar does the same for
+`./mail`, `mbsyncrc` and its secret. `restart: unless-stopped` will loop it
+until the chown is done; `docker compose logs <service>` shows the line.
+
+What changed with it, in case you have tooling around the old layout:
+
+- `mbsyncrc` is mounted at `/etc/mbsyncrc` (the loop passes `mbsync -c`), no
+  longer `/root/.mbsyncrc`.
+- `./logs/<service>` and `./data` become `0700 10001:10001` (the services
+  harden them on open, as before). Tailing from the host still needs `sudo`.
+- `docker compose exec mcp mailvec …` runs as 10001; it could read and write
+  everything it could before.
+- Re-seeding the archive: chown to `10001:10001`, not `0:0`.
+
+Validated 2026-09-17 on Docker Desktop (linux/arm64) against **named volumes**,
+which have real ownership semantics unlike Docker Desktop bind mounts: a data /
+logs / mail / secrets set populated by the old root-running image made every
+non-root service refuse with the messages above; after the chown all four ran
+under the full hardening posture (read-only rootfs, tmpfs `/tmp`, `cap_drop
+ALL`) — scans, WAL writes, log files, `/health`, the mbsync loop and the CLI.
+Not validated here: the host-side chown on the VM itself, which is the one
+line above.
+
+## Origin-side security posture — the knobs, and which are on by default
+
+Everything below is enforced by the mcp container itself, so it holds
+regardless of what the tunnel's ingress rules say. The full threat model is
+[security.md](security.md); this table is the deployment view — what ships on,
+what is recommended on, and where each is set.
+
+| Control | Default | Set where | What it does / when to change |
+| --- | --- | --- | --- |
+| Non-root services (`MAILVEC_UID`, `MAILVEC_GID`) | **on** (10001) | `.env` | mcp, indexer, embedder, mbsync run unprivileged; `parse` as `nobody`. Every mount must be owned by the uid — see [Moving to non-root](#moving-to-non-root). Change only if 10001 is taken on the host. |
+| Parse-network deny-list (`MAILVEC_PARSE_SUBNET` → `Mcp__DeniedNetworks__0`) | **on** (172.31.255.0/24) | `.env` (one value feeds both the network and mcp) | mcp refuses every request from the `parse` network, so the parse service — the process that eats attacker-chosen bytes — cannot call the mail tools back. Loopback never denied. Change only on a subnet collision, and never one of the two values without the other. Verify: the `curl` in [The parse service](#the-parse-service) prints 403. |
+| `/health` loopback-only (`MCP_RESTRICT_HEALTH_TO_LOOPBACK`) | **on** | `.env` | The detailed body (archive path, counts, Ollama address) is served to loopback only; monitors use `/up`. Migrate monitors before relying on it. |
+| Parser client limits (`Parser:MaxResponseBytes`, redirects off) | **on** (64 MB) | baked in; the byte ceiling is overridable per service via `Parser__MaxResponseBytes` | The parse service cannot redirect its callers into forwarding mail, nor exhaust them with an oversized response. No reason to change. |
+| Origin validation of the Access assertion (`MCP_ACCESS_ENABLED` + team domain + audiences) | **off** | `.env` | Every caller must present a valid Cloudflare Access assertion; the origin no longer trusts anything that can reach `mcp:3333`. **Recommended on for every tunnel deployment** — it turns "one known network is refused" into "every caller proves who it is". Needs the three dashboard values; the container refuses to boot if the signing keys cannot be fetched. Setup: [remote-access-cloudflare.md → Origin validation](remote-access-cloudflare.md#origin-validation-of-the-access-assertion-mcpaccess). Not available without a tunnel. |
+| Tool-surface trim (`Mcp__DisabledTools__*`) | **off** (staged, commented) | `compose.yml` | Drops the two on-demand native-parser tools. A documented accepted risk with invalidating conditions — read [security.md → What's accepted](security.md#whats-accepted) before deciding. |
+
+The first four are what a stack with no tunnel gets. A tunnel deployment should
+add the fifth; the sixth is a judgement call the security doc lays out.
 
 ## Rollout checklist
 
@@ -453,7 +634,30 @@ someone has ticked off is a claim about one machine.
    explicit invalidating conditions, not an oversight. Read
    [security.md → What's accepted](security.md#whats-accepted) and decide for
    your own deployment before exposing the tunnel or publishing a host port.
-10. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
+10. **The parser boundary.** `docker compose exec mcp ls /app/mcp | grep -c MimeKit`
+    prints 0 and `docker compose exec parse ls /app/parse/libpdfium.so` exists;
+    `mailvec doctor` shows `Parser … answers /up`; and a real message indexed
+    after bring-up (`mailvec status`) proves the round trip. See
+    [The parse service](#the-parse-service).
+11. **The parse network is one-way.** From a container on the `parse` network,
+    `curl -s -o /dev/null -w '%{http_code}' -H 'Host: mcp' http://mcp:3333/up`
+    prints **403**; from `mcp` itself (loopback) it prints 200 or 503. If it does
+    not, `MAILVEC_PARSE_SUBNET` and the network's actual subnet have diverged —
+    the server cannot detect that, only this probe can. See the posture table
+    above.
+12. **Every service is non-root.** `docker compose exec mcp id -u` prints 10001
+    (or your `MAILVEC_UID`), `docker compose exec parse id -u` prints 65534, and
+    `sudo ls -ln data/ logs/ mail/` shows the uid throughout. A refusal at
+    startup naming a chown means a mount was missed — see
+    [Moving to non-root](#moving-to-non-root).
+13. **Origin validation, if you run a tunnel.** `MCP_ACCESS_ENABLED=true` with
+    the team domain and both audiences set; `docker compose logs mcp` shows
+    `Cloudflare Access assertion validation ENABLED` and the signing keys
+    loaded; a request without an assertion from the default network gets 401
+    while the loopback healthcheck stays green. Off means the origin trusts
+    anything that reaches it, which the security doc accepts only while the
+    tunnel is the sole ingress.
+14. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
     see the backup bullet above for what that does and doesn't guarantee, and
     the one storage-layout invariant it rests on.
 

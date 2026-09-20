@@ -1,7 +1,9 @@
 using Mailvec.Cli.Commands;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
+using Mailvec.Core.Options;
 using Mailvec.Core.Parsing;
+using Mailvec.Parsing.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Mailvec.Cli.Tests;
@@ -19,6 +21,121 @@ public class RebuildBodiesCommandTests
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("No messages with body_html");
+    }
+
+    [Fact]
+    public void A_parser_outage_stops_the_run_instead_of_logging_an_error_per_message()
+    {
+        // Phase 3 of the parser isolation. BodyTextFromHtml crosses to the
+        // parse service in the container; when it is down every remaining row
+        // would fail identically, and "N errors" would misreport an outage as
+        // N bad messages. Rows converted before the outage stay committed.
+        using var ctx = new TestServiceProvider();
+        ctx.AddOption<ParserOptions>(o => o.UnavailableWaitSeconds = 0); // stay down: no wait
+        ctx.UseParser(new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.BodyTextFromHtml) ? FaultingParser.Unavailable() : null,
+        }).Rebuild();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        foreach (var id in new[] { "a@x", "b@x", "c@x" })
+        {
+            messages.Upsert(
+                new ParsedMessage(
+                    MessageId: id, ThreadId: id, Subject: "Hi",
+                    FromAddress: "alice@example.com", FromName: null,
+                    ToAddresses: [], CcAddresses: [],
+                    DateSent: DateTimeOffset.UtcNow,
+                    BodyText: "stale plaintext",
+                    BodyHtml: "<html><body><p>Fresh</p></body></html>",
+                    RawHeaders: $"Message-ID: <{id}>\r\n",
+                    SizeBytes: 100, ContentHash: "h-" + id, Attachments: []),
+                "INBOX", "INBOX/cur", id, DateTimeOffset.UtcNow);
+        }
+        var writer = new StringWriter();
+        var err = new StringWriter();
+
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+
+        exit.ShouldBe(1);
+        writer.ToString().ShouldContain("STOPPED");
+        writer.ToString().ShouldContain("(0 errors)", Case.Sensitive, "an outage is not a conversion error");
+        err.ToString().Split("unavailable").Length.ShouldBe(2, "reported once, not per row");
+        messages.GetByMessageId("a@x")!.BodyText.ShouldBe("stale plaintext");
+    }
+
+    [Fact]
+    public void A_rebuild_spanning_a_parse_host_recycle_converts_every_row()
+    {
+        // Review finding 5, the case that made this command unfinishable: it
+        // re-selects every row each run, so a stop at the host's request
+        // budget restarted from row one forever. The recycle lands mid-batch
+        // (second row); with the wait, the run converts all three.
+        var calls = 0;
+        using var ctx = new TestServiceProvider();
+        ctx.AddOption<ParserOptions>(o => o.UnavailableWaitSeconds = 30);
+        ctx.UseParser(new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.BodyTextFromHtml) && ++calls == 2 ? FaultingParser.Unavailable() : null,
+        }).Rebuild();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        foreach (var id in new[] { "a@x", "b@x", "c@x" })
+        {
+            messages.Upsert(
+                new ParsedMessage(
+                    MessageId: id, ThreadId: id, Subject: "Hi",
+                    FromAddress: "alice@example.com", FromName: null,
+                    ToAddresses: [], CcAddresses: [],
+                    DateSent: DateTimeOffset.UtcNow,
+                    BodyText: "stale plaintext",
+                    BodyHtml: "<html><body><p>Fresh</p></body></html>",
+                    RawHeaders: $"Message-ID: <{id}>\r\n",
+                    SizeBytes: 100, ContentHash: "h-" + id, Attachments: []),
+                "INBOX", "INBOX/cur", id, DateTimeOffset.UtcNow);
+        }
+        var writer = new StringWriter();
+        var err = new StringWriter();
+
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+
+        exit.ShouldBe(0);
+        writer.ToString().ShouldContain("Updated body_text on 3 messages (0 errors)");
+        writer.ToString().ShouldNotContain("STOPPED");
+        err.ToString().ShouldContain("parse service is back");
+        foreach (var id in new[] { "a@x", "b@x", "c@x" })
+            messages.GetByMessageId(id)!.BodyText.ShouldNotBeNull().ShouldContain("Fresh");
+    }
+
+    [Fact]
+    public void A_row_the_parser_fails_on_keeps_its_body_text()
+    {
+        // Review follow-up F2's caller-level half: with required-member
+        // enforcement on the wire, an incomplete response is a Crashed
+        // exception rather than a null result, and this command's per-row
+        // catch counts it as an error and writes nothing for that row.
+        using var ctx = new TestServiceProvider();
+        ctx.AddOption<ParserOptions>(o => o.UnavailableWaitSeconds = 0);
+        ctx.UseParser(new FaultingParser
+        {
+            Fault = op => op == nameof(IMailParser.BodyTextFromHtml) ? FaultingParser.Crashed() : null,
+        }).Rebuild();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        long id = messages.Upsert(
+            new ParsedMessage(
+                MessageId: "keep@x", ThreadId: "keep@x", Subject: "Hi",
+                FromAddress: "alice@example.com", FromName: null,
+                ToAddresses: [], CcAddresses: [],
+                DateSent: DateTimeOffset.UtcNow,
+                BodyText: "the real body", BodyHtml: "<p>Fresh</p>",
+                RawHeaders: "Message-ID: <keep@x>\r\n",
+                SizeBytes: 100, ContentHash: "h", Attachments: []),
+            "INBOX", "INBOX/cur", "keep", DateTimeOffset.UtcNow);
+        var writer = new StringWriter();
+
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, new StringWriter());
+
+        exit.ShouldBe(1, "one error");
+        writer.ToString().ShouldContain("(1 errors)");
+        messages.GetById(id)!.BodyText.ShouldBe("the real body");
     }
 
     [Fact]
