@@ -156,7 +156,9 @@ the loop. "The MCP tools are read-only" is a statement about the tool surface,
 not a boundary that survives a compromised process.
 
 **In the container, exactly one process parses attacker-chosen bytes, and it
-holds nothing.** Every mail-content parser — MimeKit, AngleSharp, PdfPig,
+holds nothing** ([the picture, as built 2026-09-19](security-boundaries.svg):
+one card per container, what each can reach — a dated snapshot, so check it
+against `compose.yml` rather than trust it)**.** Every mail-content parser — MimeKit, AngleSharp, PdfPig,
 OpenXml, PDFium/SkiaSharp, LibTiff — runs only in the `parse` service
 ([deploy-docker.md](deploy-docker.md#the-parse-service)); the indexer, embedder,
 mcp and cli ship it `.eml` bytes over an `internal: true` network and receive

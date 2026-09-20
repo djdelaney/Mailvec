@@ -64,7 +64,8 @@ there is no schema migration and no MCP tool-surface change).
 The design, the measurements and the rationale live in
 [`attachment-parser-isolation.md`](attachment-parser-isolation.md)
 (with [`…-phase0.md`](attachment-parser-isolation-phase0.md) and the
-[diagram](attachment-parser-isolation.svg)). This file is the operational summary
+[diagram](../security-boundaries.svg), which now lives beside `security.md` as the as-built
+picture). This file is the operational summary
 for whoever picks the work up: what is on the branch, how to prove it, and exactly what phase 3
 has to change and why.
 

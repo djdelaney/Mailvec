@@ -1,6 +1,6 @@
 # Design proposal — one process for untrusted bytes
 
-**Status:** phases 0, 1 and 2 done (2026-09-13, branch `parser-isolation-phase0`); phases 3–4 proposed.
+**Status:** phases 0–4 done (2026-09-13 to 2026-09-15, branch `parser-isolation-phase0`), then five rounds of independent review closed ([review](attachment-parser-isolation-review.md), [review 4–5](attachment-parser-isolation-review-2026-09-19.md)). The as-built boundaries, one card per container: [security-boundaries.svg](../security-boundaries.svg) (moved beside `security.md` once built; it is no longer a proposal). Operational handoff: [the status doc](attachment-parser-isolation-status.md).
 **Date:** 2026-09-13 (replaces an earlier review that was lost; restructured the
 same day after verifying what "managed" actually covers).
 **Scope:** the container deployment (`compose.yml`). The macOS launchd / MCPB
