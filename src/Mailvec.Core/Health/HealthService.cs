@@ -159,14 +159,19 @@ public sealed class HealthService(
         var visionProbeTask = ocrEnabled && vision is not null
             ? vision.ProbeAsync(ct)
             : null;
-        var (embedProbe, liveDigest) = await GetProbeCachedAsync(ct).ConfigureAwait(false);
-        var ollamaReachable = embedProbe.IsAvailable;
-        var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);
-
         // The parser's reachability is informational, like Services: a parse
         // service that is down is ITS outage, and /health is the mcp container's
         // own healthcheck. In-process parsers answer true without a network call.
-        bool? parserReachable = parser is null ? null : await parser.ProbeAsync(ct).ConfigureAwait(false);
+        // Started HERE, beside the vision probe, not awaited in sequence after
+        // the embed probe: its 2 s bound is spent in full exactly when the
+        // service is down, and serialised behind an unreachable Ollama's 7 s
+        // it pushed /health past the 10 s healthcheck budget — a restart of a
+        // working mcp container for two outages that are neither of them its own.
+        var parserProbeTask = parser?.ProbeAsync(ct);
+        var (embedProbe, liveDigest) = await GetProbeCachedAsync(ct).ConfigureAwait(false);
+        var ollamaReachable = embedProbe.IsAvailable;
+        var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);
+        bool? parserReachable = parserProbeTask is null ? null : await parserProbeTask.ConfigureAwait(false);
 
         // Artifact-digest leg of the stability hybrid: mismatch only when
         // both sides are known — folded into the widened modelMismatch
