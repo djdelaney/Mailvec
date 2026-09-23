@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -59,6 +60,43 @@ public class OllamaVisionClientTests
         });
         var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
         ex.Kind.ShouldBe(VisionFailureKind.Transient);
+    }
+
+    [Fact]
+    public async Task OcrAsync_classifies_its_own_timeout_as_Timeout_not_Transient()
+    {
+        // Transient accrues retirement strikes; Timeout never does. On a
+        // CPU-only host light pages finish inside the budget, which the OCR pass
+        // reads as "the model is healthy" — so a timeout left unclassified (the
+        // pass's fallback is Transient) retired every dense page to 'failed'.
+        // A real HttpClient.Timeout, not a thrown exception, so this pins what
+        // the client actually sees.
+        var http = new HttpClient(new HangingHandler())
+        {
+            BaseAddress = new Uri("http://localhost:11434"),
+            Timeout = TimeSpan.FromMilliseconds(100),
+        };
+        var client = new OllamaVisionClient(
+            http, Microsoft.Extensions.Options.Options.Create(new OllamaOptions()),
+            NullLogger<OllamaVisionClient>.Instance);
+
+        var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
+        ex.Kind.ShouldBe(VisionFailureKind.Timeout);
+    }
+
+    [Fact]
+    public async Task OcrAsync_propagates_real_cancellation_unclassified()
+    {
+        // Shutdown must stay an OperationCanceledException so the worker stops,
+        // never become a VisionException the pass would handle and continue past.
+        var http = new HttpClient(new HangingHandler()) { BaseAddress = new Uri("http://localhost:11434") };
+        var client = new OllamaVisionClient(
+            http, Microsoft.Extensions.Options.Options.Create(new OllamaOptions()),
+            NullLogger<OllamaVisionClient>.Instance);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var ex = await Should.ThrowAsync<OperationCanceledException>(() => client.OcrAsync([1], cts.Token));
+        ex.ShouldNotBeOfType<VisionException>();
     }
 
     [Fact]
@@ -152,6 +190,15 @@ public class OllamaVisionClientTests
 
     private static HttpResponseMessage Ok(object body) =>
         new(HttpStatusCode.OK) { Content = JsonContent.Create(body) };
+
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new UnreachableException();
+        }
+    }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {

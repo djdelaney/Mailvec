@@ -491,6 +491,87 @@ public class AttachmentOcrServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_vision_timeout_never_retires_a_document_even_while_others_succeed()
+    {
+        // The Poison_document test above, with the failure CLASSIFIED as a
+        // timeout — which is what the real clients now throw for
+        // HttpClient.Timeout. Same shape as production on a CPU-only Ollama:
+        // light pages finish inside the budget (so the cycle has success
+        // evidence), dense pages don't. As a strike, that retired exactly the
+        // dense scans — statements, forms — to 'failed' after five sweeps.
+        long dense = StageNoTextPdf("dense@x", MinimalPdf(1, size: 400));
+        long light = StageNoTextPdf("light@x", MinimalPdf(1, size: 200));
+        var denseAttempts = 0;
+        var svc = Build(new FakeVision(available: true, ocr: jpeg =>
+        {
+            using var bmp = SKBitmap.Decode(jpeg);
+            if (bmp is not null && bmp.Width > 600)
+            {
+                denseAttempts++;
+                throw new VisionException(VisionFailureKind.Timeout, "exceeded the vision timeout");
+            }
+            return "GOOD SCAN TEXT";
+        }));
+
+        // Long enough that even a deferred-but-still-striking timeout would
+        // reach MaxVisionAttempts (attempts land at passes 1, 6, 16, 36, 76).
+        for (int cycle = 0; cycle < 100; cycle++)
+        {
+            await svc.ProcessBatchAsync(10, default);
+        }
+
+        StatusOf(light).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        StatusOf(dense).ShouldBe(AttachmentTextExtractor.StatusNoText, "a timeout is our budget, not a verdict");
+        TextOf(dense).ShouldBeNull();
+
+        // Still retried — raising the timeout must let it through without a
+        // reocr — but on an escalating backoff, so a page that never fits costs
+        // a shrinking share of the vision budget. A fixed 5-pass backoff would
+        // be 20 attempts in 100 passes, no backoff 100.
+        denseAttempts.ShouldBeInRange(2, 5);
+    }
+
+    [Fact]
+    public async Task A_permission_denied_eml_backs_off_instead_of_retiring()
+    {
+        // UnauthorizedAccessException is not an IOException, so it used to fall
+        // to the "deterministic read failure" catch and stamp the scan 'failed'
+        // — for every scan under a wrongly-owned restore into ./mail, which is
+        // exactly how the non-root migration's chown step goes wrong. A
+        // permissions problem says nothing about the document.
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess) return; // root reads through 000
+
+        long pdf = StageNoTextPdf("locked-pdf@x", MinimalPdf(1));
+        long img = StageUnsupportedImage("locked-img@x", MakePng(300, 300));
+        var pdfPath = Path.Combine(_maildirRoot, "INBOX", "cur", "locked-pdf@x.eml");
+        var imgPath = Path.Combine(_maildirRoot, "INBOX", "cur", "locked-img@x.eml");
+        File.SetUnixFileMode(pdfPath, UnixFileMode.None);
+        File.SetUnixFileMode(imgPath, UnixFileMode.None);
+
+        var svc = Build(new FakeVision(true, _ => "RECOVERED SCAN TEXT"), ImageGate);
+        for (int cycle = 0; cycle < 8; cycle++)
+        {
+            await svc.ProcessBatchAsync(10, default);
+            await svc.ProcessImageBatchAsync(10, default);
+        }
+
+        StatusOf(pdf).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        StatusOf(img).ShouldBe(AttachmentTextExtractor.StatusUnsupported);
+
+        // And the fix is just fixing the permissions: both drain on their own.
+        File.SetUnixFileMode(pdfPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(imgPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        for (int cycle = 0; cycle < 8; cycle++)
+        {
+            await svc.ProcessBatchAsync(10, default);
+            await svc.ProcessImageBatchAsync(10, default);
+        }
+
+        StatusOf(pdf).ShouldBe(AttachmentTextExtractor.StatusOcr);
+        StatusOf(img).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
     public async Task A_blocked_prefix_longer_than_the_backoff_window_still_lets_later_pdfs_through()
     {
         // The read backoff alone does NOT establish eventual progress. With

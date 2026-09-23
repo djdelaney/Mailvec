@@ -223,15 +223,47 @@ public sealed class AttachmentOcrService(
     /// <summary>
     /// Records a failed byte read so this document steps aside for a while.
     /// </summary>
-    private void RecordReadFailure(OcrCandidate candidate)
+    private void RecordReadFailure(OcrCandidate candidate) => BackOff(KeyOf(candidate), ReadBackoffCycles);
+
+    private void BackOff(OcrFailureKey key, long cycles)
     {
-        var key = KeyOf(candidate);
         if (_readBackoffUntilCycle.Count >= MaxTrackedFailures && !_readBackoffUntilCycle.ContainsKey(key))
         {
             var evict = _readBackoffUntilCycle.Keys.First();
             _readBackoffUntilCycle.Remove(evict);
         }
-        _readBackoffUntilCycle[key] = _cycle + ReadBackoffCycles;
+        _readBackoffUntilCycle[key] = _cycle + cycles;
+    }
+
+    // Consecutive vision timeouts per document snapshot, driving the escalating
+    // deferral in DeferAfterTimeout. Cleared on a successful vision call, like
+    // _visionFailures. In memory: a restart forgets the escalation, which costs
+    // at most one timeout per document to relearn.
+    private readonly Dictionary<OcrFailureKey, int> _timeouts = new();
+
+    // Deferral after the Nth consecutive timeout is ReadBackoffCycles x 2^(N-1),
+    // capped here. 5 x 2^8 = 1280 pass invocations — several hours at the
+    // default poll — so a page that can never fit the budget costs a handful of
+    // timeouts a day instead of one per sweep, and is still retried (and
+    // succeeds) promptly after the operator raises the timeout and restarts.
+    private const int MaxTimeoutBackoffDoublings = 8;
+
+    /// <summary>
+    /// Step a timed-out document aside with an escalating backoff. It is never
+    /// retired: see <see cref="VisionFailureKind.Timeout"/>.
+    /// </summary>
+    private long DeferAfterTimeout(OcrCandidate candidate)
+    {
+        var key = KeyOf(candidate);
+        if (_timeouts.Count >= MaxTrackedFailures && !_timeouts.ContainsKey(key))
+        {
+            _timeouts.Remove(_timeouts.Keys.First());
+        }
+        var n = _timeouts.TryGetValue(key, out var prior) ? prior + 1 : 1;
+        _timeouts[key] = n;
+        var cycles = (long)ReadBackoffCycles << Math.Min(n - 1, MaxTimeoutBackoffDoublings);
+        BackOff(key, cycles);
+        return cycles;
     }
 
     // Tiny blank JPEG for the zero-success health probe (see
@@ -397,6 +429,13 @@ public sealed class AttachmentOcrService(
 
         /// <summary>Stop the batch. Nothing counted, everything stays selectable.</summary>
         AbortBatch,
+
+        /// <summary>
+        /// Already backed off, no strike. Move to the next candidate, but count
+        /// toward the consecutive-failure abort: a wedged runner times out on
+        /// everything, and each attempt costs a full timeout.
+        /// </summary>
+        Defer,
     }
 
     /// <summary>
@@ -456,6 +495,16 @@ public sealed class AttachmentOcrService(
                 messages.MarkAttachmentOcrFailed(c, vision.ModelId);
                 Increment(OcrHealthKeys.RetiredTotal, 1);
                 return VisionFailureAction.SkipDocument;
+
+            case VisionFailureKind.Timeout:
+                // Our budget, not the document's verdict — never a strike.
+                var cycles = DeferAfterTimeout(c);
+                logger.LogWarning(
+                    "{Pass}: vision call for attachment {AttachmentId} exceeded the request timeout; deferring it " +
+                    "{Cycles} pass(es), not retiring. If this repeats for dense pages, the timeout is too short for " +
+                    "this host — raise Ollama:VisionRequestTimeoutSeconds (or Vision:Mistral:RequestTimeoutSeconds).",
+                    pass, c.AttachmentId, cycles);
+                return VisionFailureAction.Defer;
 
             default:
                 return VisionFailureAction.CountAsTransient;
@@ -676,10 +725,13 @@ public sealed class AttachmentOcrService(
                     c.AttachmentId, c.MessageId);
                 continue;
             }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Possibly transient (permissions blip, volume hiccup), and
-                // possibly not — a bad sector reads the same way forever. Back
+                // possibly not — a bad sector reads the same way forever.
+                // UnauthorizedAccessException is not an IOException, and before
+                // it was named here a wrongly-owned restore into ./mail fell to
+                // the catch below and stamped every scan in it 'failed'. Back
                 // off instead of retrying every cycle: the file EXISTS, so
                 // nothing else ever removes it from the candidate set, and at
                 // the default batch of 4 a handful of these would otherwise
@@ -765,6 +817,11 @@ public sealed class AttachmentOcrService(
                 var outcome = ClassifyVisionFailure(ex, c, "OCR");
                 if (outcome == VisionFailureAction.AbortBatch) break;
                 if (outcome == VisionFailureAction.SkipDocument) continue;
+                if (outcome == VisionFailureAction.Defer)
+                {
+                    if (++consecutiveFailures >= MaxConsecutiveCycleFailures) break;
+                    continue;
+                }
 
                 // Transient until proven otherwise: Ollama down, or an HTTP
                 // timeout (which surfaces as TaskCanceledException — an
@@ -817,6 +874,7 @@ public sealed class AttachmentOcrService(
             }
 
             _visionFailures.Remove(KeyOf(c));
+            _timeouts.Remove(KeyOf(c));
             done++;
             // Blank text is a committed terminal decision but not a text
             // recovery, so it counts for liveness and not for the product
@@ -919,7 +977,7 @@ public sealed class AttachmentOcrService(
                     c.AttachmentId, c.MessageId);
                 continue;
             }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Same tiering as ProcessBatchAsync: possibly transient → skip
                 // and retry after a backoff, without blocking the rest of the
@@ -1022,6 +1080,11 @@ public sealed class AttachmentOcrService(
                 var outcome = ClassifyVisionFailure(ex, c, "Image OCR");
                 if (outcome == VisionFailureAction.AbortBatch) break;
                 if (outcome == VisionFailureAction.SkipDocument) continue;
+                if (outcome == VisionFailureAction.Defer)
+                {
+                    if (++consecutiveFailures >= MaxConsecutiveCycleFailures) break;
+                    continue;
+                }
 
                 failedThisCycle.Add(c);
                 if (++consecutiveFailures >= MaxConsecutiveCycleFailures)
@@ -1044,6 +1107,7 @@ public sealed class AttachmentOcrService(
             consecutiveFailures = 0;
             pagesSent++;
             _visionFailures.Remove(KeyOf(c));
+            _timeouts.Remove(KeyOf(c));
 
             // Empty transcription (a photo with no legible text) is the common
             // case here — mark terminal rather than persisting an empty 'ocr' row.
