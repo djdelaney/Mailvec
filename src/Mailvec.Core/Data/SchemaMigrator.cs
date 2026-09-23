@@ -481,6 +481,7 @@ public sealed class SchemaMigrator(
         // leave the new identity carrying stale observations (which would
         // refuse the very rebuild switch-model exists to enable).
         Exec($"DELETE FROM metadata WHERE key = '{Embedding.EmbeddingSpace.ModelDigestKey}'");
+        Exec($"DELETE FROM metadata WHERE key = '{Embedding.EmbeddingSpace.ModelDigestDriftKey}'");
         Exec($"DELETE FROM metadata WHERE key LIKE '{Embedding.EmbeddingSpace.SentinelKeyPrefix}%'");
 
         Exec("DROP TABLE chunk_embeddings");

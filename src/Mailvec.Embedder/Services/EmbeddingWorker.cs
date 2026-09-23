@@ -765,12 +765,31 @@ public sealed class EmbeddingWorker(
 
         if (!string.Equals(stored, digest, StringComparison.Ordinal))
         {
+            // Persist BEFORE throwing, exactly as the sentinel path does: the
+            // read-side guard refuses semantic search on this marker, so the
+            // detection here protects queries in MCP and the CLI too. Without
+            // it only writes stopped, and search ranked new-weight query
+            // vectors against old-weight documents.
+            if (metadata.Get(EmbeddingSpace.ModelDigestDriftKey) is null)
+            {
+                metadata.Set(EmbeddingSpace.ModelDigestDriftKey,
+                    DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            }
             throw new InvalidOperationException(
                 $"Embedding model artifact changed under its name: stored vectors were produced by " +
                 $"digest {stored}, but the server now serves {digest} for " +
                 $"'{embeddingProfile.WireModel}' (the tag was re-pulled with different weights). " +
                 "Run `mailvec switch-model --force` to rebuild all vectors under the new artifact, or " +
                 "restore the original model version.");
+        }
+
+        // Matching digest: a standing marker means the original artifact was
+        // restored. Nothing was written in between (the mismatch refused), so
+        // clearing reopens semantic search.
+        if (metadata.Get(EmbeddingSpace.ModelDigestDriftKey) is not null)
+        {
+            metadata.Delete(EmbeddingSpace.ModelDigestDriftKey);
+            logger.LogInformation("Embedding model digest matches the stored one again; cleared the drift marker.");
         }
     }
 

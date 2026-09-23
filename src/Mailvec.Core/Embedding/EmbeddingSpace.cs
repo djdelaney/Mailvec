@@ -42,6 +42,21 @@ public static class EmbeddingSpace
     public const string ModelDigestKey = "embedding_model_digest";
 
     /// <summary>
+    /// Persisted when the embedder DETECTS the served artifact digest differs
+    /// from <see cref="ModelDigestKey"/> (never when the digest is merely
+    /// unobservable). The digest analogue of <see cref="SentinelDriftKey"/>,
+    /// and it exists for the same reason: the embedder's refusal stopped
+    /// WRITES, but MCP kept embedding queries with the new weights and ranking
+    /// them against the old vectors — plausible, meaningless results, with
+    /// only a /health 503 to show for it. The read-side guard refuses on this
+    /// marker, metadata-only, so no network probe lands on the search path.
+    /// Cleared automatically when a later cycle sees the stored digest again
+    /// (the original model restored), and by switch-model in the identity
+    /// transaction.
+    /// </summary>
+    public const string ModelDigestDriftKey = "embedding_model_digest_drift_detected_at";
+
+    /// <summary>
     /// Sentinel fingerprints — the HOSTED half of the stability hybrid
     /// (decision 2): serverless weights are unobservable, so the served
     /// function is fingerprinted behaviorally instead. Fixed non-mail texts

@@ -128,7 +128,10 @@ public sealed class HealthService(
             // refusing semantic search RIGHT NOW — a reachable provider
             // serving the wrong function must not report green while search
             // is down. Same widened-flag contract as every identity leg.
-            || !string.IsNullOrEmpty(metadata.Get(Embedding.EmbeddingSpace.SentinelDriftKey));
+            || !string.IsNullOrEmpty(metadata.Get(Embedding.EmbeddingSpace.SentinelDriftKey))
+            // Same for a persisted digest drift: the live digest comparison
+            // below needs Ollama reachable, the marker does not.
+            || !string.IsNullOrEmpty(metadata.Get(Embedding.EmbeddingSpace.ModelDigestDriftKey));
 
         var modelMismatch = (schemaModel is not null
             && (schemaModel != configModel || (schemaDim != 0 && schemaDim != configDim)))

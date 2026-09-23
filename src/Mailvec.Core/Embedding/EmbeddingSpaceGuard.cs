@@ -13,10 +13,12 @@ namespace Mailvec.Core.Embedding;
 ///
 /// <para>Deliberately METADATA-ONLY: model, dimensions, space id and config
 /// hash are one cheap SQLite read each and definitive. The artifact digest
-/// and future hosted sentinels stay on the embedder/health cadence — a
+/// and the hosted sentinels are OBSERVED on the embedder/health cadence — a
 /// network probe inside every search would put an availability dependency on
 /// the hot path, and "unknown is never drift" means a flaky tags endpoint
-/// must not take down semantic search.</para>
+/// must not take down semantic search — but a DETECTED drift of either is
+/// persisted by the embedder (<see cref="EmbeddingSpace.SentinelDriftKey"/>,
+/// <see cref="EmbeddingSpace.ModelDigestDriftKey"/>) and refused here.</para>
 ///
 /// <para>Absent metadata passes: a fresh database has no vectors for a wrong
 /// answer to come from, and unknown ≠ mismatch is the rule everywhere else.</para>
@@ -38,6 +40,15 @@ public sealed class EmbeddingSpaceGuard(MetadataRepository metadata, ResolvedEmb
                 "vectors are no longer comparable to the stored document vectors. Semantic results would be " +
                 "meaningless; keyword search is unaffected. Run `mailvec switch-model --force` to rebuild, or " +
                 "restore the original provider revision.");
+        }
+
+        if (metadata.Get(EmbeddingSpace.ModelDigestDriftKey) is { } digestDriftAt && digestDriftAt.Length > 0)
+        {
+            throw new EmbeddingException(EmbeddingFailureKind.SpaceMismatch,
+                $"The embedding model's artifact digest changed under its name (detected at {digestDriftAt}): " +
+                "the server is serving different weights than the stored vectors were built with, so query " +
+                "vectors are not comparable to them. Semantic results would be meaningless; keyword search is " +
+                "unaffected. Restore the original model version, or run `mailvec switch-model --force` to rebuild.");
         }
 
         var (spaceId, configHash) = EmbeddingSpace.ForProfile(profile);
