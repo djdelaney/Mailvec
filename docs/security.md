@@ -452,9 +452,16 @@ how likely they are to matter:
    token must reach `/up` and nothing else, and openly concedes that this "lives
    in Cloudflare's control plane rather than in this repo — so it is a
    requirement to verify, never a property to assume." With `MonitoringAudience`
-   set, a token minted for the path-scoped monitoring app is **rejected at the
-   origin** on `/` and `/health` regardless of what the Access policy says.
-   Pinned by `AccessAuthTests`.
+   set, an assertion carrying the monitoring app's audience is **rejected at
+   the origin** on `/` and `/health`. Pinned by `AccessAuthTests`. **This
+   does not make the edge policy irrelevant**: Cloudflare stamps the audience
+   of whichever Access app *matched the request*, and the origin checks only
+   `aud` — no identity claim. If the root app's policy admits the monitoring
+   token (e.g. `Include · Any Access Service Token`), that token calling `/`
+   carries the *root* audience and the origin accepts it. Keeping the
+   monitoring token out of the root app's policy is still a requirement to
+   verify; an origin-side identity allowlist (`email` / `common_name`) would
+   close it and does not exist yet.
 3. **It survives a published port.** The single most dangerous config change in
    this stack — uncommenting the mcp `ports:` mapping — currently hands the
    whole mailbox to the LAN with no OAuth. With validation on, those callers

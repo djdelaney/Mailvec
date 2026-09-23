@@ -350,10 +350,15 @@ curl -i https://mailvec.<domain>/health          # 404
 # The detailed body, from where it's actually served:
 docker compose exec mcp curl -fsS http://127.0.0.1:3333/health   # full report
 
-# Monitoring token: /up yes, mailbox no. THIS is the check worth having —
-# it now fails at the origin even if the Access policy is wrong.
+# Monitoring token: /up yes, mailbox no. THIS is the check worth having.
+# The origin checks only the assertion's audience, and Cloudflare stamps the
+# audience of whichever Access app matched — so if the ROOT app's policy
+# admits this token, the `/` probe below succeeds at the origin too. Probe
+# `/`, not just /health: /health can't tell the two cases apart.
 curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
   https://mailvec.<domain>/up                    # 200 or 503
+curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
+  https://mailvec.<domain>/                      # refused at the edge (403, or a 302 to login) — an MCP response means the root policy admits it
 curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
   https://mailvec.<domain>/health                # 403 — audience not permitted here
 ```
