@@ -17,7 +17,7 @@ public class RebuildBodiesCommandTests
         var writer = new StringWriter();
         var err = new StringWriter();
 
-        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err, apply: true);
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("No messages with body_html");
@@ -54,7 +54,7 @@ public class RebuildBodiesCommandTests
         var writer = new StringWriter();
         var err = new StringWriter();
 
-        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err, apply: true);
 
         exit.ShouldBe(1);
         writer.ToString().ShouldContain("STOPPED");
@@ -95,7 +95,7 @@ public class RebuildBodiesCommandTests
         var writer = new StringWriter();
         var err = new StringWriter();
 
-        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err, apply: true);
 
         exit.ShouldBe(0);
         writer.ToString().ShouldContain("Updated body_text on 3 messages (0 errors)");
@@ -131,7 +131,7 @@ public class RebuildBodiesCommandTests
             "INBOX", "INBOX/cur", "keep", DateTimeOffset.UtcNow);
         var writer = new StringWriter();
 
-        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, new StringWriter());
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, new StringWriter(), apply: true);
 
         exit.ShouldBe(1, "one error");
         writer.ToString().ShouldContain("(1 errors)");
@@ -164,7 +164,7 @@ public class RebuildBodiesCommandTests
 
         var writer = new StringWriter();
         var err = new StringWriter();
-        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err);
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: false, writer, err, apply: true);
 
         exit.ShouldBe(0);
         var msg = messages.GetById(id).ShouldNotBeNull();
@@ -204,59 +204,107 @@ public class RebuildBodiesCommandTests
 
         var writer = new StringWriter();
         var err = new StringWriter();
-        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: true, writer, err);
+        var exit = RebuildBodiesCommand.Execute(ctx.Services, reembed: true, writer, err, apply: true);
 
         exit.ShouldBe(0);
         // Vectors cleared, embedded_at NULL — embedder will pick this up.
         chunks.CountForMessage(id).ShouldBe(0);
         EmbeddedAtIsSet(ctx, id).ShouldBeFalse();
-        writer.ToString().ShouldContain("Cleared embeddings on 1");
+        writer.ToString().ShouldContain("Re-queued 1 changed messages");
     }
 
     [Fact]
-    public void Reembed_invalidates_inside_the_batch_that_rewrote_the_body()
+    public void Reembed_requeues_only_the_rows_whose_body_changed()
     {
-        // The re-queue used to happen ONCE, after every body batch had
-        // committed. An interrupt in between left new body_text beside vectors
-        // and an embedded_at built from the old text, with nothing in the
-        // database marking it — a re-run repairs it (every row is re-derived
-        // from body_html) but only if someone knows to run one, and a
-        // half-finished maintenance command is when nobody does.
-        //
-        // The end state is identical either way, because the trailing bulk
-        // ClearEmbeddings updates every row unconditionally — which is exactly
-        // why the existing test above cannot tell the two apart. embed_epoch
-        // can: it is additive, so a row the batch rewrote is bumped twice (once
-        // by its own UPDATE, once by the bulk clear) while a row that was never
-        // a candidate is bumped only once. Asserting the DIFFERENCE avoids
-        // pinning either mechanism's exact count.
+        // --reembed used to finish with a corpus-wide ClearEmbeddings: every
+        // row re-queued whether or not its text moved — on a CPU-only
+        // embedding host, weeks of work for a converter change that touched a
+        // handful of messages. Now the re-queue rides in the UPDATE that
+        // rewrote the body, so a row whose converted text already matches is
+        // never touched.
         using var ctx = new TestServiceProvider();
         var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        var chunks = ctx.Services.GetRequiredService<ChunkRepository>();
 
-        long rebuilt = messages.Upsert(
+        long changed = messages.Upsert(
             Sample("html@x", bodyText: "stale", bodyHtml: "<p>fresh</p>"),
             "INBOX", "INBOX/cur", "html", DateTimeOffset.UtcNow);
-        // No body_html, so `WHERE body_html IS NOT NULL` never selects it: it
-        // can only be touched by the trailing bulk clear.
-        long untouched = messages.Upsert(
+        // Converts to exactly its stored text: must keep its vectors.
+        long unchanged = messages.Upsert(
+            Sample("same@x", bodyText: "fresh", bodyHtml: "<p>fresh</p>"),
+            "INBOX", "INBOX/cur", "same", DateTimeOffset.UtcNow);
+        long plain = messages.Upsert(
             Sample("plain@x", bodyText: "plain body", bodyHtml: null),
             "INBOX", "INBOX/cur", "plain", DateTimeOffset.UtcNow);
+        foreach (var id in new[] { changed, unchanged, plain })
+            chunks.ReplaceChunksForMessage(id, [new TextChunk(0, "x", 1)], [HotVector(0)], DateTimeOffset.UtcNow);
+        var before = new[] { changed, unchanged, plain }.ToDictionary(id => id, id => EpochOf(ctx, id));
 
-        var before = (Rebuilt: EpochOf(ctx, rebuilt), Untouched: EpochOf(ctx, untouched));
+        var writer = new StringWriter();
+        RebuildBodiesCommand.Execute(ctx.Services, reembed: true, writer, new StringWriter(), apply: true).ShouldBe(0);
 
-        RebuildBodiesCommand.Execute(ctx.Services, reembed: true, new StringWriter(), new StringWriter())
-            .ShouldBe(0);
+        BodyTextOf(ctx, changed).ShouldBe("fresh");
+        (EpochOf(ctx, changed) - before[changed]).ShouldBe(1, "re-queued by the transaction that rewrote it");
+        EmbeddedAtIsSet(ctx, changed).ShouldBeFalse();
+        chunks.CountForMessage(changed).ShouldBe(0, "stale vectors dropped with the rewrite");
 
-        var deltaRebuilt = EpochOf(ctx, rebuilt) - before.Rebuilt;
-        var deltaUntouched = EpochOf(ctx, untouched) - before.Untouched;
+        EpochOf(ctx, unchanged).ShouldBe(before[unchanged], "text already matched: vectors kept");
+        EmbeddedAtIsSet(ctx, unchanged).ShouldBeTrue();
+        EpochOf(ctx, plain).ShouldBe(before[plain], "no body_html: never a candidate");
+        writer.ToString().ShouldContain("Re-queued 1 changed messages");
+    }
 
-        deltaUntouched.ShouldBeGreaterThan(0, "the bulk clear invalidates every row");
-        deltaRebuilt.ShouldBeGreaterThan(deltaUntouched,
-            "a rewritten body must be re-queued by the transaction that rewrote it, " +
-            "not only by the bulk clear at the end");
+    [Fact]
+    public void Without_apply_nothing_is_written_and_the_change_count_is_reported()
+    {
+        using var ctx = new TestServiceProvider();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        long a = messages.Upsert(Sample("a@x", bodyText: "stale", bodyHtml: "<p>fresh</p>"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
+        long b = messages.Upsert(Sample("b@x", bodyText: "fresh", bodyHtml: "<p>fresh</p>"), "INBOX", "INBOX/cur", "b", DateTimeOffset.UtcNow);
+        var epochs = (A: EpochOf(ctx, a), B: EpochOf(ctx, b));
 
-        // And the rebuild itself still happened.
-        BodyTextOf(ctx, rebuilt).ShouldBe("fresh");
+        var writer = new StringWriter();
+        RebuildBodiesCommand.Execute(ctx.Services, reembed: true, writer, new StringWriter(), apply: false).ShouldBe(0);
+
+        BodyTextOf(ctx, a).ShouldBe("stale");
+        EpochOf(ctx, a).ShouldBe(epochs.A);
+        EpochOf(ctx, b).ShouldBe(epochs.B);
+        writer.ToString().ShouldContain("DRY RUN: 1 of 2 bodies would change");
+        writer.ToString().ShouldContain("--apply");
+    }
+
+    [Fact]
+    public void A_body_the_indexer_changed_mid_run_is_not_overwritten_with_text_from_the_old_html()
+    {
+        // The conversion runs outside any transaction (it crosses to the parse
+        // service). An indexer upsert landing in that window used to be
+        // overwritten with text converted from the OLD HTML — FTS then
+        // disagreed with the stored HTML and vectors, permanently. Simulated
+        // by rewriting the row's HTML from inside the conversion call.
+        using var ctx = new TestServiceProvider();
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        long id = messages.Upsert(Sample("race@x", bodyText: "stale", bodyHtml: "<p>old html</p>"), "INBOX", "INBOX/cur", "race", DateTimeOffset.UtcNow);
+        ctx.UseParser(new FaultingParser
+        {
+            Fault = op =>
+            {
+                if (op == nameof(IMailParser.BodyTextFromHtml))
+                {
+                    using var conn = ctx.Connections.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "UPDATE messages SET body_html = '<p>new html</p>', body_text = 'new html' WHERE id = $id";
+                    cmd.Parameters.AddWithValue("$id", id);
+                    cmd.ExecuteNonQuery();
+                }
+                return null;
+            },
+        }).Rebuild();
+
+        var writer = new StringWriter();
+        RebuildBodiesCommand.Execute(ctx.Services, reembed: true, writer, new StringWriter(), apply: true).ShouldBe(0);
+
+        BodyTextOf(ctx, id).ShouldBe("new html", "the indexer's newer body survives");
+        writer.ToString().ShouldContain("SKIPPED 1");
     }
 
     [Fact]
@@ -269,7 +317,7 @@ public class RebuildBodiesCommandTests
             "INBOX", "INBOX/cur", "nr", DateTimeOffset.UtcNow);
         var epochBefore = EpochOf(ctx, id);
 
-        RebuildBodiesCommand.Execute(ctx.Services, reembed: false, new StringWriter(), new StringWriter())
+        RebuildBodiesCommand.Execute(ctx.Services, reembed: false, new StringWriter(), new StringWriter(), apply: true)
             .ShouldBe(0);
 
         BodyTextOf(ctx, id).ShouldBe("fresh", "the body is rebuilt regardless of --reembed");

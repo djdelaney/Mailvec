@@ -240,6 +240,18 @@ public sealed class ChunkRepository(ConnectionFactory connections)
         tx.Commit();
     }
 
+    /// <summary>
+    /// Delete a message's chunks and vectors inside the CALLER's transaction,
+    /// so a write that makes them stale can drop them atomically with itself
+    /// (rebuild-bodies does this beside the body rewrite and the re-queue).
+    /// </summary>
+    public static void DeleteChunksForMessage(SqliteConnection conn, SqliteTransaction tx, long messageId)
+    {
+        ArgumentNullException.ThrowIfNull(conn);
+        ArgumentNullException.ThrowIfNull(tx);
+        DeleteChunks(conn, tx, messageId);
+    }
+
     private static void DeleteChunks(SqliteConnection conn, SqliteTransaction tx, long messageId)
     {
         // chunk_embeddings has chunk_id PRIMARY KEY but no FK to chunks (vec0 doesn't support that),
