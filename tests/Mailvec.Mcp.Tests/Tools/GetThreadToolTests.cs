@@ -338,4 +338,70 @@ public class GetThreadToolTests
 
         resp.Messages[0].WebmailUrl.ShouldNotBeNull();
     }
+
+    // ---- Sender-controlled thread membership ---------------------------------
+    //
+    // thread_id is the first References entry, which the SENDER writes, so
+    // anyone who knows one Message-ID in a thread can attach mail to it. That
+    // can't be fixed without authentication signals; what these pin is that it
+    // can't be amplified into hiding the message asked about, pinning itself to
+    // an end of the thread by forging a future date, or exhausting memory.
+
+    [Fact]
+    public void The_requested_message_survives_a_flood_attached_to_its_thread()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var t = "bank-thread";
+        var arrived = new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero);
+        repo.Upsert(Helpers.Sample("real-1@bank", threadId: t, dateSent: arrived), "INBOX", "INBOX/cur", "r1", arrived);
+        repo.Upsert(Helpers.Sample("real-2@bank", threadId: t, dateSent: arrived.AddHours(1)), "INBOX", "INBOX/cur", "r2", arrived.AddHours(1));
+        // Ten injected messages, backdated so they sort first.
+        for (var i = 0; i < 10; i++)
+            repo.Upsert(Helpers.Sample($"spam-{i}@evil", threadId: t, dateSent: new DateTimeOffset(1970, 1, 1, 0, i, 0, TimeSpan.Zero)),
+                "INBOX", "INBOX/cur", $"s{i}", arrived.AddDays(1));
+
+        var resp = Build(db, mcp: new McpOptions { ThreadMaxMessages = 3 }).GetThread(messageId: "real-2@bank");
+
+        resp.Count.ShouldBe(3);
+        resp.TotalCount.ShouldBe(12);
+        resp.Truncated.ShouldBeTrue();
+        resp.Messages.Select(m => m.MessageId).ShouldContain("real-2@bank");
+    }
+
+    [Fact]
+    public void A_future_dated_message_sorts_at_its_arrival_not_at_the_end()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var t = "t-future";
+        var d1 = new DateTimeOffset(2026, 9, 1, 10, 0, 0, TimeSpan.Zero);
+        repo.Upsert(Helpers.Sample("a@x", threadId: t, dateSent: d1), "INBOX", "INBOX/cur", "a", d1);
+        // Arrived second, claims 2099.
+        repo.Upsert(Helpers.Sample("forged@x", threadId: t, dateSent: new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            "INBOX", "INBOX/cur", "f", d1.AddHours(1));
+        repo.Upsert(Helpers.Sample("c@x", threadId: t, dateSent: d1.AddHours(2)), "INBOX", "INBOX/cur", "c", d1.AddHours(2));
+
+        var resp = Build(db).GetThread(messageId: "a@x");
+
+        resp.Messages.Select(m => m.MessageId).ShouldBe(new[] { "a@x", "forged@x", "c@x" });
+        // Stored clamped to arrival (MessageRepository.ClampDateSent); the
+        // sender's original Date: survives in raw_headers.
+        resp.Messages[1].DateSent.ShouldBe(d1.AddHours(1));
+    }
+
+    [Fact]
+    public void The_thread_query_never_loads_html_bodies()
+    {
+        // SELECT * used to materialise every member's body_html before any cap.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var parsed = Helpers.Sample("html@x", threadId: "t-html") with { BodyHtml = "<p>" + new string('x', 10_000) + "</p>" };
+        repo.Upsert(parsed, "INBOX", "INBOX/cur", "h", DateTimeOffset.UtcNow);
+
+        var page = repo.GetThreadByMessageId(null, "html@x", 10);
+
+        page.Messages.Single().BodyHtml.ShouldBeNull();
+        page.Messages.Single().BodyText.ShouldNotBeNull();
+    }
 }

@@ -223,7 +223,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.Parameters.AddWithValue("$from_name", (object?)parsed.FromName ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$to_addresses", JsonSerializer.Serialize(parsed.ToAddresses, JsonOpts));
             cmd.Parameters.AddWithValue("$cc_addresses", JsonSerializer.Serialize(parsed.CcAddresses, JsonOpts));
-            cmd.Parameters.AddWithValue("$date_sent", (object?)parsed.DateSent?.ToString("O") ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$date_sent", (object?)ClampDateSent(parsed.DateSent, indexedAt)?.ToString("O") ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$date_received", indexedAt.ToString("O"));
             cmd.Parameters.AddWithValue("$size_bytes", parsed.SizeBytes);
             cmd.Parameters.AddWithValue("$has_attachments", parsed.HasAttachments ? 1 : 0);
@@ -515,18 +515,72 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return results;
     }
 
+    /// <summary>How far past its arrival a message's claimed date may run before it is clamped.</summary>
+    internal static readonly TimeSpan MaxFutureDateSkew = TimeSpan.FromDays(1);
+
     /// <summary>
-    /// All messages in a thread, oldest first. Looks up by either the SQLite
-    /// internal id or the RFC Message-ID header. When the matched message has no
-    /// thread_id (a lone message — notifications, marketing), returns just that
-    /// one message, NOT an empty list. Returns empty only when no message
-    /// matches the id/Message-ID at all. (Don't "fix" this to require a non-null
-    /// thread_id — singletons are common; see CLAUDE.md.)
+    /// The sender's <c>Date:</c>, clamped to no later than
+    /// <see cref="MaxFutureDateSkew"/> past when we indexed the message.
     /// </summary>
-    public IReadOnlyList<Message> GetThreadByMessageId(long? id, string? messageId)
+    /// <remarks>
+    /// <c>date_sent</c> is a header the sender writes, and it drives every
+    /// "recent" ordering Claude sees: query-less browse, the archive's
+    /// <c>latestDate</c>, thread order. A message dated 2099 used to sit first in
+    /// every "show me my recent INBOX" browse and made <c>latestDate</c> claim the
+    /// mailbox reaches 2099 — pinning attacker-chosen content to the most
+    /// prominent slot for as long as it exists. Nothing can be sent after it
+    /// arrived, so the stored date is clamped to the arrival time; a day of
+    /// slack absorbs clock skew and zone mistakes, which is all a legitimate
+    /// future date ever is. The sender's original header survives in
+    /// <c>raw_headers</c>. Clamped at write time rather than in each ORDER BY
+    /// because the browse and archive-stats paths are served by expression
+    /// indexes over <c>datetime(date_sent)</c> (v12/v13) that a clamped sort key
+    /// would bypass, and one write-time rule keeps every reader consistent.
+    /// Backdating has no trusted lower bound (the initial bulk import stamped
+    /// every historic message with the import day) and is left alone.
+    /// </remarks>
+    internal static DateTimeOffset? ClampDateSent(DateTimeOffset? claimed, DateTimeOffset indexedAt) =>
+        claimed is { } d && d > indexedAt + MaxFutureDateSkew ? indexedAt : claimed;
+
+    /// <summary>
+    /// Thread ordering: oldest first. <c>date_sent</c> is already clamped
+    /// against future dates at write time (<see cref="ClampDateSent"/>).
+    /// </summary>
+    internal const string ThreadOrderBy = "ORDER BY date_sent IS NULL, datetime(date_sent) ASC, id ASC";
+
+    // Every column Map reads, with the two the thread view never uses nulled
+    // out. body_html is the big one: SELECT * over a thread used to materialise
+    // every member's HTML before any cap applied, so anyone who knew one
+    // Message-ID could attach thousands of large messages to a thread (thread_id
+    // is the sender-supplied References root) and OOM mcp the next time it was
+    // opened.
+    private const string ThreadColumns = """
+        id, message_id, thread_id, maildir_path, maildir_filename, folder, subject,
+        from_address, from_name, to_addresses, cc_addresses, date_sent, date_received,
+        size_bytes, has_attachments, body_text, NULL AS body_html, NULL AS raw_headers,
+        indexed_at, embedded_at, deleted_at
+        """;
+
+    /// <summary>
+    /// The thread containing the given message, capped at
+    /// <paramref name="maxMessages"/> in <see cref="ThreadOrderBy"/> order, plus
+    /// the thread's full size. Looks up by either the SQLite internal id or the
+    /// RFC Message-ID header. When the matched message has no thread_id (a lone
+    /// message — notifications, marketing), returns just that one message, NOT
+    /// an empty page; empty only when nothing matches. (Don't "fix" this to
+    /// require a non-null thread_id — singletons are common; see CLAUDE.md.)
+    /// </summary>
+    /// <remarks>
+    /// The requested message is always included even when the cap would clip
+    /// it: thread_id is the sender-supplied References root, so a flood of
+    /// messages attached to the thread must not push the one the caller asked
+    /// about out of the answer.
+    /// </remarks>
+    public ThreadPage GetThreadByMessageId(long? id, string? messageId, int maxMessages)
     {
         if (id is null && string.IsNullOrEmpty(messageId))
             throw new ArgumentException("Provide id or messageId.");
+        maxMessages = Math.Max(1, maxMessages);
 
         using var conn = connections.Open();
 
@@ -534,7 +588,7 @@ public sealed class MessageRepository(ConnectionFactory connections)
         // NULL (lone message), in which case we still want to return that one
         // message rather than empty.
         string? threadId;
-        long? rootId;
+        long rootId;
         using (var resolve = conn.CreateCommand())
         {
             resolve.CommandText = id is not null
@@ -542,45 +596,76 @@ public sealed class MessageRepository(ConnectionFactory connections)
                 : "SELECT id, thread_id FROM messages WHERE message_id = $k";
             resolve.Parameters.AddWithValue("$k", (object?)id ?? messageId!);
             using var r = resolve.ExecuteReader();
-            if (!r.Read()) return [];
+            if (!r.Read()) return new ThreadPage([], 0);
             rootId = r.GetInt64(0);
             threadId = r.IsDBNull(1) ? null : r.GetString(1);
         }
 
-        using var cmd = conn.CreateCommand();
+        var results = new List<Message>();
+        int total;
         if (threadId is null)
         {
             // Lone message — return just it.
-            cmd.CommandText = "SELECT * FROM messages WHERE id = $id AND deleted_at IS NULL";
-            cmd.Parameters.AddWithValue("$id", rootId!.Value);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"SELECT {ThreadColumns} FROM messages WHERE id = $id AND deleted_at IS NULL";
+            cmd.Parameters.AddWithValue("$id", rootId);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) results.Add(Map(reader));
+            total = results.Count;
         }
         else
         {
-            cmd.CommandText = """
-                SELECT * FROM messages
-                WHERE thread_id = $tid AND deleted_at IS NULL
-                ORDER BY date_sent IS NULL, datetime(date_sent) ASC, id ASC
-                """;
-            cmd.Parameters.AddWithValue("$tid", threadId);
-        }
+            using (var count = conn.CreateCommand())
+            {
+                count.CommandText = "SELECT COUNT(*) FROM messages WHERE thread_id = $tid AND deleted_at IS NULL";
+                count.Parameters.AddWithValue("$tid", threadId);
+                total = Convert.ToInt32(count.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            }
 
-        var results = new List<Message>();
-        using (var reader = cmd.ExecuteReader())
-        {
-            while (reader.Read()) results.Add(Map(reader));
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $"""
+                    SELECT {ThreadColumns} FROM messages
+                    WHERE thread_id = $tid AND deleted_at IS NULL
+                    {ThreadOrderBy}
+                    LIMIT $limit
+                    """;
+                cmd.Parameters.AddWithValue("$tid", threadId);
+                cmd.Parameters.AddWithValue("$limit", maxMessages);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read()) results.Add(Map(reader));
+            }
+
+            if (total > results.Count && results.All(m => m.Id != rootId))
+            {
+                using var anchor = conn.CreateCommand();
+                anchor.CommandText = $"SELECT {ThreadColumns} FROM messages WHERE id = $id AND deleted_at IS NULL";
+                anchor.Parameters.AddWithValue("$id", rootId);
+                using var reader = anchor.ExecuteReader();
+                if (reader.Read())
+                {
+                    // Replace the last kept entry, then restore thread order.
+                    results[^1] = Map(reader);
+                    results = [.. results
+                        .OrderBy(m => m.DateSent is null)
+                        .ThenBy(m => m.DateSent)
+                        .ThenBy(m => m.Id)];
+                }
+            }
         }
 
         // Hydrate attachment rows so the thread view can list each message's
         // attachments (get_thread) without a follow-up get_email per message.
-        // Only attachment-carrying messages pay the extra query, threads are
-        // small, and the summary loader skips the extracted-text blobs.
+        // Only attachment-carrying messages pay the extra query, and the
+        // summary loader skips the extracted-text blobs.
         for (var i = 0; i < results.Count; i++)
         {
             if (results[i].HasAttachments)
                 results[i] = results[i] with { Attachments = GetAttachmentSummariesForMessage(conn, results[i].Id) };
         }
-        return results;
+        return new ThreadPage(results, total);
     }
+
 
     /// <summary>
     /// One row per non-empty folder, sorted by name. Soft-deleted messages are
@@ -1920,3 +2005,9 @@ public sealed record OcrCandidate(
         HasAttachments = true,
     };
 }
+
+/// <summary>
+/// A capped thread: <see cref="Messages"/> in thread order, and
+/// <see cref="TotalCount"/> — how many live messages the thread actually has.
+/// </summary>
+public sealed record ThreadPage(IReadOnlyList<Message> Messages, int TotalCount);
