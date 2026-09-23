@@ -271,9 +271,18 @@ static async Task RunHttp(string[] args)
 
         var accessLogger = app.Services.GetRequiredService<ILoggerFactory>()
             .CreateLogger("Mailvec.Mcp.Startup");
+        var identities = resolvedMcpOpts.Access.IdentityAllowlist();
         accessLogger.LogInformation(
-            "Cloudflare Access assertion validation ENABLED (issuer {Issuer}, loopback bypass {Loopback}).",
-            resolvedMcpOpts.Access.TeamDomain, resolvedMcpOpts.Access.AllowLoopback ? "on" : "off");
+            "Cloudflare Access assertion validation ENABLED (issuer {Issuer}, loopback bypass {Loopback}, identity allowlist {IdentityCount}).",
+            resolvedMcpOpts.Access.TeamDomain, resolvedMcpOpts.Access.AllowLoopback ? "on" : "off",
+            identities.Count == 0 ? "off" : identities.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (identities.Count == 0)
+        {
+            accessLogger.LogWarning(
+                "Mcp:Access:AllowedIdentities is empty: the origin checks only which Access application admitted a " +
+                "caller, not who it is. A root-app policy that admits an unintended credential (e.g. 'Any Access " +
+                "Service Token') would reach the mailbox. Set it to your email and your service tokens' client ids.");
+        }
 
         // Fetch the signing keys NOW rather than lazily on the first request.
         // The line above says "ENABLED"; without this, that is all an operator

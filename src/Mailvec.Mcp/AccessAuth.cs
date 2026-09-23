@@ -262,6 +262,9 @@ internal sealed class AccessAudienceHandler(
             var presented = context.User.FindAll("aud").Select(c => c.Value);
             if (presented.Any(a => permitted.Contains(a, StringComparer.Ordinal)))
             {
+                if (requirement.Scope == AccessScope.Owner && !IdentityAllowed(context, access))
+                    return Task.CompletedTask;
+
                 context.Succeed(requirement);
                 return Task.CompletedTask;
             }
@@ -280,6 +283,33 @@ internal sealed class AccessAudienceHandler(
         // can't override, which would make this unusable if a second policy is
         // ever composed alongside it. Declining is already deny-by-default.
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The <see cref="AccessOptions.AllowedIdentities"/> check. The audience
+    /// says which Access application admitted the caller; this says whether the
+    /// caller is one we meant to admit — see the option's remarks for why those
+    /// differ exactly when the edge policy is wrong.
+    /// </summary>
+    private bool IdentityAllowed(AuthorizationHandlerContext context, AccessOptions access)
+    {
+        var allowlist = access.IdentityAllowlist();
+        if (allowlist.Count == 0) return true;
+
+        // A user assertion carries `email`; a service-token assertion carries
+        // `common_name` (the token's client id) and an empty `sub`.
+        var identity = context.User.FindFirst("email")?.Value;
+        if (string.IsNullOrEmpty(identity)) identity = context.User.FindFirst("common_name")?.Value;
+
+        if (!string.IsNullOrEmpty(identity) && allowlist.Contains(identity, StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        // Logs the identity so a rollout that forgot a legitimate caller is a
+        // one-line fix; an email or client id is not a secret.
+        logger.LogWarning(
+            "Access assertion rejected for {Path}: identity {Identity} is not in Mcp:Access:AllowedIdentities.",
+            http.HttpContext?.Request.Path.Value, string.IsNullOrEmpty(identity) ? "(none presented)" : identity);
+        return false;
     }
 
     private static bool IsLoopback(HttpContext? context)

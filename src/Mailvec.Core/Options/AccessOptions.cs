@@ -18,8 +18,11 @@ namespace Mailvec.Core.Options;
 /// nothing else, and that this "lives in Cloudflare's control plane rather than
 /// in this repo — so it is a requirement to verify, never a property to assume".
 /// <see cref="MonitoringAudience"/> is that assumption made checkable at the
-/// origin: a token minted for the path-scoped monitoring app fails the audience
-/// check on <c>/</c> and <c>/health</c> even if the Access policy is wrong.</para>
+/// origin: an assertion carrying the monitoring app's audience fails the
+/// audience check on <c>/</c> and <c>/health</c>. It is NOT proof against every
+/// wrong policy — Cloudflare stamps the audience of whichever application
+/// matched, so a root policy that admits the monitoring token hands it the
+/// OWNER audience. <see cref="AllowedIdentities"/> is what closes that.</para>
 ///
 /// <para><b>Why <see cref="Enabled"/> defaults to false.</b> Mailvec ships two
 /// deployment shapes and only one of them has Cloudflare in front of it. The
@@ -67,6 +70,34 @@ public sealed class AccessOptions
     /// — that asymmetry is the entire point of having a second app.
     /// </summary>
     public string MonitoringAudience { get; set; } = "";
+
+    /// <summary>
+    /// Who may use the mailbox surface, independent of what the edge policy
+    /// admits: a comma-separated list of user emails (the assertion's
+    /// <c>email</c> claim) and service-token client IDs (its
+    /// <c>common_name</c> claim). Empty = audience-only, the historical
+    /// behaviour.
+    ///
+    /// <para><b>Why the audience alone is not enough.</b> Cloudflare stamps the
+    /// assertion with the audience of whichever Access application matched the
+    /// request. If the root application's policy ever admits a credential it
+    /// shouldn't — <c>Include · Any Access Service Token</c>, a Bypass left from
+    /// troubleshooting, a group that grew — that credential calling <c>/</c>
+    /// carries the owner audience and the audience check accepts it. The edge
+    /// policy lives in Cloudflare's dashboard, unversioned; this list lives in
+    /// the deployment and is checked by the origin on every mailbox request.</para>
+    ///
+    /// <para>Applies to <c>/</c> and <c>/health</c>, not <c>/up</c> (booleans
+    /// only, and the monitor's identity is already pinned by
+    /// <see cref="MonitoringAudience"/>). Emails compare case-insensitively.
+    /// A rejection logs the presented identity, so the rollout is: set the list,
+    /// watch the log for anything you forgot, add it.</para>
+    /// </summary>
+    public string AllowedIdentities { get; set; } = "";
+
+    /// <summary>The parsed <see cref="AllowedIdentities"/>; empty means "no identity check".</summary>
+    public IReadOnlyList<string> IdentityAllowlist() =>
+        AllowedIdentities.Split([',', ';', ' ', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>
     /// Exempt requests arriving over the loopback interface. Default true, and

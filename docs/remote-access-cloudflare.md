@@ -351,10 +351,11 @@ curl -i https://mailvec.<domain>/health          # 404
 docker compose exec mcp curl -fsS http://127.0.0.1:3333/health   # full report
 
 # Monitoring token: /up yes, mailbox no. THIS is the check worth having.
-# The origin checks only the assertion's audience, and Cloudflare stamps the
-# audience of whichever Access app matched — so if the ROOT app's policy
-# admits this token, the `/` probe below succeeds at the origin too. Probe
-# `/`, not just /health: /health can't tell the two cases apart.
+# Cloudflare stamps the audience of whichever Access app matched — so if the
+# ROOT app's policy admits this token, it arrives at `/` with the root
+# audience. With MCP_ACCESS_ALLOWED_IDENTITIES set the origin still refuses it
+# (403, and a "not in Mcp:Access:AllowedIdentities" log line); without it, it
+# gets through. Probe `/`, not just /health: /health can't tell the cases apart.
 curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
   https://mailvec.<domain>/up                    # 200 or 503
 curl -i -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \

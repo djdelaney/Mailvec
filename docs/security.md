@@ -458,10 +458,14 @@ how likely they are to matter:
    of whichever Access app *matched the request*, and the origin checks only
    `aud` — no identity claim. If the root app's policy admits the monitoring
    token (e.g. `Include · Any Access Service Token`), that token calling `/`
-   carries the *root* audience and the origin accepts it. Keeping the
-   monitoring token out of the root app's policy is still a requirement to
-   verify; an origin-side identity allowlist (`email` / `common_name`) would
-   close it and does not exist yet.
+   carries the *root* audience and the audience check accepts it. That is
+   what `Mcp:Access:AllowedIdentities` (`MCP_ACCESS_ALLOWED_IDENTITIES`) is
+   for: a comma-separated list of the emails and service-token client ids
+   allowed on `/` and `/health`, checked against the assertion's `email` /
+   `common_name` claim whatever the edge policy admitted. Empty keeps the
+   audience-only behaviour and logs a warning at boot. A rejection logs the
+   presented identity, so a forgotten legitimate caller shows up in
+   `docker compose logs mcp` as a one-line fix.
 3. **It survives a published port.** The single most dangerous config change in
    this stack — uncommenting the mcp `ports:` mapping — currently hands the
    whole mailbox to the LAN with no OAuth. With validation on, those callers

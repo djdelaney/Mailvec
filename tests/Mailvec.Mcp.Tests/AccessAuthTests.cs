@@ -287,6 +287,104 @@ public class AccessAuthTests
         response.StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
     }
 
+    // ---------- identity allowlist ----------
+    //
+    // The audience says which Access APPLICATION admitted the caller, and
+    // Cloudflare stamps whichever app matched. A root-app policy that admits
+    // the monitoring service token (e.g. "Any Access Service Token") therefore
+    // hands that token the OWNER audience, and the audience check accepts it.
+    // These model exactly that: a service-token assertion carrying OwnerAud.
+
+    private static readonly Dictionary<string, object> MonitorTokenOnRootApp = new()
+    {
+        ["common_name"] = "monitor-client-id.access",
+        ["sub"] = "",
+    };
+
+    [Fact]
+    public async Task Without_an_allowlist_a_misadmitted_service_token_reaches_the_mailbox()
+    {
+        // The gap the allowlist closes, pinned so the docs can't drift back to
+        // claiming the audience check alone refuses it.
+        using var factory = new AccessFactory();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(AccessAuth.AssertionHeader, factory.Token(OwnerAud, identity: MonitorTokenOnRootApp));
+
+        using var request = ToolsListRequest();
+        (await client.SendAsync(request)).StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task With_an_allowlist_a_misadmitted_service_token_is_forbidden()
+    {
+        using var factory = new AccessFactory(allowedIdentities: "owner@example.com, claude-code-client-id.access");
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(AccessAuth.AssertionHeader, factory.Token(OwnerAud, identity: MonitorTokenOnRootApp));
+
+        using var request = ToolsListRequest();
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+        (await response.Content.ReadAsStringAsync()).ShouldNotContain("search_emails");
+    }
+
+    [Fact]
+    public async Task With_an_allowlist_the_owner_is_admitted_case_insensitively()
+    {
+        using var factory = new AccessFactory(allowedIdentities: "Owner@Example.com");
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(AccessAuth.AssertionHeader, factory.Token(OwnerAud));
+
+        using var request = ToolsListRequest();
+        (await client.SendAsync(request)).StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task With_an_allowlist_a_listed_service_token_is_admitted()
+    {
+        using var factory = new AccessFactory(allowedIdentities: "owner@example.com,claude-code-client-id.access");
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(AccessAuth.AssertionHeader, factory.Token(OwnerAud, identity: new Dictionary<string, object>
+        {
+            ["common_name"] = "claude-code-client-id.access",
+            ["sub"] = "",
+        }));
+
+        using var request = ToolsListRequest();
+        (await client.SendAsync(request)).StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task With_an_allowlist_an_assertion_with_no_identity_is_forbidden()
+    {
+        using var factory = new AccessFactory(allowedIdentities: "owner@example.com");
+
+        var response = await factory.GetWithAssertion("/health",
+            factory.Token(OwnerAud, identity: new Dictionary<string, object> { ["sub"] = "x" }));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task The_allowlist_does_not_apply_to_up()
+    {
+        // /up is booleans only and already pinned to the monitoring audience;
+        // the monitor's client id need not be listed.
+        using var factory = new AccessFactory(allowedIdentities: "owner@example.com");
+
+        var response = await factory.GetWithAssertion("/up", factory.Token(MonitorAud, identity: MonitorTokenOnRootApp));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable); // degraded, but served
+    }
+
+    [Fact]
+    public void The_allowlist_parses_commas_and_whitespace_and_ignores_blanks()
+    {
+        var access = new AccessOptions { AllowedIdentities = " a@x.com, ,b.access\n c@y.com;" };
+        access.IdentityAllowlist().ShouldBe(new[] { "a@x.com", "b.access", "c@y.com" });
+        new AccessOptions().IdentityAllowlist().ShouldBeEmpty();
+    }
+
     // ---------- loopback bypass ----------
 
     [Fact]
@@ -445,8 +543,11 @@ public class AccessAuthTests
         /// Access-gated deployment (cloudflared forwarding from the tunnel).
         /// Tests that want the loopback path say so explicitly.
         /// </summary>
-        public AccessFactory(IPAddress? remoteIp = null, bool allowLoopback = true)
+        private readonly string? _allowedIdentities;
+
+        public AccessFactory(IPAddress? remoteIp = null, bool allowLoopback = true, string? allowedIdentities = null)
         {
+            _allowedIdentities = allowedIdentities;
             _tempDir = Path.Combine(Path.GetTempPath(), "mailvec-access-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_tempDir);
             _remoteIp = remoteIp ?? IPAddress.Parse("172.18.0.7");
@@ -460,7 +561,8 @@ public class AccessAuthTests
             string? issuer = null,
             DateTime? expires = null,
             DateTime? notBefore = null,
-            SecurityKey? signingKey = null)
+            SecurityKey? signingKey = null,
+            IDictionary<string, object>? identity = null)
         {
             var descriptor = new SecurityTokenDescriptor
             {
@@ -470,11 +572,13 @@ public class AccessAuthTests
                 Expires = expires ?? DateTime.UtcNow.AddHours(1),
                 SigningCredentials = new SigningCredentials(
                     signingKey ?? _key, SecurityAlgorithms.RsaSha256),
-                Claims = new Dictionary<string, object>
-                {
-                    ["email"] = "owner@example.com",
-                    ["sub"] = "owner-subject-id",
-                },
+                Claims = identity is not null
+                    ? new Dictionary<string, object>(identity)
+                    : new Dictionary<string, object>
+                    {
+                        ["email"] = "owner@example.com",
+                        ["sub"] = "owner-subject-id",
+                    },
             };
             return new JsonWebTokenHandler().CreateToken(descriptor);
         }
@@ -501,6 +605,7 @@ public class AccessAuthTests
                     ["Mcp:Access:Audience"] = OwnerAud,
                     ["Mcp:Access:MonitoringAudience"] = MonitorAud,
                     ["Mcp:Access:AllowLoopback"] = _allowLoopback ? "true" : "false",
+                    ["Mcp:Access:AllowedIdentities"] = _allowedIdentities ?? "",
                     // /health is this file's probe surface for auth behaviour,
                     // so its own loopback restriction is off here — otherwise
                     // every off-box case 404s before authorization is reached
