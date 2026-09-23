@@ -65,7 +65,7 @@ public sealed class GetAttachmentPageImageTool(
         if (page < 1)
             throw new McpException("page must be 1 or greater.");
 
-        var msg = id is not null ? messages.GetById(id.Value) : messages.GetByMessageId(messageId!);
+        var msg = id is not null ? messages.GetById(id.Value, includeAttachmentText: false) : messages.GetByMessageId(messageId!, includeAttachmentText: false);
         if (msg is null)
             throw new McpException(id is not null
                 ? $"No message with id {id}."

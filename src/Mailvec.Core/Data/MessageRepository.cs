@@ -426,7 +426,16 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return list;
     }
 
-    public Message? GetById(long id)
+    public Message? GetById(long id) => GetById(id, includeAttachmentText: true);
+
+    /// <summary>
+    /// <paramref name="includeAttachmentText"/> false loads attachment
+    /// SUMMARIES (length, not text) — what every caller that only reports or
+    /// selects an attachment needs. The full load pulls every attachment's
+    /// extracted text (up to millions of chars each) into memory to answer a
+    /// question about one.
+    /// </summary>
+    public Message? GetById(long id, bool includeAttachmentText)
     {
         using var conn = connections.Open();
         using var cmd = conn.CreateCommand();
@@ -439,13 +448,34 @@ public sealed class MessageRepository(ConnectionFactory connections)
             msg = reader.Read() ? Map(reader) : null;
         }
         if (msg is null) return null;
-        return msg with { Attachments = GetAttachmentsForMessage(conn, msg.Id) };
+        return msg with
+        {
+            Attachments = includeAttachmentText
+                ? GetAttachmentsForMessage(conn, msg.Id)
+                : GetAttachmentSummariesForMessage(conn, msg.Id),
+        };
     }
 
     public Message? GetByMessageId(string messageId)
     {
         using var conn = connections.Open();
         return GetByMessageId(conn, messageId);
+    }
+
+    /// <inheritdoc cref="GetById(long, bool)"/>
+    public Message? GetByMessageId(string messageId, bool includeAttachmentText)
+    {
+        if (includeAttachmentText) return GetByMessageId(messageId);
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM messages WHERE message_id = $mid";
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        Message? msg;
+        using (var reader = cmd.ExecuteReader())
+        {
+            msg = reader.Read() ? Map(reader) : null;
+        }
+        return msg is null ? null : msg with { Attachments = GetAttachmentSummariesForMessage(conn, msg.Id) };
     }
 
     /// <summary>

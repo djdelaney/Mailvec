@@ -184,4 +184,59 @@ public class GetEmailToolTests
         resp.WebmailUrl.ShouldNotBeNull();
         resp.WebmailUrl.ShouldContain("u1");
     }
+
+    // ---- Size bound ------------------------------------------------------------
+
+    [Fact]
+    public void A_body_over_the_bound_is_cut_and_flagged_with_its_full_length()
+    {
+        // The body was bounded only by the parse service's 64 MB response
+        // ceiling, so one crafted message could put tens of MB into a tool
+        // result.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var huge = new string('x', 5_000);
+        long id = repo.Upsert(Helpers.Sample("big@x", body: huge) with { BodyHtml = "<p>" + huge + "</p>" },
+            "INBOX", "INBOX/cur", "big", DateTimeOffset.UtcNow);
+        var tool = new GetEmailTool(repo, Helpers.Fastmail(null), Helpers.NoopLogger(),
+            Microsoft.Extensions.Options.Options.Create(new McpOptions { EmailMaxBodyChars = 1_000 }));
+
+        var resp = tool.GetEmail(id: id, includeHtml: true);
+
+        resp.BodyText.Length.ShouldBe(1_000);
+        resp.BodyHtml!.Length.ShouldBe(1_000);
+        resp.BodyTruncated.ShouldBeTrue();
+        resp.BodyTextChars.ShouldBe(5_000);
+    }
+
+    [Fact]
+    public void A_body_under_the_bound_is_returned_whole()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = repo.Upsert(Helpers.Sample("small@x", body: "short body"), "INBOX", "INBOX/cur", "s", DateTimeOffset.UtcNow);
+
+        var resp = Build(db).GetEmail(id: id);
+
+        resp.BodyText.ShouldBe("short body");
+        resp.BodyTruncated.ShouldBeFalse();
+        resp.BodyTextChars.ShouldBe(10);
+    }
+
+    [Fact]
+    public void Attachment_lengths_are_reported_without_loading_the_text()
+    {
+        // The summary loader projects LENGTH(extracted_text); the reported
+        // length must be the same one the full load used to compute.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        long id = repo.Upsert(Helpers.Sample("att@x", attachments: [
+                new ParsedAttachment(0, "a.pdf", "application/pdf", 10, ExtractedText: new string('t', 1234), ExtractionStatus: "done"),
+            ]), "INBOX", "INBOX/cur", "att", DateTimeOffset.UtcNow);
+
+        var resp = Build(db).GetEmail(id: id);
+
+        resp.Attachments.Single().ExtractedTextChars.ShouldBe(1234);
+        repo.GetById(id, includeAttachmentText: false)!.Attachments.Single().ExtractedText.ShouldBeNull();
+    }
 }

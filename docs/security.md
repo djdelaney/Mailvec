@@ -576,7 +576,14 @@ still no rate limiting; see below).
   `Mcp:ThreadMaxBodyChars` (200k) budget spent oldest-first. Truncation is
   always reported (`truncated`, `totalCount`, per-entry `bodyTruncated`) —
   silent truncation is worse than none, because the model summarises half a
-  thread as if it saw all of it.
+  thread as if it saw all of it. The message cap is applied in the SQL, and
+  the thread query never loads `body_html`, so the cap bounds memory as well
+  as the response.
+- **`get_email`** is how a truncated thread entry is read in full, so its
+  bound (`Mcp:EmailMaxBodyChars`, 1M chars) is set past any real message
+  rather than as a budget; before it, a body was limited only by the parse
+  service's 64 MB response ceiling. A cut is reported (`bodyTruncated`,
+  `bodyTextChars`). It loads attachment *lengths*, not their extracted text.
 
 ## What's accepted
 
