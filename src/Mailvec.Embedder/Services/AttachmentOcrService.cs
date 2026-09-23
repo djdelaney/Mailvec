@@ -448,6 +448,44 @@ public sealed class AttachmentOcrService(
     }
 
     /// <summary>
+    /// Retire a document to 'failed', stamping the decision time when the write
+    /// commits. A retirement is a terminal decision — it removes the document
+    /// from the queue — but it is not evidence the provider is healthy, so it
+    /// moves LastDecisionAt WITHOUT clearing the failure counters the way
+    /// <see cref="RecordOcrDecision"/> does. Before, retirements (and
+    /// gate-rejected images) moved nothing, so `mailvec status` said "last
+    /// processed 21h ago" right after a pass that had just decided seven
+    /// documents.
+    /// </summary>
+    private OcrWriteOutcome Retire(OcrCandidate c, string provenance)
+    {
+        var outcome = messages.MarkAttachmentOcrFailed(c, provenance);
+        if (outcome == OcrWriteOutcome.Committed) StampDecisionTime();
+        return outcome;
+    }
+
+    /// <summary>The pre-provider dimension/aspect gate's no_text verdict; see <see cref="Retire"/>.</summary>
+    private OcrWriteOutcome GateOutAsNoText(OcrCandidate c)
+    {
+        var outcome = messages.MarkAttachmentImageNoText(c, OcrProvenance.PreProvider);
+        if (outcome == OcrWriteOutcome.Committed) StampDecisionTime();
+        return outcome;
+    }
+
+    private void StampDecisionTime()
+    {
+        if (metadata is null) return;
+        try
+        {
+            metadata.Set(OcrHealthKeys.LastDecisionAt, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to record OCR decision marker.");
+        }
+    }
+
+    /// <summary>
     /// Record a committed terminal DECISION — text recovered, or a definitive
     /// "this document has none". Both are full round trips that removed a
     /// document from the queue, so both prove the pass is working; only the
@@ -597,7 +635,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "{Pass}: provider refused attachment {AttachmentId} as unprocessable; marking failed.",
                     pass, c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c, vision.ModelId);
+                Retire(c, vision.ModelId);
                 Increment(OcrHealthKeys.RetiredTotal, 1);
                 return VisionFailureAction.SkipDocument;
 
@@ -741,7 +779,7 @@ public sealed class AttachmentOcrService(
         {
             if (RecordVisionFailure(c))
             {
-                if (messages.MarkAttachmentOcrFailed(c, provenance) == OcrWriteOutcome.Stale)
+                if (Retire(c, provenance) == OcrWriteOutcome.Stale)
                 {
                     logger.LogInformation(
                         "{Pass}: attachment {AttachmentId} reached its retirement threshold but the row moved; " +
@@ -865,7 +903,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
+                Retire(c, OcrProvenance.PreProvider);
                 continue;
             }
 
@@ -891,7 +929,7 @@ public sealed class AttachmentOcrService(
                 if (action == ParserFailureAction.CountAsStrike) { sawFailure = true; parserFailedThisCycle.Add(c); continue; }
 
                 logger.LogWarning(ex, "OCR: cannot open or render PDF for attachment {AttachmentId}; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
+                Retire(c, OcrProvenance.PreProvider);
                 continue;
             }
             parserSuccesses++;
@@ -1124,7 +1162,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "Image OCR: cannot read attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
+                Retire(c, OcrProvenance.PreProvider);
                 continue;
             }
 
@@ -1148,7 +1186,7 @@ public sealed class AttachmentOcrService(
                 logger.LogWarning(ex,
                     "Image OCR: cannot decode attachment {AttachmentId} from its .eml (message {MessageId}); marking failed.",
                     c.AttachmentId, c.MessageId);
-                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
+                Retire(c, OcrProvenance.PreProvider);
                 continue;
             }
             parserSuccesses++;
@@ -1156,7 +1194,7 @@ public sealed class AttachmentOcrService(
             {
                 logger.LogInformation(
                     "Image OCR: attachment {AttachmentId} did not decode as an image; marking failed.", c.AttachmentId);
-                messages.MarkAttachmentOcrFailed(c, OcrProvenance.PreProvider);
+                Retire(c, OcrProvenance.PreProvider);
                 continue;
             }
 
@@ -1171,7 +1209,7 @@ public sealed class AttachmentOcrService(
                 logger.LogInformation(
                     "Image OCR gate: attachment {AttachmentId} {W}x{H} (short {Short}px, aspect {Aspect:F1}) — skipping as non-content.",
                     c.AttachmentId, normalized.Width, normalized.Height, shortEdge, aspect);
-                messages.MarkAttachmentImageNoText(c, OcrProvenance.PreProvider);
+                GateOutAsNoText(c);
                 continue;
             }
 

@@ -1251,6 +1251,21 @@ public class AttachmentOcrServiceTests : IDisposable
     // an operator has on a quiet corpus.
 
     [Fact]
+    public async Task A_retirement_moves_the_decision_time_without_claiming_success()
+    {
+        // `mailvec status` said "last processed 21h ago" right after a pass
+        // retired seven documents: retirements stamped nothing. They are
+        // terminal decisions, so they move LastDecisionAt — but not
+        // LastSuccessAt, which is the text-recovered metric.
+        StageNoTextPdf("bad@x", Encoding.ASCII.GetBytes("this is not a pdf at all"));
+
+        await BuildWithMetadata(new FakeVision(true, _ => "X")).ProcessBatchAsync(4, default);
+
+        Metadata.Get(OcrHealthKeys.LastDecisionAt).ShouldNotBeNullOrWhiteSpace();
+        Metadata.Get(OcrHealthKeys.LastSuccessAt).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_committed_OCR_records_a_success_timestamp()
     {
         StageNoTextPdf("scan@x", MinimalPdf(1));
