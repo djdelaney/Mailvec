@@ -12,12 +12,12 @@
 # - Ollama, via the cask (`brew install --cask ollama-app`), NOT the `ollama`
 #   formula — the formula bottle has shipped without the GGML llama-server, so
 #   mxbai-embed-large fails to load. The cask auto-starts via its own Login Item.
-# - ~/.mbsyncrc configured + IMAP password in Keychain — README "mbsync" section
+# - ~/.mbsyncrc configured + IMAP password in Keychain — docs/getting-started-macos.md
 #
 # Why not bundle prereqs too? They all need user-specific config (Fastmail
 # app password, Ollama model selection, etc.) and live longer than this app,
 # so wrapping them would hide configuration the user needs to own. The
-# README walks through each.
+# docs/getting-started-macos.md walks through each.
 #
 # Usage:
 #   ops/install-all.sh             # full bootstrap, prompts for paths in install.sh

@@ -45,4 +45,4 @@ Fastmail exposes labels as IMAP folders, so a message with two labels lives in t
 
 ## Scheduling
 
-Once the manual sync is working, [`ops/install.sh`](../ops/install.sh) (run by `ops/install-all.sh` in the [README Quickstart](../README.md#quickstart)) installs a launchd plist that runs `mbsync -c ~/.mbsyncrc -a` once at load and every 10 minutes thereafter (the interval lives in the plist's `StartInterval`; see the comment there for why 600s).
+Once the manual sync is working, [`ops/install.sh`](../ops/install.sh) (run by `ops/install-all.sh` in [Get started on macOS](getting-started-macos.md#3-install-the-services-and-connect-a-client)) installs a launchd plist that runs `mbsync -c ~/.mbsyncrc -a` once at load and every 10 minutes thereafter (the interval lives in the plist's `StartInterval`; see the comment there for why 600s).

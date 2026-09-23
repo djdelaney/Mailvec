@@ -1,8 +1,6 @@
 # Mailvec
 
-Local-first IMAP archive with keyword (FTS5) and semantic (sqlite-vec) search, exposed to Claude over MCP. Single-account, single-machine, designed to run unattended on a Mac mini.
-
-Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server works — Fastmail, iCloud, Gmail (with an app password), self-hosted Dovecot, etc. The shipped `ops/mbsyncrc.example` and reference design use Fastmail; swap the `Host` / `User` / `PassCmd` lines and the rest of the pipeline is unchanged.
+Mailvec pulls one IMAP account into a searchable local archive and gives MCP clients access to it. Search combines keyword (FTS5) and semantic (sqlite-vec) results. [`mbsync`](https://isync.sourceforge.io/) handles the pull-only mail sync, so Fastmail, iCloud, Gmail, and other IMAP servers can be used.
 
 <p align="center">
   <img src="assets/screenshots/claude-desktop-answer.png" alt="Claude Desktop answering from the archive" width="480"/><br/>
@@ -13,163 +11,27 @@ Sync is done by [`mbsync`](https://isync.sourceforge.io/), so any IMAP server wo
 
 ## What you get
 
-- **A local searchable archive** of your IMAP account on disk — keyword (FTS5/BM25), semantic (sqlite-vec, mxbai-embed-large), and hybrid (RRF fusion) search.
-- **An MCP server** Claude Desktop, Claude Code, and other local agents can call to search your mail, fetch threads, and read attachments — an inline image, a small text file's contents, the extracted text of a document, or a rendered PDF page. Arbitrary binaries (PDF, DOCX, zip) are deliberately not shipped back through MCP; to get the actual file on disk, use `mailvec extract-attachments` ([docs/attachments.md](docs/attachments.md)).
-- **A CLI** (`mailvec`) for status, health checks, retrieval-quality evals, and maintenance — `mailvec doctor` is the one-stop preflight (see [Validating the install](#validating-the-install)); `mailvec --help` lists the rest.
+- A local Maildir and SQLite archive with keyword, semantic, and hybrid search.
+- An MCP server for searching mail, reading threads, and viewing attachment text or images in Claude and other MCP clients. See [attachment capabilities](docs/attachments.md).
+- A `mailvec` CLI for status, diagnostics, maintenance, and retrieval evals.
 
-## Architecture
+The pipeline is `IMAP → mbsync → Maildir → indexer → SQLite`; the embedder adds vectors, and the MCP server reads the archive. The Docker deployment also isolates mail parsing in a separate service. See the [documentation index](docs/README.md) for architecture and operator guides.
 
-Four .NET services communicating only through the filesystem (Maildir) and the SQLite database — plus, in the container deployment, a fifth, `Mailvec.Parse`: the one process that parses mail content (MIME, HTML, PDF, Office, image decode). It holds no volume, no secret and no route out; the indexer, embedder and MCP server send it `.eml` bytes over an internal network and get plain data back (`docs/deploy-docker.md`, "The parse service").
+## Get started
 
-```
-Fastmail (or any IMAP)
-    │ IMAP (Pull-only, read-only)
-    ▼
-mbsync ──► ~/Mail/<account>/  (Maildir)
-                │ FileSystemWatcher
-                ▼
-        Mailvec.Indexer  ──┐
-                           │ writes messages + FTS5
-                           ▼
-                    archive.sqlite  ◄── reads ── Mailvec.Mcp ──► Claude (over MCP/HTTP)
-                           ▲
-                           │ writes chunks
-                           │ + vectors
-        Mailvec.Embedder  ──► Ollama
-                              (localhost:11434)
-```
+Choose the machine that will hold the Maildir and database:
 
-## Quickstart
+| Deployment | Start here | Client connection |
+| --- | --- | --- |
+| **One Apple Silicon Mac** | [macOS getting started](docs/getting-started-macos.md) — launchd services and local Ollama | [Local client setup](docs/clients/README.md) |
+| **Always-on Linux Docker host** | [Docker getting started](docs/getting-started-docker.md) — compose stack and an external Ollama host | [Remote access through Cloudflare](docs/remote-access-cloudflare.md), if you want clients outside the stack |
 
-Requires macOS 14+ on **Apple Silicon** (Intel Macs are not supported — macOS is dropping Intel in its next release, and the install scripts refuse to run on x86_64), the .NET 10 SDK, and a few brews. Embeddings run via Ollama by default — local, or any reachable Ollama (`Ollama:BaseUrl`); deployments without local inference can instead point an `Embedding:*` profile at any OpenAI-compatible embeddings endpoint (a hosted provider, or the same mxbai served from TEI/vLLM/a remote Ollama's `/v1/embeddings` — a distinct embedding space that gets its own identity and integrity checks). Hosted profiles send mail content off-network and are a deliberate opt-in — read `docs/security.md` "Hosted embedding" first; `docs/proposals/embedding-providers.md` documents the configuration and the space-identity guards that keep provider switches safe.
+Both paths start with an IMAP account and provider-appropriate credentials (Fastmail, Gmail, and iCloud use app-specific passwords). The macOS path is the simplest single-machine install. The author's deployment runs in Docker; the Mac is now a frozen-corpus development machine. **Do not run install scripts on that development machine**; see [local development](docs/contributing/local-dev-dataset.md).
 
-```sh
-# 1. Prereqs
-brew install --cask dotnet-sdk   # the .NET 10 SDK (the cask; see the dotnet note below)
-brew install isync jq            # jq is only used by the validation snippets below
-brew install --cask ollama-app   # the cask, NOT `brew install ollama` — see note below
-open -a Ollama                   # launch once; enable "Open at Login" to survive reboot
-ollama pull mxbai-embed-large    # needs Ollama ≥ 0.21.2 (the cask auto-updates; see ops/UPGRADING.md)
-ollama pull qwen2.5vl:7b         # vision model for OCR'ing scanned PDFs (~6 GB; Embedder:OcrEnabled, on by default)
+After installation, run `mailvec doctor` and `mailvec status` (or `docker compose exec mcp mailvec doctor` and `status` in Docker). Keyword search works while the initial embedding pass is still running; a large archive can take hours or days to finish embedding.
 
-# 2. Configure mbsync — full walkthrough in docs/imap-setup.md; the short version:
-mkdir -p ~/Mail/Fastmail                             # the Maildir mbsync fills
-security add-generic-password -a you@fastmail.com -s mbsync -w   # stash the IMAP app password in the Keychain
-cp ops/mbsyncrc.example ~/.mbsyncrc && chmod 600 ~/.mbsyncrc
-$EDITOR ~/.mbsyncrc                              # set User + PassCmd to the same account you used above
-mbsync -aV                                       # first sync — may take hours for a big archive
+## Privacy and scope
 
-# 3. Build + install everything (fetches vec0.dylib itself; --no-fetch to skip)
-./ops/install-all.sh                             # services + CLI, launchd-managed
-```
+Mailvec is for one account and one owner. Ollama is the default for embeddings and OCR. Hosted embedding or OCR providers send mail content to the configured service and require an explicit opt-in. A local MCP server binds to loopback; the Docker deployment publishes no host port by default. Read the [security model](docs/security.md) before exposing the server or enabling hosted providers.
 
-> **Fastmail/Gmail/iCloud all need an app-specific password**, not your account password — [docs/imap-setup.md](docs/imap-setup.md) has the per-provider pointers and explains the `-a`/`-s` values, which must match your `PassCmd` line exactly. Skipping the `security add-generic-password` step is the #1 way to make `mbsync -aV` fail on first contact.
-
-> **Install the .NET SDK via the cask (`dotnet-sdk`)**, which puts the runtime at `/usr/local/share/dotnet` — the path the CLI shim and stdio launcher default to. The `dotnet` *formula* installs under `/opt/homebrew` and may not track .NET 10; it mostly works via PATH fallbacks, but the cask is the tested path.
-
-> **Install Ollama via the cask (`ollama-app`), not the `ollama` formula.** The Homebrew *formula* bottle has shipped incomplete builds that bundle only the MLX runner and no `llama-server`, so GGML models like `mxbai-embed-large` fail to load (`llama-server binary not found`) — Ollama answers HTTP but every `/api/embed` hangs. The cask is Ollama's own complete prebuilt app, auto-updates, and keeps the `ollama` CLI on your PATH. If you previously installed the formula: `brew services stop ollama && brew uninstall ollama`, then install the cask.
-
-`install-all.sh` orchestrates two scripts and prompts for site-specific values (Maildir root, DB path, Ollama URL, mbsync config path, optional Fastmail account id).
-
-Then connect Claude Desktop:
-
-```sh
-./ops/build-mcpb.sh                              # writes dist/mailvec-<version>.mcpb
-open dist/mailvec-*.mcpb                         # one-click install into Claude Desktop
-```
-
-> The MCPB bundle is built self-contained for **Apple Silicon** (`RID="osx-arm64"` in `ops/build-mcpb.sh`). Intel Macs are not supported — the script refuses to run on x86_64.
-
-### What to expect on first run
-
-- **The first embed pass takes hours to days** on a multi-year archive — every message is chunked and run through Ollama locally. `mailvec status` shows embedding coverage ticking up, and the archive is keyword-searchable long before vector coverage completes.
-- **Scanned-PDF OCR runs after that**, also locally, via the ~6 GB vision model. It loads on demand, so expect Ollama memory spikes during OCR cycles.
-- **Disk**: plan on roughly 4–5 GB of `archive.sqlite` per ~75k messages (vectors dominate), on top of the Maildir itself.
-
-Nothing is stuck if the numbers are still moving — `mailvec status` is the progress bar.
-
-## Validating the install
-
-The installer drops the `mailvec` CLI shim at `~/.local/bin/mailvec`. That directory isn't on the default macOS `PATH`, so add it if `mailvec` isn't found (e.g. `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc` then restart the shell).
-
-```sh
-mailvec doctor          # one-stop preflight: DB, schema, vec0, Maildir, Ollama, launchd, /health
-mailvec status          # message count, embedding coverage, schema/model match
-curl -s http://127.0.0.1:3333/health | jq .
-```
-
-`doctor` rolls all of the above into one checklist, returning exit 1 if any check fails. `--no-net` skips Ollama and HTTP probes for offline diagnosis; `--json` produces a machine-readable dump for bug reports.
-
-## Backup & moving machines
-
-The expensive part of the archive is the *derived* data — OCR'd text and embeddings that took hours to compute. Two scripts move it safely (a raw `cp` of a live SQLite file, or copying the `-wal` sidecar, can corrupt the copy):
-
-```sh
-ops/export-db.sh                      # consistent snapshot → ~/mailvec-archive-snapshot.sqlite
-ops/export-db.sh --to you@newmac      # ...and scp it over
-ops/import-db.sh /path/snapshot.sqlite  # on the destination, AFTER install-all.sh + mbsync there
-```
-
-Both scripts pause the writers and restart the services when done — export checkpoints the WAL before copying, import removes stale `-wal`/`-shm` sidecars before moving the snapshot into place; their header comments document the ordering requirements (on the destination: install first, sync mail first, then import). The Maildir itself is not backed up by these — mbsync can always re-pull it from the server.
-
-## Uninstall
-
-```sh
-ops/stop.sh                  # just stop the launchd agents (keeps everything installed)
-ops/install.sh --uninstall   # boot out the agents and remove their plists
-```
-
-`--uninstall` intentionally preserves the published binaries, your database, and the logs. For full removal afterwards:
-
-```sh
-rm -rf ~/.local/share/mailvec                          # published binaries
-rm -f  ~/.local/bin/mailvec ~/.local/bin/mailvec-mcp-stdio   # CLI + stdio-launcher shims
-rm -rf "$HOME/Library/Application Support/Mailvec"     # archive.sqlite + shared config + eval queries
-rm -rf ~/Library/Logs/Mailvec                          # logs
-# plus your Maildir (~/Mail/...) and ~/.mbsyncrc if you're done with mbsync too
-```
-
-The Claude Desktop extension is removed from Claude Desktop's Settings → Extensions.
-
-## Documentation
-
-Operations and dev:
-
-- **[docs/imap-setup.md](docs/imap-setup.md)** — mbsync config, Keychain, first-sync, Fastmail label-filtering gotcha
-- **[docs/install-macos.md](docs/install-macos.md)** — what the launchd install actually does: the ops scripts, the `mailvec` CLI shim, why published binaries lag the working tree, log rotation
-- **[docs/dev-walkthrough.md](docs/dev-walkthrough.md)** — point the pipeline at a throwaway DB for debugging without touching production
-- **[docs/logs.md](docs/logs.md)** — log paths, rotation, dev overrides
-- **[ops/export-db.sh](ops/export-db.sh)** / **[ops/import-db.sh](ops/import-db.sh)** — consistent archive snapshots for backup / machine migration (see "Backup & moving machines" above)
-
-Deployment (what the author runs, and where deployment issues surface first):
-
-- **[docs/deploy-docker.md](docs/deploy-docker.md)** — the Proxmox homelab stack: container/compose strategy, external Ollama, GHCR image pins, archive migration
-- **[docs/remote-access-cloudflare.md](docs/remote-access-cloudflare.md)** — the as-built public MCP exposure: Cloudflare Tunnel + Access Managed OAuth
-- **[docs/monitoring-uptime-kuma.md](docs/monitoring-uptime-kuma.md)** — verifying live monitor state (`/up` vs `/health`)
-
-Client wiring:
-
-- **[docs/clients/](docs/clients/)** — per-client setup for a single-machine install: Claude Desktop and Claude Code. Any other MCP-capable client works too, via the stdio launcher or the HTTP URL; there are no per-provider integrations to write.
-- **[docs/attachments.md](docs/attachments.md)** — reading attachments three ways (`view_attachment` inline image/text, `get_attachment_text`, `get_attachment_page_image`)
-- **[docs/fastmail-deep-links.md](docs/fastmail-deep-links.md)** — optional `webmailUrl` field
-- **[docs/security.md](docs/security.md)** — threat model: what's exposed, what's accepted, what's out of scope
-- **[docs/future-ideas.md](docs/future-ideas.md)** — deferred work and open questions (cross-vendor cloud access, multi-user identity, a GUI, packaged distribution, i18n), each with the reasoning that deferred it
-
-Project:
-
-- **[CHANGELOG.md](CHANGELOG.md)** — phase-by-phase build history
-- **[CLAUDE.md](CLAUDE.md)** — contributor-facing architectural map, build conventions, gotchas
-- **[ops/UPGRADING.md](ops/UPGRADING.md)** — bumping NuGet packages, the .NET SDK, sqlite-vec, SQLite, Ollama floor
-- **[ops/mcpb-release.md](ops/mcpb-release.md)** — building and shipping the MCPB bundle
-
-## Security model
-
-Single-user, two boundaries. The author's deployment runs the pipeline on a homelab Docker VM and exposes MCP to the public internet through a Cloudflare Tunnel gated by **Cloudflare Access Managed OAuth** — the identity gate is the outer boundary; the compose network (where the MCP server has no auth of its own) is the inner one. All seven tools are read-only against the database and write nothing to the filesystem — attachment reads (`view_attachment`, `get_attachment_page_image`) decode Maildir bytes in memory; the only attachment writes to disk come from the explicit, user-initiated path (`mailvec extract-attachments`), which is sanitized and path-contained. `Mcp:LogToolCalls=false` by default — turning it on writes query strings into the rolling log files.
-
-A **loopback-only, single-machine install is still fully supported** (`ops/install-all.sh`, below) and is what the macOS instructions here describe; the trust boundary there is the macOS user account. Full discussion — the two deployment shapes, what's accepted, what's out of scope — lives in [`docs/security.md`](docs/security.md). Read it before changing the bind address, adding a mutating tool, publishing a host port, or pointing the server at anything other than loopback.
-
-## Status
-
-End-to-end working. The author's deployment runs in Docker on a Proxmox homelab ([`docs/deploy-docker.md`](docs/deploy-docker.md)) with every Claude surface — Code, Desktop, iOS, claude.ai — reaching it through one OAuth-gated remote connector ([`docs/remote-access-cloudflare.md`](docs/remote-access-cloudflare.md)); the author's Mac is now a development machine only. Phase 5 (per-provider local agent integrations) was dropped — one OAuth-gated endpoint serves any MCP-capable client, so there is nothing per-provider left to build; see [CHANGELOG.md](CHANGELOG.md) for that decision and the phase-by-phase history.
-
-**The macOS install below is fully supported and is the right starting point if you want Mailvec on one machine** — the launchd services and the Claude Desktop MCPB bundle both still build and work. It's simply no longer what the author runs, so the Docker path is where deployment issues get found first.
+For installation details, backups, operations, development, and design history, use the [documentation index](docs/README.md). The [changelog](CHANGELOG.md) records project history, and [CLAUDE.md](CLAUDE.md) is the contributor guide for code changes.

@@ -1,16 +1,12 @@
 # Claude Code
 
-**Transport**: HTTP (Streamable HTTP), against the launchd-managed MCP server on `127.0.0.1:3333`.
+**Transport**: HTTP (Streamable HTTP), against the launchd-managed MCP server on `127.0.0.1:3333`. Complete the [macOS installation](../getting-started-macos.md) first.
 
 Claude Code can talk to local HTTP MCP servers directly — no stdio launcher, no bundle. The launchd service installed by `ops/install.sh` keeps the server running across reboots.
 
-## Install the HTTP service (one-time)
+## Check the HTTP service
 
-```sh
-ops/install.sh
-```
-
-The installer publishes the indexer / embedder / MCP server to `~/.local/share/mailvec/<svc>/` and bootstraps four launchd agents. Verify the MCP server is reachable:
+Verify that the installed MCP server is reachable:
 
 ```sh
 curl -s http://127.0.0.1:3333/health | jq .

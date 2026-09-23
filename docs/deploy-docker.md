@@ -221,7 +221,9 @@ for the image build that follows it.
 ruleset on `v*` that blocks deletion and non-fast-forward updates, so a git
 tag can't be moved to a different commit after it's published.
 
-**Deploying it:** pin both vars in `.env` to `:v0.1.30`, then
+**Deploying it:** pin both image variables in `.env` to the same release's
+`:v0.1.30@sha256:…` references (inspect each image's digest as described
+above), then
 `docker compose pull && docker compose up -d` (backup first — the
 SchemaMigrator-on-start rule above), and verify the loop closes:
 `/health` reports a `version` field
@@ -609,11 +611,13 @@ what is recommended on, and where each is set.
 | Parse-network deny-list (`MAILVEC_PARSE_SUBNET` → `Mcp__DeniedNetworks__0`) | **on** (172.31.255.0/24) | `.env` (one value feeds both the network and mcp) | mcp refuses every request from the `parse` network, so the parse service — the process that eats attacker-chosen bytes — cannot call the mail tools back. Loopback never denied. Change only on a subnet collision, and never one of the two values without the other. Verify: the `curl` in [The parse service](#the-parse-service) prints 403. |
 | `/health` loopback-only (`MCP_RESTRICT_HEALTH_TO_LOOPBACK`) | **on** | `.env` | The detailed body (archive path, counts, Ollama address) is served to loopback only; monitors use `/up`. Migrate monitors before relying on it. |
 | Parser client limits (`Parser:MaxResponseBytes`, redirects off) | **on** (64 MB) | baked in; the byte ceiling is overridable per service via `Parser__MaxResponseBytes` | The parse service cannot redirect its callers into forwarding mail, nor exhaust them with an oversized response. No reason to change. |
-| Origin validation of the Access assertion (`MCP_ACCESS_ENABLED` + team domain + audiences) | **off** | `.env` | Every caller must present a valid Cloudflare Access assertion; the origin no longer trusts anything that can reach `mcp:3333`. **Recommended on for every tunnel deployment** — it turns "one known network is refused" into "every caller proves who it is". Needs the three dashboard values; the container refuses to boot if the signing keys cannot be fetched. Setup: [remote-access-cloudflare.md → Origin validation](remote-access-cloudflare.md#origin-validation-of-the-access-assertion-mcpaccess). Not available without a tunnel. |
+| Origin validation of the Access assertion (`MCP_ACCESS_ENABLED` + team domain + audiences) | **off** | `.env` | Every caller must present a valid Cloudflare Access assertion; the origin no longer trusts anything that can reach `mcp:3333`. **Recommended on for every tunnel deployment** — it turns "one known network is refused" into "every caller proves who it is". Needs the team domain and owner app audience, plus the monitoring app audience if used; the container refuses to boot if the signing keys cannot be fetched. Setup: [remote-access-cloudflare.md → Origin validation](remote-access-cloudflare.md#origin-validation-of-the-access-assertion-mcpaccess). Not available without a tunnel. |
+| Owner identity allowlist (`MCP_ACCESS_ALLOWED_IDENTITIES`) | **empty** (audience-only) | `.env` | With origin validation enabled, restrict `/` and `/health` to the listed owner emails or service-token client IDs, even if a Cloudflare policy admits another credential. Set this on a tunnel deployment; omit the monitoring token's ID. See [origin validation](remote-access-cloudflare.md#origin-validation-of-the-access-assertion-mcpaccess). |
 | Tool-surface trim (`Mcp__DisabledTools__*`) | **off** (staged, commented) | `compose.yml` | Drops the two on-demand native-parser tools. A documented accepted risk with invalidating conditions — read [security.md → What's accepted](security.md#whats-accepted) before deciding. |
 
-The first four are what a stack with no tunnel gets. A tunnel deployment should
-add the fifth; the sixth is a judgement call the security doc lays out.
+The local container controls apply without a tunnel. A tunnel deployment should
+enable origin validation and set the identity allowlist. The tool-surface trim
+is a judgement call the security doc lays out.
 
 ## Rollout checklist
 

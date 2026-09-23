@@ -4,7 +4,7 @@
 images) are OCR'd by the embedder and fully searchable (semantic + keyword),
 `mailvec doctor` checks the vision model, and the docs are updated. This file is
 kept as the design record; the operator setup (pull `qwen2.5vl:7b`) is in the
-README Quickstart. Implementation details that have since drifted from this
+[macOS getting started](../getting-started-macos.md). Implementation details that have since drifted from this
 proposal are noted inline below.
 
 ## Goal
@@ -244,10 +244,10 @@ OCR pass feeds them **unattended**.
    can fold into step 6's doctor work).
 6. ✅ `mailvec doctor` "OCR model" check (warns with the `ollama pull` hint when OCR is on but the
    model isn't pulled; `IVisionClient` registered in `CliServices`). The vision model is documented
-   in the README quickstart next to `mxbai-embed-large` — `install-all.sh` pulls no models (the
-   embedding model is a manual prereq too), so a README line is the consistent home, not new pull logic.
+   in the macOS getting-started guide next to `mxbai-embed-large` — `install-all.sh` pulls no models (the
+   embedding model is a manual prereq too), so a prerequisite line is the consistent home, not new pull logic.
 7. ◐ Docs done: CLAUDE.md (embedder-now-reads-filesystem, the `ocr` status, `Mailvec.Pdf`/native
-   dep, the scanned-PDF OCR section), README (vision-model prereq), UPGRADING.md (vision model).
+   dep, the scanned-PDF OCR section), getting-started-macos.md (vision-model prereq), UPGRADING.md (vision model).
    **Operational, pending you on the real box:** pull `qwen2.5vl:7b`, let the backfill drain the ~309
    `no_text` PDFs (watch `mailvec status` → "OCR pending"), then re-baseline `mailvec eval` (the new
    content shifts ranking).

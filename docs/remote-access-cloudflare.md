@@ -305,13 +305,14 @@ and untested, and this makes the origin's half of the gate checkable in CI — p
 it enforces the `/up` monitoring split at the origin rather than trusting the
 edge path scoping.
 
-**Values you need**, both from the Zero Trust dashboard:
+**Values you need** from the Zero Trust dashboard and the owner account:
 
 | `.env` key | Where |
 |---|---|
 | `MCP_ACCESS_TEAM_DOMAIN` | Settings → your team domain, as a full `https://` URL |
 | `MCP_ACCESS_AUDIENCE` | Access → Applications → *the Mailvec app* → **Additional settings → AUD tag** |
 | `MCP_ACCESS_MONITORING_AUDIENCE` | the AUD tag of the separate path-scoped `up` application. Leave empty if you have no such app — but note origin validation then can't distinguish the monitor from the mailbox, which is the whole point of the split |
+| `MCP_ACCESS_ALLOWED_IDENTITIES` | the owner's email address and any intended mailbox service-token client IDs, comma-separated. Do not include the monitoring token. An empty value retains audience-only checks, so a root-app policy that admits the monitoring token could still grant it mail access |
 
 > **The AUD tag is not on the application's Overview/Details tab.** In the
 > current Cloudflare One dashboard it lives under **Additional settings → AUD
@@ -325,8 +326,8 @@ edge path scoping.
 > `MCP_ACCESS_AUDIENCE` is updated and the container restarted.
 
 Then set `MCP_ACCESS_ENABLED=true` (literal `true`, not `1` — .NET's binder only
-understands `true`/`false`, and an unbindable value reads as false) and
-`docker compose up -d mcp`.
+understands `true`/`false`, and an unbindable value reads as false), set
+`MCP_ACCESS_ALLOWED_IDENTITIES`, and run `docker compose up -d mcp`.
 
 **A half configuration refuses to start**, naming the missing knob — deliberately,
 since `Enabled` without an audience would validate signature and issuer while
