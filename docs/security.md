@@ -563,6 +563,32 @@ not that a model obeys it. See the call-out under
 [What's out of scope](#whats-out-of-scope) and
 [future-ideas.md](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing).
 
+**Structure is sender-controlled too, not just text.** Three things a sender
+chooses shape *where* their content appears, and the residual after hardening
+is stated here rather than implied:
+
+- **Thread membership.** `thread_id` is the first entry of the sender-written
+  `References` header, so anyone who knows one Message-ID in a thread — any past
+  correspondent, any public list archive — can attach mail to it, with a spoofed
+  `From`. Fixing that needs sender-authentication results (DKIM/DMARC), which
+  Mailvec does not store. What is bounded: `get_thread` caps the thread in SQL
+  and never loads HTML (a padded thread cannot exhaust mcp's memory), and the
+  message the caller asked about is always in the answer however many are
+  attached. **Accepted residual:** an attacker's message can appear inside a
+  real thread, and a flood can fill the capped view (`truncated`/`totalCount`
+  report it).
+- **Dates.** `date_sent` is clamped at ingest to no later than a day past
+  arrival (the original `Date:` stays in `raw_headers`), so future-dated mail
+  cannot pin itself to the top of "recent mail" or make `latestDate` claim
+  2099. **Accepted residual:** backdating has no trusted lower bound — the
+  initial bulk import stamped all history with the import day — so a message
+  can still claim to be old and sort first in a thread.
+- **Labels in server-written text.** Attachment filenames and content types
+  spliced into a tool's own framing go through `ToolText.Label` (control, bidi
+  and separator characters stripped, quotes neutralised, length capped), so a
+  filename carrying `%0A` cannot forge a server line. JSON fields were already
+  escaped by the serializer.
+
 ## Response bounds
 
 Not a confidentiality control — a blast-radius one, and only partial (there is
