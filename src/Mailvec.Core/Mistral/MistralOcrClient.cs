@@ -224,8 +224,9 @@ public sealed class MistralOcrClient(
         catch (OperationCanceledException ex)
         {
             // HttpClient timeout surfaces as TaskCanceledException with the
-            // outer token un-cancelled. Retry-worthy, never a document verdict.
-            throw new VisionException(VisionFailureKind.Transient, "mistral-ocr call timed out.", ex);
+            // outer token un-cancelled. Retry-worthy, never a document verdict
+            // — and never a strike (see VisionFailureKind.Timeout).
+            throw new VisionException(VisionFailureKind.Timeout, "mistral-ocr call timed out.", ex);
         }
         catch (HttpRequestException ex)
         {

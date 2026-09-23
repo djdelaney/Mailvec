@@ -366,6 +366,19 @@ public class MistralOcrClientTests
 
     // ---- helpers --------------------------------------------------------------
 
+    [Fact]
+    public async Task A_timeout_is_classified_Timeout_so_it_can_never_retire_a_document()
+    {
+        // HttpClient.Timeout arrives as TaskCanceledException with the caller's
+        // token un-cancelled. Transient would accrue strikes toward 'failed'
+        // whenever other documents in the cycle succeed; a timeout is our budget,
+        // not a verdict on the page.
+        var client = ClientWith(_ => throw new TaskCanceledException("timeout", new TimeoutException()));
+
+        var ex = await Should.ThrowAsync<VisionException>(() => client.OcrImageAsync([1]));
+        ex.Kind.ShouldBe(VisionFailureKind.Timeout);
+    }
+
     private static MistralOcrClient ClientWith(
         Func<HttpRequestMessage, HttpResponseMessage> handler,
         Action<MistralVisionOptions>? configure = null)

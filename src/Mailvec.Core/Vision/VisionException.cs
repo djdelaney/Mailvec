@@ -20,11 +20,27 @@ namespace Mailvec.Core.Vision;
 public enum VisionFailureKind
 {
     /// <summary>
-    /// Might work next time and might not — a timeout, a dropped connection, a
-    /// 5xx. The historical default, and still the only kind that can accrue
-    /// strikes toward retiring a poison document.
+    /// Might work next time and might not — a dropped connection, a 5xx. The
+    /// historical default, and still the only kind that can accrue strikes
+    /// toward retiring a poison document.
     /// </summary>
     Transient,
+
+    /// <summary>
+    /// The call outran OUR time budget (<c>HttpClient.Timeout</c>). That is a
+    /// fact about the budget and the host's speed, not a verdict on the
+    /// document: generation is bounded by <c>num_predict</c> and prompt size by
+    /// the render cap, so on a given host every page has a bounded cost, and a
+    /// page that exceeds the budget will exceed it identically on every retry
+    /// until someone raises the timeout. **Must never count toward
+    /// retirement** — as a strike, a CPU-only Ollama with light pages
+    /// finishing in time ("the model is healthy") retired every dense page,
+    /// i.e. exactly the statements and forms OCR exists for. The pass defers
+    /// the document with an escalating backoff instead, so a page that never
+    /// fits costs a shrinking share of the vision budget rather than being
+    /// destroyed.
+    /// </summary>
+    Timeout,
 
     /// <summary>
     /// The provider is asking us to slow down (HTTP 429, or a 503 carrying

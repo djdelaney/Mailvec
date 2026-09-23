@@ -76,7 +76,29 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
             },
         };
 
-        using var response = await http.PostAsJsonAsync("/api/generate", request, ct).ConfigureAwait(false);
+        HttpResponseMessage sent;
+        try
+        {
+            sent = await http.PostAsJsonAsync("/api/generate", request, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // genuine shutdown
+        }
+        catch (OperationCanceledException ex)
+        {
+            // HttpClient.Timeout: TaskCanceledException with the caller's token
+            // un-cancelled. Classified rather than left to the pass's
+            // unclassified-is-Transient fallback, because Transient accrues
+            // strikes: on a CPU-only host, light pages finishing inside the
+            // budget made every dense page look like a poison document.
+            throw new VisionException(
+                VisionFailureKind.Timeout,
+                $"Ollama /api/generate exceeded the {http.Timeout.TotalSeconds:0}s vision timeout " +
+                "(Ollama:VisionRequestTimeoutSeconds).",
+                ex);
+        }
+        using var response = sent;
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
