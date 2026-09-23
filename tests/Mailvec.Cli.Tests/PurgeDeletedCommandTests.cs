@@ -103,6 +103,71 @@ public class PurgeDeletedCommandTests
         messages.CountSoftDeleted().ShouldBe(0);
     }
 
+    // ---- Mass deletions ---------------------------------------------------------
+
+    private static List<long> SoftDeleteBatch(TestServiceProvider ctx, int n, DateTimeOffset at, string prefix)
+    {
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+        var ids = Enumerable.Range(0, n)
+            .Select(i => messages.Upsert(Sample($"{prefix}{i}@x"), "INBOX", "INBOX/cur", $"{prefix}{i}", DateTimeOffset.UtcNow).Id)
+            .ToList();
+        messages.MarkDeleted(ids, at);
+        return ids;
+    }
+
+    [Fact]
+    public void A_mass_soft_delete_from_one_scan_is_refused_even_with_yes()
+    {
+        // Soft-deletes are recoverable; the purge is not. A single scan
+        // deleting hundreds of messages is the signature of a partly missing
+        // Maildir, so --yes alone must not get past it — this is exactly the
+        // command someone scripts.
+        using var ctx = new TestServiceProvider();
+        var scanAt = DateTimeOffset.UtcNow.AddHours(-3);
+        SoftDeleteBatch(ctx, PurgeDeletedCommand.MassDeletionBatch, scanAt, "m");
+        var messages = ctx.Services.GetRequiredService<MessageRepository>();
+
+        var writer = new StringWriter();
+        var exit = PurgeDeletedCommand.Execute(ctx.Services, yes: true, dryRun: false, writer, readLine: () => "y");
+
+        exit.ShouldBe(1);
+        writer.ToString().ShouldContain("WARNING");
+        writer.ToString().ShouldContain("--allow-mass-deletion");
+        messages.CountSoftDeleted().ShouldBe(PurgeDeletedCommand.MassDeletionBatch, "nothing purged");
+
+        var allowed = PurgeDeletedCommand.Execute(ctx.Services, yes: true, dryRun: false, new StringWriter(),
+            readLine: () => null, allowMassDeletion: true);
+        allowed.ShouldBe(0);
+        messages.CountSoftDeleted().ShouldBe(0);
+    }
+
+    [Fact]
+    public void The_dry_run_shows_the_mass_deletion_warning()
+    {
+        using var ctx = new TestServiceProvider();
+        SoftDeleteBatch(ctx, PurgeDeletedCommand.MassDeletionBatch, DateTimeOffset.UtcNow.AddHours(-3), "d");
+
+        var writer = new StringWriter();
+        PurgeDeletedCommand.Execute(ctx.Services, yes: false, dryRun: true, writer, readLine: () => null).ShouldBe(0);
+
+        writer.ToString().ShouldContain("WARNING");
+    }
+
+    [Fact]
+    public void Many_small_scans_worth_of_deletions_are_not_a_mass_deletion()
+    {
+        // The same total spread across scans is ordinary churn.
+        using var ctx = new TestServiceProvider();
+        var start = DateTimeOffset.UtcNow.AddDays(-2);
+        for (var scan = 0; scan < 10; scan++)
+            SoftDeleteBatch(ctx, PurgeDeletedCommand.MassDeletionBatch / 10, start.AddMinutes(scan), $"s{scan}-");
+
+        var writer = new StringWriter();
+        PurgeDeletedCommand.Execute(ctx.Services, yes: true, dryRun: false, writer, readLine: () => null).ShouldBe(0);
+
+        writer.ToString().ShouldNotContain("WARNING");
+    }
+
     [Fact]
     public void Recent_soft_deletes_are_skipped_by_the_default_grace_period()
     {
