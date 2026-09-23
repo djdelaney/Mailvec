@@ -40,7 +40,7 @@ public sealed class GetThreadTool(
         "extractedTextChars), so 'which message has the invoice?' needs no per-message get_email — go straight to " +
         "get_attachment_text / view_attachment / get_attachment_page_image with that entry's id and partIndex. " +
         "Long threads are capped: `count` is what you got, `totalCount` is how many the thread actually has, and " +
-        "`truncated` is true when either the message cap clipped the thread (oldest kept) or the aggregate body budget " +
+        "`truncated` is true when either the message cap clipped the thread (oldest kept, plus the message you asked about) or the aggregate body budget " +
         "cut a body short (that entry's `bodyTruncated` is true). When truncated, say so rather than summarising as if " +
         "you saw the whole thread — reach the rest with get_email per message id. " +
         "Each entry includes `webmailUrl` (the raw deep-link to that specific message) and `webmailLink` (a ready-made, " +
@@ -65,21 +65,22 @@ public sealed class GetThreadTool(
         if (id is not null && !string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Pass id OR messageId, not both.");
 
-        var thread = messages.GetThreadByMessageId(id, messageId);
-        if (thread.Count == 0)
+        // Two independent caps, because they bound different things: the message
+        // cap bounds how many entries there are, the char budget bounds how big
+        // they are. Neither implies the other — 3 messages can blow the budget,
+        // and 500 empty ones blow the count. The message cap is applied IN the
+        // query, so a thread padded with thousands of large messages is never
+        // materialised whole.
+        var maxMessages = Math.Max(1, _mcp.ThreadMaxMessages);
+        var page = messages.GetThreadByMessageId(id, messageId, maxMessages);
+        var kept = page.Messages;
+        if (kept.Count == 0)
             throw new McpException(id is not null
                 ? $"No message with id {id} (or its thread is empty after soft-deletes)."
                 : $"No message with Message-ID '{messageId}' (or its thread is empty after soft-deletes).");
 
-        var rootThreadId = thread[0].ThreadId;
-
-        // Two independent caps, because they bound different things: the message
-        // cap bounds how many entries there are, the char budget bounds how big
-        // they are. Neither implies the other — 3 messages can blow the budget,
-        // and 500 empty ones blow the count.
-        var totalCount = thread.Count;
-        var maxMessages = Math.Max(1, _mcp.ThreadMaxMessages);
-        var kept = totalCount > maxMessages ? thread.Take(maxMessages).ToList() : thread;
+        var rootThreadId = kept[0].ThreadId;
+        var totalCount = page.TotalCount;
         var truncated = kept.Count < totalCount;
 
         // Spent oldest-first, mirroring the response order, so what survives is

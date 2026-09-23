@@ -782,4 +782,56 @@ public class MessageRepositoryTests
         while (reader.Read()) ids.Add(reader.GetInt64(0));
         return ids.ToArray();
     }
+
+    // ---- Future-dated mail ---------------------------------------------------
+    //
+    // date_sent is the sender's Date: header and drives every "recent" ordering.
+    // A 2099 date used to pin a message to the top of every query-less browse
+    // and make archiveStats.latestDate claim the mailbox reaches 2099.
+
+    [Fact]
+    public void A_future_dated_message_is_stored_at_its_arrival_time()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var arrived = new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero);
+
+        long id = repo.Upsert(Sample("future@x") with { DateSent = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero) },
+            "INBOX", "INBOX/cur", "f", arrived);
+
+        repo.GetById(id)!.DateSent.ShouldBe(arrived);
+        repo.GetArchiveStats().LatestDate.ShouldBe(arrived);
+    }
+
+    [Fact]
+    public void A_future_dated_message_does_not_pin_itself_to_the_top_of_browse()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var arrived = new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero);
+        repo.Upsert(Sample("forged@x") with { DateSent = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero) },
+            "INBOX", "INBOX/cur", "f", arrived);
+        // Genuinely newer mail, arriving a week later.
+        repo.Upsert(Sample("real@x") with { DateSent = arrived.AddDays(7) }, "INBOX", "INBOX/cur", "r", arrived.AddDays(7));
+
+        var browse = repo.BrowseByFilters(new Mailvec.Core.Search.SearchFilters(), 10);
+
+        browse.Select(m => m.MessageId).ShouldBe(new[] { "real@x", "forged@x" });
+    }
+
+    [Fact]
+    public void Ordinary_skew_and_past_dates_are_stored_as_sent()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var arrived = new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero);
+        var slightlyAhead = arrived.AddHours(20); // a wrong sender clock, inside the slack
+        var old = new DateTimeOffset(2019, 3, 4, 5, 6, 7, TimeSpan.FromHours(-5));
+
+        long a = repo.Upsert(Sample("skew@x") with { DateSent = slightlyAhead }, "INBOX", "INBOX/cur", "a", arrived);
+        long b = repo.Upsert(Sample("old@x") with { DateSent = old }, "INBOX", "INBOX/cur", "b", arrived);
+
+        repo.GetById(a)!.DateSent.ShouldBe(slightlyAhead);
+        repo.GetById(b)!.DateSent.ShouldBe(old);
+    }
 }
