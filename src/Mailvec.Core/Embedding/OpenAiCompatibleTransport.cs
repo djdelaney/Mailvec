@@ -75,6 +75,24 @@ public sealed class OpenAiCompatibleTransport(
             throw new EmbeddingException(EmbeddingFailureKind.Transient,
                 "Embeddings endpoint connection failed.", ex);
         }
+        // The resilience pipeline's own rejections are neither an
+        // OperationCanceledException nor an HttpRequestException, so they used
+        // to escape unclassified: an attempt timeout counted as a strike
+        // against whichever message was in isolation, and the sentinel check
+        // (which catches only EmbeddingException) aborted its cycle instead
+        // of skipping. A timeout is Transient like the HttpClient one above;
+        // an open circuit (or any other rejection) is the provider refusing
+        // work across the board — provider-wide, never a message's fault.
+        catch (Polly.Timeout.TimeoutRejectedException ex)
+        {
+            throw new EmbeddingException(EmbeddingFailureKind.Transient,
+                "Embeddings request timed out (resilience pipeline).", ex);
+        }
+        catch (Polly.ExecutionRejectedException ex)
+        {
+            throw new EmbeddingException(EmbeddingFailureKind.Backpressure,
+                "Embeddings request: the resilience pipeline rejected the call (circuit open).", ex);
+        }
         catch (System.Text.Json.JsonException ex)
         {
             throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,

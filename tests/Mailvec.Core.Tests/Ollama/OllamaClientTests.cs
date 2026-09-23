@@ -301,6 +301,22 @@ public class OllamaClientTests
             .GetModelArtifactDigestAsync()).ShouldBeNull();
     }
 
+    [Fact]
+    public async Task Resilience_pipeline_rejections_are_classified_not_left_to_escape()
+    {
+        // The standard resilience handler throws its own types from inside the
+        // handler chain. Unclassified, an attempt timeout counted as a strike
+        // against the message in isolation and aborted the sentinel check.
+        var timedOut = await Should.ThrowAsync<Mailvec.Core.Embedding.EmbeddingException>(() =>
+            ClientWith(_ => throw new Polly.Timeout.TimeoutRejectedException("attempt timeout")).EmbedAsync(["x"]));
+        timedOut.Kind.ShouldBe(Mailvec.Core.Embedding.EmbeddingFailureKind.Transient);
+
+        var circuit = await Should.ThrowAsync<Mailvec.Core.Embedding.EmbeddingException>(() =>
+            ClientWith(_ => throw new Polly.CircuitBreaker.BrokenCircuitException("open")).EmbedAsync(["x"]));
+        circuit.Kind.ShouldBe(Mailvec.Core.Embedding.EmbeddingFailureKind.Backpressure);
+        circuit.IsProviderWide.ShouldBeTrue("an open circuit is never a message's fault");
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>

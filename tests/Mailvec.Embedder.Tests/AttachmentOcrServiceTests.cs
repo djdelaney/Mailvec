@@ -681,6 +681,48 @@ public class AttachmentOcrServiceTests : IDisposable
         TextOf(id).ShouldBe("TEXT OF THE NEW DOCUMENT");
     }
 
+    // ---- Per-pass time budget ----------------------------------------------------
+
+    private sealed class ManualClock : TimeProvider
+    {
+        public long Ticks;
+        public override long GetTimestamp() => Ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public void Advance(TimeSpan by) => Ticks += by.Ticks;
+    }
+
+    [Fact]
+    public async Task A_pass_stops_starting_documents_once_its_budget_is_spent_but_always_does_one()
+    {
+        // OCR runs before embedding on the one worker. Unbounded, a batch of
+        // slow scans held new mail unembedded for hours.
+        for (var i = 0; i < 3; i++) StageNoTextPdf($"slow{i}@x", MinimalPdf(1));
+        var clock = new ManualClock();
+        var calls = 0;
+        var svc = new AttachmentOcrService(
+            _messages,
+            new MaildirAttachmentReader(Options.Create(new IngestOptions { MaildirRoot = _maildirRoot })),
+            new InProcessParser(extractor: null),
+            new FakeVision(true, img =>
+            {
+                if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+                calls++;
+                clock.Advance(TimeSpan.FromSeconds(100)); // each page outlasts the budget
+                return "SLOW SCAN TEXT";
+            }),
+            Options.Create(new EmbedderOptions { OcrMaxSecondsPerPass = 60 }),
+            NullLogger<AttachmentOcrService>.Instance,
+            time: clock);
+
+        (await svc.ProcessBatchAsync(10, default)).ShouldBe(1, "one document, then the budget stops the pass");
+        calls.ShouldBe(1);
+
+        // Later passes keep draining — one per pass here — so nothing is lost.
+        await svc.ProcessBatchAsync(10, default);
+        await svc.ProcessBatchAsync(10, default);
+        calls.ShouldBe(3);
+    }
+
     [Fact]
     public async Task A_blocked_prefix_longer_than_the_backoff_window_still_lets_later_pdfs_through()
     {
