@@ -265,6 +265,7 @@ can't be re-pointed under us:
 | **cloudflared** | image digest in `compose.yml` (version tag kept alongside for humans) | Holds the tunnel credential and is the only thing that can reach the unauthenticated mcp origin — the highest-value container in the stack. Was `:latest`, i.e. every `compose pull` could swap it silently |
 | **Dockerfile bases** (`dotnet/sdk`, `dotnet/aspnet`, `alpine`) | image digests, version tag in the comment | Same reasoning one step earlier in the chain: `10.0` is a moving pointer, so it isn't what a reproducible build should resolve |
 | **GitHub Actions** | full commit SHAs, version in a trailing comment | A major tag like `v7` is repointable by the action's owner, and these run with the repo's token — `publish-images.yml` grants `packages: write` |
+| **BuildKit** (the `# syntax=` frontend in `Dockerfile`, and the buildx builder image in `publish-images.yml`) | image digest, version tag alongside | Both execute every build step, and the builder holds the GHCR push. Left unpinned they are `docker/dockerfile:1` and `moby/buildkit:buildx-stable-1`, moving tags pulled fresh on every build. **Not covered by Dependabot** (neither ecosystem parses a `# syntax=` line or a `driver-opts` string) — bump by hand alongside the SDK base, resolving the digest with `docker buildx imagetools inspect` |
 
 **A pin with nothing bumping it is its own failure mode**: it trades supply-chain
 risk for running a known-vulnerable version forever, and that risk is sharpest

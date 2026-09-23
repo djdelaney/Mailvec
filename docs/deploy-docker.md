@@ -164,10 +164,20 @@ Two kinds of pin, with different lifetimes:
   re-pull, host rebuild, or rollback against a pruned tag fails.
 - **`v<version>`** (and `latest`) — **never pruned**. Use `v*` for the
   production pin and for anything you may want to roll back to.
-  A `v*` tag is the same image bytes as its underlying `sha-` — one
-  durable, human-meaningful name for the same digest (which also protects
-  that build's `sha-` tag from pruning: tags on one digest share a package
-  version).
+  A `v*` tag is **promoted, not rebuilt**: the tag push finds the `sha-`
+  image the green-main build published for that commit and adds the `v*`
+  name to it, so the platform image is byte-for-byte what CI tested (this
+  also protects that build's `sha-` tag from pruning: tags on one digest
+  share a package version). The promotion refuses if the `v*` tag already
+  exists in GHCR — a published release is never re-pointed — and fails if
+  no green-main build of the commit exists.
+- **Pin the digest, not just the tag.** `MAILVEC_IMAGE=ghcr.io/<owner>/mailvec:vX.Y.Z@sha256:…`
+  makes `compose pull` refuse anything but the image you verified, whatever
+  happens to the tag afterwards (a deleted-and-recreated GHCR version, a
+  compromised token). Get it with
+  `docker buildx imagetools inspect ghcr.io/<owner>/mailvec:vX.Y.Z --format '{{json .Manifest.Digest}}'`
+  at deploy time; compose accepts the `name:tag@digest` form and pulls by
+  digest.
 
 **The tag value is not free-form.** The repo-wide `<Version>` in
 `Directory.Build.props` stamps all four binaries and `serverInfo.version`,
@@ -197,12 +207,19 @@ git tag -a v0.1.30 -m "…" && git push origin v0.1.30   # only after CI is gree
 ```
 
 The tag push publishes `ghcr.io/<owner>/mailvec:v0.1.30` +
-`…/mailvec-mbsync:v0.1.30` (plus the commit's `sha-` tag). It does **not**
-move `:latest` (green-main / manual-dispatch only) — and note the `v*`
-trigger is **not test-gated**, unlike the green-main path (it only checks
-tag↔version agreement). That non-gating is exactly why the release rule is
-"only tag commits that already passed CI on main," and why `--ship` exists to
-enforce it rather than leaving it to discipline.
+`…/mailvec-mbsync:v0.1.30` by **promoting** the commit's existing `sha-`
+images — it builds nothing. It does **not** move `:latest` (green-main /
+manual-dispatch-on-main only). The `v*` trigger is test-gated by
+construction: only a commit that passed CI on a push to main ever gets a
+`sha-` image, so tagging anything else (an unmerged branch, a commit whose CI
+failed) fails the promote job after a 40-minute wait rather than publishing.
+It also checks tag↔`<Version>` agreement and refuses a `v*` that is already in
+GHCR. `--ship` still waits for green CI before tagging; the promote job waits
+for the image build that follows it.
+
+**Repo settings that complete this** (GitHub-side, not in the repo): a tag
+ruleset on `v*` that blocks deletion and non-fast-forward updates, so a git
+tag can't be moved to a different commit after it's published.
 
 **Deploying it:** pin both vars in `.env` to `:v0.1.30`, then
 `docker compose pull && docker compose up -d` (backup first — the

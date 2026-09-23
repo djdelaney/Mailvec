@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.26.0@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 # One image containing all four Mailvec .NET services (indexer, embedder, mcp,
 # cli). Each compose service picks its binary via `command:`; the default CMD
 # runs the MCP server. The CLI is on PATH as `mailvec`, so operator commands
