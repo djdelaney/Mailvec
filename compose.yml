@@ -234,10 +234,12 @@ services:
       # looking protected while admitting every app in the account.
       #
       # Note this is what makes the /up split enforceable HERE rather than only
-      # in Cloudflare's control plane: a token minted for the path-scoped
-      # monitoring app fails the audience check on / and /health even if the
-      # Access policy is wrong. See docs/security.md and
-      # docs/remote-access-cloudflare.md "Origin validation".
+      # in Cloudflare's control plane: an assertion carrying the monitoring
+      # app's audience fails the check on / and /health. It does NOT survive a
+      # root-app policy that admits the monitoring token (that request carries
+      # the ROOT audience) — MCP_ACCESS_ALLOWED_IDENTITIES below is what does.
+      # See docs/security.md and docs/remote-access-cloudflare.md "Origin
+      # validation".
       Mcp__Access__Enabled: ${MCP_ACCESS_ENABLED:-false}
       # WITH the scheme — https://<team>.cloudflareaccess.com, no trailing path.
       # Used verbatim as the expected `iss` AND as the base for the signing-key
@@ -248,6 +250,10 @@ services:
       Mcp__Access__TeamDomain: ${MCP_ACCESS_TEAM_DOMAIN:-}
       Mcp__Access__Audience: ${MCP_ACCESS_AUDIENCE:-}
       Mcp__Access__MonitoringAudience: ${MCP_ACCESS_MONITORING_AUDIENCE:-}
+      # Who may use the mailbox surface, checked at the origin regardless of
+      # what the Access policy admits: comma-separated emails and service-token
+      # client ids. Empty = audience-only. See AccessOptions.AllowedIdentities.
+      Mcp__Access__AllowedIdentities: ${MCP_ACCESS_ALLOWED_IDENTITIES:-}
       # The compose healthcheck below curls 127.0.0.1:3333/health from inside
       # this container and has no assertion to present, as does `mailvec doctor`
       # under `docker compose exec`. Leave the loopback exemption on or the
