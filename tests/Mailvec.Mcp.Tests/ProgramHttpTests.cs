@@ -21,6 +21,28 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     public ProgramHttpTests(MailvecMcpFactory factory) => _factory = factory;
 
     [Fact]
+    public void The_mcp_endpoint_is_concurrency_limited_and_the_monitor_endpoints_are_not()
+    {
+        // Tool handlers are synchronous and not cancellable, so unbounded
+        // concurrent calls could pin the thread pool. The bound applies to the
+        // MCP endpoint only: /up and /health must answer however busy it is.
+        _ = _factory.CreateClient(); // build the host
+        var endpoints = _factory.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>()
+            .Endpoints.OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>().ToList();
+
+        string? PolicyOf(string route) => endpoints
+            .Where(e => e.RoutePattern.RawText == route)
+            .Select(e => e.Metadata.GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>()?.PolicyName)
+            .FirstOrDefault();
+
+        var mcp = endpoints.Where(e => e.RoutePattern.RawText is "" or "/").ToList();
+        mcp.ShouldNotBeEmpty();
+        mcp.ShouldAllBe(e => e.Metadata.GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>() != null);
+        PolicyOf("/up").ShouldBeNull();
+        PolicyOf("/health").ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Health_endpoint_returns_503_when_Ollama_unreachable()
     {
         // Tests don't run a real Ollama; HealthService.PingAsync fails →

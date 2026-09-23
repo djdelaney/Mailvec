@@ -126,6 +126,22 @@ public sealed class McpOptions
     public int EmailMaxBodyChars { get; set; } = 1_000_000;
 
     /// <summary>
+    /// Concurrent MCP requests (tool calls) this server will run at once, with
+    /// <see cref="ToolCallQueueLimit"/> more waiting; anything beyond gets 503.
+    /// Tool handlers are synchronous and not cancellable — a parser-backed call
+    /// (<c>get_attachment_page_image</c> on a pathological PDF) can hold a
+    /// thread for the parse service's full 90 s budget — so without a bound a
+    /// prompt-injected loop of such calls could pin every pool thread and stall
+    /// search for the owner. Applied after authentication, so an
+    /// unauthenticated caller never occupies a slot. A single-owner mailbox
+    /// runs a handful of calls at a time; 8 + 32 queued is far above that.
+    /// </summary>
+    public int MaxConcurrentToolCalls { get; set; } = 8;
+
+    /// <summary>See <see cref="MaxConcurrentToolCalls"/>.</summary>
+    public int ToolCallQueueLimit { get; set; } = 32;
+
+    /// <summary>
     /// When true, the MCP server emits one INFO log line per tool invocation showing
     /// the arguments and a small result summary. Useful for capturing real Claude
     /// usage patterns to iterate on tool result quality. Off by default.
