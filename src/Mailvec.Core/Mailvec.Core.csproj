@@ -32,6 +32,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Mailvec.Core.Tests" />
+    <InternalsVisibleTo Include="Mailvec.Embedder.Tests" />
   </ItemGroup>
 
 </Project>

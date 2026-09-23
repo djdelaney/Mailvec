@@ -292,6 +292,19 @@ public sealed class EmbeddingWorker(
             {
                 throw;
             }
+            catch (Exception ex) when (SqliteFailures.IsDatabaseWide(ex))
+            {
+                // The database, not this message: another writer holding the
+                // lock (a maintenance command's corpus-wide transaction), a
+                // full disk, an I/O error. Counting it as a strike quarantined
+                // good messages three at a time; walking on would only hit the
+                // same wall with the next one. Abort the pass, count nothing —
+                // isolation mode persists and retries next poll.
+                throw new InvalidOperationException(
+                    $"Isolation pass aborted at message {m.Id}: the database refused the write " +
+                    $"({((Microsoft.Data.Sqlite.SqliteException)ex).SqliteErrorCode}). Not counted against any message.",
+                    ex);
+            }
             catch (Exception ex)
             {
                 failed.Add((new EmbedSnapshot(m.Id, m.ContentHash, m.EmbedEpoch), ex));
