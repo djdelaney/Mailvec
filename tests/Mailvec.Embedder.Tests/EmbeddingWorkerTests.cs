@@ -1067,6 +1067,40 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_changed_digest_persists_a_marker_so_reads_refuse_too_and_restoring_clears_it()
+    {
+        // The refusal above stops WRITES in this process. Before the marker,
+        // MCP kept embedding queries with the new weights and ranking them
+        // against old-weight documents — the read guard had nothing to see.
+        var worker = BuildWorker(new DigestFake("sha256:aaa"));
+        await worker.VerifyModelArtifactDigestAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.ModelDigestDriftKey).ShouldBeNull();
+
+        var changed = BuildWorker(new DigestFake("sha256:bbb"));
+        await Should.ThrowAsync<InvalidOperationException>(
+            () => changed.VerifyModelArtifactDigestAsync(CancellationToken.None));
+        var markedAt = _metadata.Get(EmbeddingSpace.ModelDigestDriftKey).ShouldNotBeNull();
+
+        // A repeat refusal keeps the original detection time.
+        await Should.ThrowAsync<InvalidOperationException>(
+            () => changed.VerifyModelArtifactDigestAsync(CancellationToken.None));
+        _metadata.Get(EmbeddingSpace.ModelDigestDriftKey).ShouldBe(markedAt);
+
+        // The original weights are back: nothing was written in between, so
+        // the marker clears and semantic search reopens.
+        await worker.VerifyModelArtifactDigestAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.ModelDigestDriftKey).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_unobservable_digest_never_sets_the_drift_marker()
+    {
+        _metadata.Set(EmbeddingSpace.ModelDigestKey, "sha256:aaa");
+        await BuildWorker(new DigestFake(null)).VerifyModelArtifactDigestAsync(CancellationToken.None);
+        _metadata.Get(EmbeddingSpace.ModelDigestDriftKey).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task An_unobservable_digest_neither_stamps_nor_refuses()
     {
         // Unknown is not drift: an unreachable server (or a hosted profile,

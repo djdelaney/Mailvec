@@ -263,6 +263,30 @@ public class EmbeddingSpaceIdentityTests
         Should.NotThrow(guard.VerifyReadCompatible);
     }
 
+    [Fact]
+    public void A_standing_digest_drift_marker_refuses_reads_until_switch_model_clears_it()
+    {
+        using var db = new TempDatabase();
+        var profile = HostedProfile();
+        // Identity matches the profile so ONLY the marker is in play.
+        new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance, embeddingProfile: profile)
+            .SwitchEmbeddingModel(profile.WireModel, profile.OutputDimensions);
+        var guard = new EmbeddingSpaceGuard(new MetadataRepository(db.Connections), profile);
+        Should.NotThrow(guard.VerifyReadCompatible);
+
+        SetMetadata(db, EmbeddingSpace.ModelDigestDriftKey, "2026-09-23T12:00:00Z");
+        var ex = Should.Throw<EmbeddingException>(guard.VerifyReadCompatible);
+        ex.Kind.ShouldBe(EmbeddingFailureKind.SpaceMismatch);
+        ex.Message.ShouldContain("digest");
+
+        // switch-model (--force) is the documented remedy; it must not leave
+        // the marker behind to refuse the rebuilt space.
+        new SchemaMigrator(db.Connections, NullLogger<SchemaMigrator>.Instance, embeddingProfile: profile)
+            .SwitchEmbeddingModel(profile.WireModel, profile.OutputDimensions);
+        Metadata(db, EmbeddingSpace.ModelDigestDriftKey).ShouldBeNull();
+        Should.NotThrow(guard.VerifyReadCompatible);
+    }
+
     /// <summary>
     /// Rewind a fresh (latest-version) database to the v10 shape: no space
     /// id, no config hash, schema_version stamped 10, and the stored

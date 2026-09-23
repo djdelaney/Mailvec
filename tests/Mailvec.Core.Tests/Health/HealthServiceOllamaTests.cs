@@ -132,6 +132,20 @@ public class HealthServiceOllamaTests
     }
 
     [Fact]
+    public async Task A_standing_digest_drift_marker_degrades_health_even_without_a_live_digest()
+    {
+        // The live digest comparison needs Ollama answering /api/tags; the
+        // persisted marker does not — search is refused either way.
+        using var db = new TempDatabase();
+        new MetadataRepository(db.Connections).Set(EmbeddingSpace.ModelDigestDriftKey, "2026-09-23T12:00:00Z");
+
+        var r = await Build(db, new FakeEmbedding(ping: true, modelAvailable: null)).CheckAsync();
+
+        r.Embeddings.ModelMismatch.ShouldBeTrue();
+        r.Status.ShouldBe("degraded");
+    }
+
+    [Fact]
     public async Task Rapid_health_checks_coalesce_onto_one_real_probe()
     {
         // Every probe is a real embed — a paid request under a hosted
