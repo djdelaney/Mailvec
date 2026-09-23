@@ -26,7 +26,13 @@ public class EmbeddingWorkerTests : IDisposable
         _dbPath = Path.Combine(_dirPath, "archive.sqlite");
 
         var archiveOpts = Options.Create(new ArchiveOptions { DatabasePath = _dbPath });
-        _connections = new ConnectionFactory(archiveOpts);
+        _connections = new ConnectionFactory(archiveOpts)
+        {
+            // Test seam: a write blocked by another connection's writer lock
+            // fails in ~1 s with SQLITE_BUSY rather than the production ~33 s.
+            DefaultTimeoutSeconds = 1,
+            BusyTimeoutMilliseconds = 100,
+        };
         new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
         _messages = new MessageRepository(_connections);
@@ -869,6 +875,51 @@ public class EmbeddingWorkerTests : IDisposable
         throttled = false;
         await worker.ProcessNextBatchAsync(batchSize: 16, ct: default);
         EmbeddedAt(GetMessageId("throttled@x")).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_locked_or_full_database_never_counts_as_a_strike_against_the_message()
+    {
+        // Embeds succeed; the WRITE is refused because another connection
+        // holds SQLite's writer slot — what a maintenance command's
+        // corpus-wide transaction does. Before SqliteFailures, isolation mode
+        // counted that as a per-message strike (the embed health probe
+        // passed, so the provider looked healthy) and quarantined a good
+        // message after three cycles.
+        InsertMessage("victim@x", "ok", new string('v', 300));
+        var worker = BuildWorker(req => Ok([.. Enumerable.Range(0, ReadInputCount(req)).Select(i => HotVector(i))]));
+
+        using (var holder = _connections.Open())
+        {
+            using (var begin = holder.CreateCommand()) { begin.CommandText = "BEGIN IMMEDIATE;"; begin.ExecuteNonQuery(); }
+
+            // Two normal-mode failures enter isolation, then well past
+            // QuarantineStrikes isolation passes.
+            for (int cycle = 0; cycle < 6; cycle++)
+            {
+                await Should.ThrowAsync<Exception>(() => worker.ProcessNextBatchAsync(batchSize: 16, ct: default));
+            }
+
+            using var rollback = holder.CreateCommand();
+            rollback.CommandText = "ROLLBACK;";
+            rollback.ExecuteNonQuery();
+        }
+
+        // Lock released: a quarantined message would be excluded from
+        // selection and stay unembedded until a restart.
+        await worker.ProcessNextBatchAsync(batchSize: 16, ct: default);
+        EmbeddedAt(GetMessageId("victim@x")).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Database_wide_sqlite_codes_are_told_apart_from_row_level_ones()
+    {
+        Mailvec.Core.Data.SqliteFailures.IsDatabaseWide(new Microsoft.Data.Sqlite.SqliteException("busy", 5)).ShouldBeTrue();
+        Mailvec.Core.Data.SqliteFailures.IsDatabaseWide(new Microsoft.Data.Sqlite.SqliteException("full", 13)).ShouldBeTrue();
+        Mailvec.Core.Data.SqliteFailures.IsDatabaseWide(new Microsoft.Data.Sqlite.SqliteException("busy snapshot", 517)).ShouldBeTrue();
+        Mailvec.Core.Data.SqliteFailures.IsDatabaseWide(new Microsoft.Data.Sqlite.SqliteException("constraint", 19)).ShouldBeFalse();
+        Mailvec.Core.Data.SqliteFailures.IsDatabaseWide(new Microsoft.Data.Sqlite.SqliteException("toobig", 18)).ShouldBeFalse();
+        Mailvec.Core.Data.SqliteFailures.IsDatabaseWide(new InvalidOperationException()).ShouldBeFalse();
     }
 
     // ---------- sentinel fingerprints (stability hybrid, hosted half) ----------

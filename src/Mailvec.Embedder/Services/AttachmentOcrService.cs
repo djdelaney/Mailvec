@@ -235,6 +235,92 @@ public sealed class AttachmentOcrService(
         _readBackoffUntilCycle[key] = _cycle + cycles;
     }
 
+    // Provider-produced verdicts whose write-back the DATABASE refused (busy,
+    // full, I/O — SqliteFailures.IsDatabaseWide). The vision work behind them
+    // is done and, on a hosted provider, billed; dropping them meant paying
+    // for the same pages again next cycle, and a maintenance command holding
+    // the writer lock for minutes threw away every transcription finished in
+    // that window. They are replayed at the start of the next pass, before
+    // candidate selection, through the same identity-guarded writes — so a
+    // document that changed in the meantime is still skipped (Stale), exactly
+    // as it would have been. In memory and bounded: a restart or overflow
+    // costs a re-OCR, never a wrong write.
+    private readonly List<PendingOcrWrite> _pendingWrites = new();
+    private const int MaxPendingWrites = 64;
+
+    private sealed record PendingOcrWrite(OcrCandidate Candidate, string Text, bool ImageNoText, string ModelId);
+
+    private OcrWriteOutcome Apply(PendingOcrWrite w) => w.ImageNoText
+        ? messages.MarkAttachmentImageNoText(w.Candidate, w.ModelId)
+        : messages.SaveOcrText(w.Candidate, w.Text, w.ModelId);
+
+    /// <summary>
+    /// Write a provider-produced verdict, or hold it for the next pass if the
+    /// database refuses. Null = deferred; the caller should stop spending
+    /// vision calls this pass, since their writes would meet the same wall.
+    /// </summary>
+    private OcrWriteOutcome? WriteOrDefer(PendingOcrWrite w, string pass)
+    {
+        try
+        {
+            return Apply(w);
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex) when (SqliteFailures.IsDatabaseWide(ex))
+        {
+            if (_pendingWrites.Count < MaxPendingWrites)
+            {
+                _pendingWrites.Add(w);
+                // Keep the candidate out of selection while it waits, so the
+                // pass doesn't re-OCR (and re-bill) a document whose result is
+                // already in hand.
+                BackOff(KeyOf(w.Candidate), ReadBackoffCycles);
+            }
+            logger.LogWarning(ex,
+                "{Pass}: the database refused the write-back for attachment {AttachmentId} ({Code}); holding the " +
+                "result to replay next pass ({Pending} pending) and stopping this pass.",
+                pass, w.Candidate.AttachmentId, ex.SqliteErrorCode, _pendingWrites.Count);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Replay held write-backs. Returns how many committed text, and whether
+    /// the database accepted writes (false = still refusing; skip this pass).
+    /// </summary>
+    private (int Committed, bool DatabaseWritable) ReplayPendingWrites()
+    {
+        var committed = 0;
+        while (_pendingWrites.Count > 0)
+        {
+            var w = _pendingWrites[0];
+            OcrWriteOutcome outcome;
+            try
+            {
+                outcome = Apply(w);
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException ex) when (SqliteFailures.IsDatabaseWide(ex))
+            {
+                logger.LogWarning(
+                    "OCR: database still refusing writes ({Code}); {Pending} held result(s) wait for the next pass.",
+                    ex.SqliteErrorCode, _pendingWrites.Count);
+                return (committed, false);
+            }
+            _pendingWrites.RemoveAt(0);
+            if (outcome == OcrWriteOutcome.Stale)
+            {
+                logger.LogInformation(
+                    "OCR: held result for attachment {AttachmentId} is stale (the document changed); discarded.",
+                    w.Candidate.AttachmentId);
+                continue;
+            }
+            _visionFailures.Remove(KeyOf(w.Candidate));
+            _timeouts.Remove(KeyOf(w.Candidate));
+            if (w.ImageNoText || w.Text.Length == 0) RecordOcrDecision(); else { RecordOcrSuccess(); committed++; }
+            logger.LogInformation("OCR: replayed held result for attachment {AttachmentId}.", w.Candidate.AttachmentId);
+        }
+        return (committed, true);
+    }
+
     // Consecutive vision timeouts per document snapshot, driving the escalating
     // deferral in DeferAfterTimeout. Cleared on a successful vision call, like
     // _visionFailures. In memory: a restart forgets the escalation, which costs
@@ -668,12 +754,14 @@ public sealed class AttachmentOcrService(
     {
         batchSize = Math.Max(1, batchSize);
         _cycle++;
+        var (replayed, writable) = ReplayPendingWrites();
+        if (!writable) return replayed;
         // Over-fetch, then drop anything still backing off from a failed read,
         // so unreadable rows at the front of the id order can't fill the batch
         // and starve everything behind them. See _readBackoffUntilCycle.
         var candidates = NextPage(
             (limit, after) => messages.EnumerateAttachmentsNeedingOcr(limit, after), batchSize, ref _pdfCursor);
-        if (candidates.Count == 0) return 0;
+        if (candidates.Count == 0) return replayed;
 
         if (!await vision.IsModelAvailableAsync(ct).ConfigureAwait(false))
         {
@@ -681,10 +769,10 @@ public sealed class AttachmentOcrService(
                 "OCR is enabled but the vision model is unavailable; leaving {Count} scanned PDF(s) unprocessed. " +
                 "Pull it (`ollama pull <Ollama:VisionModel>`) or set Embedder:OcrEnabled=false.",
                 candidates.Count);
-            return 0;
+            return replayed;
         }
 
-        int done = 0;
+        int done = replayed;
         int visionSuccesses = 0;
         int consecutiveFailures = 0;
         int pagesSent = 0;
@@ -864,7 +952,9 @@ public sealed class AttachmentOcrService(
                     c.AttachmentId, sb.ToString().Trim().Length, _opts.OcrMinTextChars);
             }
 
-            if (messages.SaveOcrText(c, pdfText, vision.ModelId) == OcrWriteOutcome.Stale)
+            var pdfOutcome = WriteOrDefer(new PendingOcrWrite(c, pdfText, ImageNoText: false, vision.ModelId), "OCR");
+            if (pdfOutcome is null) break;
+            if (pdfOutcome == OcrWriteOutcome.Stale)
             {
                 logger.LogInformation(
                     "OCR: attachment {AttachmentId} changed underneath the OCR pass; discarding the transcription. " +
@@ -924,10 +1014,12 @@ public sealed class AttachmentOcrService(
         // deployment running images-only would otherwise never move the clock
         // and every read backoff would become permanent.
         _cycle++;
+        var (replayed, writable) = ReplayPendingWrites();
+        if (!writable) return replayed;
         var candidates = NextPage(
             (limit, after) => messages.EnumerateImagesNeedingOcr(limit, _opts.ImageOcrMinBytes, after),
             batchSize, ref _imageCursor);
-        if (candidates.Count == 0) return 0;
+        if (candidates.Count == 0) return replayed;
 
         if (!await vision.IsModelAvailableAsync(ct).ConfigureAwait(false))
         {
@@ -935,10 +1027,10 @@ public sealed class AttachmentOcrService(
                 "Image OCR is enabled but the vision model is unavailable; leaving {Count} image(s) unprocessed. " +
                 "Pull it (`ollama pull <Ollama:VisionModel>`) or set Embedder:ImageOcrEnabled=false.",
                 candidates.Count);
-            return 0;
+            return replayed;
         }
 
-        int done = 0;
+        int done = replayed;
         int visionSuccesses = 0;
         int consecutiveFailures = 0;
         int pagesSent = 0;
@@ -1114,7 +1206,9 @@ public sealed class AttachmentOcrService(
             // A result under the floor counts as empty: see BelowTextFloor.
             if (BelowTextFloor(text))
             {
-                if (messages.MarkAttachmentImageNoText(c, vision.ModelId) == OcrWriteOutcome.Stale)
+                var noTextOutcome = WriteOrDefer(new PendingOcrWrite(c, "", ImageNoText: true, vision.ModelId), "Image OCR");
+                if (noTextOutcome is null) break;
+                if (noTextOutcome == OcrWriteOutcome.Stale)
                 {
                     logger.LogInformation(
                         "Image OCR: attachment {AttachmentId} changed underneath the pass; no_text mark skipped.",
@@ -1133,7 +1227,9 @@ public sealed class AttachmentOcrService(
                 continue;
             }
 
-            if (messages.SaveOcrText(c, text, vision.ModelId) == OcrWriteOutcome.Stale)
+            var imageOutcome = WriteOrDefer(new PendingOcrWrite(c, text, ImageNoText: false, vision.ModelId), "Image OCR");
+            if (imageOutcome is null) break;
+            if (imageOutcome == OcrWriteOutcome.Stale)
             {
                 logger.LogInformation(
                     "Image OCR: attachment {AttachmentId} changed underneath the OCR pass; discarding the transcription.",

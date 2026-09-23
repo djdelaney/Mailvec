@@ -39,7 +39,13 @@ public class AttachmentOcrServiceTests : IDisposable
         _connections = new ConnectionFactory(Options.Create(new ArchiveOptions
         {
             DatabasePath = Path.Combine(_root, "archive.sqlite"),
-        }));
+        }))
+        {
+            // Test seam: a write blocked by HoldWriterLock gives up in ~1 s
+            // with SQLITE_BUSY instead of the production ~33 s.
+            DefaultTimeoutSeconds = 1,
+            BusyTimeoutMilliseconds = 100,
+        };
         new SchemaMigrator(_connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
         _messages = new MessageRepository(_connections);
     }
@@ -131,7 +137,7 @@ public class AttachmentOcrServiceTests : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    private long StageNoTextPdf(string id, byte[] pdfBytes, int partIndex = 0)
+    private long StageNoTextPdf(string id, byte[] pdfBytes, int partIndex = 0, string? contentHash = null)
     {
         var b64 = Convert.ToBase64String(pdfBytes);
         var eml =
@@ -146,7 +152,7 @@ public class AttachmentOcrServiceTests : IDisposable
         var parsed = new ParsedMessage(
             MessageId: id, ThreadId: id, Subject: "s", FromAddress: "a@x", FromName: null,
             ToAddresses: [], CcAddresses: [], DateSent: DateTimeOffset.UtcNow, BodyText: "body",
-            BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 100, ContentHash: $"h-{id}",
+            BodyHtml: null, RawHeaders: $"Message-ID: <{id}>\r\n", SizeBytes: 100, ContentHash: contentHash ?? $"h-{id}",
             Attachments: [new ParsedAttachment(partIndex, "scan.pdf", "application/pdf", pdfBytes.LongLength,
                 ExtractedText: null, ExtractionStatus: AttachmentTextExtractor.StatusNoText)]);
         return _messages.Upsert(parsed, "INBOX", "INBOX/cur", id + ".eml", DateTimeOffset.UtcNow);
@@ -569,6 +575,110 @@ public class AttachmentOcrServiceTests : IDisposable
 
         StatusOf(pdf).ShouldBe(AttachmentTextExtractor.StatusOcr);
         StatusOf(img).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    // ---- Database refusing the write-back ----------------------------------
+    //
+    // The vision work is done (and, hosted, billed) before the write. A
+    // database-wide refusal — another writer's lock, a full disk, a read-only
+    // file — used to throw the transcription away and re-OCR next cycle. Made
+    // real here by taking the writer lock from another connection inside the
+    // vision call, i.e. after selection and before the write-back.
+
+    private Microsoft.Data.Sqlite.SqliteConnection? _lockHolder;
+
+    /// <summary>
+    /// Take SQLite's single writer slot from another connection — what a
+    /// maintenance command's corpus-wide transaction does — so the pass's
+    /// write-back fails with a real SQLITE_BUSY.
+    /// </summary>
+    private void HoldWriterLock()
+    {
+        _lockHolder = _connections.Open();
+        using var cmd = _lockHolder.CreateCommand();
+        cmd.CommandText = "BEGIN IMMEDIATE;";
+        cmd.ExecuteNonQuery();
+    }
+
+    private void ReleaseWriterLock()
+    {
+        if (_lockHolder is null) return;
+        using (var cmd = _lockHolder.CreateCommand())
+        {
+            cmd.CommandText = "ROLLBACK;";
+            cmd.ExecuteNonQuery();
+        }
+        _lockHolder.Dispose();
+        _lockHolder = null;
+    }
+
+    [Fact]
+    public async Task A_refused_write_back_is_held_and_replayed_without_re_OCRing()
+    {
+        long first = StageNoTextPdf("first@x", MinimalPdf(1));
+        long second = StageNoTextPdf("second@x", MinimalPdf(1));
+        var visionCalls = 0;
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            if (Interlocked.Increment(ref visionCalls) == 1) HoldWriterLock();
+            return "RECOVERED SCAN TEXT";
+        }));
+
+        try
+        {
+            (await svc.ProcessBatchAsync(10, default)).ShouldBe(0);
+        }
+        finally
+        {
+            ReleaseWriterLock();
+        }
+
+        // One vision call, then the pass stopped: the second document's write
+        // would have met the same wall, so it wasn't paid for.
+        visionCalls.ShouldBe(1);
+        StatusOf(first).ShouldBe(AttachmentTextExtractor.StatusNoText);
+        StatusOf(second).ShouldBe(AttachmentTextExtractor.StatusNoText);
+
+        // Database back: the held result lands first, with no second vision
+        // call for that document; the other is processed normally.
+        var done = await svc.ProcessBatchAsync(10, default);
+
+        done.ShouldBe(2);
+        visionCalls.ShouldBe(2);
+        TextOf(first).ShouldBe("RECOVERED SCAN TEXT");
+        TextOf(second).ShouldBe("RECOVERED SCAN TEXT");
+        StatusOf(first).ShouldBe(AttachmentTextExtractor.StatusOcr);
+    }
+
+    [Fact]
+    public async Task A_held_result_for_a_document_that_changed_meanwhile_is_discarded()
+    {
+        // The replay goes through the same identity guard, so a document that
+        // changed while its result was held is not given the old text.
+
+        long id = StageNoTextPdf("changes@x", MinimalPdf(1));
+        var calls = 0;
+        var svc = Build(new FakeVision(true, img =>
+        {
+            if (ReferenceEquals(img, AttachmentOcrService.HealthProbeJpeg)) return "";
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                HoldWriterLock();
+                return "TEXT OF THE OLD DOCUMENT";
+            }
+            return "TEXT OF THE NEW DOCUMENT";
+        }));
+
+        try { await svc.ProcessBatchAsync(10, default); }
+        finally { ReleaseWriterLock(); }
+
+        // The message's content changes while the result is held.
+        StageNoTextPdf("changes@x", MinimalPdf(1, size: 400), contentHash: "h-changed");
+
+        await svc.ProcessBatchAsync(10, default);
+
+        TextOf(id).ShouldBe("TEXT OF THE NEW DOCUMENT");
     }
 
     [Fact]
