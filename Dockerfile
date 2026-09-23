@@ -303,6 +303,11 @@ while :; do
 done
 EOF
 RUN chmod +x /usr/local/bin/mbsync-loop
+# Non-root by default, not only when compose says so. compose.yml sets
+# `user:` on every service, but a plain `docker run` of the published image,
+# or a compose override that drops the line, used to run as root. The uid
+# matches compose's MAILVEC_UID default; compose still overrides it.
+USER 10001:10001
 CMD ["mbsync-loop"]
 
 
@@ -387,5 +392,8 @@ ENV HOME=/tmp \
     MAILVEC_LOG_DIR=/logs
 
 EXPOSE 3333
+# Non-root by default — see the mbsync stage. The parse service overrides this
+# to 65534 in compose; everything else runs as this uid.
+USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/mailvec-entrypoint"]
 CMD ["dotnet", "/app/mcp/Mailvec.Mcp.dll"]

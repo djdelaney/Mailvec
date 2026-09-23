@@ -18,13 +18,22 @@ internal static class SetupHints
     /// config file's presence picks between "the installer never ran" and
     /// "installed but the indexer hasn't produced anything".
     /// </summary>
-    internal static string? EmptyArchiveHint(long totalMessages, bool sharedConfigExists, string dbPath)
+    /// <remarks>
+    /// Never names the database path. This text goes to the MCP client — on
+    /// the container deployment that is Anthropic's cloud, through the tunnel —
+    /// and server filesystem layout is exactly what the rest of the surface
+    /// keeps out of client-facing messages (<c>/health</c> is loopback-only for
+    /// the same reason). <c>mailvec status</c> prints the path to whoever can
+    /// run it on the server, which is who can act on it.
+    /// </remarks>
+    internal static string? EmptyArchiveHint(long totalMessages, bool sharedConfigExists)
     {
         if (totalMessages > 0) return null;
 
         return sharedConfigExists
             ? "The archive database is empty (0 messages). Mailvec is installed but the indexer has not " +
-              $"ingested anything yet — or this server resolved an unexpected database path ({dbPath}). " +
+              "ingested anything yet — or this server resolved an unexpected database path (`mailvec status` " +
+              "on the server prints the one it uses). " +
               "Suggest the user run `mailvec status` to see counts and `mailvec doctor` for a full diagnosis; " +
               "if mbsync has never synced, their Maildir may still be empty."
             : "The archive database is empty and Mailvec's shared configuration file was not found — this " +

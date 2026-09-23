@@ -13,7 +13,7 @@ namespace Mailvec.Mcp.Tools;
 /// filter — without this, Claude has to guess names like "INBOX" or "Archive".
 /// </summary>
 [McpServerToolType]
-public sealed class ListFoldersTool(MessageRepository messages, IOptions<ArchiveOptions> archiveOptions, ToolCallLogger callLog)
+public sealed class ListFoldersTool(MessageRepository messages, ToolCallLogger callLog)
 {
     private const string ToolName = "list_folders";
 
@@ -30,8 +30,7 @@ public sealed class ListFoldersTool(MessageRepository messages, IOptions<Archive
         // search_emails so the client LLM can explain instead of guessing.
         var setupHint = stats.Count > 0 ? null : SetupHints.EmptyArchiveHint(
             totalMessages: 0,
-            SharedConfig.SharedConfigFileExists(),
-            PathExpansion.Expand(archiveOptions.Value.DatabasePath));
+            SharedConfig.SharedConfigFileExists());
         var response = new ListFoldersResponse(stats.Count, stats, setupHint);
         callLog.LogResult(ToolName, new { count = response.Count }, startTs, count: response.Count);
         return response;

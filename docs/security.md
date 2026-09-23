@@ -192,8 +192,8 @@ All six services therefore run with:
 | `user: 10001:10001` (`parse`: `nobody`) | Non-root inside the container. A compromised process holds no root-only powers and, with `cap_drop`, no way back to them; it can touch only what its uid owns — the mounts the operator handed it, and nothing in the image. The uid is a fixed high number with no passwd entry; every mounted path must be owned by it, and the entrypoint refuses to start otherwise. |
 | `security_opt: [no-new-privileges:true]` | A setuid binary can't raise privileges — so a dropped capability stays dropped, and a dropped uid stays dropped. |
 | `Mcp__DeniedNetworks__0` = the pinned `parse` subnet (mcp only) | The parse service cannot call mcp back over the network they share. Without it, a compromised parser reaches the mail tools and the "holds nothing" claim above is false. Verified by a container on the `parse` network getting 403 on `/up` and on a tool call. |
-| `mem_limit` | Caps blast radius per service (mcp 3g, parse 2g, indexer/embedder 2g, mbsync 512m, cloudflared 256m). A decode bomb or a parser leak kills **one container** — and since the parsers moved, that container is `parse`, which holds nothing — instead of the Docker VM. |
-| `pids_limit` | Bounds task count (512 .NET / 256 cloudflared / 128 mbsync) so a fork bomb can't exhaust the VM's pid space. The cgroup controller counts threads, not just processes. |
+| `mem_limit` | Caps blast radius per service — values in `compose.yml`, which is the source of truth (at 2026-09-23: mcp 3g, parse/indexer/embedder 2g, mbsync 1g, cloudflared 256m). A decode bomb or a parser leak kills **one container** — and since the parsers moved, that container is `parse`, which holds nothing — instead of the Docker VM. |
+| `pids_limit` | Bounds task count — values in `compose.yml` (at 2026-09-23: 512 for mcp/indexer/embedder, 128 for parse and mbsync, 256 for cloudflared) — so a fork bomb can't exhaust the VM's pid space. The cgroup controller counts threads, not just processes. |
 
 Two consequences worth knowing rather than rediscovering:
 
