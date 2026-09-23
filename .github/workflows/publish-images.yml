@@ -35,9 +35,23 @@ permissions:
 
 jobs:
   images:
-    # For workflow_run events, publish only when CI passed. Tag pushes and
-    # manual dispatches have no workflow_run payload and publish directly.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # For workflow_run events, publish only when CI passed on a PUSH to this
+    # repository. Tag pushes and manual dispatches have no workflow_run
+    # payload and publish directly.
+    #
+    # The event + head_repository checks are the security boundary, not the
+    # `branches: [main]` filter above: that filter matches the triggering
+    # run's head BRANCH NAME, and CI also runs on pull_request — so a fork PR
+    # from a branch named `main` passes it, and the checkout below would then
+    # build the fork's commit (attacker-controlled Dockerfile) and push it to
+    # GHCR with this repo's packages:write token.
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
