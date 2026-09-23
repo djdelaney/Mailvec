@@ -85,6 +85,26 @@ static async Task RunHttp(string[] args)
     // time, and whether any of it is actually in the pipeline is decided
     // post-Build against the resolved options. See AccessAuth.
     AccessAuth.AddAccessAuthentication(builder.Services);
+
+    // Concurrency bound for the MCP endpoint (Mcp:MaxConcurrentToolCalls).
+    // The limiter's options are read from the RESOLVED IOptions<McpOptions>
+    // when its single partition is first created — never the builder-time
+    // snapshot (see src/Mailvec.Mcp/CLAUDE.md).
+    builder.Services.AddRateLimiter(o =>
+    {
+        o.RejectionStatusCode = StatusCodes.Status503ServiceUnavailable;
+        o.AddPolicy(McpToolCallsPolicy, context =>
+            System.Threading.RateLimiting.RateLimitPartition.GetConcurrencyLimiter("mcp", _ =>
+            {
+                var opts = context.RequestServices.GetRequiredService<IOptions<McpOptions>>().Value;
+                return new System.Threading.RateLimiting.ConcurrencyLimiterOptions
+                {
+                    PermitLimit = Math.Max(1, opts.MaxConcurrentToolCalls),
+                    QueueLimit = Math.Max(0, opts.ToolCallQueueLimit),
+                    QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst,
+                };
+            }));
+    });
     // TryParse + a named error: Mcp:BindAddress takes an IP literal, and the
     // natural-looking value "localhost" used to crash with a bare
     // FormatException pointing nowhere near the config knob.
@@ -168,6 +188,8 @@ static async Task RunHttp(string[] args)
         app.UseAuthentication();
         app.UseAuthorization();
     }
+    // After auth: a caller that fails it never takes a tool-call slot.
+    app.UseRateLimiter();
 
     // /health returns a structured snapshot of DB / embedding / Ollama state.
     // Returns 503 when degraded so monitors can alert without parsing the body.
@@ -257,6 +279,7 @@ static async Task RunHttp(string[] args)
             : Results.Json(minimal, statusCode: StatusCodes.Status503ServiceUnavailable);
     });
     var mcpEndpoint = app.MapMcp();
+    mcpEndpoint.RequireRateLimiting(McpToolCallsPolicy);
 
     if (accessEnabled)
     {
@@ -453,3 +476,9 @@ static void ConfigureServerInfo(ModelContextProtocol.Server.McpServerOptions opt
 
 // Required for WebApplicationFactory<Program> in tests to discover the entry point.
 public partial class Program;
+
+public partial class Program
+{
+    /// <summary>Rate-limiter policy bounding concurrent MCP requests (Mcp:MaxConcurrentToolCalls).</summary>
+    internal const string McpToolCallsPolicy = "mcp-tool-calls";
+}
