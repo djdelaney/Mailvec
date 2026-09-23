@@ -26,6 +26,14 @@ internal static class PurgeDeletedCommand
     /// </summary>
     internal const int DefaultMinAgeMinutes = 60;
 
+    /// <summary>
+    /// A single scan that soft-deleted at least this many messages is treated
+    /// as a possible Maildir problem, not a decision: the purge refuses it
+    /// unless <c>--allow-mass-deletion</c> is passed. Matches the scanner's
+    /// <c>Indexer:MassDeletionMinimum</c> default; the day-to-day rate is tens.
+    /// </summary>
+    internal const int MassDeletionBatch = 500;
+
     public static Command Build()
     {
         var yesOpt = new Option<bool>("--yes", "-y") { Description = "Skip the y/N confirmation prompt." };
@@ -37,21 +45,28 @@ internal static class PurgeDeletedCommand
             DefaultValueFactory = _ => DefaultMinAgeMinutes,
         };
 
+        var allowMassOpt = new Option<bool>("--allow-mass-deletion")
+        {
+            Description = $"Required to purge when a single indexer scan soft-deleted {MassDeletionBatch}+ messages. " +
+                          "Check that the Maildir is intact first: a folder move or a half-mounted volume looks exactly like that.",
+        };
+
         var cmd = new Command("purge-deleted", "Hard-delete soft-deleted messages and their chunks/vectors/attachments. Irreversible.")
         {
             yesOpt,
             dryRunOpt,
             minAgeOpt,
+            allowMassOpt,
         };
 
-        cmd.SetAction(parse => Run(parse.GetValue(yesOpt), parse.GetValue(dryRunOpt), parse.GetValue(minAgeOpt)));
+        cmd.SetAction(parse => Run(parse.GetValue(yesOpt), parse.GetValue(dryRunOpt), parse.GetValue(minAgeOpt), parse.GetValue(allowMassOpt)));
         return cmd;
     }
 
-    private static int Run(bool yes, bool dryRun, int minAgeMinutes)
+    private static int Run(bool yes, bool dryRun, int minAgeMinutes, bool allowMass)
     {
         using var sp = CliServices.Build();
-        return Execute(sp, yes, dryRun, Console.Out, () => Console.ReadLine(), minAgeMinutes);
+        return Execute(sp, yes, dryRun, Console.Out, () => Console.ReadLine(), minAgeMinutes, allowMass);
     }
 
     /// <summary>
@@ -60,7 +75,7 @@ internal static class PurgeDeletedCommand
     /// and script the y/N prompt. The CLI wrapper above passes the standard
     /// Console.Out + Console.ReadLine.
     /// </summary>
-    internal static int Execute(IServiceProvider sp, bool yes, bool dryRun, TextWriter @out, Func<string?> readLine, int minAgeMinutes = DefaultMinAgeMinutes)
+    internal static int Execute(IServiceProvider sp, bool yes, bool dryRun, TextWriter @out, Func<string?> readLine, int minAgeMinutes = DefaultMinAgeMinutes, bool allowMassDeletion = false)
     {
         sp.GetRequiredService<SchemaMigrator>().EnsureUpToDate();
         var messages = sp.GetRequiredService<MessageRepository>();
@@ -87,10 +102,32 @@ internal static class PurgeDeletedCommand
             @out.WriteLine($"{skippedRecent:N0} message(s) soft-deleted within the last {minAgeMinutes} minute(s) are skipped (use --min-age-minutes 0 to include them).");
         }
 
+        // Soft-deletes are recoverable (a row resurrects when its file
+        // reappears); this purge is the step that is not. A large batch from
+        // one scan is the signature of a partly missing Maildir, which is why
+        // --yes alone does not get past it.
+        var largest = messages.LargestSoftDeleteBatch(cutoff);
+        var mass = largest is { Count: >= MassDeletionBatch };
+        if (mass)
+        {
+            @out.WriteLine(
+                $"WARNING: {largest!.Value.Count:N0} of these were soft-deleted by a single indexer scan at " +
+                $"{largest.Value.DeletedAt:u}. That is the signature of a Maildir that was partly missing (a folder " +
+                "move, a half-mounted volume, a partial restore), not only of a deliberate bulk delete. Confirm the " +
+                "mail is really gone from the server before purging — if the files come back, the indexer restores " +
+                "these rows on its own, but not after a purge.");
+        }
+
         if (dryRun)
         {
             @out.WriteLine("Dry run — no changes made.");
             return 0;
+        }
+
+        if (mass && !allowMassDeletion)
+        {
+            @out.WriteLine("Refusing: re-run with --allow-mass-deletion once you have confirmed the deletion is real.");
+            return 1;
         }
 
         if (!yes)

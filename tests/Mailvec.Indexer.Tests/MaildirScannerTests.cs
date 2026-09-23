@@ -646,6 +646,98 @@ public class MaildirScannerTests : IDisposable
         _messages.GetByMessageId("fresh@x").ShouldNotBeNull();
     }
 
+    // ---- Mass-deletion hold ----------------------------------------------------
+    //
+    // A partly present Maildir (folder mid-move on the server, half-mounted
+    // volume, partial restore) is indistinguishable from the user deleting
+    // that mail. The only earlier guard was "the walk saw zero files".
+
+    private sealed class ManualClock(DateTimeOffset start) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = start;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    private (MaildirScanner Scanner, ManualClock Clock) ScannerWithHold(int minimum = 3, double fraction = 0.10, int holdMinutes = 60)
+    {
+        var clock = new ManualClock(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+        var scanner = new MaildirScanner(
+            Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = _root }),
+            new InProcessParser(extractor: null), _messages, _chunks, _syncState, _connections,
+            NullLogger<MaildirScanner>.Instance,
+            indexerOptions: Microsoft.Extensions.Options.Options.Create(new IndexerOptions
+            {
+                MassDeletionMinimum = minimum,
+                MassDeletionFraction = fraction,
+                MassDeletionHoldMinutes = holdMinutes,
+            }),
+            time: clock);
+        return (scanner, clock);
+    }
+
+    private List<string> WriteMany(int n, string prefix) =>
+        [.. Enumerable.Range(0, n).Select(i =>
+            WriteEml("INBOX", "cur", $"{prefix}{i}.host:2,S", $"{prefix} body {i}", $"{prefix}{i}@x"))];
+
+    [Fact]
+    public void A_mass_deletion_is_held_and_forgotten_if_the_files_come_back()
+    {
+        var (scanner, clock) = ScannerWithHold();
+        var paths = WriteMany(10, "m");
+        scanner.ScanAll();
+
+        // Half the Maildir vanishes (a folder mid-move, say).
+        var backup = paths.Take(5).ToDictionary(p => p, File.ReadAllText);
+        foreach (var p in backup.Keys) File.Delete(p);
+
+        var held = scanner.ScanAll();
+        held.SoftDeleted.ShouldBe(0);
+        held.DeletionsHeld.ShouldBe(5);
+        clock.Now += TimeSpan.FromMinutes(30);
+        scanner.ScanAll().SoftDeleted.ShouldBe(0, "still inside the hold");
+
+        // The files come back: nothing was ever deleted.
+        foreach (var (p, content) in backup) File.WriteAllText(p, content);
+        var back = scanner.ScanAll();
+        back.SoftDeleted.ShouldBe(0);
+        back.DeletionsHeld.ShouldBe(0);
+        for (var i = 0; i < 10; i++)
+            _messages.GetByMessageId($"m{i}@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_mass_deletion_that_persists_past_the_hold_is_applied()
+    {
+        var (scanner, clock) = ScannerWithHold();
+        var paths = WriteMany(10, "g");
+        scanner.ScanAll();
+        foreach (var p in paths.Take(5)) File.Delete(p);
+
+        scanner.ScanAll().DeletionsHeld.ShouldBe(5);
+        clock.Now += TimeSpan.FromMinutes(61);
+        var applied = scanner.ScanAll();
+
+        applied.SoftDeleted.ShouldBe(5, "a genuine bulk deletion still lands, just late");
+        _messages.GetByMessageId("g0@x").ShouldNotBeNull().DeletedAt.ShouldNotBeNull();
+        _messages.GetByMessageId("g9@x").ShouldNotBeNull().DeletedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Ordinary_deletions_below_the_threshold_apply_immediately()
+    {
+        // Two of ten is 20% — over the fraction — but under the absolute
+        // minimum, which is what keeps day-to-day deletions on a small
+        // mailbox (and every existing deletion test) unaffected.
+        var (scanner, _) = ScannerWithHold(minimum: 3);
+        var paths = WriteMany(10, "d");
+        scanner.ScanAll();
+        foreach (var p in paths.Take(2)) File.Delete(p);
+
+        var result = scanner.ScanAll();
+        result.SoftDeleted.ShouldBe(2);
+        result.DeletionsHeld.ShouldBe(0);
+    }
+
     [Fact]
     public void Deletion_is_still_detected_after_many_unchanged_scans()
     {

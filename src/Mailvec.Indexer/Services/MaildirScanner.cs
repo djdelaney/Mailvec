@@ -20,8 +20,18 @@ public sealed class MaildirScanner(
     ILogger<MaildirScanner> logger,
     // Optional so the tests that build the scanner by hand keep compiling;
     // the defaults are the shipped ones.
-    IOptions<ParserOptions>? parserOptions = null)
+    IOptions<ParserOptions>? parserOptions = null,
+    IOptions<IndexerOptions>? indexerOptions = null,
+    TimeProvider? time = null)
 {
+    private readonly IndexerOptions _indexer = indexerOptions?.Value ?? new IndexerOptions();
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+
+    // When the current run of held mass deletions started (null = not
+    // holding). In memory on purpose: a restart restarts the hold, which only
+    // ever delays a deletion, never hastens one.
+    private DateTimeOffset? _massDeletionHeldSince;
+
     private readonly string _maildirRoot = PathExpansion.Expand(ingestOptions.Value.MaildirRoot);
     private readonly int _maxCrashesPerFile = Math.Max(1, (parserOptions?.Value ?? new ParserOptions()).MaxCrashesPerFile);
 
@@ -93,7 +103,12 @@ public sealed class MaildirScanner(
     /// <paramref name="Seen"/> is a prefix of the corpus and nothing was
     /// reconciled. The next scan retries; see <see cref="IngestOutcome.ParserUnavailable"/>.
     /// </param>
-    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted, bool Incomplete = false);
+    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted, bool Incomplete = false, int DeletionsHeld = 0);
+
+    private bool IsMassDeletion(int gone, int tracked) =>
+        gone >= Math.Max(1, _indexer.MassDeletionMinimum)
+        && _indexer.MassDeletionFraction < 1
+        && gone > tracked * Math.Max(0, _indexer.MassDeletionFraction);
 
     /// <summary>
     /// Walks every Maildir subfolder under MaildirRoot, parses messages, and
@@ -142,7 +157,8 @@ public sealed class MaildirScanner(
         // probing File.Exists per tracked row at reconciliation time, trades
         // that for a second stat() of the whole corpus per scan AND changes
         // which unwalked-but-present files soft-delete.
-        var observedPaths = new HashSet<string>(syncState.TrackedPathCount(), StringComparer.Ordinal);
+        var trackedAtStart = syncState.TrackedPathCount();
+        var observedPaths = new HashSet<string>(trackedAtStart, StringComparer.Ordinal);
         // Directories we couldn't enumerate (permissions, I/O). Any skipped
         // directory means the files inside it never got their sync_state
         // refreshed this scan, so — like `unrefreshed` — it must veto the
@@ -335,6 +351,35 @@ public sealed class MaildirScanner(
         // Distinct: a message with several vanished copies must not be
         // looked up (or marked) once per copy.
         var goneMessageIds = deletedMessageIds.Distinct().ToList();
+
+        // The mass-deletion hold (see IndexerOptions.MassDeletionFraction).
+        // Counted on messages that would actually be deleted — renames and
+        // surviving duplicate copies are not deletions, so an mbsync flag
+        // storm never trips it. Returning here also leaves the stale
+        // sync_state entries in place, so the next scan re-evaluates the same
+        // set rather than forgetting it.
+        if (IsMassDeletion(goneMessageIds.Count, trackedAtStart))
+        {
+            var now = _time.GetUtcNow();
+            _massDeletionHeldSince ??= now;
+            var hold = TimeSpan.FromMinutes(Math.Max(0, _indexer.MassDeletionHoldMinutes));
+            if (now - _massDeletionHeldSince.Value < hold)
+            {
+                logger.LogError(
+                    "MaildirScanner: this scan would soft-delete {Gone} message(s) of {Tracked} tracked paths — " +
+                    "HOLDING deletion reconciliation (held since {Since:O}; proceeds after {Hold} min if it persists). " +
+                    "A partly missing Maildir (folder move, half-mounted volume, partial restore) looks exactly like " +
+                    "this. If the mail is back on the next scan nothing happens; do NOT run purge-deleted until this " +
+                    "is explained.",
+                    goneMessageIds.Count, trackedAtStart, _massDeletionHeldSince.Value, hold.TotalMinutes);
+                return new ScanResult(seen, upserted, unchanged, failed, 0, DeletionsHeld: goneMessageIds.Count);
+            }
+            logger.LogWarning(
+                "MaildirScanner: the mass deletion of {Gone} message(s) has persisted for {Held:F0} min; applying it " +
+                "as a genuine deletion (soft-delete — the rows come back if the files reappear).",
+                goneMessageIds.Count, (now - _massDeletionHeldSince.Value).TotalMinutes);
+        }
+        _massDeletionHeldSince = null;
 
         var softDeleted = 0;
         if (goneMessageIds.Count > 0)

@@ -1775,6 +1775,28 @@ public sealed class MessageRepository(ConnectionFactory connections)
     }
 
     /// <summary>
+    /// The largest group of soft-deletes that share one <c>deleted_at</c> —
+    /// the scanner stamps a whole reconciliation with its scan-start time, so
+    /// this is "the most messages a single scan deleted" within the purgeable
+    /// set. <c>purge-deleted</c> refuses to hard-delete a large one without an
+    /// explicit flag: a mass deletion is far more often a Maildir problem than
+    /// a decision. Null when nothing is soft-deleted.
+    /// </summary>
+    public (DateTimeOffset DeletedAt, int Count)? LargestSoftDeleteBatch(DateTimeOffset? deletedBefore = null)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT deleted_at, COUNT(*) FROM messages WHERE deleted_at IS NOT NULL"
+            + (deletedBefore is null ? "" : " AND datetime(deleted_at) <= datetime($cutoff)")
+            + " GROUP BY deleted_at ORDER BY COUNT(*) DESC LIMIT 1";
+        if (deletedBefore is { } cutoff)
+            cmd.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
+        using var r = cmd.ExecuteReader();
+        if (!r.Read()) return null;
+        return (DateTimeOffset.Parse(r.GetString(0), System.Globalization.CultureInfo.InvariantCulture), r.GetInt32(1));
+    }
+
+    /// <summary>
     /// Hard-deletes every message with deleted_at IS NOT NULL, along with its
     /// chunks, chunk_embeddings, attachments, and FTS rows. Returns the number
     /// of message rows removed.
