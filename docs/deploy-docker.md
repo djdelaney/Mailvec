@@ -316,16 +316,30 @@ docker compose exec mcp mailvec doctor
   An **app-consistent** copy is a stronger guarantee, and the only way to get
   one is pause-checkpoint-copy. `ops/export-db.sh` is macOS-only (it pauses
   writers via launchctl); the container equivalent is:
-  `docker compose stop indexer embedder && docker compose exec mcp mailvec
-  checkpoint && cp data/archive.sqlite <backup> && docker compose start
-  indexer embedder` (mcp stays up — it's read-only against the DB, and the
-  CLI rides inside its container). Worth running before anything that
-  migrates the DB in place (a new image — see the SchemaMigrator-on-start
-  warning above), and worth cronning only if VM-snapshot restores ever prove
-  unsatisfying in practice. Note `ConnectionFactory`
-  hardens the DB dir/files to owner-only (0700/0600) on open — on the VM
-  that owner is the container's root, so run backup reads via
-  `docker compose exec` or as root on the host.
+
+  ```sh
+  docker compose stop indexer embedder
+  if docker compose exec -T mcp mailvec checkpoint; then
+    sudo cp -p data/archive.sqlite <backup>
+  else
+    echo "checkpoint could not truncate the WAL (a reader held it) — nothing copied; retry" >&2
+  fi
+  docker compose start indexer embedder   # ALWAYS, copy or not
+  ```
+
+  mcp stays up — it's read-only against the DB, and the CLI rides inside its
+  container. **Don't chain the steps with `&&`**, as an earlier version of this
+  recipe did: `checkpoint` exits 1 whenever a reader holds the WAL (mcp
+  serving a search is enough), which skipped the `start` at the end and left
+  the indexer and embedder stopped with no warning. The copy is skipped in
+  that case on purpose — the main file alone, without a truncated WAL, is not
+  the consistent copy this recipe exists to take. Worth running before
+  anything that migrates the DB in place (a new image — see the
+  SchemaMigrator-on-start warning above), and worth cronning only if
+  VM-snapshot restores ever prove unsatisfying in practice. Note
+  `ConnectionFactory` hardens the DB dir/files to owner-only (0700/0600) on
+  open — on the VM that owner is the container uid (10001), so run backup
+  reads via `docker compose exec` or with `sudo` on the host.
 
 ## Hosted embedding provider (optional)
 
