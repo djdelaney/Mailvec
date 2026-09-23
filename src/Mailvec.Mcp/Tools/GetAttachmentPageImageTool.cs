@@ -99,7 +99,7 @@ public sealed class GetAttachmentPageImageTool(
 
         if (!IsPdf(info.ContentType, info.FileName))
             throw new McpException(
-                $"partIndex {partIndex} ('{info.FileName}', {info.ContentType}) is not a PDF. " +
+                $"partIndex {partIndex} ('{ToolText.Label(info.FileName, "attachment")}', {ToolText.Label(info.ContentType, "unknown type")}) is not a PDF. " +
                 "This tool only renders PDFs — use get_attachment_text for a document's text.");
 
         PdfRender render;
@@ -140,19 +140,19 @@ public sealed class GetAttachmentPageImageTool(
             logger.LogWarning(ex, "PDF render failed for message {MessageId} partIndex {PartIndex} page {Page}",
                 msg.Id, partIndex, page);
             throw new McpException(
-                $"Could not render '{info.FileName}' page {page}. " +
+                $"Could not render '{ToolText.Label(info.FileName, "attachment")}' page {page}. " +
                 "The PDF may be encrypted or corrupt; try get_attachment_text for any embedded text.");
         }
 
         if (page > render.PageCount || render.Pages.Count == 0)
-            throw new McpException($"'{info.FileName}' has {render.PageCount} page(s); page {page} is out of range.");
+            throw new McpException($"'{ToolText.Label(info.FileName, "attachment")}' has {render.PageCount} page(s); page {page} is out of range.");
 
         var jpeg = render.Pages[0];
         var content = new List<ContentBlock>
         {
             new TextContentBlock
             {
-                Text = $"Rendered page {page} of {render.PageCount} from {info.FileName} as a JPEG image.",
+                Text = $"Rendered page {page} of {render.PageCount} from '{ToolText.Label(info.FileName, "attachment")}' as a JPEG image.",
             },
             new ImageContentBlock
             {
