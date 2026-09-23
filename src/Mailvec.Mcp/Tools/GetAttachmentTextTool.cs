@@ -96,7 +96,9 @@ public sealed class GetAttachmentTextTool(
                 $"Message {msg.Id} has no attachment at partIndex {partIndex}. Call get_email to list attachment part indexes.");
 
         var content = new List<ContentBlock>();
-        var name = attachment.FileName ?? "attachment";
+        // Quoted and sanitized: this lands in server-written framing text, and
+        // the raw name is sender-controlled (see ToolText.Label).
+        var name = $"'{ToolText.Label(attachment.FileName, "attachment")}'";
 
         // 'ocr' is searchable text like 'done' — it's a scanned document the
         // embedder recovered via vision-model OCR. Refusing it here would
@@ -175,28 +177,28 @@ public sealed class GetAttachmentTextTool(
     private static string UnavailableMessage(string name, string? status) => status switch
     {
         ExtractionStatus.NoText =>
-            $"No text could be extracted from '{name}' — it has no embedded text layer (e.g. a scanned or image-only PDF). " +
+            $"No text could be extracted from {name} — it has no embedded text layer (e.g. a scanned or image-only PDF). " +
             "Use get_attachment_page_image to view its pages.",
         ExtractionStatus.Encrypted =>
-            $"'{name}' is encrypted, so its text could not be extracted and its pages cannot be rendered. " +
+            $"{name} is encrypted, so its text could not be extracted and its pages cannot be rendered. " +
             "Mailvec cannot decrypt it — the user can save the file with `mailvec extract-attachments` and open it themselves.",
         ExtractionStatus.Oversize =>
-            $"'{name}' exceeds the text-extraction size cap, so its text was not extracted. " +
+            $"{name} exceeds the text-extraction size cap, so its text was not extracted. " +
             "If it is a PDF, get_attachment_page_image can still render individual pages.",
         ExtractionStatus.Unsupported =>
-            $"'{name}' is a type Mailvec does not extract text from. " +
+            $"{name} is a type Mailvec does not extract text from. " +
             "If it is an image or a small text file, view_attachment can show it inline.",
         ExtractionStatus.Failed =>
-            $"Text extraction failed for '{name}'. " +
+            $"Text extraction failed for {name}. " +
             "Try get_attachment_page_image for a PDF, or view_attachment for an image or small text file.",
         ExtractionStatus.Ocr =>
-            $"'{name}' was OCR-processed but no text was recovered (likely a blank scan). " +
+            $"{name} was OCR-processed but no text was recovered (likely a blank scan). " +
             "Use get_attachment_page_image to view the pages.",
         null =>
-            $"'{name}' has no extraction record yet (it predates attachment text extraction, or the embedder hasn't " +
+            $"{name} has no extraction record yet (it predates attachment text extraction, or the embedder hasn't " +
             "processed it). Try get_attachment_page_image for a PDF, or view_attachment for an image or small text file.",
         _ =>
-            $"No extracted text is available for '{name}' (status: {status}). " +
+            $"No extracted text is available for {name} (status: {status}). " +
             "Try get_attachment_page_image for a PDF, or view_attachment for an image or small text file.",
     };
 }

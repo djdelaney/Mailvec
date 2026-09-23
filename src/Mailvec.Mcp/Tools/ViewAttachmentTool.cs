@@ -306,7 +306,7 @@ public sealed class ViewAttachmentTool(
     [SupportedOSPlatform("windows")]
     private static string BuildSummary(InlineAttachment att, bool isImage, bool imageInlined, bool imageTranscoded, bool textInlined, bool inlineTruncated, int inlineTotalChars)
     {
-        var header = $"'{att.FileName}' ({att.ContentType}, {FormatSize(att.SizeBytes)})";
+        var header = $"'{ToolText.Label(att.FileName, "attachment")}' ({ToolText.Label(att.ContentType, "unknown type")}, {FormatSize(att.SizeBytes)})";
         if (imageInlined)
             return imageTranscoded
                 ? $"{header} — shown inline below, re-encoded as JPEG (long edge capped at {RasterLimits.MaxEdgePx}px) for client compatibility and size."
