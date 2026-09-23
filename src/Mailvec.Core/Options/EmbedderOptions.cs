@@ -104,4 +104,15 @@ public sealed class EmbedderOptions
     // Stage 2 (post-decode): skip images whose long/short edge ratio exceeds this
     // — banner strips and 1×N spacer rows that carry no readable text.
     public double ImageOcrMaxAspectRatio { get; set; } = 8.0;
+
+    // Wall-clock budget per OCR pass (PDF and image passes each), checked
+    // between documents: once exceeded, the pass stops STARTING documents and
+    // the cycle moves on to embedding. It always finishes at least one, so a
+    // slow provider still makes progress. OCR runs before the embed pass on
+    // the one worker, and without a bound a batch of 4 x 20-page scans on a
+    // slow vision host (or a hosted provider's worst-case retry schedule) held
+    // new mail unembedded for hours — reachable by anyone who can mail a
+    // scanned PDF, while the liveness beat stayed green by design. Candidates
+    // skipped for budget are picked up by the next sweep. 0 disables.
+    public int OcrMaxSecondsPerPass { get; set; } = 600;
 }

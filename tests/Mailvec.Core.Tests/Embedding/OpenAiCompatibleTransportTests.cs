@@ -241,6 +241,21 @@ public class OpenAiCompatibleTransportTests
         public void OnEmbeddingResponse(EmbeddingTelemetry telemetry) => onSeen(telemetry);
     }
 
+    [Fact]
+    public async Task Resilience_pipeline_rejections_are_classified_not_left_to_escape()
+    {
+        // Interactive hosted requests run through the standard resilience
+        // handler; its rejections are neither OperationCanceledException nor
+        // HttpRequestException and used to escape unclassified.
+        var timedOut = await Should.ThrowAsync<EmbeddingException>(() =>
+            Transport(_ => throw new Polly.Timeout.TimeoutRejectedException("attempt timeout")).EmbedAsync(["a"]));
+        timedOut.Kind.ShouldBe(EmbeddingFailureKind.Transient);
+
+        var circuit = await Should.ThrowAsync<EmbeddingException>(() =>
+            Transport(_ => throw new Polly.CircuitBreaker.BrokenCircuitException("open")).EmbedAsync(["a"]));
+        circuit.Kind.ShouldBe(EmbeddingFailureKind.Backpressure);
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>

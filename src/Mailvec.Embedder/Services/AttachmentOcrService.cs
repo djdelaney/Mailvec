@@ -36,8 +36,27 @@ public sealed class AttachmentOcrService(
     // Batch-outcome record. Optional so the existing tests (which build this
     // service by hand) keep compiling; null simply means the outcome keys go
     // unwritten, which reads downstream as "unknown" rather than "broken".
-    MetadataRepository? metadata = null)
+    MetadataRepository? metadata = null,
+    TimeProvider? time = null)
 {
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+
+    /// <summary>
+    /// True once this pass has used its <see cref="EmbedderOptions.OcrMaxSecondsPerPass"/>
+    /// budget and has already processed at least one document.
+    /// </summary>
+    private bool PassBudgetSpent(long passStart, int started, string pass)
+    {
+        if (started == 0 || _opts.OcrMaxSecondsPerPass <= 0) return false;
+        var elapsed = _time.GetElapsedTime(passStart);
+        if (elapsed < TimeSpan.FromSeconds(_opts.OcrMaxSecondsPerPass)) return false;
+        logger.LogInformation(
+            "{Pass}: pass budget of {Budget}s spent after {Started} document(s) ({Elapsed:F0}s); leaving the rest " +
+            "for the next sweep so embedding isn't held up.",
+            pass, _opts.OcrMaxSecondsPerPass, started, elapsed.TotalSeconds);
+        return true;
+    }
+
     private readonly int _maxPages = Math.Max(1, options.Value.OcrMaxPagesPerPdf);
     private readonly EmbedderOptions _opts = options.Value;
 
@@ -790,9 +809,13 @@ public sealed class AttachmentOcrService(
         // nothing about whether the parse service is up, and vice versa.
         int parserSuccesses = 0;
         var parserFailedThisCycle = new List<OcrCandidate>();
+        var passStart = _time.GetTimestamp();
+        var started = 0;
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
+            if (PassBudgetSpent(passStart, started, "OCR")) break;
+            started++;
 
             byte[] eml;
             try
@@ -1048,9 +1071,13 @@ public sealed class AttachmentOcrService(
         // nothing about whether the parse service is up, and vice versa.
         int parserSuccesses = 0;
         var parserFailedThisCycle = new List<OcrCandidate>();
+        var passStart = _time.GetTimestamp();
+        var started = 0;
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
+            if (PassBudgetSpent(passStart, started, "Image OCR")) break;
+            started++;
 
             byte[] eml;
             try
