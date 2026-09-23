@@ -161,10 +161,14 @@ public static class EmbeddingRegistration
         }
         else
         {
+            // Handler + response ceiling from OllamaHttp: no redirects, no
+            // proxy, bounded body — Ollama is unauthenticated plain HTTP on
+            // the LAN, and this client runs in mcp as well as the embedder.
             var http = services.AddHttpClient<OllamaClient>((sp, client) =>
             {
                 var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
                 client.BaseAddress = new Uri(opts.BaseUrl);
+                OllamaHttp.ApplyResponseCeiling(client, opts);
                 client.Timeout = role == EmbeddingClientRole.BackgroundIngestion
                     // The resilience handler below owns the per-attempt/total
                     // timeouts. HttpClient.Timeout wraps the entire handler
@@ -179,7 +183,7 @@ public static class EmbeddingRegistration
                     // + body slack.
                     ? TimeSpan.FromSeconds(330)
                     : TimeSpan.FromSeconds(Math.Max(5, opts.RequestTimeoutSeconds));
-            });
+            }).ConfigurePrimaryHttpMessageHandler(OllamaHttp.CreateHandler);
 
             if (role == EmbeddingClientRole.BackgroundIngestion)
             {
