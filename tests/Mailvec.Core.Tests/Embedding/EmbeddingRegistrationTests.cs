@@ -256,6 +256,7 @@ public class EmbeddingRegistrationTests
 
         var keyFile = Path.Combine(Path.GetTempPath(), "mailvec-test-key-" + Guid.NewGuid().ToString("N"));
         File.WriteAllText(keyFile, "fw_from_file\n");
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         try
         {
             EmbeddingRegistration.ResolveBearerToken(Config(FireworksConfig(
@@ -264,6 +265,101 @@ public class EmbeddingRegistrationTests
                 .ShouldBe("fw_from_file");
         }
         finally { File.Delete(keyFile); }
+    }
+
+    // ---------- secret-source rules (SecretConfig) ----------
+
+    [Fact]
+    public void A_key_file_readable_by_other_users_is_refused()
+    {
+        // "Owner-only file" was a doc comment nothing checked.
+        if (OperatingSystem.IsWindows()) return;
+        var keyFile = Path.Combine(Path.GetTempPath(), "mailvec-test-key-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(keyFile, "fw_from_file");
+        File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        try
+        {
+            var ex = Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.ResolveBearerToken(Config(FireworksConfig(
+                ("Embedding:Profiles:fw:Auth:ApiKey", null),
+                ("Embedding:Profiles:fw:Auth:ApiKeyFile", keyFile))), "fw"));
+            ex.Message.ShouldContain("chmod 600");
+
+            // Group-read alone is allowed (a service-group shape).
+            File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+            EmbeddingRegistration.ResolveBearerToken(Config(FireworksConfig(
+                ("Embedding:Profiles:fw:Auth:ApiKey", null),
+                ("Embedding:Profiles:fw:Auth:ApiKeyFile", keyFile))), "fw").ShouldBe("fw_from_file");
+        }
+        finally { File.Delete(keyFile); }
+    }
+
+    [Fact]
+    public void An_inline_key_from_a_json_config_file_is_refused_but_an_env_override_is_not()
+    {
+        // The shared appsettings.Local.json is world-readable by design.
+        var dir = Path.Combine(Path.GetTempPath(), "mailvec-cfg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var json = Path.Combine(dir, "appsettings.Local.json");
+        File.WriteAllText(json, """{"Embedding":{"Profiles":{"fw":{"Auth":{"ApiKey":"leaked_key"}}}}}""");
+        try
+        {
+            var baseline = FireworksConfig(("Embedding:Profiles:fw:Auth:ApiKey", null))
+                .Select(p => new KeyValuePair<string, string?>(p.Item1, p.Item2));
+            var fromJson = new ConfigurationBuilder().AddInMemoryCollection(baseline).AddJsonFile(json).Build();
+            var ex = Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.ResolveBearerToken(fromJson, "fw"));
+            ex.Message.ShouldContain("appsettings.Local.json");
+            ex.Message.ShouldNotContain("leaked_key", Case.Sensitive, "never echo the key");
+
+            // An environment-style override layered on top shadows the file's
+            // copy: the value in use did not come from the file.
+            var overridden = new ConfigurationBuilder().AddInMemoryCollection(baseline).AddJsonFile(json)
+                .AddInMemoryCollection([new("Embedding:Profiles:fw:Auth:ApiKey", "env_key")]).Build();
+            EmbeddingRegistration.ResolveBearerToken(overridden, "fw").ShouldBe("env_key");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public async Task The_hosted_client_never_follows_a_redirect_with_the_bearer_token()
+    {
+        // Through the real registration: the hosted transport now builds on
+        // HostedHttp (no redirects, no proxy, a response ceiling).
+        using var elsewhere = new LoopbackServer(_ => Task.CompletedTask);
+        using var provider = new LoopbackServer(ctx =>
+        {
+            ctx.Response.StatusCode = 307;
+            ctx.Response.RedirectLocation = $"http://127.0.0.1:{elsewhere.Port}/steal";
+            return Task.CompletedTask;
+        });
+
+        var sp = BuildProvider(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Endpoint", $"http://127.0.0.1:{provider.Port}/v1/embeddings"),
+            ("Embedding:Profiles:fw:OutputDimensions", "4"))), EmbeddingClientRole.Interactive);
+
+        await Should.ThrowAsync<EmbeddingException>(
+            () => sp.GetRequiredService<IEmbeddingService>().EmbedQueryAsync("confidential"));
+        provider.Requests.ShouldBeGreaterThan(0);
+        elsewhere.Requests.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task The_hosted_handler_has_no_proxy_and_the_ceiling_is_enforced_while_buffering()
+    {
+        using var handler = HostedHttp.CreateHandler();
+        handler.AllowAutoRedirect.ShouldBeFalse();
+        handler.UseProxy.ShouldBeFalse();
+
+        using var server = new LoopbackServer(async ctx =>
+        {
+            ctx.Response.StatusCode = 200;
+            await ctx.Response.OutputStream.WriteAsync(new byte[16 * 1024]);
+        });
+        using var client = new HttpClient(HostedHttp.CreateHandler()) { BaseAddress = new Uri($"http://127.0.0.1:{server.Port}/") };
+        HostedHttp.ApplyResponseCeiling(client);
+        client.MaxResponseContentBufferSize.ShouldBe(HostedHttp.MaxResponseBytes);
+
+        client.MaxResponseContentBufferSize = 1024;
+        await Should.ThrowAsync<HttpRequestException>(() => client.GetStringAsync("x"));
     }
 
     [Fact]

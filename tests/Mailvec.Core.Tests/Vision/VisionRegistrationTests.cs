@@ -149,6 +149,96 @@ public class VisionRegistrationTests
         }, requiresCredentials: true).ShouldBeOfType<MistralOcrClient>();
     }
 
+    // ---- Probe-only processes that DO hold credentials ----------------------
+
+    [Fact]
+    public async Task A_probe_only_process_refuses_a_cleartext_endpoint_instead_of_sending_the_key()
+    {
+        // It used to skip validation whenever the config was complete, so the
+        // key went over http:// on every /health poll while the embedder
+        // refused the same setting. Degrades, never throws: MCP must not
+        // crashloop over an OCR setting.
+        var client = Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = "http://ocr.example.com",
+            ["Vision:Mistral:Model"] = "mistral-ocr-4-0",
+            ["Vision:Mistral:ApiKey"] = "k",
+        });
+
+        var probe = await client.ProbeAsync();
+        probe.Status.ShouldBe(VisionProbeStatus.Misconfigured);
+        probe.Detail.ShouldNotBeNull().ShouldContain("https");
+    }
+
+    [Fact]
+    public void The_embedder_still_refuses_to_start_on_the_same_setting()
+    {
+        Should.Throw<InvalidOperationException>(() => Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = "http://ocr.example.com",
+            ["Vision:Mistral:Model"] = "mistral-ocr-4-0",
+            ["Vision:Mistral:ApiKey"] = "k",
+        }, requiresCredentials: true));
+    }
+
+    // ---- ApiKeyFile ------------------------------------------------------------
+
+    [Fact]
+    public void The_key_can_come_from_an_owner_only_file_and_is_trimmed()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var keyFile = Path.Combine(Path.GetTempPath(), "mailvec-ocr-key-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(keyFile, "ocr_key_from_file\n");
+        File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        try
+        {
+            var opts = new MistralVisionOptions { ApiKeyFile = keyFile };
+            opts.ResolveApiKey().ShouldBe("ocr_key_from_file");
+            new MistralVisionOptions { ApiKey = "  inline_wins \n", ApiKeyFile = keyFile }.ResolveApiKey().ShouldBe("inline_wins");
+
+            File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.OtherRead);
+            Should.Throw<InvalidOperationException>(() => opts.ResolveApiKey()).Message.ShouldContain("chmod 600");
+        }
+        finally { File.Delete(keyFile); }
+    }
+
+    [Fact]
+    public void A_probe_only_process_without_the_key_file_mounted_is_not_configured_here()
+    {
+        // Compose mounts the OCR key into the embedder only; mcp/cli see the
+        // option but not the file, which must read as the deliberate posture.
+        var client = Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = "https://ocr.example.com",
+            ["Vision:Mistral:Model"] = "mistral-ocr-4-0",
+            ["Vision:Mistral:ApiKeyFile"] = "/run/secrets/not-mounted-here",
+        });
+        client.ShouldBeOfType<UnconfiguredVisionClient>();
+    }
+
+    [Fact]
+    public void An_inline_key_from_a_json_config_file_is_refused()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mailvec-cfg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var json = Path.Combine(dir, "appsettings.Local.json");
+        File.WriteAllText(json, """{"Vision":{"Provider":"mistral","Mistral":{"Endpoint":"https://ocr.example.com","Model":"m","ApiKey":"leaked"}}}""");
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddJsonFile(json).Build();
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.Configure<OllamaOptions>(configuration.GetSection(OllamaOptions.SectionName));
+
+            Should.Throw<InvalidOperationException>(() => services.AddMailvecVision(configuration, requiresCredentials: true))
+                .Message.ShouldContain("appsettings.Local.json");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     private static IVisionClient Resolve(
         Dictionary<string, string?> settings, bool requiresCredentials = false)
     {

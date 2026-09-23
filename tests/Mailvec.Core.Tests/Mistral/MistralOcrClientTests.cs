@@ -379,6 +379,45 @@ public class MistralOcrClientTests
         ex.Kind.ShouldBe(VisionFailureKind.Timeout);
     }
 
+    [Fact]
+    public async Task The_probe_is_bounded_independently_of_the_request_timeout()
+    {
+        // The HttpClient timeout is 120 s by default; /health's compose
+        // healthcheck gives up at 10 s. A hung endpoint must read as
+        // unreachable, promptly.
+        var original = MistralOcrClient.ProbeTimeout;
+        MistralOcrClient.ProbeTimeout = TimeSpan.FromMilliseconds(200);
+        try
+        {
+            var http = new HttpClient(new HangingHandler())
+            {
+                BaseAddress = new Uri("https://example.invalid/"),
+                Timeout = TimeSpan.FromMinutes(2),
+            };
+            var opts = new VisionOptions
+            {
+                Provider = VisionOptions.ProviderMistral,
+                Mistral = new MistralVisionOptions { Endpoint = "https://example.invalid", Model = "m", ApiKey = "k" },
+            };
+            var client = new MistralOcrClient(http, MsOptions.Create(opts), NullLogger<MistralOcrClient>.Instance);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var probe = await client.ProbeAsync();
+            sw.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+            probe.Status.ShouldBe(VisionProbeStatus.Unreachable);
+        }
+        finally { MistralOcrClient.ProbeTimeout = original; }
+    }
+
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
     private static MistralOcrClient ClientWith(
         Func<HttpRequestMessage, HttpResponseMessage> handler,
         Action<MistralVisionOptions>? configure = null)

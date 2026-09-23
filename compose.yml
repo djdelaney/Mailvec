@@ -414,6 +414,14 @@ services:
       # Setting MAILVEC_VISION_PROVIDER=mistral sends rendered pages of mail
       # OFF-NETWORK, unattended — read docs/security.md before switching.
       Vision__Mistral__ApiKey: ${MAILVEC_MISTRAL_API_KEY:-}
+      # OPT-IN: the key as a file secret instead of an environment variable
+      # (not visible through `docker inspect` or /proc/1/environ). Put it in
+      # secrets/mistral_api_key (owner 10001, mode 0600), uncomment this line,
+      # the `- mistral_api_key` entry under this service's secrets, and the
+      # top-level `mistral_api_key` secret, then REMOVE MAILVEC_MISTRAL_API_KEY
+      # from .env — an explicit ApiKey wins over the file. Commented because
+      # compose refuses to start when a declared secret file is missing.
+      # Vision__Mistral__ApiKeyFile: /run/secrets/mistral_api_key
     volumes:
       - ./data:/data
       - ./mail:/mail:ro    # OCR pass reads .eml bytes out of the maildir
@@ -425,6 +433,7 @@ services:
     # Chunk embedding needs the hosted key when a hosted profile is active.
     secrets:
       - embedding_api_key
+      # - mistral_api_key   # opt-in; see Vision__Mistral__ApiKeyFile above
 
   # The one process that eats attacker-chosen bytes: MIME, HTML, PDF text,
   # Office, PDF rasterisation, image decode — for the indexer, the embedder's
@@ -566,6 +575,19 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+      # OPT-IN: the token as a file secret instead of an environment variable
+      # (cloudflared reads TUNNEL_TOKEN_FILE / --token-file, verified in the
+      # 2026.9.1 source; an explicit TUNNEL_TOKEN takes precedence). The image
+      # runs as distroless `nonroot`, uid 65532, so the file must be readable
+      # by that uid:
+      #   sudo install -o 65532 -g 65532 -m 0400 /dev/null secrets/tunnel_token
+      #   (then write the token into it as root, no trailing text needed —
+      #    cloudflared trims whitespace)
+      # Uncomment this line, the `secrets:` block below, and the top-level
+      # `tunnel_token` secret; remove TUNNEL_TOKEN from .env; recreate with
+      # `--profile tunnel up -d`, and confirm the tunnel reconnects in
+      # `docker compose logs cloudflared` before walking away.
+      # TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
       # Edge transport. cloudflared's default is `auto`: try QUIC (UDP), fall
       # back to http2 if UDP connections can't be established. Parameterised
       # rather than pinned because forcing a value is a PER-NETWORK workaround,
@@ -584,6 +606,9 @@ services:
       TUNNEL_TRANSPORT_PROTOCOL: ${TUNNEL_TRANSPORT_PROTOCOL:-auto}
     depends_on:
       - mcp
+    # Opt-in token file; see TUNNEL_TOKEN_FILE above.
+    # secrets:
+    #   - tunnel_token
 
 secrets:
   fastmail_password:
@@ -594,6 +619,14 @@ secrets:
   # bearer-auth hosted profile is actually activated.
   embedding_api_key:
     file: ./secrets/embedding_api_key
+  # OPT-IN file secrets for the two credentials that still default to .env
+  # variables — see the comments at Vision__Mistral__ApiKeyFile (embedder) and
+  # TUNNEL_TOKEN_FILE (cloudflared). Declared here only once the file exists:
+  # compose refuses to start on a missing secret file.
+  # mistral_api_key:
+  #   file: ./secrets/mistral_api_key
+  # tunnel_token:
+  #   file: ./secrets/tunnel_token
 
 networks:
   # Compose's implicit default, named so `isolated` can sit beside it. Every

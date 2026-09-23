@@ -313,6 +313,11 @@ internal static class DoctorCommand
                             "Check it where OCR runs: `docker compose exec embedder mailvec doctor`.",
                             "pipeline"),
 
+                    VisionProbeStatus.Misconfigured =>
+                        DoctorCheck.Warn("OCR model",
+                            $"{provider} configuration refused{detail} — nothing was sent to the provider from this process.",
+                            "pipeline"),
+
                     VisionProbeStatus.AuthFailed =>
                         DoctorCheck.Warn("OCR model",
                             $"{provider} rejected our credentials{detail} — scanned PDFs won't be OCR'd. " +

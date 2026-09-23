@@ -37,6 +37,14 @@ public enum VisionProbeStatus
     /// operator to ignore the indicator.
     /// </summary>
     NotConfiguredHere,
+
+    /// <summary>
+    /// This process has credentials but the provider configuration was refused
+    /// (e.g. a cleartext endpoint, a key from a JSON config file). Probe-only
+    /// processes report this instead of crashing — and, unlike before, instead
+    /// of sending the key over a connection the embedder would have refused.
+    /// </summary>
+    Misconfigured,
 }
 
 /// <summary>Probe result plus an optional human detail (status code, message).</summary>
