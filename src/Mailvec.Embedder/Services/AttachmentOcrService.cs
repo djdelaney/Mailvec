@@ -911,9 +911,9 @@ public sealed class AttachmentOcrService(
                     continue;
                 }
 
-                // Transient until proven otherwise: Ollama down, or an HTTP
-                // timeout (which surfaces as TaskCanceledException — an
-                // OperationCanceledException — while ct is NOT cancelled).
+                // Transient until proven otherwise: Ollama down or an
+                // unclassified transport failure. A request timeout is
+                // classified above and deferred without a strike.
                 // Record the failure and move on to the NEXT candidate:
                 // whether this cycle produces any successes is what decides
                 // (in SettleVisionFailures) if these failures count toward

@@ -1,9 +1,8 @@
 # macOS install mechanics
 
 How the launchd install is put together, and the traps in working against it.
-The step-by-step *how to install* lives in the [README](../README.md) ("Install"
-and "Backup & moving machines"); this file is the mechanics and the rationale
-behind them — the things that bite while developing, not while installing.
+For a first install, follow [Get started on macOS](getting-started-macos.md).
+This page covers maintenance, backups, and removal.
 
 > ⛔ **This does not apply to the development box.** The Mac these docs were
 > written on runs a frozen corpus with no agents installed, and
@@ -56,7 +55,7 @@ the three .NET services) and drops a shim at `~/.local/bin/mailvec` that execs
   changes** — the shim is generated at install time and points at a published
   .dll, not the working-tree source. `dotnet build` alone won't update it.
 
-`~/.local/bin` isn't on the default macOS `PATH`; the README covers adding it.
+`~/.local/bin` isn't on the default macOS `PATH`; the [getting-started guide](getting-started-macos.md#4-check-the-first-result) covers adding it.
 
 ## Logging
 
@@ -82,3 +81,33 @@ the three .NET services) and drops a shim at `~/.local/bin/mailvec` that execs
   `StandardOutPath`/`StandardErrorPath` — doubling disk usage. With the env var
   set, the launchd-captured `<service>.launchd.log` only catches things that
   bypass `ILogger`: pre-Serilog startup output, unhandled native stderr, panics.
+
+## Backup and moving machines
+
+The expensive part of the archive is the derived data: OCR text and embeddings that took hours to compute. Use the snapshot scripts rather than copying a live SQLite file or its `-wal` sidecar:
+
+```sh
+ops/export-db.sh                         # snapshot → ~/mailvec-archive-snapshot.sqlite
+ops/export-db.sh --to you@newmac         # snapshot and transfer it
+ops/import-db.sh /path/snapshot.sqlite   # destination, after install + mail sync
+```
+
+Export pauses the writers and checkpoints the WAL before copying. Import removes stale `-wal` and `-shm` sidecars before installing the snapshot. Read the scripts' header comments for ordering: install Mailvec and sync mail on the destination before import. The Maildir is separate and can be pulled again from IMAP.
+
+## Stop or uninstall
+
+```sh
+ops/stop.sh                  # stop agents until the next login
+ops/install.sh --uninstall   # boot them out and remove their launchd plists
+```
+
+`--uninstall` preserves published binaries, the archive, and logs. To remove those too, after uninstalling:
+
+```sh
+rm -rf ~/.local/share/mailvec
+rm -f ~/.local/bin/mailvec ~/.local/bin/mailvec-mcp-stdio
+rm -rf "$HOME/Library/Application Support/Mailvec"
+rm -rf ~/Library/Logs/Mailvec
+```
+
+Remove your Maildir and `~/.mbsyncrc` separately if you no longer want the local mail copy. Remove the Claude Desktop extension in Settings → Extensions.

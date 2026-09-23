@@ -1,7 +1,7 @@
 # Review note — embedding providers phase 3
 
 **Reviewed:** 2026-08-08  
-**Proposal:** [`docs/proposals/embedding-providers.md`](docs/proposals/embedding-providers.md)  
+**Proposal:** [`docs/proposals/embedding-providers.md`](../../docs/proposals/embedding-providers.md)
 **Implementation reviewed through:** `c22635a` (`Add sentinel fingerprints — the stability hybrid's hosted half`)
 
 ## Overall assessment
@@ -35,9 +35,9 @@ drift, or the full readiness mathematical contract.
 Fresh-schema creation still sources its model and dimensions from
 `OllamaOptions` and substitutes an Ollama-derived space ID:
 
-- [`src/Mailvec.Core/Data/SchemaMigrator.cs`](src/Mailvec.Core/Data/SchemaMigrator.cs#L98)
-- [`src/Mailvec.Core/Data/SchemaMigrator.cs`](src/Mailvec.Core/Data/SchemaMigrator.cs#L148)
-- [`schema/001_initial.sql`](schema/001_initial.sql#L204)
+- [`src/Mailvec.Core/Data/SchemaMigrator.cs`](../../src/Mailvec.Core/Data/SchemaMigrator.cs#L98)
+- [`src/Mailvec.Core/Data/SchemaMigrator.cs`](../../src/Mailvec.Core/Data/SchemaMigrator.cs#L148)
+- [`schema/001_initial.sql`](../../schema/001_initial.sql#L204)
 
 This remains true even when `SchemaMigrator` receives a hosted
 `ResolvedEmbeddingProfile`. `StampConfigHashIfMissing` first compares stored
@@ -48,8 +48,8 @@ identity available if it is the first process to create the database.
 
 The sanctioned migration path has the same failure independently:
 
-- [`src/Mailvec.Core/Data/SchemaMigrator.cs`](src/Mailvec.Core/Data/SchemaMigrator.cs#L440)
-- [`src/Mailvec.Cli/Commands/SwitchModelCommand.cs`](src/Mailvec.Cli/Commands/SwitchModelCommand.cs#L47)
+- [`src/Mailvec.Core/Data/SchemaMigrator.cs`](../../src/Mailvec.Core/Data/SchemaMigrator.cs#L440)
+- [`src/Mailvec.Cli/Commands/SwitchModelCommand.cs`](../../src/Mailvec.Cli/Commands/SwitchModelCommand.cs#L47)
 
 `SwitchEmbeddingModel` always calls `EmbeddingSpace.LegacySpaceId(model,
 dimensions)`. With a Fireworks profile active, for example, the CLI defaults
@@ -82,13 +82,13 @@ Recommended resolution:
 The hosted worker correctly re-embeds fixed non-mail sentinels and throws when
 their cosine similarity falls below the measured threshold:
 
-- [`src/Mailvec.Embedder/Services/EmbeddingWorker.cs`](src/Mailvec.Embedder/Services/EmbeddingWorker.cs#L767)
+- [`src/Mailvec.Embedder/Services/EmbeddingWorker.cs`](../../src/Mailvec.Embedder/Services/EmbeddingWorker.cs#L767)
 
 That exception stops the worker's current and later write cycles, but no
 known-drift state is persisted. The semantic read guard remains metadata-only
 and checks only model, dimensions, space ID, and config hash:
 
-- [`src/Mailvec.Core/Embedding/EmbeddingSpaceGuard.cs`](src/Mailvec.Core/Embedding/EmbeddingSpaceGuard.cs#L26)
+- [`src/Mailvec.Core/Embedding/EmbeddingSpaceGuard.cs`](../../src/Mailvec.Core/Embedding/EmbeddingSpaceGuard.cs#L26)
 
 Those values remain unchanged when a hosted provider silently changes weights
 behind a stable alias. MCP and CLI can therefore continue embedding queries
@@ -111,7 +111,7 @@ and hybrid search while keyword mode remains available.
 `EmbeddingService.ProbeAsync` calls the raw transport and reports `Available`
 when the first returned vector is merely nonempty:
 
-- [`src/Mailvec.Core/Embedding/EmbeddingService.cs`](src/Mailvec.Core/Embedding/EmbeddingService.cs#L76)
+- [`src/Mailvec.Core/Embedding/EmbeddingService.cs`](../../src/Mailvec.Core/Embedding/EmbeddingService.cs#L76)
 
 It does not run `ValidateAndNormalize`, so a response with the wrong vector
 count, wrong width, NaN, or infinity can pass readiness even though every real
@@ -132,7 +132,7 @@ proving those provider-wide failures never quarantine a message.
 The worker invokes artifact and sentinel verification at the top of every loop
 iteration:
 
-- [`src/Mailvec.Embedder/Services/EmbeddingWorker.cs`](src/Mailvec.Embedder/Services/EmbeddingWorker.cs#L114)
+- [`src/Mailvec.Embedder/Services/EmbeddingWorker.cs`](../../src/Mailvec.Embedder/Services/EmbeddingWorker.cs#L114)
 
 When a batch processes work, the loop does not wait for `PollInterval`; it
 immediately begins the next batch. The sentinel request is consequently made
@@ -152,8 +152,8 @@ The proposal requires optional input-token usage, response model, request ID,
 and rate-limit observations. The implementation currently returns only raw
 vectors from `IEmbeddingTransport`:
 
-- [`src/Mailvec.Core/Embedding/IEmbeddingTransport.cs`](src/Mailvec.Core/Embedding/IEmbeddingTransport.cs#L12)
-- [`src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs`](src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs#L53)
+- [`src/Mailvec.Core/Embedding/IEmbeddingTransport.cs`](../../src/Mailvec.Core/Embedding/IEmbeddingTransport.cs#L12)
+- [`src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs`](../../src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs#L53)
 
 `OpenAiCompatibleTransport` defines `EmbedResponse.Model` but discards it,
 does not deserialize `usage`, and never reads request-ID or rate-limit headers.
@@ -170,7 +170,7 @@ or throttling audits.
 The standard resilience handler is registered only for
 `BackgroundIngestion`:
 
-- [`src/Mailvec.Core/Embedding/EmbeddingRegistration.cs`](src/Mailvec.Core/Embedding/EmbeddingRegistration.cs#L111)
+- [`src/Mailvec.Core/Embedding/EmbeddingRegistration.cs`](../../src/Mailvec.Core/Embedding/EmbeddingRegistration.cs#L111)
 
 MCP and CLI requests therefore fail immediately on 429, 503, and transient 5xx
 responses and do not honor `Retry-After`. This differs from the proposal's
@@ -190,7 +190,7 @@ classifies a suspected length-related 400 as `InputTooLong` and explicitly
 declines to split or truncate because current chunks are much smaller than the
 hosted model's context window:
 
-- [`src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs`](src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs#L107)
+- [`src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs`](../../src/Mailvec.Core/Embedding/OpenAiCompatibleTransport.cs#L107)
 
 That may be a defensible operational choice, but it is not the behavior the
 proposal marks complete. Either implement and test the fallback or record it as

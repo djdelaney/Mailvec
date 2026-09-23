@@ -35,7 +35,7 @@ The schema migrator creates a fresh empty DB at `Archive__DatabasePath` if it do
 
 ## 3. (Optional) Run the embedder
 
-For semantic and hybrid queries. Ollama must be running with `mxbai-embed-large` pulled (see README Quickstart). Second terminal, same env vars:
+For semantic and hybrid queries. Ollama must be running with `mxbai-embed-large` pulled (see [macOS prerequisites](getting-started-macos.md#1-install-prerequisites)). Second terminal, same env vars:
 
 ```sh
 dotnet run --project src/Mailvec.Embedder

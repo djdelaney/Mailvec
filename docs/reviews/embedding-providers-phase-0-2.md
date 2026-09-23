@@ -1,7 +1,7 @@
 # Review note — embedding providers phases 0–2
 
 **Reviewed:** 2026-08-08  
-**Proposal:** [`docs/proposals/embedding-providers.md`](docs/proposals/embedding-providers.md)  
+**Proposal:** [`docs/proposals/embedding-providers.md`](../../docs/proposals/embedding-providers.md)
 **Implementation reviewed through:** `5a45148` (`Add the purpose-aware embedding service, classified failures, neutral probe`)
 
 ## Overall assessment
@@ -30,8 +30,8 @@ an avoidable vector rebuild.
 
 `VectorSearchService.SearchAsync` embeds the query and immediately runs KNN:
 
-- [`src/Mailvec.Core/Search/VectorSearchService.cs`](src/Mailvec.Core/Search/VectorSearchService.cs#L58)
-- [`src/Mailvec.Core/Embedding/EmbeddingService.cs`](src/Mailvec.Core/Embedding/EmbeddingService.cs#L22)
+- [`src/Mailvec.Core/Search/VectorSearchService.cs`](../../src/Mailvec.Core/Search/VectorSearchService.cs#L58)
+- [`src/Mailvec.Core/Embedding/EmbeddingService.cs`](../../src/Mailvec.Core/Embedding/EmbeddingService.cs#L22)
 
 Neither path compares the active profile with the database's stored model,
 dimensions, `embedding_space_id`, `embedding_config_hash`, or observed model
@@ -63,7 +63,7 @@ Recommended resolution:
 
 `GetModelDigestAsync` uses the first `/api/tags` item accepted by `Matches`:
 
-- [`src/Mailvec.Core/Ollama/OllamaModelProbe.cs`](src/Mailvec.Core/Ollama/OllamaModelProbe.cs#L42)
+- [`src/Mailvec.Core/Ollama/OllamaModelProbe.cs`](../../src/Mailvec.Core/Ollama/OllamaModelProbe.cs#L42)
 
 For tagless configuration, `Matches` accepts `name:latest` but also any tag with
 the same base name. If both `model:old` and `model:latest` are installed, the
@@ -94,14 +94,14 @@ The current implementation instead has:
 - `IEmbeddingClient` serving as the transport abstraction rather than the
   proposed `IEmbeddingTransport`;
 - batching remaining in
-  [`EmbeddingWorker`](src/Mailvec.Embedder/Services/EmbeddingWorker.cs#L556);
+  [`EmbeddingWorker`](../../src/Mailvec.Embedder/Services/EmbeddingWorker.cs#L556);
 - normalization and output validation remaining in
-  [`OllamaClient`](src/Mailvec.Core/Ollama/OllamaClient.cs#L227);
+  [`OllamaClient`](../../src/Mailvec.Core/Ollama/OllamaClient.cs#L227);
 - no space-identity check in
-  [`EmbeddingService`](src/Mailvec.Core/Embedding/EmbeddingService.cs);
+  [`EmbeddingService`](../../src/Mailvec.Core/Embedding/EmbeddingService.cs);
 - only query/document prefixes represented by `ResolvedEmbeddingProfile`; and
 - query/document suffixes and document prefixes still rejected by
-  [`EmbeddingRegistration`](src/Mailvec.Core/Embedding/EmbeddingRegistration.cs#L189).
+  [`EmbeddingRegistration`](../../src/Mailvec.Core/Embedding/EmbeddingRegistration.cs#L189).
 
 This is behavior-compatible for today's Ollama configuration, but it leaves the
 shared semantics likely to drift when the OpenAI-compatible transport is added.
@@ -132,7 +132,7 @@ documents this honestly and records that its current file came from a
 working-tree v11 build, with an A/B against pre-phase main reported as
 bit-identical:
 
-- [`baselines/subset-ocr/README.md`](baselines/subset-ocr/README.md#L24)
+- [`baselines/subset-ocr/README.md`](../../baselines/subset-ocr/README.md#L24)
 
 Recommended documentation update:
 
@@ -151,7 +151,7 @@ Recommended documentation update:
 Substantially complete, with a documented procedural deviation.
 
 - A 70-query subset baseline is committed at
-  [`baselines/subset-ocr/2026-08-07.json`](baselines/subset-ocr/2026-08-07.json).
+  [`baselines/subset-ocr/2026-08-07.json`](../../baselines/subset-ocr/2026-08-07.json).
 - The README records corpus identity, binary provenance, and the fact that the
   subset family cannot be compared with full-corpus baselines.
 - The current baseline was captured with working-tree v11 code rather than

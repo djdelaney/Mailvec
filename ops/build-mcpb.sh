@@ -68,7 +68,7 @@ if manifest != props:
 print(manifest)
 PY
 )"
-RID="osx-arm64"   # Apple Silicon only — Intel is unsupported (see README Requirements)
+RID="osx-arm64"   # Apple Silicon only — Intel is unsupported (see docs/getting-started-macos.md)
 
 if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
     echo "ERROR: build-mcpb.sh must run on an Apple Silicon Mac — Intel is not supported." >&2

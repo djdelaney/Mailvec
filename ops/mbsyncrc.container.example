@@ -1,6 +1,6 @@
 # mbsync config for the Docker compose stack (the container counterpart of
 # ops/mbsyncrc.example). Copy to ./mbsyncrc next to compose.yml and fill in
-# the placeholders; compose mounts it read-only at /root/.mbsyncrc in the
+# the placeholders; compose mounts it read-only at /etc/mbsyncrc in the
 # mbsync service.
 #
 # The app-specific password is NOT in this file: it lives in
