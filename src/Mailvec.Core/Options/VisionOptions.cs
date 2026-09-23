@@ -85,6 +85,31 @@ public sealed class MistralVisionOptions
     /// </summary>
     public string ApiKey { get; set; } = "";
 
+    /// <summary>
+    /// An owner-only file holding the API key — the <c>/run/secrets</c> channel,
+    /// which unlike an environment variable is not visible through
+    /// <c>docker inspect</c> or <c>/proc/&lt;pid&gt;/environ</c>. Mirrors
+    /// <c>Embedding:Profiles:*:Auth:ApiKeyFile</c>. <see cref="ApiKey"/>, when
+    /// set, wins. The file is read (and its permissions checked) when the
+    /// client is registered; a probe-only process that does not have the file
+    /// mounted treats the provider as not configured here, as it does for a
+    /// missing key.
+    /// </summary>
+    public string ApiKeyFile { get; set; } = "";
+
+    /// <summary>
+    /// The key actually used: <see cref="ApiKey"/> trimmed, else the contents of
+    /// <see cref="ApiKeyFile"/>, else empty. Trimmed because a pasted key with a
+    /// trailing newline authenticates as a different string and fails as a 401.
+    /// </summary>
+    public string ResolveApiKey()
+    {
+        if (!string.IsNullOrWhiteSpace(ApiKey)) return ApiKey.Trim();
+        if (string.IsNullOrWhiteSpace(ApiKeyFile)) return "";
+        var path = PathExpansion.Expand(ApiKeyFile);
+        return File.Exists(path) ? SecretConfig.ReadSecretFile(path, "Vision:Mistral:ApiKeyFile") : "";
+    }
+
     /// <summary><c>bearer</c> (default) or a literal header name such as <c>api-key</c>.</summary>
     public string AuthHeader { get; set; } = "bearer";
 
@@ -124,7 +149,8 @@ public sealed class MistralVisionOptions
     public bool IsComplete =>
         !string.IsNullOrWhiteSpace(Endpoint)
         && !string.IsNullOrWhiteSpace(Model)
-        && !string.IsNullOrWhiteSpace(ApiKey);
+        && (!string.IsNullOrWhiteSpace(ApiKey)
+            || (!string.IsNullOrWhiteSpace(ApiKeyFile) && File.Exists(PathExpansion.Expand(ApiKeyFile))));
 
     public void Validate()
     {
@@ -162,9 +188,10 @@ public sealed class MistralVisionOptions
                 "mail travel over this connection, unattended. Only loopback may use http, for local testing.");
         if (string.IsNullOrWhiteSpace(Model))
             throw new InvalidOperationException("Vision:Mistral:Model (the deployment name) is required when Vision:Provider=mistral.");
-        if (string.IsNullOrWhiteSpace(ApiKey))
+        if (string.IsNullOrWhiteSpace(ResolveApiKey()))
             throw new InvalidOperationException(
-                "Vision:Mistral:ApiKey is required when Vision:Provider=mistral. " +
-                "Supply it via the Vision__Mistral__ApiKey environment variable, not the shared appsettings.Local.json (world-readable).");
+                "Vision:Mistral:ApiKey (or :ApiKeyFile) is required when Vision:Provider=mistral. " +
+                "Supply it via the Vision__Mistral__ApiKey environment variable or an owner-only file named by " +
+                "Vision__Mistral__ApiKeyFile — not the shared appsettings.Local.json (world-readable).");
     }
 }

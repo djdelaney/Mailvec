@@ -365,30 +365,41 @@ change than hosted OCR, because embedding touches everything:
   material by construction. It is never placed in the shared env anchor, the
   shared `appsettings.Local.json` (world-readable by design), or the profile
   object that health/doctor display.
-- **Two credentials deliberately do NOT use this pattern**, and the asymmetry
-  is a choice rather than an oversight: the Mistral OCR key
-  (`Vision__Mistral__ApiKey`) and the Cloudflare tunnel token (`TUNNEL_TOKEN`)
-  both ride container environment variables from `.env`. Environment is a
-  weaker channel than a file mount — it is readable through `docker inspect`,
+- **Two credentials default to environment variables but can move to file
+  secrets** — the Mistral OCR key (`Vision__Mistral__ApiKey`) and the
+  Cloudflare tunnel token (`TUNNEL_TOKEN`), both from `.env`. Environment is a
+  weaker channel than a file mount: it is readable through `docker inspect`,
   `/proc/1/environ` and crash dumps, none of which a `/run/secrets` mount
   exposes. Reading any of them requires **root on the Docker VM**, which is
   outside this threat model (see the scope section), so the two channels are
-  equivalent against every attacker this document defends against. The
-  practical reasons: `cloudflared` has no `_FILE` convention, so a file secret
-  there needs an entrypoint wrapper working against the `read_only` rootfs;
-  and `Vision:Mistral` has no `ApiKeyFile` option — its
-  [`ApiKey` doc](../src/Mailvec.Core/Options/VisionOptions.cs) names the
-  environment as the intended channel. **If the threat model ever widens to
-  include a local unprivileged account on the VM, both need to move**, and the
-  OCR key is the cheaper of the two (an `ApiKeyFile` option mirroring
-  `EmbeddingAuthOptions`). Scoping is already correct either way: the OCR key
-  reaches the embedder only, never the internet-fronted mcp.
+  equivalent against every attacker this document defends against — which is
+  why the switch is opt-in rather than forced (compose refuses to start on a
+  missing secret file, so forcing it would break the next deploy of every
+  existing install). Both now have a file channel, commented in `compose.yml`
+  with the steps: `Vision:Mistral:ApiKeyFile` (mirrors `EmbeddingAuthOptions`)
+  and cloudflared's own `TUNNEL_TOKEN_FILE` / `--token-file`. **An earlier
+  revision of this bullet said cloudflared had no `_FILE` convention; it has
+  one** (verified in the 2026.9.1 source, `cmd/cloudflared/tunnel/subcommands.go`),
+  so no entrypoint wrapper is needed — only a token file readable by the
+  image's uid, 65532. **If the threat model ever widens to include a local
+  unprivileged account on the VM, flip both.** Scoping is already correct
+  either way: the OCR key reaches the embedder only, never the
+  internet-fronted mcp.
+- **Where a credential may come from is enforced, not advised.** A key file
+  (`*ApiKeyFile`) must not be readable by other users or writable by anyone but
+  its owner (group-read is allowed), and an inline key (`Auth:ApiKey`,
+  `Vision:Mistral:ApiKey`) is refused when it comes from a JSON config file —
+  the shared `appsettings.Local.json` is world-readable by design — while an
+  environment variable is accepted. `SecretConfig` holds both rules. Keys are
+  trimmed, so a pasted trailing newline doesn't turn into a 401.
 - **Blast radius of a compromised mcp container** therefore now includes a
   reusable hosted-inference credential in addition to mail-search access. Use
   a dedicated provider account/key with a conservative monthly spend limit,
   and rotate on any doubt — the file's contents are the only thing to change.
-- **Bearer-only, HTTPS-only, no redirects** are enforced in code (registration
-  validation and the transport's handler), not convention.
+- **Bearer-only, HTTPS-only, no redirects, no proxy, and a bounded response**
+  are enforced in code (registration validation and `HostedHttp`, the handler
+  both hosted clients — this one and mistral-ocr — are built on), not
+  convention.
 - **Egress**: mcp and embedder need outbound 443 to the configured endpoint.
 
 Deactivation is `MAILVEC_EMBEDDING_PROFILE=` (empty → Ollama) — but note the

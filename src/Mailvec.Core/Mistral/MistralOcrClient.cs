@@ -368,11 +368,16 @@ public sealed class MistralOcrClient(
     /// </summary>
     public async Task<VisionProbe> ProbeAsync(CancellationToken ct = default)
     {
+        // Bounded independently of the HttpClient timeout (120 s by default):
+        // this answers /health, whose compose healthcheck gives up at 10 s, and
+        // `doctor`. A hung endpoint must read as unreachable, not stall them.
+        using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        probeCts.CancelAfter(ProbeTimeout);
         try
         {
             var json = JsonSerializer.Serialize(new { model = _opts.Model }, SerializerOptions);
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var response = await http.PostAsync(_opts.Route, content, ct).ConfigureAwait(false);
+            using var response = await http.PostAsync(_opts.Route, content, probeCts.Token).ConfigureAwait(false);
 
             // 422 means the route exists and accepted our credentials, then
             // rejected the deliberately-incomplete body. That is success here.
@@ -402,6 +407,9 @@ public sealed class MistralOcrClient(
         }
     }
 
+    /// <summary>Upper bound on one probe. Internal so tests can shorten it.</summary>
+    internal static TimeSpan ProbeTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -411,9 +419,9 @@ public sealed class MistralOcrClient(
     public static void ApplyAuth(HttpClient client, MistralVisionOptions opts)
     {
         if (opts.AuthHeader.Equals("bearer", StringComparison.OrdinalIgnoreCase))
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", opts.ApiKey);
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", opts.ResolveApiKey());
         else
-            client.DefaultRequestHeaders.Add(opts.AuthHeader, opts.ApiKey);
+            client.DefaultRequestHeaders.Add(opts.AuthHeader, opts.ResolveApiKey());
     }
 
     private sealed class OcrRequest

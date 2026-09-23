@@ -115,6 +115,7 @@ public static class EmbeddingRegistration
             var hostedHttp = services.AddHttpClient<OpenAiCompatibleTransport>((sp, client) =>
             {
                 client.BaseAddress = new Uri(resolved.Endpoint);
+                HostedHttp.ApplyResponseCeiling(client);
                 if (bearerToken is not null)
                     client.DefaultRequestHeaders.Authorization =
                         new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearerToken);
@@ -127,8 +128,8 @@ public static class EmbeddingRegistration
             })
             // No legitimate inference call redirects, and a redirect must not
             // receive the bearer credential or a mail payload. Same rule as
-            // the hosted OCR client.
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+            // the hosted OCR client; HostedHttp also drops proxies.
+            .ConfigurePrimaryHttpMessageHandler(HostedHttp.CreateHandler);
 
             if (role == EmbeddingClientRole.BackgroundIngestion)
             {
@@ -347,21 +348,25 @@ public static class EmbeddingRegistration
 
         if (!string.Equals(profile.Auth.Scheme, "bearer", StringComparison.OrdinalIgnoreCase)) return null;
 
-        if (!string.IsNullOrWhiteSpace(profile.Auth.ApiKey)) return profile.Auth.ApiKey.Trim();
+        if (!string.IsNullOrWhiteSpace(profile.Auth.ApiKey))
+        {
+            // The doc comment always said "never the shared config"; now it's
+            // enforced. Env overrides still pass (see SecretConfig).
+            SecretConfig.RejectIfFromJsonFile(configuration,
+                $"{EmbeddingOptions.SectionName}:Profiles:{profileName}:Auth:ApiKey",
+                "Use Auth:ApiKeyFile (an owner-only file) or an environment variable override.");
+            return profile.Auth.ApiKey.Trim();
+        }
 
         if (!string.IsNullOrWhiteSpace(profile.Auth.ApiKeyFile))
         {
-            var path = PathExpansion.Expand(profile.Auth.ApiKeyFile);
-            if (!File.Exists(path))
-                throw new InvalidOperationException(
-                    $"Embedding profile '{profileName}': Auth:ApiKeyFile '{path}' does not exist. " +
-                    "Query embedding needs the key in every process (embedder, MCP, CLI) — a service that " +
-                    "starts without it is a search outage wearing a green healthcheck.");
-            var key = File.ReadAllText(path).Trim();
-            if (key.Length == 0)
-                throw new InvalidOperationException(
-                    $"Embedding profile '{profileName}': Auth:ApiKeyFile '{path}' is empty.");
-            return key;
+            // Existence, emptiness and permissions checked in one place.
+            // Query embedding needs the key in every process (embedder, MCP,
+            // CLI) — a service that starts without it is a search outage
+            // wearing a green healthcheck, so any failure here is fatal.
+            return SecretConfig.ReadSecretFile(
+                PathExpansion.Expand(profile.Auth.ApiKeyFile),
+                $"Embedding profile '{profileName}': Auth:ApiKeyFile");
         }
 
         throw new InvalidOperationException(

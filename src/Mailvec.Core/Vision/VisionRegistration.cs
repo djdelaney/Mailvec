@@ -1,3 +1,4 @@
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Mistral;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
@@ -38,6 +39,10 @@ public static class VisionRegistration
     /// disproportionate to the fault. They degrade to reporting OCR unavailable,
     /// which is both true and exactly the signal the operator needs.
     /// </param>
+    private static void RejectInlineKeyFromJson(IConfiguration configuration) =>
+        SecretConfig.RejectIfFromJsonFile(configuration, "Vision:Mistral:ApiKey",
+            "Use Vision__Mistral__ApiKey (environment) or Vision:Mistral:ApiKeyFile (an owner-only file).");
+
     public static IServiceCollection AddMailvecVision(
         this IServiceCollection services, IConfiguration configuration, bool requiresCredentials = false)
     {
@@ -56,6 +61,7 @@ public static class VisionRegistration
         {
             if (requiresCredentials)
             {
+                RejectInlineKeyFromJson(configuration);
                 vision.Mistral.Validate();
             }
             else if (!vision.Mistral.IsComplete)
@@ -65,12 +71,33 @@ public static class VisionRegistration
                 services.AddSingleton<IVisionClient>(new UnconfiguredVisionClient());
                 return services;
             }
+            else
+            {
+                // Probe-only process that DOES hold credentials (the macOS
+                // install, where every binary reads the same config). It used
+                // to skip validation entirely, so an http:// endpoint the
+                // embedder refused still got the key in cleartext on every
+                // /health poll and `doctor` run. Validate the same way, but
+                // degrade rather than throw — a crashlooping MCP server over an
+                // OCR setting is wildly disproportionate.
+                try
+                {
+                    RejectInlineKeyFromJson(configuration);
+                    vision.Mistral.Validate();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    services.AddSingleton<IVisionClient>(new MisconfiguredVisionClient(ex.Message));
+                    return services;
+                }
+            }
 
             services.AddHttpClient<MistralOcrClient>((sp, client) =>
             {
                 var opts = sp.GetRequiredService<IOptions<VisionOptions>>().Value.Mistral;
                 client.BaseAddress = new Uri(opts.Endpoint.TrimEnd('/') + "/");
                 client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.RequestTimeoutSeconds));
+                HostedHttp.ApplyResponseCeiling(client);
                 MistralOcrClient.ApplyAuth(client, opts);
             })
             // Do not follow redirects. HttpClient strips the standard
@@ -79,7 +106,8 @@ public static class VisionRegistration
             // is not stripped, so a redirect to another host would forward the
             // credential AND the rendered page of mail. Nothing legitimate here
             // redirects; a 3xx becomes a plain non-success and is classified.
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+            // HostedHttp also drops proxies and bounds the response.
+            .ConfigurePrimaryHttpMessageHandler(HostedHttp.CreateHandler);
             services.AddTransient<IVisionClient>(sp => sp.GetRequiredService<MistralOcrClient>());
             return services;
         }
@@ -120,6 +148,22 @@ public static class VisionRegistration
 /// fault. Every OCR call throws, loudly and classified, because a process that
 /// reached one had no business doing so.
 /// </summary>
+internal sealed class MisconfiguredVisionClient(string reason) : IVisionClient
+{
+    public string ModelId => "misconfigured";
+
+    public Task<string> OcrAsync(byte[] image, CancellationToken ct = default) =>
+        throw new VisionException(VisionFailureKind.AuthOrConfig, reason);
+
+    public Task<string> OcrImageAsync(byte[] image, CancellationToken ct = default) =>
+        throw new VisionException(VisionFailureKind.AuthOrConfig, reason);
+
+    public Task<bool> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult(false);
+
+    public Task<VisionProbe> ProbeAsync(CancellationToken ct = default) =>
+        Task.FromResult(new VisionProbe(VisionProbeStatus.Misconfigured, reason));
+}
+
 internal sealed class UnconfiguredVisionClient : IVisionClient
 {
     private const string Message =
