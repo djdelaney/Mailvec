@@ -84,12 +84,16 @@ public static class VisionRegistration
             return services;
         }
 
+        // Same handler and ceiling as the embedding client (OllamaHttp): each
+        // request is a rendered page of mail, and the answer is written back
+        // as searchable text.
         services.AddHttpClient<OllamaVisionClient>((sp, client) =>
         {
             var opts = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
             client.BaseAddress = new Uri(opts.BaseUrl);
             client.Timeout = TimeSpan.FromSeconds(Math.Max(30, opts.VisionRequestTimeoutSeconds));
-        });
+            OllamaHttp.ApplyResponseCeiling(client, opts);
+        }).ConfigurePrimaryHttpMessageHandler(OllamaHttp.CreateHandler);
         services.AddTransient<IVisionClient>(sp => sp.GetRequiredService<OllamaVisionClient>());
         return services;
     }

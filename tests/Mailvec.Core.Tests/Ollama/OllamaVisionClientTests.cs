@@ -100,9 +100,23 @@ public class OllamaVisionClientTests
     }
 
     [Fact]
-    public async Task OcrAsync_returns_empty_string_when_response_is_missing()
+    public async Task OcrAsync_refuses_a_200_without_a_response_field()
     {
+        // Used to return "" — so anything answering JSON 200 at the BaseUrl
+        // marked every image no_text and every PDF ocr-with-no-text, draining
+        // the queue on transcriptions that never happened. Not an Ollama
+        // generate answer, so it's the endpoint that's wrong: AuthOrConfig
+        // aborts the batch and retires nothing.
         var client = ClientWith(_ => Ok(new { }));
+        var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
+        ex.Kind.ShouldBe(VisionFailureKind.AuthOrConfig);
+    }
+
+    [Fact]
+    public async Task OcrAsync_still_accepts_an_empty_transcription()
+    {
+        // "" IS a valid answer (a blank page) and must stay distinct from absent.
+        var client = ClientWith(_ => Ok(new { response = "" }));
         (await client.OcrAsync([1])).ShouldBe(string.Empty);
     }
 

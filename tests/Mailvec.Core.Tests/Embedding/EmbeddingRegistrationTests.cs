@@ -399,6 +399,102 @@ public class EmbeddingRegistrationTests
         await Task.WhenAny(serving, Task.Delay(1000));
     }
 
+    // ---------- Ollama client hardening (OllamaHttp) ----------
+    //
+    // Ollama is unauthenticated plain HTTP on the LAN and this client runs in
+    // mcp as well as the embedder, so whatever answers for it chooses the
+    // response. Exercised through the real registration against loopback
+    // servers, like the parser's RogueServiceTests.
+
+    /// <summary>A loopback HTTP server answering every request with <paramref name="respond"/>.</summary>
+    private sealed class LoopbackServer : IDisposable
+    {
+        private readonly System.Net.HttpListener _listener = new();
+        public int Port { get; }
+        public int Requests;
+
+        public LoopbackServer(Func<System.Net.HttpListenerContext, Task> respond)
+        {
+            Port = new Random().Next(20000, 60000);
+            _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
+            _listener.Start();
+            _ = Task.Run(async () =>
+            {
+                while (_listener.IsListening)
+                {
+                    System.Net.HttpListenerContext ctx;
+                    try { ctx = await _listener.GetContextAsync(); } catch { break; }
+                    Interlocked.Increment(ref Requests);
+                    try { await respond(ctx); } catch { /* client hung up */ }
+                    try { ctx.Response.Close(); } catch { }
+                }
+            });
+        }
+
+        public void Dispose() { try { _listener.Stop(); } catch { } _listener.Close(); }
+    }
+
+    [Fact]
+    public async Task The_ollama_client_never_follows_a_redirect_with_mail_text()
+    {
+        // A 307/308 would make the client resend the embed body — mail text —
+        // to a Location the responder chose.
+        using var elsewhere = new LoopbackServer(_ => Task.CompletedTask);
+        using var ollama = new LoopbackServer(ctx =>
+        {
+            ctx.Response.StatusCode = 307;
+            ctx.Response.RedirectLocation = $"http://127.0.0.1:{elsewhere.Port}/api/embed";
+            return Task.CompletedTask;
+        });
+
+        var sp = BuildProvider(Config(
+            ("Ollama:BaseUrl", $"http://127.0.0.1:{ollama.Port}"),
+            ("Ollama:EmbeddingModel", "mxbai-embed-large"),
+            ("Ollama:EmbeddingDimensions", "4")), EmbeddingClientRole.Interactive);
+
+        await Should.ThrowAsync<EmbeddingException>(
+            () => sp.GetRequiredService<IEmbeddingService>().EmbedQueryAsync("confidential mail text"));
+        ollama.Requests.ShouldBe(1);
+        elsewhere.Requests.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task The_ollama_client_refuses_a_response_over_the_ceiling_before_parsing_it()
+    {
+        // 64 KB of valid-looking JSON against a 4 KB ceiling: the body must be
+        // refused while buffering, as a classified (never quarantining)
+        // failure — not deserialized into a giant vector array.
+        var huge = "{\"embeddings\":[[" + string.Join(",", Enumerable.Repeat("0.5", 16_000)) + "]]}";
+        using var ollama = new LoopbackServer(async ctx =>
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(huge);
+            ctx.Response.StatusCode = 200;
+            ctx.Response.ContentType = "application/json";
+            await ctx.Response.OutputStream.WriteAsync(bytes);
+        });
+
+        var sp = BuildProvider(Config(
+            ("Ollama:BaseUrl", $"http://127.0.0.1:{ollama.Port}"),
+            ("Ollama:EmbeddingModel", "mxbai-embed-large"),
+            ("Ollama:EmbeddingDimensions", "4"),
+            ("Ollama:MaxResponseBytes", "4096")), EmbeddingClientRole.Interactive);
+
+        var ex = await Should.ThrowAsync<EmbeddingException>(
+            () => sp.GetRequiredService<IEmbeddingService>().EmbedQueryAsync("hello"));
+        ex.Kind.ShouldBe(EmbeddingFailureKind.Transient);
+    }
+
+    [Fact]
+    public void The_ollama_handler_never_follows_redirects_or_a_proxy()
+    {
+        // The knob behind the behaviour above; an HTTP_PROXY in a container's
+        // environment would otherwise route every mail chunk through it.
+        using var handler = OllamaHttp.CreateHandler();
+        handler.AllowAutoRedirect.ShouldBeFalse();
+        handler.UseProxy.ShouldBeFalse();
+        handler.UseCookies.ShouldBeFalse();
+    }
+
     private static ResolvedEmbeddingProfile ResolvedProfileFrom(IConfiguration config, EmbeddingClientRole role) =>
         BuildProvider(config, role).GetRequiredService<ResolvedEmbeddingProfile>();
 

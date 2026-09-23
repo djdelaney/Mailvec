@@ -126,6 +126,20 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
         var parsed = await response.Content.ReadFromJsonAsync<GenerateResponse>(ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Ollama returned an empty body.");
 
+        // A 200 with no `response` member is not an Ollama /api/generate
+        // answer — non-streaming generate always carries it, "" for a blank
+        // page. Something else answered (a wrong BaseUrl, a proxy page, a
+        // spoofed responder). Treating it as "" used to mark every image
+        // no_text and every PDF ocr-with-empty-text: a queue silently drained
+        // by a service that transcribed nothing. AuthOrConfig aborts the batch
+        // and retires nothing, which is right for "the endpoint is wrong".
+        if (parsed.Response is null)
+        {
+            throw new VisionException(VisionFailureKind.AuthOrConfig,
+                "Ollama /api/generate answered 200 without a `response` field — this is not an Ollama " +
+                "generate response. Check Ollama:BaseUrl.");
+        }
+
         // Empty is a legitimate, handled outcome (blank page, or a textless
         // photo hitting the image prompt's escape hatch) — the caller decides
         // what to persist, so this is Debug, not a warning.

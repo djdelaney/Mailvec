@@ -11,6 +11,13 @@ public sealed class OllamaOptions
     public int MaxBatchSize { get; set; } = 16;
     public int RequestTimeoutSeconds { get; set; } = 60;
 
+    // Ceiling on any single Ollama response body (embed batch, OCR page,
+    // /api/tags), enforced while it is buffered — see OllamaHttp. An honest
+    // embed batch is ~20 bytes per float (MaxBatchSize x dims: 16 x 1024 is
+    // ~330 KB, 64 x 4096 ~5 MB); 64 MB is an order of magnitude above any real
+    // answer and far below what the embedder's 2 GB container can absorb.
+    public long MaxResponseBytes { get; set; } = 64L * 1024 * 1024;
+
     // Vision model for scanned-PDF OCR (the embedder's OCR pass). See
     // docs/contributing/attachment-ocr.md.
     public string VisionModel { get; set; } = "qwen2.5vl:7b";
