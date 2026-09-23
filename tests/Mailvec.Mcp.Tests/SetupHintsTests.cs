@@ -12,15 +12,15 @@ public class SetupHintsTests
     [Fact]
     public void Non_empty_archive_gets_no_hint()
     {
-        SetupHints.EmptyArchiveHint(1, sharedConfigExists: true, "/x/archive.sqlite").ShouldBeNull();
-        SetupHints.EmptyArchiveHint(1, sharedConfigExists: false, "/x/archive.sqlite").ShouldBeNull();
+        SetupHints.EmptyArchiveHint(1, sharedConfigExists: true).ShouldBeNull();
+        SetupHints.EmptyArchiveHint(1, sharedConfigExists: false).ShouldBeNull();
     }
 
     [Fact]
     public void Empty_archive_without_shared_config_points_at_the_installer()
     {
         // The MCPB-installed-but-installer-never-ran case.
-        var hint = SetupHints.EmptyArchiveHint(0, sharedConfigExists: false, "/x/archive.sqlite");
+        var hint = SetupHints.EmptyArchiveHint(0, sharedConfigExists: false);
 
         hint.ShouldNotBeNull();
         hint!.ShouldContain("ops/install.sh");
@@ -32,12 +32,12 @@ public class SetupHintsTests
     {
         // Installed, but the indexer hasn't produced anything (or the DB path
         // is wrong) — telling this user to re-run the installer would be noise.
-        var hint = SetupHints.EmptyArchiveHint(0, sharedConfigExists: true, "/x/archive.sqlite");
+        var hint = SetupHints.EmptyArchiveHint(0, sharedConfigExists: true);
 
         hint.ShouldNotBeNull();
         hint!.ShouldContain("mailvec status");
         hint.ShouldContain("mailvec doctor");
-        hint.ShouldContain("/x/archive.sqlite");
+        hint.ShouldNotContain("archive.sqlite", Case.Insensitive, "the server path never goes to the client");
         hint.ShouldNotContain("ops/install.sh");
     }
 }

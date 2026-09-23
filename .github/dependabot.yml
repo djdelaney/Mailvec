@@ -45,12 +45,18 @@ updates:
       - "/src/Mailvec.Embedder"
       - "/src/Mailvec.Indexer"
       - "/src/Mailvec.Mcp"
-      - "/src/Mailvec.Pdf"
+      # Mailvec.Parsing holds every parser package (MimeKit, AngleSharp,
+      # PdfPig, OpenXml, PDFtoImage, LibTiff) since the isolation — it is the
+      # project whose dependencies matter most. Mailvec.Pdf no longer exists.
+      - "/src/Mailvec.Parse"
+      - "/src/Mailvec.Parsing"
+      - "/src/Mailvec.Parsing.Contracts"
       - "/tests/Mailvec.Cli.Tests"
       - "/tests/Mailvec.Core.Tests"
       - "/tests/Mailvec.Embedder.Tests"
       - "/tests/Mailvec.Indexer.Tests"
       - "/tests/Mailvec.Mcp.Tests"
+      - "/tests/Mailvec.Parse.Tests"
     schedule:
       interval: "weekly"
     assignees:

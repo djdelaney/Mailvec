@@ -30,7 +30,6 @@ public sealed class SearchEmailsTool(
     IOptions<McpOptions> mcpOptions,
     IOptions<FastmailOptions> fastmailOptions,
     IOptions<OllamaOptions> ollamaOptions,
-    IOptions<ArchiveOptions> archiveOptions,
     ToolCallLogger callLog,
     ILogger<SearchEmailsTool> logger,
     // Provider-aware error translation (phase 4): remediation must name the
@@ -40,7 +39,6 @@ public sealed class SearchEmailsTool(
     private readonly McpOptions _mcp = mcpOptions.Value;
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
     private readonly OllamaOptions _ollama = ollamaOptions.Value;
-    private readonly ArchiveOptions _archive = archiveOptions.Value;
     private const string ToolName = "search_emails";
 
     [McpServerTool(Name = "search_emails", ReadOnly = true, OpenWorld = false)]
@@ -130,8 +128,7 @@ public sealed class SearchEmailsTool(
         // instead of letting "0 results" read as "your mail contains nothing".
         var setupHint = SetupHints.EmptyArchiveHint(
             archiveStats.TotalMessages,
-            Mailvec.Core.Options.SharedConfig.SharedConfigFileExists(),
-            Mailvec.Core.PathExpansion.Expand(_archive.DatabasePath));
+            Mailvec.Core.Options.SharedConfig.SharedConfigFileExists());
 
         // Query-less path: just list filter-matching messages by date.
         if (string.IsNullOrWhiteSpace(query))

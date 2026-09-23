@@ -6,7 +6,7 @@ namespace Mailvec.Mcp.Tests.Tools;
 public class ListFoldersToolTests
 {
     private static ListFoldersTool Build(TempDatabase db) =>
-        new(new MessageRepository(db.Connections), Helpers.Archive(), Helpers.NoopLogger());
+        new(new MessageRepository(db.Connections), Helpers.NoopLogger());
 
     [Fact]
     public void Empty_archive_returns_zero_folders_with_setup_hint()

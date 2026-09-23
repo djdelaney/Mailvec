@@ -34,7 +34,6 @@ public class SearchEmailsToolTests
             Helpers.Mcp(mcpOpts),
             Helpers.Fastmail(fastmailOpts),
             Helpers.Ollama(ollamaOpts),
-            Helpers.Archive(),
             Helpers.NoopLogger(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance,
             profile);
