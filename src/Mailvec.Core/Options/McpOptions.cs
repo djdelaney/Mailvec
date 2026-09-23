@@ -114,6 +114,18 @@ public sealed class McpOptions
     public int ThreadMaxBodyChars { get; set; } = 200_000;
 
     /// <summary>
+    /// Ceiling on get_email's <c>bodyText</c> (and <c>bodyHtml</c>, separately).
+    /// Deliberately far above <see cref="ThreadMaxBodyChars"/>: get_email is how
+    /// a truncated thread entry is read in full, so this is not a budget but a
+    /// bound — 1M chars is past any real message, while the body was otherwise
+    /// limited only by the parse service's 64 MB response ceiling (a crafted
+    /// message could put tens of MB into one tool result). Over it, the text is
+    /// cut and <c>bodyTruncated</c> is set, with <c>bodyTextChars</c> giving the
+    /// full length.
+    /// </summary>
+    public int EmailMaxBodyChars { get; set; } = 1_000_000;
+
+    /// <summary>
     /// When true, the MCP server emits one INFO log line per tool invocation showing
     /// the arguments and a small result summary. Useful for capturing real Claude
     /// usage patterns to iterate on tool result quality. Off by default.

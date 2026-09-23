@@ -91,7 +91,7 @@ public sealed class ViewAttachmentTool(
         if (id is not null && !string.IsNullOrWhiteSpace(messageId))
             throw new McpException("Pass id OR messageId, not both.");
 
-        var msg = id is not null ? messages.GetById(id.Value) : messages.GetByMessageId(messageId!);
+        var msg = id is not null ? messages.GetById(id.Value, includeAttachmentText: false) : messages.GetByMessageId(messageId!, includeAttachmentText: false);
         if (msg is null)
             throw new McpException(id is not null
                 ? $"No message with id {id}."
