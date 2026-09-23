@@ -23,7 +23,7 @@
 # enabled and bumps these weekly. If Dependabot is ever turned off, go back to
 # tags rather than sitting on a frozen base.
 #   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:2fa828c68761b1b8c23d7662dc134421b9d3b59fe1425fdbc80804e390cdb24d AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:35d40304542c8689331f8cab17c65926cdf48fe711e289321d71924b230a7d29 AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
@@ -81,7 +81,7 @@ RUN set -eux; \
 # Pull-only IMAP sync sidecar. Config comes from a bind-mounted /etc/mbsyncrc
 # (see ops/mbsyncrc.container.example); the Fastmail app password from a
 # compose file-secret the config's PassCmd cats.
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS mbsync
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS mbsync
 RUN apk add --no-cache isync ca-certificates
 RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 #!/bin/sh
@@ -311,7 +311,7 @@ USER 10001:10001
 CMD ["mbsync-loop"]
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:6a94333d37514e385650a3c81a55e5350b67253dbe136e9cf17e499c35606a8c AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:2d584d8147faddb0d678c5748d47953e5b8e18621ed4fb7049a91381d9d7746f AS runtime
 # curl is for the compose healthcheck against /health.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
