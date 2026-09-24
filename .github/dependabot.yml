@@ -25,8 +25,8 @@
 # ship it. A major HAS been missed: xunit.runner.visualstudio 4.0.0 sat
 # unproposed for a week and was bumped by hand on 2026-08-22. GitHub's own docs
 # read the other way, so DON'T reorder or re-pattern these groups on a guess —
-# settle it from the Dependabot job log first. See docs/future-ideas.md,
-# "Does Dependabot's `nuget-major` group ever fire?".
+# settle it from the Dependabot job log first. See ops/UPGRADING.md,
+# "Dependabot major-update coverage".
 #
 # Central Package Management is on: every version lives in the root
 # Directory.Packages.props and csproj files carry no Version attribute. The

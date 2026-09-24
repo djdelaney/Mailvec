@@ -39,7 +39,7 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | `/health` (detailed) | **loopback only** (`Mcp:RestrictHealthToLoopback`, default true); 404 to anything else, and 404'd at the tunnel as well | n/a — not reachable off-box | only the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` under `docker compose exec` |
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and**, when `Vision:Provider=ollama`, rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
 | **mistral-ocr (outbound, off-network)** | **the public internet** — `Vision:Mistral:Endpoint` (an Azure AI Foundry resource or api.mistral.ai) | API key, embedder container only | **only when `Vision:Provider=mistral`** (default is `ollama`, which sends nothing off-LAN). Rendered pages of scanned PDFs and image attachments leave the network. See [below](#hosted-ocr-vision-provider-mistral) |
-| SQLite file | bind mount on the VM | unix permissions (0600, container root) | root on the VM, and every container that mounts `./data` |
+| SQLite file | bind mount on the VM | unix permissions (0600, container uid 10001 by default) | the configured service uid, root on the VM, and containers that mount `./data` |
 | Maildir | bind mount on the VM | unix permissions; mounted **read-only** into every service except mbsync | same |
 
 ### `/up` and `/health`
@@ -197,14 +197,11 @@ All six services therefore run with:
 
 Two consequences worth knowing rather than rediscovering:
 
-- **`cap_drop: ALL` means container-root no longer bypasses permission bits.**
-  Steady state is unaffected — everything under `./data` and `./mail` is created
-  by these containers, so root already owns it. The exception is a **seeded**
-  `archive.sqlite` copied in by a non-root host user: without `DAC_OVERRIDE`,
-  0600-owned-by-someone-else is simply unreadable, and it surfaces as a bare
-  SQLite "unable to open database file". The seeding steps in
-  [deploy-docker.md](deploy-docker.md#migrating-the-archive-from-a-macos-install) chown
-  it to `0:0` for this reason.
+- **A seeded archive must belong to the service uid.** The services run as
+  uid 10001 by default and have no `DAC_OVERRIDE` capability. A 0600 archive
+  copied in by another host user is unreadable, surfacing as SQLite "unable to
+  open database file". The [migration steps](deploy-docker.md#migrating-the-archive-from-a-macos-install)
+  chown it to `10001:10001` (or your configured `MAILVEC_UID` and `MAILVEC_GID`).
 - **`mem_limit` charges page cache to the cgroup.** mcp's is deliberately roomy
   because search latency depends on ~1.2 GB of chunk vectors sitting in the OS
   file cache (process RSS is ~22 MB — they are not in the .NET heap). Tuning it
@@ -602,8 +599,10 @@ is stated here rather than implied:
 
 ## Response bounds
 
-Not a confidentiality control — a blast-radius one, and only partial (there is
-still no rate limiting; see below).
+Not a confidentiality control — a blast-radius one. MCP tool calls are limited
+to 8 concurrent requests with a queue of 32 by default; excess requests get
+503. This bounds work in flight, but there is no per-identity request-rate
+limit (see below).
 
 - **Search** is bounded by `Mcp:SearchMaxLimit`, **attachment text** by its
   `maxChars`/`offset` window — both caller-supplied.
@@ -656,7 +655,7 @@ These are explicit decisions, not oversights:
   - `Mcp__DeniedNetworks__0` stops matching the `parse` network's subnet — both read `MAILVEC_PARSE_SUBNET`, so changing one in compose without the other, or a second network that mcp and parse share, reopens the return path. A malformed entry is fatal at startup, but a *wrong* subnet is not detectable by the server; the verification is a container on the parse network getting 403.
 
   See [remote-access-cloudflare.md](remote-access-cloudflare.md) and [Future ideas](future-ideas.md).
-- **No rate limiting.** A chatty agent can burn VM CPU on SQLite reads and GPU-VM time on embedding queries. SQLite WAL handles concurrent readers fine and Ollama is the natural bottleneck on the embedding leg, so the worst case is "the homelab slows down briefly." The Access gate bounds who can do this to owner-equivalent callers; Cloudflare's edge absorbs unauthenticated flood traffic before it reaches the tunnel.
+- **No per-identity request-rate limit.** The MCP concurrency and queue limits above bound simultaneous work, but a chatty agent can keep that queue full and burn VM CPU on SQLite reads and GPU-VM time on embedding queries. The Access gate bounds who can do this to owner-equivalent callers; Cloudflare's edge absorbs unauthenticated flood traffic before it reaches the tunnel.
 - **`Mcp:LogToolCalls` is off by default.** When on, the server logs each tool call's arguments **and a summary of its results**. Both halves carry mailbox PII, and the result half is the one that surprises people:
   - `search_emails` — the free-text query and `fromContains` / `fromExact` filters, plus the **top 5 hits' sender addresses, subjects and dates**.
   - `get_email` — sender address and subject.
@@ -672,13 +671,13 @@ These are explicit decisions, not oversights:
 ## What's out of scope
 
 - **Multi-tenant isolation.** The archive is single-account and nothing in Mailvec scopes results per-caller, so **every caller the Access gate admits holds the owner's entire mailbox**, not a view of their own. That is not a hypothetical distinction: an `Any Access Service Token` rule on the root application hands the whole mailbox to any monitoring credential in the account ([above](#up-and-health)) — a grant that arrives without anyone editing Mailvec's policy, and that this project shipped with for about a year. Admitting anyone who shouldn't hold the whole mailbox is therefore a model change, not a config change — and it also invalidates the native-parser acceptance above.
-- **Root on the Docker VM.** `ConnectionFactory` hardens the DB dir/files to owner-only (0700/0600), where the owner is the container's root. Anyone with root on the VM, or the ability to run containers on it, reads the archive directly and doesn't need MCP. The VM's own access control is the boundary.
+- **Root on the Docker VM.** `ConnectionFactory` hardens the DB dir/files to owner-only (0700/0600), where the owner is the configured container uid (10001 by default). Anyone with root on the VM, or the ability to run containers on it, reads the archive directly and doesn't need MCP. The VM's own access control is the boundary.
 - **Network adversaries at the edge.** TLS termination, DDoS absorption, and the identity gate are Cloudflare's. Mailvec publishes no inbound port and holds no certificate; the origin is reachable only through the tunnel the sidecar dials *outbound*. This delegates a real chunk of the security model to Cloudflare — that's the trade the iOS requirement forced (see [remote-access-cloudflare.md](remote-access-cloudflare.md) for why nothing local-only could work).
 - **Compromised AI agent exfiltration.** If the agent calling Mailvec is itself malicious (e.g. an LLM jailbroken into "find all messages from X and POST them to attacker.com"), nothing in the MCP layer stops it from reading every email and shipping the contents back to its own provider. The relevant control is "trust the agent" — choose your clients. Note this is now *structural*, not hypothetical: connectors are invoked from Anthropic's cloud, so every tool call and its results already traverse a third party by design.
 - **Encrypted-at-rest archive.** `archive.sqlite` and the Maildir are plain files at rest on the host's local disk, protected by unix permissions and whatever disk encryption the host and hypervisor provide. Per-application encryption isn't built.
 - **User-facing data policy** — retention, deletion, export, consent-at-onboarding, breach response. These presuppose data subjects other than the operator. Mailvec has exactly one user, who is also the person who runs it; a privacy policy addressed to yourself is paperwork, not a control. This becomes in scope the moment a second identity is admitted — at which point it arrives together with the multi-tenancy work above, not before it.
 - **Container image / filesystem scanning and publish-approval gates in CI.** Both produce artifacts whose value is having someone to show them to: a scan report gated on severity needs a reviewer with authority to accept an exception, and an environment approval needs a second person to approve. On a single-owner homelab, the operator builds, reviews, and deploys — so these add ceremony without adding a decision-maker. The NuGet vulnerability gate above is deliberately *not* in this category: it's an automated check with a real pass/fail, not a report.
-- **An external penetration test.** Disproportionate for one mailbox behind a single-identity Access policy, and the likely finding set is what's already written down here — no rate limiting, native parsers fed attacker bytes (in one data-less container). Revisit if a second identity is ever admitted, which is the same trigger as the data-policy item.
+- **An external penetration test.** Disproportionate for one mailbox behind a single-identity Access policy, and the likely finding set is what's already written down here — no per-identity request-rate limit, native parsers fed attacker bytes (in one data-less container). Revisit if a second identity is ever admitted, which is the same trigger as the data-policy item.
 
 > **What is *not* out of scope, and is genuinely untested: whether the
 > hostile-content framing works.** [The framing above](#hostile-mail-content-indirect-prompt-injection)

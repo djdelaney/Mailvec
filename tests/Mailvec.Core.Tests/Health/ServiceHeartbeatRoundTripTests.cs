@@ -464,7 +464,7 @@ public class MbsyncSyncFileTests : IDisposable
     [Fact]
     public void A_short_sync_interval_does_not_collapse_the_window()
     {
-        // docs/future-ideas.md plans a one-minute sync cadence. A bare multiple
+        // The Docker mbsync loop uses a one-minute sync cadence. A bare multiple
         // would give a 4-minute window there, so any pull slower than that
         // would report a working sidecar as broken — the same class of bug as
         // wiring the beat cadence to the sync interval.

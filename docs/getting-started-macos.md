@@ -19,7 +19,7 @@ Keep Ollama running and enable **Open at Login** if this machine should serve ma
 
 ## 2. Configure IMAP and make the first sync
 
-The included mbsync example uses Fastmail. For another provider, change its `Host`, `User`, and `PassCmd` values; [IMAP setup](imap-setup.md) has provider pointers and explains folder filtering.
+The included mbsync example uses Fastmail. Change its `Host`, `User`, and `PassCmd` for another provider; [IMAP setup](imap-setup.md) covers credentials and folder filtering.
 
 ```sh
 mkdir -p ~/Mail/Fastmail
@@ -30,7 +30,7 @@ $EDITOR ~/.mbsyncrc                   # set User and PassCmd for your account
 mbsync -aV                            # first sync can take hours
 ```
 
-The Keychain `-a` account and `-s` service must match the `PassCmd` in `~/.mbsyncrc`. Fastmail, Gmail, and iCloud require an app-specific password. For a large archive, run the first sync in `tmux` or `screen` so a closed terminal does not stop it.
+The Keychain entry must match `PassCmd`. For a large archive, run the first sync in `tmux` or `screen`.
 
 ## 3. Install the services and connect a client
 
