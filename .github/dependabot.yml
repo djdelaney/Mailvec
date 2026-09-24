@@ -57,6 +57,10 @@ updates:
       - "/tests/Mailvec.Indexer.Tests"
       - "/tests/Mailvec.Mcp.Tests"
       - "/tests/Mailvec.Parse.Tests"
+      # A benchmarking tool, not shipped — but it restores packages from this
+      # same Directory.Packages.props, so an advisory against one of them
+      # should still produce a PR.
+      - "/tools/Mailvec.OcrBench"
     schedule:
       interval: "weekly"
     assignees:
