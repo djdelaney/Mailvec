@@ -1,48 +1,13 @@
-# Mailvec homelab stack — the full mail pipeline in one compose project,
-# with Ollama external (a GPU VM reachable over the LAN) and the MCP server
-# exposed through a Cloudflare tunnel.
+# Mailvec homelab stack. Follow docs/getting-started-docker.md for first
+# setup; docs/deploy-docker.md covers migration, updates, and recovery.
 #
-#   fastmail ◄─IMAP── mbsync ──► ./mail ──► indexer ─┐
-#                                                     ▼
-#   cloudflared ──► mcp:3333 ◄────── ./data ◄── embedder ──► ${OLLAMA_BASE_URL}
-#
-# Setup on the Docker host. Run the whole block in one shell — the leading
-# `umask 077` is what keeps the three credential-bearing files owner-only.
-# Under the usual 0022 umask these commands produce 0644 .env / 0644 password
-# / 0755 secrets, i.e. the Fastmail app password (direct mailbox access) and
-# the Cloudflare tunnel token (join or impersonate the tunnel) readable by
-# every local account on the host:
-#   0. umask 077
-#   1. cp .env.example .env                          # Ollama URL, tunnel token
-#   2. cp ops/mbsyncrc.container.example mbsyncrc    # fill in User / Patterns
-#   3. install -d -m 700 secrets
-#      printf '%s' '<fastmail app password>' > secrets/fastmail_password
-#      : > secrets/embedding_api_key   # empty unless hosted embedding is used;
-#                                      # compose requires the file to exist
-#      # Verify. The umask covers all three (cp applies it to the new file
-#      # rather than copying .env.example's mode), but check anyway: the umask
-#      # only applies to the shell that set it, and these steps get run
-#      # piecemeal across sessions more often than not.
-#      chmod 600 .env mbsyncrc secrets/fastmail_password secrets/embedding_api_key
-#      ls -l .env mbsyncrc secrets/*   # expect -rw-------
-#      # If any of these were ever group/other-readable on a host with other
-#      # local accounts, rotate BOTH credentials — the files are the only
-#      # thing standing between a local reader and the mailbox.
-#   4. Seed ./data/archive.sqlite from an ops/export-db.sh snapshot — see
-#      "Migrating the archive from the Mac" in docs/deploy-docker.md
-#      (or set MAILVEC_REQUIRE_SEEDED_DB=0 in .env for a from-scratch build).
-#   5. Hand the mounts to the container uid. The services run as 10001 (not
-#      root — see MAILVEC_UID below) with no capability to bypass permission
-#      bits, so every path they mount must be OWNED by that uid. Create the
-#      directories yourself rather than letting Docker create them root-owned:
-#      mkdir -p data logs/mcp logs/indexer logs/embedder mail
-#      sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
-#      (the files keep their 0600; chown changes owner, not mode). A missed
-#      path is a loud refusal at startup with this exact command in it.
-#   6. docker compose --profile tunnel up -d --build
-#      (--profile tunnel starts cloudflared, the only ingress to mcp; a plain
-#      `up -d` runs the pipeline but leaves it unreachable. Omit it only for
-#      a deliberately local/LAN-only bring-up.)
+# Set `umask 077` before creating .env, mbsyncrc, or files in secrets/:
+# they hold mailbox and tunnel credentials. Check each file is mode 0600.
+# The services run as uid 10001 by default with no permission-bypass capability;
+# own all mounted paths with that uid before starting the stack.
+# MAILVEC_REQUIRE_SEEDED_DB=1 refuses a missing archive; set 0 only when
+# intentionally starting a new one. The tunnel profile is the only ingress
+# to mcp; do not publish a host port without revisiting docs/security.md.
 #
 # ./data and ./mail must live on host-local disk: SQLite WAL needs real POSIX
 # file locking, so never place them on an NFS/SMB mount. The maildir is

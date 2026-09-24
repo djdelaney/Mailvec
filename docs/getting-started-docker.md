@@ -18,7 +18,7 @@ printf '%s' '<IMAP app password>' > secrets/fastmail_password
 chmod 600 .env mbsyncrc secrets/fastmail_password secrets/embedding_api_key
 ```
 
-Replace the password placeholder. Set `OLLAMA_BASE_URL` in `.env` to the Ollama host's LAN URL, and edit `mbsyncrc` for your IMAP provider and account. The example's Maildir path, `/mail/Fastmail`, matches `compose.yml`; if you change it, change `Ingest__MaildirRoot` there too. Verify the permissions with `ls -l .env mbsyncrc secrets/*` (each file should be `-rw-------`). The [compose file header](../compose.yml) explains each setup step and why it matters.
+Replace the password placeholder. Set `OLLAMA_BASE_URL` in `.env` to the Ollama host's LAN URL, and edit `mbsyncrc` for your IMAP provider and account. The example's Maildir path, `/mail/Fastmail`, matches `compose.yml`; if you change it, change `Ingest__MaildirRoot` there too. Verify the permissions with `ls -l .env mbsyncrc secrets/*` (each file should be `-rw-------`).
 
 ## 2. Choose a database start
 

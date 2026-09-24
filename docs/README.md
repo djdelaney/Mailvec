@@ -30,4 +30,4 @@ Start with one installation path. The pages below are grouped by the task you ar
 
 ## Design history
 
-The [embedding providers proposal](proposals/embedding-providers.md), [parser isolation proposal](proposals/attachment-parser-isolation.md), [phase reviews](reviews/embedding-providers-phases-4-7.md), and [future ideas](future-ideas.md) preserve decisions and investigations. Some describe superseded implementation states; use the install, operation, and security guides above for current instructions.
+The [embedding providers proposal](proposals/embedding-providers.md), [parser isolation proposal](proposals/attachment-parser-isolation.md), and [phase reviews](reviews/embedding-providers-phases-4-7.md) record past decisions; [future ideas](future-ideas.md) holds deferred work. Use the install, operation, and security guides above for current instructions.

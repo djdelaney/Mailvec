@@ -2,23 +2,15 @@
 
 Considered, then deferred. Captured here so the reasoning isn't lost if someone re-opens the question later.
 
-## Cross-vendor / cloud-LLM access via public HTTPS
+## Cross-vendor cloud clients
 
-The Anthropic / Google / OpenAI cloud clients (Claude.ai web app, Gemini in the browser, ChatGPT Connectors) cannot reach `127.0.0.1` since they're themselves cloud services. Exposing Mailvec to them would need three things on top of today's HTTP transport:
-
-1. **Public reachability.** Cloudflare Tunnel (`cloudflared`) or Tailscale **Funnel** (the public variant — ordinary tailnet doesn't reach those clients) terminates TLS so the MCP server can stay bound to `127.0.0.1` and the tunnel connects locally.
-2. **OAuth 2.1 (PKCE).** Cloud connectors expect MCP's standard OAuth flow. The .NET MCP SDK has authentication scaffolding; the open call is the issuer — self-hosted, Cloudflare Access, or Tailscale identity in front are all viable, with different implications for who can approve a new login.
-3. **Per-tool authorization.** All current tools are read-only against the local DB and Maildir, so the simplest scope is "any authenticated user can call any tool." Revisit if mutating tools are added.
-
-**The Anthropic slice of this shipped.** Cloudflare Tunnel + Access Managed OAuth is live and serves every Claude surface — see [remote-access-cloudflare.md](remote-access-cloudflare.md) for the as-built wiring. So (1) and (2) above are solved *generically*: the tunnel and the OAuth front are vendor-agnostic infrastructure that a ChatGPT or Gemini connector could register against too.
-
-**The cross-vendor part is still deferred, and the reason has changed.** It's no longer operational cost — that's a sunk cost now. It's (3): there is still no per-tool or per-client authorization. Today's model is "one identity, all seven tools, the whole mailbox." Adding a second vendor's connector means handing a second cloud that same unscoped access, and the Access policy has no way to say "this client gets `search_emails` but not `view_attachment`." That's a real design problem (Access service tokens per client? per-tool scopes at the origin?), not a config toggle — and it's the same per-client scoping [security.md](security.md) parks under "More local clients don't change the threat model". Un-defer when there's an actual reason to want a non-Claude cloud client, and expect to solve scoping first.
-
-Note this is the *only* surviving cross-vendor item: the local-agent half (per-provider stdio/HTTP config for Gemini CLI, Codex CLI, ChatGPT desktop) was dropped outright in 2026-08-10, because one OAuth-gated endpoint already serves any MCP-capable client and per-provider wiring bought nothing a URL doesn't. Cloud access is a different question — it's blocked on authorization, not on plumbing.
-
-## ~~Tailnet-only access from another personal machine~~ (obsolete)
-
-Was a middle ground between local-only and public: a laptop on the same Tailscale tailnet hitting the Mac mini's MCP server, gated by Tailscale ACLs at the network layer instead of OAuth. **Moot now.** The server no longer lives on the Mac, and the public OAuth-gated tunnel already reaches every device from anywhere — a tailnet path would be strictly more setup for strictly less reach. Kept only so the idea isn't re-proposed.
+The Cloudflare Tunnel and Access Managed OAuth already give Claude's cloud a
+public MCP endpoint ([current wiring](remote-access-cloudflare.md)). A second
+cloud connector could use it, but Mailvec has no per-client or per-tool scope:
+it would receive the same access to the whole mailbox. Defer until there is a
+reason to add a non-Claude cloud client, then design that scope before adding
+its credential. The [security model](security.md#more-local-clients-dont-change-the-threat-model)
+covers the existing boundary.
 
 ## Multi-user / federated identity
 
@@ -140,310 +132,29 @@ separate problems, one trigger:
    when the trigger arrives; still needs re-processing affected messages and
    a re-baseline.
 
-## Faster mail arrival: one-minute polling (shipped)
+## Polling below one minute
 
-**Kept here only so the reasoning that made it safe isn't re-derived.**
-`MBSYNC_INTERVAL_SECONDS` now defaults to **60** in `compose.yml`,
-`.env.example` and the Dockerfile, promoted after running at that cadence on
-the author's deployment. The load-bearing parts moved to the code they govern:
-the Dockerfile comment explains why the loop cannot overlap its own runs (the
-interval is a delay *after* completion, not an independent timer, so a backlog
-pull never queues anything behind it), `.env.example` explains what a shorter
-interval actually costs, and CLAUDE.md's heartbeat section records the
-prerequisite — the beat runs on its own 60s timer, because beating only on sync
-completion would report a *busy* sidecar as dead during exactly the long
-backlog pulls an operator most wants to watch. **Do not re-couple the beat
-cadence to the sync cadence**; that is the bug the prerequisite removed.
+The Docker mbsync loop already waits 60 seconds **after** each sync finishes,
+so runs cannot overlap. Its heartbeat has a separate timer; tying heartbeat
+to sync completion would falsely report a busy sidecar as dead during a long
+backlog pull. The macOS launchd job remains at 600 seconds: its independent
+`StartInterval` caused `.mbsyncstate` lock failures at 300 seconds in a dated
+observation, so the Docker result does not transfer.
 
-The macOS launchd plist deliberately stayed at 600s. Its comment records a
-dated observation of `.mbsyncstate` lock failures at 300s, on a path this
-deployment no longer exercises, and launchd's `StartInterval` is a genuinely
-independent timer rather than a sleep-after-completion — so the container's
-result does not transfer. Re-measure on a live macOS install before changing
-it; overwriting a measurement with an inference is how a runbook goes quietly
-wrong.
-
-**Still deferred: going below a minute by splitting the sync.** Keep one
-serialized runner, poll INBOX on a tight loop, and retain a less frequent
-full-account `mbsync -a` for labels, server-side filing, moves, deletions and
-flags. More machinery, and it changes freshness semantics outside INBOX, so
-it's a fallback to a *measured* cost problem rather than a next step. The two
-costs that would trigger it: provider throttling, or SQLite writer-lock
-contention from unbatched indexer scans — scans are watcher-driven, so a
-shorter cadence doesn't add them, it spreads the same mail across ~10x as many,
-and a scan's dominant cost is independent of how much new mail it carries
-(`MaildirScanner`'s mtime fast path touches `sync_state` for every file it
-walks). Watch embedder `SQLITE_BUSY` retries and OCR throughput, not scan
-duration.
-
-## Date-ordering index for `datetime(date_sent)`
-
-> **Status 2026-08-10: SHIPPED as schema v12** —
-> `schema/migrations/012_messages_date_sort_index.sql`, and the index is in
-> `001_initial.sql` for fresh databases. This section is kept because it is the
-> only record of what was measured and, more importantly, of the two index shapes
-> that were tried and rejected; CLAUDE.md's invariant links here. Not a proposal
-> any more — read it before touching the browse `ORDER BY` or the index.
-
-**The mechanism.** `date_sent` holds `DateTimeOffset.ToString("O")`, so one
-column mixes UTC `Z` and `+HH:mm` offsets. Sorted as text, `…07:13:20-05:00`
-(12:13Z) lands below `…11:00:00+00:00` (11:00Z) — exactly inverted. Every
-date-ordered or date-filtered query therefore wraps the column in SQLite's
-`datetime()`, which is load-bearing for correctness and fatal for
-`idx_messages_date_sent`: a plain-column index cannot satisfy an expression, so
-these paths full-scan `messages` instead. Affected: query-less browse
-(`BrowseByFilters`), `FolderStats` / `list_folders`, the `dateFrom`/`dateTo`
-filters in `SearchFilterSql`, `reocr` candidate ordering, `purge-deleted`'s
-cutoff. Ranked search is unaffected — BM25 and KNN order by relevance.
-
-**Measured 2026-08-10** (observed, not a permanent fact — re-measure before
-acting). Copy of the frozen dev corpus: 81,732 messages, 75,414 live, 4.5 GiB,
-zero NULL `date_sent`, no `sqlite_stat1`. Numbers below are **through the app's
-own stack** — `MessageRepository.BrowseByFilters` / `.FolderStats()` called via
-`ConnectionFactory`, so Microsoft.Data.Sqlite over
-`SQLitePCLRaw.bundle_e_sqlite3` (reported `sqlite_version()` **3.53.4**) — not a
-CLI. Best of 3 warm:
-
-| index | browse | +dateFrom | +folder | list_folders |
-|---|---|---|---|---|
-| baseline (as shipped) | 215 ms | 162 ms | 106 ms | 499 ms |
-| `(datetime(date_sent))` | 219 ms | 189 ms | 106 ms | 485 ms |
-| `(date_sent IS NULL, datetime(date_sent))` | **9,173 ms** | 275 ms | 144 ms | 482 ms |
-| `(date_sent IS NULL, datetime(date_sent) DESC)` | **<1 ms** | **<1 ms** | 144 ms | 490 ms |
-
-Cross-checked against `sqlite3` CLI 3.51.0 and Python's 3.50.4 on the same copy:
-**every ratio and every query plan reproduced on all three builds**, which is
-the part worth trusting. Absolute times did not — `list_folders` reads 490 ms
-here, 594 ms via the CLI, 998 ms via Python, and 325 ms in `FolderStats`'s own
-recorded measurement. Quote ratios from this entry, never the milliseconds.
-An additional `(folder, message_id)` index was measured too and changed nothing
-(see below), so it is omitted from the table.
-
-Four things that table says, in rough order of how expensive it would be to
-learn them the other way:
-
-1. **The obvious index does nothing.** `ON messages(datetime(date_sent))` — what
-   this entry prescribed for months — leaves the plan at `SCAN m` and the time
-   unmoved. The real `ORDER BY` leads with `m.date_sent IS NULL` (the explicit
-   key that keeps undated mail sorting last in both directions, since SQLite puts
-   NULLs first ascending), and an index whose first column is a *different*
-   expression cannot satisfy that ordering.
-2. **The naive repair is ~43x worse than doing nothing.** Adding the `IS NULL`
-   key but leaving both columns ASC gets the index adopted and browse takes **9.2
-   seconds**: the `ORDER BY` is mixed-direction (`IS NULL` ascending,
-   `datetime(...)` descending), so SQLite walks the whole index and still needs a
-   `TEMP B-TREE FOR LAST TERM OF ORDER BY`. **The second column must be declared
-   `DESC`.** This is the shape of mistake that ships looking principled.
-3. **The correct index takes browse from 215 ms to under a millisecond** — below
-   `Stopwatch` resolution, plan `SCAN m USING INDEX` with no sort step at all, so
-   >200x rather than the ~40x an earlier CLI measurement suggested (that figure
-   was inflated by process startup). Costs 102 ms to build and grew the file by
-   0 KiB, fitting in existing free pages.
-4. **It regresses folder-filtered browse by ~36%** (106 → 144 ms), reproducibly
-   on all three SQLite builds, because the planner takes the new ordering index
-   and then evaluates the folder `EXISTS` per row. `ANALYZE` does not fix it. Net
-   across the paths is overwhelmingly positive, but this is a real cost, not a
-   rounding error — and it is why "just add the index" is not the whole design.
-
-**`list_folders` is a different problem and this index is not it.** Its ~490 ms
-does not move under any variant. The cost is the `membership` CTE's
-`UNION`/`TEMP B-TREE` over both folder sources, not the date ordering. Note also
-that `FolderStats`'s own remarks propose "a covering index on
-`messages(folder, message_id)`" if its cost ever matters: **measured, that index
-changes nothing here** (586 vs 594 ms, inside noise). Treat that comment as an
-untested hypothesis, not a plan. **The ~490 ms was reviewed and accepted as-is
-by the owner 2026-08-10** — `list_folders` is called once before a folder-scoped
-search rather than per search, so this is not a live follow-up. Reopen it only
-if that call pattern changes.
-
-**The argument for un-parking is stronger than the old "tens of ms" claim.**
-Browse is ~200 ms warm and was 2.1 s cold on first touch, on the author's own
-corpus — not obviously below perception. And the scan reads most of a 4.5 GiB
-table, so it competes for exactly the page cache that
-[search-performance.md](contributing/search-performance.md) documents search
-latency as depending on (~1.2 GB of chunk vectors resident, where the container's
-`mem_limit` charges page cache to the cgroup). A cheap index that stops
-full-scanning the widest table in the database is also cache hygiene for the
-search path.
-
-**Both costs were measured and accepted before it shipped**, and both are
-recorded here rather than in a commit message so a later reader finds the price
-next to the win:
-
-- ~~**Decide about the folder-filter regression.**~~ **Accepted by the owner
-  2026-08-10**: folder-filtered browse going 106 → 144 ms is worth unfiltered
-  browse going 215 ms → sub-millisecond. Recorded so a later reader doesn't
-  "discover" the regression and treat it as an oversight — it is a priced
-  trade, and the price is in the table above.
-- ~~**Cost the write side.**~~ **Measured 2026-08-10 — it is a non-issue.** Same
-  app stack, 5,000-row workloads inside rolled-back transactions so the copy
-  stayed clean:
-
-  | write workload | no index | +index | delta |
-  |---|---|---|---|
-  | INSERT 5,000 new messages | 184 ms | 303 ms | +23.8 us/row |
-  | UPDATE 5,000 reassigning `date_sent` (the Upsert branch) | 115 ms | 127 ms | +2.4 us/row |
-  | UPDATE 5,000 with a genuinely changed `date_sent` | 170 ms | 180 ms | +2 us/row |
-  | UPDATE 5,000 re-queue only (`embedded_at`, no `date_sent`) | 164 ms | 161 ms | none |
-
-  Two results matter. **The bulk re-queue paths pay nothing** — `reocr`,
-  `extract-attachments` and `rebuild-bodies` clear `embedded_at` / bump
-  `embed_epoch` without assigning `date_sent`, and SQLite skips an index whose
-  columns no `SET` clause touches, so the highest-volume `messages` writers are
-  unaffected. And **against a real write the cost vanishes**: 300 fresh messages
-  through `MessageRepository.Upsert` (own transaction each, FTS triggers, real
-  connection open) ran 55.0 ms/msg without the index and 54.9 ms/msg with it —
-  the 24 us of index maintenance is ~0.04% of a message write and does not rise
-  above measurement noise.
-
-  Storage is 2.25 MiB (577 pages, per `dbstat`) for 81,732 rows — 0.05% of the
-  4.5 GiB file, and on this database the file did not grow at all because the
-  index was absorbed by the existing freelist (2,095 → 1,518 free pages). Build
-  cost 0.1-0.7 s depending on cache state.
-- ~~**Write down the silent-regression invariant.**~~ **Done** — it is in
-  CLAUDE.md's schema invariants, and it is enforced rather than merely described:
-  the clause lives once as `MessageRepository.BrowseOrderBy` and
-  `SchemaMigratorTests.The_date_sort_index_resolves_the_browse_ordering_with_no_sort_step`
-  asserts the query PLAN for that const. Both failure shapes were verified by
-  mutation — dropping `DESC` from the index, and dropping the `IS NULL` key from
-  the clause — and each fails that test with a message naming the cause.
-
-**Shipped as v12**, and the DDL is the one measured above — note the `DESC`,
-which is the whole difference between a 200x win and a 43x regression:
-
-```sql
-CREATE INDEX idx_messages_date_sort
-    ON messages(date_sent IS NULL, datetime(date_sent) DESC);
-```
-
-Per CLAUDE.md's migration rule, both carriers moved (`LatestSchemaVersion` and
-the `schema_version` literal in `001_initial.sql`) and the index is declared in
-`001_initial.sql` too, so the fresh-install and migrated paths converge — the
-v1-forward walk test asserts the index exists at the end, because a divergence
-there would leave migrated databases full-scanning while new installs don't.
-
-**One caveat on the measurement, unresolved on purpose:** every number here was
-taken on a schema **v8** copy (the frozen dev corpus) while main is v12. v9-v12
-add no indexes on `messages` and touch none of these queries' columns, so the
-plans transfer — but nothing has re-measured this against a v12 database with
-real data, and the only honest confirmation is doing so on the next corpus
-refresh.
-
-## Does Dependabot's `nuget-major` group ever fire?
-
-> **Status 2026-09-12: OPEN — evidence gathered twice, cause not established.**
-> Not a proposal; a question with two hard data points behind it. Cheap to
-> answer, and the failure mode if the answer is "no" is silent — which is why
-> it is written down rather than left as a hunch.
-
-**What was observed (2026-08-22).** `xunit.runner.visualstudio` 4.0.0 was published
-2026-08-15. The weekly NuGet run on 2026-08-22 (06:22-06:26Z) opened exactly one
-PR — #27, under `nuget-minor-patch`, carrying the PDFtoImage bump. Nothing was
-opened for the 4.0.0 major: not grouped, not standalone. Searching the repo's
-full PR history turns up **no `nuget-major` PR that has ever existed**. The bump
-was applied by hand on 2026-08-22 instead.
-
-**What it is not.** The innocent explanation — Dependabot declining an update it
-considers inapplicable — does not hold. 4.0.0 ships `net8.0` (and `net472`),
-which a `net10.0` project consumes normally, and the package still declares
-support for xUnit v1/v2/v3, so our xunit 2.9.3 is in range. The open-PR limit is
-not it either (default 5; one nuget PR was open at the time). And the major had
-been available for a full week, so it is not a timing miss like PdfPig 0.1.16,
-which landed 95 minutes *after* that same run and duly appeared the week after.
-
-**The two readings.** `.github/dependabot.yml` declares `nuget-minor-patch`
-(`update-types: ["minor","patch"]`, no `patterns`) *before* `nuget-major`
-(`update-types: ["major"]`, no `patterns`).
-
-- **The file's own model says `nuget-major` is dead code.** Its header states
-  that Dependabot "assigns each dependency to the FIRST group whose patterns
-  match". An omitted `patterns` matches everything, so `nuget-minor-patch`
-  claims every dependency, and a dependency whose only available update is a
-  major then sits in a group that will never ship it.
-- **GitHub's documentation reads the other way** — `update-types` participates in
-  the match, so a major-only update should fall through to `nuget-major`, or at
-  worst out of grouping and into an individual PR. Under this reading the group
-  should have fired and something else suppressed it.
-
-Both cannot be right, and the repo has been asserting the first reading in its
-comments while assuming the second in its behaviour.
-
-**Why it matters.** If the first reading holds, majors have been invisible for as
-long as these groups have existed, while the config *reads* as though they are
-covered. That is the same "configured but not actually covering the thing"
-failure `.github/dependabot.yml` already records for the `docker` ecosystem and
-the cloudflared pin, which sat unbumped from 2026-08-03 to 2026-08-15 behind a
-comment implying it was maintained. An ecosystem that silently declines to report
-majors is worse than one that reports nothing, because it silences the question.
-
-**New evidence 2026-09-12: one dependency was claimed by two groups in the same
-run, which the first reading forbids.** That morning's NuGet run opened #33 at
-06:27Z under `dotnet-and-mcp`, carrying `Microsoft.Extensions.Http.Resilience`
-10.9.0 -> 10.10.0 on its own. Seven minutes later it opened #34 under
-`nuget-minor-patch` carrying four updates — AngleSharp, Test.Sdk,
-System.CommandLine, **and the same Http.Resilience bump**. #33 was closed at
-06:34:33Z, four seconds after #34 was created, as superseded; the bump reached
-`main` inside #34.
-
-Under the first reading that cannot happen. `Http.Resilience` matches
-`Microsoft.Extensions.*` in `dotnet-and-mcp`, which is declared *first*, so
-first-match-wins would claim it there and leave it invisible to the catch-all.
-Instead both groups produced a PR for it from one run. So assignment is **not** a
-single exclusive first-match pass over the ordered group list — or, if it is, it
-runs once per entry in `directories` rather than once per ecosystem, with
-de-duplication happening at PR level by superseding rather than at assignment
-time. The directory fanout is a live possibility here and not a tidy separation:
-`Http.Resilience` is referenced by `src/Mailvec.Core` and `src/Mailvec.Embedder`
-while AngleSharp is referenced by `src/Mailvec.Core`, so a single directory's run
-holds members of both groups.
-
-**What this does not settle.** It weakens the "`nuget-minor-patch` claims
-everything, therefore `nuget-major` is dead code" argument — if one dependency
-can be claimed by two groups, a major-only update is not obviously locked out of
-`nuget-major`. But it explains nothing about why `xunit.runner.visualstudio`
-4.0.0 produced no PR at all, so the original question stands and arguably gets
-harder: under non-exclusive assignment there is *less* reason for the 2026-08-22
-silence, not more. The instruction below not to reorder on a guess applies to
-this data point too.
-
-**A second, separate reporting defect in the same run — read the branch, not the
-body.** #34's body claimed four updates; its branch carried three.
-`System.CommandLine` stayed pinned at 2.0.11 while the body announced 2.0.12.
-Nothing was wrong with 2.0.12: published 2026-09-08 (four days before the run),
-listed, dependency surface identical to 2.0.11, and — verified afterwards — a
-clean Release build with the full suite green at 1284 tests. #31 and #32 from the
-same morning both carry "Cooldown could not be applied because no publication
-date was available from the registry", and **no Dependabot PR before 2026-09-12
-carries that warning**, so a cooldown appears to have been enabled recently and
-somewhere other than `.github/dependabot.yml`, which declares none. A cooldown
-would explain *withholding* a four-day-old release; it does not explain
-*announcing it as applied*. Taken by hand in "Take System.CommandLine 2.0.12".
-Treat a group PR's body as a statement of intent and diff the branch before
-believing it — a body that overstates what it changed is the same
-"reads as maintained but is not" failure this section already turns on.
-
-**How to settle it.** Insights -> Dependency graph -> Dependabot -> the nuget
-job's "Last checked" log lists per-dependency outcomes and skip reasons, and
-names the group each candidate was assigned to. Decisive, and a minute's work.
-If that log is unavailable, the fallback experiment is to give both groups an
-explicit `patterns: ["*"]`, or reorder them, then trigger a run and see whether a
-major appears. **Don't reorder pre-emptively as a "fix"**: until the semantics
-are known there is no way to tell a fix from a coincidence, and a config change
-made on a guess is how the current ambiguity got here.
+A faster INBOX-only poll alongside a slower full-account sync remains an option
+if provider throttling or SQLite contention is measured. It would change
+freshness for labels, moves, deletions, and flags, and would need a single
+serialized runner. Re-measure on the target deployment before implementing it.
 
 ## Still open (small)
 
 Carried forward from the original design doc — none are committed work, all gated on a problem actually being observed:
 
-- ~~**Date-ordering index.**~~ Shipped as schema v12 — measured, and the
-  rejected alternatives are recorded in
-  [its own section above](#date-ordering-index-for-datetimedate_sent).
 - **Thread reconstruction.** Today's `In-Reply-To` / `References` heuristic is acceptable; revisit if mismatches with Fastmail's JMAP threading become a usability issue.
 - **JMAP-specific metadata.** IMAP flags are available via mbsync, but JMAP-only fields (masked email, server-side labels) would require a separate JMAP path. Not currently planned.
-- **WAL checkpointing strategy.** No periodic auto-checkpoint configured beyond SQLite's default (every 1000 frames). For one-off cleanup after a bulk embed, `mailvec checkpoint` runs `PRAGMA wal_checkpoint(TRUNCATE)`. Worth measuring `-wal` file growth on a long-running install before deciding whether automatic periodic checkpoints are needed.
+- **WAL checkpointing strategy.** No periodic auto-checkpoint beyond SQLite's default (every 1000 frames). Measure long-running `-wal` growth before adding one; `mailvec checkpoint` handles one-off cleanup.
+- **Duplicate-worker exclusion.** Heartbeat detection reports two indexers sharing a database, but does not serialize their scans. If that becomes an operational risk, add an interprocess lock around `ScanAll`; do not turn a fresh heartbeat from a normal restart into a startup refusal. See [CLAUDE.md](../CLAUDE.md#schema--data-invariants).
 
 ## Out of scope entirely
 
 Sending mail, modifying server-side state (marking read, moving, deleting), multi-account support, calendar/contacts/files (even though Fastmail offers these via CalDAV/CardDAV/WebDAV — this project is mail-only), a web UI, and real-time push notifications (mbsync is timer-driven, not IDLE/JMAP push).
-
-(OCR for image-only PDFs and images was originally out of scope; it now ships in the embedder via a local Ollama vision model — see [contributing/attachment-ocr.md](contributing/attachment-ocr.md).)

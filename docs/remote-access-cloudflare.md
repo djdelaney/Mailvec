@@ -201,14 +201,9 @@ on the same hostname, in this order:
 > exactly like a healthy one. Check where yours point before shipping either. See
 > [monitoring-uptime-kuma.md](monitoring-uptime-kuma.md#migrating-existing-monitors-from-health-to-up).
 
-**`/up` is the forwarded monitoring endpoint; `/health` is not.** Uptime Kuma
-polls `/up` end-to-end through the tunnel, which detects tunnel / Access / edge
-failures an in-network probe can't. `/health` is its detailed sibling and
-discloses the archive path, corpus counts, embedding model identity and the
-internal Ollama LAN address — `/up` exists precisely so nothing external needs
-any of that. Its real consumers are all loopback (the compose healthcheck and
-`mailvec doctor` under `docker compose exec`), so keeping it off-box costs
-nothing. See [security.md → `/up` and `/health`](security.md#up-and-health).
+**External monitors use `/up`; `/health` stays loopback-only.** The
+[security model](security.md#up-and-health) explains the data boundary, and the
+[Kuma guide](monitoring-uptime-kuma.md) owns monitor configuration.
 
 **Verify** rule 2 after adding it (as the owner, from outside):
 
@@ -222,10 +217,7 @@ curl -i https://mailvec.<domain>/up       # 200 or 503, with the boolean body
 docker compose exec mcp curl -fsS http://127.0.0.1:3333/health   # full report
 ```
 
-**Verify after any ingress or image change**: `curl -i .../up` → the boolean
-status body, and `curl -i .../health` → **404** (the origin serves it to
-loopback only); the compose healthcheck curls it from inside the container and
-is unaffected.
+Repeat these probes after any ingress or image change.
 
 **Scope the monitoring service token to `/up`.** The Uptime Kuma service token
 passes Access; if it's authorized on the whole-subdomain app it can reach MCP

@@ -1,8 +1,12 @@
 # Design proposal — pluggable embedding providers (Fireworks first)
 
-**Status:** phases 0–3 implemented (see "Phased implementation" for commit
-references); phases 4+ proposed.  
-**Date:** 2026-08-07; phase status updated 2026-08-08.  
+**Status:** phases 0–6 implemented; the evaluated Fireworks candidate failed
+the quality gate, so its conditional phase-7 production rollout did not happen.
+This is design history; use the current deployment and security guides for
+configuration. See [Phased implementation](#phased-implementation) for the
+dated implementation record and [the phase 4–7 review](../reviews/embedding-providers-phases-4-7.md)
+for findings recorded at that point in development.
+**Date:** 2026-08-07; status clarified 2026-09-24.
 **Default remains:** local Ollama. Hosted providers are explicit opt-ins because
 they send mail content and semantic-search queries off-network.
 

@@ -179,56 +179,18 @@ Two kinds of pin, with different lifetimes:
   at deploy time; compose accepts the `name:tag@digest` form and pulls by
   digest.
 
-**The tag value is not free-form.** The repo-wide `<Version>` in
-`Directory.Build.props` stamps all four binaries and `serverInfo.version`,
-kept in lockstep with `manifest.json` by **`ops/release.sh`** (the only
-sanctioned bump path; `ops/build-mcpb.sh --bump` delegates to it).
-The `v*` tag must equal that version at the tagged commit, or the image's
-label and what its binaries report from `mailvec status` / the MCP handshake
-disagree forever — `publish-images.yml` enforces this: a `v*` push whose tag
-doesn't match `<Version>` fails before building anything.
+The `v*` tag must match the repo-wide `<Version>` in
+`Directory.Build.props`; CI checks this before promotion. Version bumps and tag
+publishing use [`ops/release.sh`](../ops/release.sh) and the approval rules in
+[`CLAUDE.md`](../CLAUDE.md#releases). Committing deployment changes does not cut
+a release.
 
-**Cutting a release** (dev machine, not the deploy host). One command does the
-whole disciplined flow — push, wait for THIS commit's CI to go green, then tag —
-and refuses to tag a red/cancelled run:
-
-```sh
-# --patch default; --minor for a tool-surface change or a schema migration
-# (the "back up first" flag in the tag name, since a new image migrates the
-# seeded archive in place). --ship needs the `gh` CLI and the main branch.
-ops/release.sh --minor --ship
-```
-
-Or drive it by hand (what `--ship` automates), e.g. behind a PR:
-
-```sh
-ops/release.sh --minor          # commits the bump; must go green on main
-git tag -a v0.1.30 -m "…" && git push origin v0.1.30   # only after CI is green
-```
-
-The tag push publishes `ghcr.io/<owner>/mailvec:v0.1.30` +
-`…/mailvec-mbsync:v0.1.30` by **promoting** the commit's existing `sha-`
-images — it builds nothing. It does **not** move `:latest` (green-main /
-manual-dispatch-on-main only). The `v*` trigger is test-gated by
-construction: only a commit that passed CI on a push to main ever gets a
-`sha-` image, so tagging anything else (an unmerged branch, a commit whose CI
-failed) fails the promote job after a 40-minute wait rather than publishing.
-It also checks tag↔`<Version>` agreement and refuses a `v*` that is already in
-GHCR. `--ship` still waits for green CI before tagging; the promote job waits
-for the image build that follows it.
-
-**Repo settings that complete this** (GitHub-side, not in the repo): a tag
-ruleset on `v*` that blocks deletion and non-fast-forward updates, so a git
-tag can't be moved to a different commit after it's published.
-
-**Deploying it:** pin both image variables in `.env` to the same release's
-`:v0.1.30@sha256:…` references (inspect each image's digest as described
-above), then
-`docker compose pull && docker compose up -d` (backup first — the
-SchemaMigrator-on-start rule above), and verify the loop closes:
-`/health` reports a `version` field
-(`docker compose exec mcp curl -s localhost:3333/health`) that must equal
-the image tag; `docker compose exec mcp mailvec status` prints the same.
+**Deploying a release:** pin both image variables in `.env` to the same release's
+`:vX.Y.Z@sha256:…` references (inspect each digest as described above), take a
+[backup](#backups), then run `docker compose pull && docker compose up -d`.
+Verify that `/health` reports the pinned version with
+`docker compose exec mcp curl -s localhost:3333/health`, and compare
+`docker compose exec mcp mailvec status`.
 
 ## Migrating the archive from a macOS install
 
@@ -284,62 +246,44 @@ docker compose exec mcp mailvec doctor
   `docker compose exec mcp mailvec eval` against the latest baseline in
   `baselines/`. Same model + same vectors means any drift implicates the
   .NET-on-Linux platform swap specifically.
-- **Exposure**: cloudflared sidecar (compose `tunnel` profile), token-based
-  tunnel, ingress → `http://mcp:3333` (Streamable HTTP, stateless — no
-  `Mcp-Session-Id` is issued, so no sticky routing or session affinity is
-  needed at the tunnel), fronted by a Cloudflare Access self-hosted app using
-  Managed OAuth. The MCP container **publishes no host port** — the tunnel is
-  the only ingress, and keeping it that way is what the security model's
-  accepted risks rest on. The DNS-rebinding **HostGuard**
-  (src/Mailvec.Mcp/HostGuard.cs, fronts every route) 403s any Host header that
-  isn't loopback or allowlisted — tunnel traffic carries the public hostname,
-  so `MCP_PUBLIC_HOSTNAME` **must** be set in `.env` (compose wires it to
-  `Mcp:AllowedHosts`, alongside `mcp` for in-network access) or every tunnelled
-  request fails. `Mcp__BindAddress=0.0.0.0` inside the compose network is where
-  the old bind-to-127.0.0.1 boundary stops applying; Access is what replaced
-  it. Full model in [security.md](security.md), wiring in
-  [remote-access-cloudflare.md](remote-access-cloudflare.md).
-- **Health/monitoring**: compose healthcheck curls `/health` (30 s interval).
-  Note `/health` returns 503 when Ollama is unreachable, so an Ollama VM
-  outage shows as an *unhealthy mcp container* even though keyword search
-  still works — informative, nothing restarts on it.
-- **Backups are the host's**, not Mailvec's: cover the Docker host with
-  whatever snapshot schedule and offsite shipping you run. That's a
-  **crash-consistent** layer — a snapshot can land mid-transaction, with the
-  `-wal` captured alongside the main file. SQLite is built for exactly that
-  (a crash-consistent volume snapshot is equivalent to a power cut, which WAL
-  recovery handles on next open), so this is a genuine backup, not a
-  hopeful one — **provided `./data` and its `-wal`/`-shm` sidecars sit on one
-  volume that snapshots atomically.** They do today; that's the invariant to
-  preserve if the storage layout ever changes.
+## Remote access and health
 
-  An **app-consistent** copy is a stronger guarantee, and the only way to get
-  one is pause-checkpoint-copy. `ops/export-db.sh` is macOS-only (it pauses
-  writers via launchctl); the container equivalent is:
+The MCP container publishes no host port. For tunnel ingress, Access, and
+`MCP_PUBLIC_HOSTNAME` / HostGuard setup, use the
+[Cloudflare runbook](remote-access-cloudflare.md); the accepted boundary is
+in the [security model](security.md). Compose checks `/health` inside the mcp
+container every 30 seconds. An Ollama outage makes that container unhealthy
+although keyword search remains available; external monitors use `/up`.
 
-  ```sh
-  docker compose stop indexer embedder
-  if docker compose exec -T mcp mailvec checkpoint; then
-    sudo cp -p data/archive.sqlite <backup>
-  else
-    echo "checkpoint could not truncate the WAL (a reader held it) — nothing copied; retry" >&2
-  fi
-  docker compose start indexer embedder   # ALWAYS, copy or not
-  ```
+## Backups
 
-  mcp stays up — it's read-only against the DB, and the CLI rides inside its
-  container. **Don't chain the steps with `&&`**, as an earlier version of this
-  recipe did: `checkpoint` exits 1 whenever a reader holds the WAL (mcp
-  serving a search is enough), which skipped the `start` at the end and left
-  the indexer and embedder stopped with no warning. The copy is skipped in
-  that case on purpose — the main file alone, without a truncated WAL, is not
-  the consistent copy this recipe exists to take. Worth running before
-  anything that migrates the DB in place (a new image — see the
-  SchemaMigrator-on-start warning above), and worth cronning only if
-  VM-snapshot restores ever prove unsatisfying in practice. Note
-  `ConnectionFactory` hardens the DB dir/files to owner-only (0700/0600) on
-  open — on the VM that owner is the container uid (10001), so run backup
-  reads via `docker compose exec` or with `sudo` on the host.
+Cover the Docker host with your snapshot schedule and offsite shipping. A
+**crash-consistent** snapshot is valid when `./data`, `archive.sqlite-wal`, and
+`archive.sqlite-shm` sit on one volume that snapshots atomically: SQLite can
+recover the captured WAL on next open. Preserve that storage-layout invariant.
+
+An **app-consistent** copy requires pause-checkpoint-copy. `ops/export-db.sh`
+is macOS-only; in the container deployment run:
+
+```sh
+docker compose stop indexer embedder
+if docker compose exec -T mcp mailvec checkpoint; then
+  sudo cp -p data/archive.sqlite <backup>
+else
+  echo "checkpoint could not truncate the WAL (a reader held it) — nothing copied; retry" >&2
+fi
+docker compose start indexer embedder   # ALWAYS, copy or not
+```
+
+mcp stays up — it's read-only against the DB, and the CLI rides inside its
+container. **Don't chain the steps with `&&`**: `checkpoint` exits 1 whenever
+a reader holds the WAL (mcp serving a search is enough), which would skip the
+`start` and leave the indexer and embedder stopped. The copy is skipped in
+that case because the main file alone, without a truncated WAL, is not a
+consistent backup. Run this before an image that migrates the database in
+place; use `sudo` for host-side reads because `ConnectionFactory` hardens the
+DB dir/files to owner-only (0700/0600) under the container uid (10001 by
+default).
 
 ## Hosted embedding provider (optional)
 
@@ -693,7 +637,7 @@ someone has ticked off is a claim about one machine.
     anything that reaches it, which the security doc accepts only while the
     tunnel is the sole ingress.
 14. **Backups.** Cover the Docker VM with whatever snapshot schedule you run;
-    see the backup bullet above for what that does and doesn't guarantee, and
+    see [Backups](#backups) for what that does and doesn't guarantee, and
     the one storage-layout invariant it rests on.
 
 ## Known gaps

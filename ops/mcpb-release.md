@@ -27,7 +27,7 @@
 ops/build-mcpb.sh --bump
 ```
 
-This patch-bumps **the** Mailvec version (by delegating to `ops/release.sh --patch --no-commit` — `manifest.json` and the repo-wide `<Version>` in `Directory.Build.props`, which stamps all four .NET binaries, atomically), rebuilds, and `open`s the new `.mcpb` (which Claude Desktop intercepts as an install prompt). Then in Settings → Extensions toggle Mailvec off and confirm the install, quit + relaunch.
+This patch-bumps **the** Mailvec version (by delegating to `ops/release.sh --patch --no-commit` — `manifest.json` and the repo-wide `<Version>` in `Directory.Build.props`, which stamps all five .NET binaries, atomically), rebuilds, and `open`s the new `.mcpb` (which Claude Desktop intercepts as an install prompt). Then in Settings → Extensions toggle Mailvec off and confirm the install, quit + relaunch.
 
 - Toggling off (vs uninstalling) preserves user_config values across upgrades.
 - Without a version bump, Claude Desktop silently ignores the re-install — plain `build-mcpb.sh` is fine for "rebuild and inspect locally" but `--bump` is what you need to actually swap the running binary.

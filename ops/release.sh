@@ -3,7 +3,7 @@
 #
 # The sanctioned bump path (extracted from ops/build-mcpb.sh --bump, which now
 # delegates here). Bumps the two version carriers in lockstep — manifest.json
-# and the repo-wide <Version> in Directory.Build.props (which stamps all four
+# and the repo-wide <Version> in Directory.Build.props (which stamps all five
 # .NET binaries and initialize.serverInfo.version) — commits the bump, and
 # prints the tag commands that cut the release. The v<version> tag push publishes the durable
 # GHCR images the homelab pins (docs/deploy-docker.md "Release tags"); the

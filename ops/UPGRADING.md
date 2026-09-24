@@ -22,6 +22,33 @@ dotnet restore && dotnet build
 - **`SkiaSharp` follows `PDFtoImage`, never its own cadence.** PDFtoImage 5.4.0 declares `SkiaSharp [4.150.1, )`, and CPM means the single pinned version is what *both* the renderer and the test-side PNG decoder resolve to — so pinning below the floor breaks restore, and pinning ahead runs PDFium against a SkiaSharp it wasn't built with. Bump the two together. `.github/dependabot.yml` carries an `ignore` for SkiaSharp so it can't drift ahead one minor at a time; a *group* can't express this, because groups batch whatever updates exist rather than holding a member back. Don't trust the version named in this bullet once you're bumping past it — re-derive the floor from the nuspec of the PDFtoImage you're moving to, which is authoritative and can't go stale here: `curl -s https://api.nuget.org/v3-flatcontainer/pdftoimage/<version>/pdftoimage.nuspec | grep SkiaSharp`.
 - `MimeKit` and `AngleSharp` are independent — bump on their own cadence. **AngleSharp still deserves a look on the way past**: it drives `HtmlToText`, so a behaviour change moves `body_text` for newly-parsed mail and for anything `rebuild-bodies` touches — which is the moment it reaches the index. Run `mailvec rebuild-bodies` (a dry run) first to see how many bodies the bump actually changes, and capture an eval baseline before the `rebuild-bodies --reembed --apply` that follows.
 
+### Dependabot major-update coverage (open investigation)
+
+Check the NuGet job's **Last checked** log in GitHub's Dependency graph before
+changing the groups in [`.github/dependabot.yml`](../.github/dependabot.yml).
+The question is whether the `nuget-minor-patch` catch-all, declared before
+`nuget-major`, can prevent major-only updates from appearing. The config's
+first-match comment suggests yes; GitHub's documented `update-types` behavior
+suggests otherwise. The repo has no known `nuget-major` PR.
+
+Two dated observations make a config edit on inference unsafe:
+
+- On 2026-08-22, `xunit.runner.visualstudio` 4.0.0 had been available for a
+  week, but that week's run opened only #27 for PDFtoImage. The xUnit major
+  was bumped by hand. Package compatibility and the normal open-PR limit did
+  not explain its absence.
+- On 2026-09-12, the same `Microsoft.Extensions.Http.Resilience` update appeared
+  in both #33 (`dotnet-and-mcp`) and #34 (`nuget-minor-patch`); #33 was closed
+  as superseded. This rules out a simple, exclusive first-match assignment,
+  but does not explain the missing xUnit major. #34's body also listed a
+  `System.CommandLine` bump absent from its branch, so inspect group PR diffs
+  rather than relying on their descriptions.
+
+The job log's per-dependency skip reason and group assignment would settle the
+question. If unavailable, test explicit `patterns: ["*"]` or reordered groups
+in a controlled Dependabot run and observe whether a major appears. Do not
+reorder preemptively.
+
 ### The VSTest adapter is on a deprecation path
 
 `xunit.runner.visualstudio` 4.0.0 (2026-08-15) shipped with its maintainers
@@ -146,7 +173,7 @@ Ships inside `SQLitePCLRaw.bundle_e_sqlite3` — bump the bundle to bump SQLite.
 - **Vision model (OCR):** `Ollama:VisionModel`, default `qwen2.5vl:7b`, used by the embedder's scanned-PDF OCR pass (`Embedder:OcrEnabled`, on by default). Pull it with `ollama pull qwen2.5vl:7b`. Unlike the embedding model it is **not** schema-coupled — swap it freely (no reindex); only newly-OCR'd PDFs use the new model, and you can re-run OCR on existing ones by resetting their `extraction_status` from `ocr` back to `no_text`. If it isn't pulled, OCR logs a warning and skips (scanned PDFs stay `no_text`); `mailvec doctor` flags it. Loaded on demand, not pinned — see the OCR design doc. There is no hard version floor today; `/api/generate` with `images` is long-standing.
 
 
-## Upgrading a compose deployment across the embedding-providers work (unreleased -> next release)
+## Upgrading an older compose deployment across the embedding-providers change
 
 `compose.yml` now unconditionally declares the `embedding_api_key` secret
 (mounted into mcp and embedder), and compose refuses to start a service whose

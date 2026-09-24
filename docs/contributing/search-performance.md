@@ -121,3 +121,48 @@ ollama ps                              # is mxbai-embed-large resident? cold loa
 4. **Was the MCP server just restarted?** First ~dozen queries pay JIT warmup.
 5. Re-run the curl sweep above to separate warm steady-state from cold-idle and
    post-restart effects before changing any code.
+
+## Date-ordering index measurement (2026-08-10)
+
+Schema v12 added `idx_messages_date_sort` for query-less browse. Stored
+`date_sent` values mix UTC and explicit offsets, so date comparisons and
+ordering must use `datetime(date_sent)`. Browse also leads with
+`date_sent IS NULL` to put undated mail last. The index must match both terms
+and directions:
+
+```sql
+CREATE INDEX idx_messages_date_sort
+    ON messages(date_sent IS NULL, datetime(date_sent) DESC);
+```
+
+Measured on a copy of the frozen corpus (schema v8, 81,732 messages, 75,414
+live, 4.5 GiB, no NULL dates or `sqlite_stat1`). Results are best of three
+warm calls through `MessageRepository` and `ConnectionFactory` using SQLite
+3.53.4; SQLite CLI 3.51.0 and Python 3.50.4 reproduced the ratios and query
+plans, though their absolute timings differed. Re-measure on a current-schema
+corpus before drawing new performance conclusions.
+
+| Index shape | Browse | With dateFrom | With folder | list_folders |
+| --- | ---: | ---: | ---: | ---: |
+| Before v12 | 215 ms | 162 ms | 106 ms | 499 ms |
+| `datetime(date_sent)` alone | 219 ms | 189 ms | 106 ms | 485 ms |
+| `IS NULL`, then `datetime(...)` both ASC | 9,173 ms | 275 ms | 144 ms | 482 ms |
+| Shipped shape with `DESC` | <1 ms | <1 ms | 144 ms | 490 ms |
+
+The expression-only index was never used for browse because it missed the
+leading NULL key. The both-ASC index was adopted but still required a temporary
+sort for the mixed-direction order: about **43 times slower than no index**.
+The shipped shape eliminates that sort and takes unfiltered browse from
+215 ms to below 1 ms. It makes folder-filtered browse about 36% slower because
+the planner evaluates folder membership per row; this was accepted on
+2026-08-10. No tested date-index variant improved `list_folders`: its cost is
+the membership CTE's `UNION`. A separate `(folder, message_id)` index also
+changed nothing (586 vs 594 ms, within noise), so it is not a ready fix.
+
+Write costs were measured on 5,000-row rolled-back workloads: new-message
+inserts added 23.8 µs/row, changed-date updates about 2 µs/row, and
+`embedded_at`-only requeues paid nothing. In a 300-message real `Upsert`
+workload, 55.0 vs 54.9 ms/message was within noise. The index occupied
+2.25 MiB (577 pages) and built in roughly 0.1–0.7 s. These measurements
+explain the accepted trade; the invariant and query-plan test are in
+[`CLAUDE.md`](../../CLAUDE.md#search).
