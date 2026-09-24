@@ -27,7 +27,7 @@
   <rect width="1280" height="1000" fill="#FFFFFF"/>
 
   <!-- Title -->
-  <text x="40" y="40" class="title">Mailvec compose stack — isolation boundaries (as built, 2026-09-19)</text>
+  <text x="40" y="40" class="title">Mailvec compose stack — network boundaries (compose.yml, 2026-09-24)</text>
   <text x="40" y="60" class="sub">Each rounded band is a Docker network. Each card lists what a process running there can reach. Dashed boxes are outside the compose project. Verify against compose.yml; this is a picture of one date.</text>
 
   <!-- External row -->
@@ -73,7 +73,7 @@
     <text x="72" y="262" class="row">uid 10001 · 1 GB · 128 pids</text>
     <text x="72" y="282" class="row"><tspan class="mono">/mail</tspan> rw — it writes the Maildir</text>
     <text x="72" y="302" class="row">secret: <tspan class="mono">fastmail_password</tspan></text>
-    <text x="72" y="322" class="row">egress: Fastmail only</text>
+    <text x="72" y="322" class="row">egress allowed; IMAP used</text>
     <text x="72" y="342" class="row">no database, no SQLite</text>
     <text x="72" y="372" class="row">parser code: <tspan class="none">none</tspan></text>
     <text x="72" y="392" class="row muted">writes heartbeat + sync marker files</text>
@@ -88,7 +88,7 @@
     <line x1="290" y1="242" x2="490" y2="242" stroke="#CBD5E1"/>
     <text x="302" y="219" class="cardT">cloudflared</text>
     <text x="302" y="234" class="cardS">outbound tunnel (profile: tunnel)</text>
-    <text x="302" y="262" class="row">root · 256 MB · 256 pids</text>
+    <text x="302" y="262" class="row">uid 65532 · 256 MB · 256 pids</text>
     <text x="302" y="282" class="row">no volumes</text>
     <text x="302" y="302" class="row">secret: <tspan class="mono">TUNNEL_TOKEN</tspan> (env)</text>
     <text x="302" y="322" class="row">egress: Cloudflare edge</text>
@@ -152,7 +152,7 @@
     <circle cx="850" cy="520" r="4.5"/>
     <circle cx="1110" cy="520" r="4.5"/>
   </g>
-  <text x="870" y="507" class="band" fill="#9A3412">parse network — internal: true, no egress, one-way</text>
+  <text x="870" y="507" class="band" fill="#9A3412">parse network — internal: true, no egress</text>
   <text x="870" y="540" class="note">.eml bytes in → ParsedMessage / text / JPEG / decoded part out</text>
   <text x="870" y="554" class="note">subnet pinned (MAILVEC_PARSE_SUBNET) and denied at mcp: parse → mcp is 403</text>
   <rect x="596" y="466" width="48" height="16" rx="8" fill="#FEE2E2" stroke="#B91C1C"/>
@@ -220,8 +220,8 @@
     <text x="76" y="740" class="row"><tspan class="mono">.env</tspan>     <tspan class="mono">TUNNEL_TOKEN</tspan>, mistral key, hostnames, Ollama URL, parse subnet</text>
     <line x1="60" y1="756" x2="460" y2="756" stroke="#E2E8F0"/>
     <text x="76" y="780" class="row">Mounted into <tspan class="warn">parse</tspan>: <tspan class="none">nothing</tspan>.</text>
-    <text x="76" y="800" class="row muted">Every other service holds the whole mailbox by design;</text>
-    <text x="76" y="814" class="row muted">this diagram is about what a parser bug adds to that.</text>
+    <text x="76" y="800" class="row muted">Indexer, embedder, mcp mount the archive;</text>
+    <text x="76" y="814" class="row muted">mbsync writes Maildir; cloudflared has no data mount.</text>
     <text x="76" y="836" class="row muted">All six: cap_drop ALL · no-new-privileges · mem/pids limits.</text>
     <text x="76" y="850" class="row muted">Mailvec-image services: read_only rootfs, tmpfs /tmp (noexec).</text>
     <text x="76" y="864" class="row muted">Non-root: every mount above is owned by uid 10001; the entrypoint</text>

@@ -40,7 +40,31 @@ Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
 | Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and**, when `Vision:Provider=ollama`, rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
 | **mistral-ocr (outbound, off-network)** | **the public internet** — `Vision:Mistral:Endpoint` (an Azure AI Foundry resource or api.mistral.ai) | API key, embedder container only | **only when `Vision:Provider=mistral`** (default is `ollama`, which sends nothing off-LAN). Rendered pages of scanned PDFs and image attachments leave the network. See [below](#hosted-ocr-vision-provider-mistral) |
 | SQLite file | bind mount on the VM | unix permissions (0600, container uid 10001 by default) | the configured service uid, root on the VM, and containers that mount `./data` |
-| Maildir | bind mount on the VM | unix permissions; mounted **read-only** into every service except mbsync | same |
+| Maildir | bind mount on the VM | unix permissions; read-only in `mcp`, `indexer`, and `embedder`, writable in `mbsync`, absent from `parse` and `cloudflared` | those four services and root on the VM |
+
+### Docker Compose network boundaries
+
+The checked-in topology has three networks. This is the security-relevant
+membership, not a claim about any running deployment; check
+[`compose.yml`](../compose.yml) and `docker compose config` on the deployment
+host after a change. The diagram also shows which services hold the archive,
+Maildir, and credentials.
+
+![Mailvec Docker Compose services, networks, mounts, and external routes](security-boundaries.svg)
+
+| Network | Attached services | Boundary |
+| --- | --- | --- |
+| `default` | `mcp`, `embedder`, `mbsync`, `cloudflared` (when the tunnel profile is enabled) | External routing is available for IMAP, Ollama or opted-in hosted providers, and the outbound tunnel. The MCP service publishes **no host port**; cloudflared is the only configured outside ingress. Containers on this network can still address `mcp:3333` directly, so the network is not an origin-authentication control. |
+| `isolated` (`internal: true`) | `indexer` | No route off this network. The indexer also joins `parse` to send mail bytes for parsing; neither network gives it external egress. |
+| `parse` (`internal: true`) | `parse`, `indexer`, `embedder`, `mcp` | The three callers send bytes to `parse:3400`; the parser has no external route, volume, or secret. Docker reachability is symmetric, so `parse` could otherwise call the MCP server back. Compose pins this network's subnet with `MAILVEC_PARSE_SUBNET`, and `Mcp:DeniedNetworks` returns 403 to requests from it, including `/up` and tool calls. `mbsync` and `cloudflared` are not members. |
+
+`default` allows egress but does not restrict destinations to the intended
+IMAP, Ollama, Cloudflare, or hosted endpoints. A compromise of `mcp` or
+`embedder` still has network egress and access to its mounted data. The
+parser's isolation depends on **both** its network placement and the MCP
+return-path refusal; verify the 403 probe in the
+[Docker rollout checklist](deploy-docker.md#rollout-checklist) after changing
+either network.
 
 ### `/up` and `/health`
 
@@ -156,13 +180,13 @@ the loop. "The MCP tools are read-only" is a statement about the tool surface,
 not a boundary that survives a compromised process.
 
 **In the container, exactly one process parses attacker-chosen bytes, and it
-holds nothing** ([the picture, as built 2026-09-19](security-boundaries.svg):
-one card per container, what each can reach — a dated snapshot, so check it
-against `compose.yml` rather than trust it)**.** Every mail-content parser — MimeKit, AngleSharp, PdfPig,
+holds nothing** (see the [network boundaries](#docker-compose-network-boundaries)
+above). Every mail-content parser — MimeKit, AngleSharp, PdfPig,
 OpenXml, PDFium/SkiaSharp, LibTiff — runs only in the `parse` service
 ([deploy-docker.md](deploy-docker.md#the-parse-service)); the indexer, embedder,
-mcp and cli ship it `.eml` bytes over an `internal: true` network and receive
-plain data back, and the image build **deletes every parser library from their
+and mcp (including CLI commands run inside mcp) ship it `.eml` bytes over an
+`internal: true` network and receive plain data back. The image build
+**deletes every parser library from their
 directories and asserts it**, so a caller that tried to parse in-process fails
 loudly rather than quietly regaining the surface. `parse` mounts no volume,
 reads no secret, has no route out, runs as `nobody` (`65534:65534`), and exits
@@ -184,12 +208,12 @@ stronger layer on top — it demands proof of identity rather than denying one
 known network — and the two compose. The deny-list is what holds in the
 default posture, with no Cloudflare in the picture.
 
-All six services therefore run with:
+The stack applies these controls (with the identity exceptions shown):
 
 | Control | What it buys |
 | --- | --- |
 | `cap_drop: [ALL]` | No Linux capabilities. Removes `DAC_OVERRIDE` (bypassing file permission bits), `FOWNER`, `NET_RAW` (raw sockets / spoofing), `SETUID`, and the rest. Nothing here needs any: the .NET services bind 3333 (unprivileged), mbsync makes outbound TLS connections, cloudflared dials out. |
-| `user: 10001:10001` (`parse`: `nobody`) | Non-root inside the container. A compromised process holds no root-only powers and, with `cap_drop`, no way back to them; it can touch only what its uid owns — the mounts the operator handed it, and nothing in the image. The uid is a fixed high number with no passwd entry; every mounted path must be owned by it, and the entrypoint refuses to start otherwise. |
+| Non-root users | `mcp`, `indexer`, `embedder`, and `mbsync` run as configurable uid/gid 10001 by default; `parse` runs as `nobody` (65534); the cloudflared image defaults to `nonroot` (65532). With `cap_drop`, none can bypass file permissions. The mounted paths for Mailvec and mbsync must be owned by their configured uid; the entrypoints refuse to start otherwise. |
 | `security_opt: [no-new-privileges:true]` | A setuid binary can't raise privileges — so a dropped capability stays dropped, and a dropped uid stays dropped. |
 | `Mcp__DeniedNetworks__0` = the pinned `parse` subnet (mcp only) | The parse service cannot call mcp back over the network they share. Without it, a compromised parser reaches the mail tools and the "holds nothing" claim above is false. Verified by a container on the `parse` network getting 403 on `/up` and on a tool call. |
 | `mem_limit` | Caps blast radius per service — values in `compose.yml`, which is the source of truth (at 2026-09-23: mcp 3g, parse/indexer/embedder 2g, mbsync 1g, cloudflared 256m). A decode bomb or a parser leak kills **one container** — and since the parsers moved, that container is `parse`, which holds nothing — instead of the Docker VM. |
@@ -211,13 +235,10 @@ Two consequences worth knowing rather than rediscovering:
 
 **Also applied**: `read_only: true` + a `noexec,nosuid` `/tmp` tmpfs on the
 four .NET services, so a compromised process cannot persist anything outside
-the explicit mounts — no binary dropped into `/app`, no modified config
-surviving a restart. The **indexer and `parse` run on `internal: true`
-networks**: the indexer reads the Maildir and writes SQLite and never calls
-Ollama; `parse` answers only the indexer, embedder and mcp on its own network.
-Neither has a route out. The indexer no longer parses attachments itself — it
-was the service that used to combine "reads attacker bytes" with "writes the
-archive", and that combination is what the split removed.
+the explicit mounts. The [network table](#docker-compose-network-boundaries)
+shows why the indexer and `parse` have no external route. The indexer no longer
+parses attachments itself — it was the service that combined "reads attacker
+bytes" with "writes the archive", and the split removed that combination.
 
 **Not yet done**, and each for a stated reason rather than oversight:
 
