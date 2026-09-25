@@ -124,20 +124,24 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
    say whether anything about it has changed.
    Afterwards, `docker image rm mailvec-cloud-check`.
 
-6. Hosted embeddings over a synthetic corpus. Run
-   `dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev --embedding fireworks`,
-   then, in ONE shell that has sourced /tmp/mvdev/env.sh: run
-   src/Mailvec.Indexer until it logs "MaildirScanner: seen=…" and stop it;
-   run src/Mailvec.Embedder until `dotnet run --project src/Mailvec.Cli -- status`
+6. Hosted embeddings over a synthetic corpus. Run `dotnet build` once, then
+   `dotnet run --no-build --project tools/Mailvec.DevCorpus -- /tmp/mvdev --embedding fireworks`,
+   then, in ONE shell that has sourced /tmp/mvdev/env.sh, start each service
+   with `dotnet run --no-build --project …` in the background and stop it with
+   `kill` (SIGTERM: a background job started from a script ignores SIGINT).
+   Run src/Mailvec.Indexer until it logs "MaildirScanner: seen=…" and stop it;
+   run src/Mailvec.Embedder until `dotnet run --no-build --project src/Mailvec.Cli -- status`
    shows every message embedded (stop it after 10 minutes regardless), then
-   stop it. Report: the scanner line; the status output's Messages,
+   stop it. Messages under Embedder:MinBodyCharsForVector (100) are stamped
+   with zero chunks by design, so "embedded" and "has chunks" differ. Report: the scanner line; the status output's Messages,
    Embeddings, Embed model and Embed space lines; any embedder log line at
    Warning or above (first occurrence of each, verbatim); the top 3 results
    of `dotnet run --project src/Mailvec.Cli -- search --hybrid "greenhouse sensors"`;
    and the summary table of
    `dotnet run --project src/Mailvec.Cli -- eval --queries "$MAILVEC_DEV_EVAL_QUERIES"`.
-   A 401 from api.fireworks.ai means the environment has no Fireworks API
-   credential; say so and stop this step. Never print, search for, or try to
+   A 401 from api.fireworks.ai means the proxy attached no working
+   credential; a 403 "Host not in allowlist" means the request bypassed the
+   agent proxy. Say which, and stop this step. Never print, search for, or try to
    recover a key: there is none in this VM, by design.
 
 End with a summary table: step, result (pass / fail / not run), and one
@@ -151,6 +155,15 @@ say so.
 
 **Start a new session for every run**, from the branch under test, and
 copy the prompt from that branch. A resumed session never pulls.
+
+**Egress is an explicit proxy** (observed 2026-09-25, run 6 on `dev-corpus`).
+A request that ignores `HTTPS_PROXY` gets a 403 "Host not in allowlist" for any
+host outside the environment's network list. API credentials are attached only
+on the proxied path. So a client that bypasses the proxy can neither reach a
+credential's host nor receive the credential. Mailvec's hosted client bypasses
+it by design (`HostedHttp`); the dev profile opts back in with
+`Proxy=environment`, which is refused for any profile holding a key. The same
+run's 401 through the proxy was a bad key in the credential, since replaced.
 
 **Verified 2026-09-25** at eea92b9 (the merge of PR #41), from a new
 session started on `main`: steps 0–4 pass, 1,470 passed, 0 failed,
@@ -193,8 +206,9 @@ the base image's CA store. The Dockerfile itself was never reached, so this
 says nothing about it.
 
 Making it build means getting the proxy CA into every stage that fetches
-something: the SDK stage (curl, NuGet), the mbsync stage (`apk`), and the
-runtime stage (`apt-get`). That must not change the image the release path
+over HTTPS: the SDK stage (curl, NuGet) and the mbsync stage (`apk`). The
+runtime stage's `apt-get` uses the plain-HTTP Debian archive and fetched
+fine (observed 2026-09-25). That must not change the image the release path
 produces. The unexplored option that needs no Dockerfile edit is to
 override each `FROM` with a local CA-augmented copy through BuildKit's
 `--build-context`. Until someone does that, image changes are verified by

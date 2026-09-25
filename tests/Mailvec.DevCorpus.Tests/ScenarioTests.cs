@@ -109,6 +109,32 @@ public class ScenarioTests(IndexedCorpus fixture) : IClassFixture<IndexedCorpus>
     }
 
     [Fact]
+    public void Every_eval_target_is_eligible_for_a_vector()
+    {
+        // The embedder gives a message no chunks when its body is under
+        // MinBodyCharsForVector and it has no attachment text. An eval target
+        // like that can never be found by the semantic leg, so the eval would
+        // measure the corpus rather than the search.
+        var min = new Mailvec.Core.Options.EmbedderOptions().MinBodyCharsForVector;
+        foreach (var mid in fixture.Corpus.Eval.SelectMany(q => q.Relevant).Distinct())
+        {
+            fixture.Query(
+                "SELECT length(trim(coalesce(body_text, ''))) >= $min OR coalesce(attachment_text, '') <> '' FROM messages WHERE message_id = $m",
+                r => { r.Read(); return r.GetInt64(0); }, ("$m", mid), ("$min", min))
+                .ShouldBe(1, $"{mid} gets no vector at MinBodyCharsForVector={min}");
+        }
+    }
+
+    [Fact]
+    public void Most_filler_is_eligible_for_a_vector()
+    {
+        var min = new Mailvec.Core.Options.EmbedderOptions().MinBodyCharsForVector;
+        fixture.Query(
+            "SELECT COUNT(*) FROM messages WHERE message_id LIKE 'filler-%' AND length(trim(coalesce(body_text, ''))) < $min",
+            r => { r.Read(); return r.GetInt64(0); }, ("$min", min)).ShouldBe(0);
+    }
+
+    [Fact]
     public void Every_eval_label_resolves_to_an_indexed_message()
     {
         foreach (var q in fixture.Corpus.Eval)

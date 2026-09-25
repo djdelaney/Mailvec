@@ -121,7 +121,10 @@ mode=keyword".
 **`--embedding fireworks`** adds a hosted profile to `env.sh`: Fireworks
 `qwen3-embedding-8b` at 1024 dimensions, the shape of the reference profile in
 [embedding-providers.md](../proposals/embedding-providers.md), with its own
-space id (`fireworks:qwen3-embedding-8b:1024:devcorpus`) and OCR switched off.
+space id (`fireworks:qwen3-embedding-8b:1024:devcorpus`), OCR switched off,
+and `Proxy=environment`: a cloud session's egress only works through
+`HTTPS_PROXY`, which is also where the key is attached. Hosted clients ignore
+the proxy unless a profile opts in, and a profile holding its own key can't.
 It is how a Claude cloud session exercises the hosted embedding path
 (`OpenAiCompatibleTransport`, normalisation, sentinel fingerprints, the
 space guards) that production, running Ollama, never touches.

@@ -83,14 +83,14 @@ internal sealed class Catalog
             s03b, "Re: Lisbon trip dates",
             new Expect { Folders = ["Sent"], ThreadId = s03a, BodyContains = ["look at the tram passes"] },
             Mail("Sent", Message(s03b, Owner, Grace, "Re: Lisbon trip dates", At(2025, 2, 11, 8, 30),
-                TextPlain("The 14th to the 19th works for me. I'll look at the tram passes tonight.\n\n"
+                TextPlain("The 14th to the 19th works for me. I'll look at the tram passes tonight, and ask\nabout a day trip to Sintra while we're there.\n\n"
                           + "On Mon, 10 Feb 2025 at 20:05, Grace Sample wrote:\n> Could we do the 14th to the 19th of May? Flights from the regional airport are\n> cheapest midweek, and the tram passes are sold by the day.\n"),
                 ("In-Reply-To", $"<{s03a}>"), ("References", $"<{s03a}>"))));
         Add("s03-thread-second-reply", "Second reply: References lists root then parent; quoted text and a '-- ' signature.",
             s03c, "Re: Lisbon trip dates",
             new Expect { Folders = ["INBOX"], ThreadId = s03a, BodyContains = ["booked the flat in Alfama"] },
             Mail("INBOX", Message(s03c, Grace, Owner, "Re: Lisbon trip dates", At(2025, 2, 11, 12, 0, 1),
-                TextPlain("Perfect — I've booked the flat in Alfama.\n\n> The 14th to the 19th works for me. I'll look at the tram passes tonight.\n\n-- \nGrace Sample\nSent from a very small phone\n"),
+                TextPlain("Perfect — I've booked the flat in Alfama, five minutes from the tram stop, with a\nbalcony over the river.\n\n> The 14th to the 19th works for me. I'll look at the tram passes tonight.\n\n-- \nGrace Sample\nSent from a very small phone\n"),
                 ("In-Reply-To", $"<{s03b}>"), ("References", $"<{s03a}> <{s03b}>"))));
 
         const string s04 = "s04-allotment@example.com";
@@ -133,7 +133,7 @@ internal sealed class Catalog
             Mail("INBOX", Message(s06, $"{EncodedWord("Élodie Martin")} <elodie@example.fr>", Owner,
                 EncodedWord("Rendez-vous: café crème à Montréal"), At(2025, 5, 2, 10, 15, -4),
                 Part("Content-Type: text/plain; charset=iso-8859-1\nContent-Transfer-Encoding: quoted-printable\n",
-                    QuotedPrintable(Latin1("Bonjour Sam,\n\nOn se retrouve pour un café crème à Montréal, près de la gare ?\nÇa te va ?\n\nÉlodie\n"))))));
+                    QuotedPrintable(Latin1("Bonjour Sam,\n\nOn se retrouve pour un café crème à Montréal, près de la gare ?\nJ'apporte les photos du voyage et le livre que tu m'avais prêté. Ça te va ?\n\nÉlodie\n"))))));
 
         const string s07 = "s07-legacy@oldmail.example";
         Add("s07-undeclared-cp1252", "8-bit Windows-1252 body (curly quotes, euro sign) with NO charset declared — the byte range where 1252 and Latin-1 disagree.",
@@ -149,7 +149,7 @@ internal sealed class Catalog
             new Expect { Folders = ["INBOX"], BodyContains = ["東京の会議"] },
             Mail("INBOX", Message(s08, "Kenji Example <kenji@example.jp>", Owner, EncodedWord("東京 meetup 🚀"), At(2025, 7, 1, 21, 0, 9),
                 Part("Content-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: base64\n",
-                    Base64(System.Text.Encoding.UTF8.GetBytes("東京の会議は来週の火曜日です。Bring the meetup slides! 🚀\n"))))));
+                    Base64(System.Text.Encoding.UTF8.GetBytes("東京の会議は来週の火曜日です。Bring the meetup slides! 🚀\n\nWe meet at the station exit at six, then walk to the venue together. Kenji\n"))))));
 
         const string s09a = "s09a-report@example.com", s09b = "s09b-report@example.com";
         Add("s09-offset-later", "Sent 07:13:20 -05:00 = 12:13:20Z. As ISO text it sorts BEFORE s09-offset-earlier; as an instant it is later. Date comparisons must go through datetime().",
@@ -399,7 +399,7 @@ internal sealed class Catalog
             s31, "Boiler service booked",
             new Expect { Folders = ["Archive/2025"], BodyContains = ["annual service"] },
             Mail("Archive/2025", Message(s31, "Heat Co <service@heatco.example>", Owner, "Boiler service booked", At(2025, 10, 14, 9, 30),
-                TextPlain("Your annual service is booked for the 3rd of November between 8am and noon.\n"))));
+                TextPlain("Your annual service is booked for the 3rd of November between 8am and noon.\nPlease make sure the boiler cupboard is clear and the engineer can reach the flue.\n"))));
 
         return list;
     }

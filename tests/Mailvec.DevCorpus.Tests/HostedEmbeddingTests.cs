@@ -76,6 +76,9 @@ public sealed class HostedEmbeddingTests : IDisposable
         sp.GetRequiredService<IEmbeddingService>().ShouldNotBeNull();
 
         config["Embedder:OcrEnabled"].ShouldBe("false");
+        // Keyless AND routed through the environment's proxy — the only
+        // combination registration permits for Proxy=environment.
+        config["Embedding:Profiles:fireworks_dev:Proxy"].ShouldBe("environment");
     }
 
     [Fact]
