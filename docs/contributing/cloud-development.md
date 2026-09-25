@@ -39,6 +39,16 @@ In the claude.ai environment settings for this repository:
    ```
 3. **Setup script:** paste the whole of
    [`ops/claude-cloud-setup.sh`](../../ops/claude-cloud-setup.sh).
+4. **API credential (optional, for hosted embeddings):** under **API
+   credentials**, add a **Bearer** credential: allowed website
+   `api.fireworks.ai`, header `Authorization`, prefix `Bearer`, and as the
+   value a Fireworks key **dedicated to this environment** with a low spend
+   limit, never the production key. The proxy attaches it to requests for
+   that host after they leave the VM, so it never reaches the session, and
+   the host needs no allowlist entry. It applies to every session in the
+   environment until deleted. API credentials exist on Pro and Max plans
+   only. Used by the dev corpus's `--embedding fireworks`
+   ([dev-corpus.md](dev-corpus.md#embeddings)).
 
 **The file in the repo is the master copy; the settings field holds a
 paste.** Change the script through a PR like any other file, then re-paste
@@ -113,6 +123,22 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
    known result (see "What the machine is"): report it as "known" and
    say whether anything about it has changed.
    Afterwards, `docker image rm mailvec-cloud-check`.
+
+6. Hosted embeddings over a synthetic corpus. Run
+   `dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev --embedding fireworks`,
+   then, in ONE shell that has sourced /tmp/mvdev/env.sh: run
+   src/Mailvec.Indexer until it logs "MaildirScanner: seen=…" and stop it;
+   run src/Mailvec.Embedder until `dotnet run --project src/Mailvec.Cli -- status`
+   shows every message embedded (stop it after 10 minutes regardless), then
+   stop it. Report: the scanner line; the status output's Messages,
+   Embeddings, Embed model and Embed space lines; any embedder log line at
+   Warning or above (first occurrence of each, verbatim); the top 3 results
+   of `dotnet run --project src/Mailvec.Cli -- search --hybrid "greenhouse sensors"`;
+   and the summary table of
+   `dotnet run --project src/Mailvec.Cli -- eval --queries "$MAILVEC_DEV_EVAL_QUERIES"`.
+   A 401 from api.fireworks.ai means the environment has no Fireworks API
+   credential; say so and stop this step. Never print, search for, or try to
+   recover a key: there is none in this VM, by design.
 
 End with a summary table: step, result (pass / fail / not run), and one
 line of evidence each.

@@ -29,6 +29,8 @@ public static class CorpusWriter
     public static Corpus Build(CorpusOptions options)
     {
         if (options.Filler < 0) throw new ArgumentOutOfRangeException(nameof(options), "Filler count cannot be negative.");
+        if (options.Embedding is { } e && !HostedEmbedding.Names.Contains(e))
+            throw new ArgumentException($"Unknown embedding profile '{e}'. Known: {string.Join(", ", HostedEmbedding.Names)}.", nameof(options));
         var catalog = new Catalog();
         var scenarios = catalog.Build();
         var filler = Filler.Build(catalog, options.Filler);
@@ -39,8 +41,8 @@ public static class CorpusWriter
     /// <summary>Guards the target, then writes the corpus. Returns the resolved corpus directory.</summary>
     public static string Write(string target, CorpusOptions options, string? sharedConfigPath = null)
     {
+        var corpus = Build(options); // validates the options before the guards touch the disk
         var root = Guards.Check(target, sharedConfigPath ?? Guards.DefaultSharedConfigPath());
-        var corpus = Build(options);
 
         var mail = Path.Combine(root, "Mail");
         var state = Path.Combine(root, "state");
@@ -74,7 +76,7 @@ public static class CorpusWriter
         Directory.CreateDirectory(Path.Combine(root, "eval"));
         File.WriteAllText(Path.Combine(root, "eval", "queries.json"), EvalJson(corpus.Eval));
         File.WriteAllText(Path.Combine(root, "manifest.json"), ManifestJson(corpus, options));
-        File.WriteAllText(Path.Combine(root, "env.sh"), EnvSh(root, mail, state));
+        File.WriteAllText(Path.Combine(root, "env.sh"), EnvSh(root, mail, state) + HostedEmbedding.EnvSh(options.Embedding));
         return root;
     }
 
@@ -99,6 +101,7 @@ public static class CorpusWriter
             note = "Synthetic mail. Every name, address and document is invented. Expectations are checked by tests/Mailvec.DevCorpus.Tests.",
             filler = options.Filler,
             hazards = options.Hazards,
+            embedding = options.Embedding,
             scenarios = corpus.Scenarios.Select(s => new
             {
                 s.Id,
