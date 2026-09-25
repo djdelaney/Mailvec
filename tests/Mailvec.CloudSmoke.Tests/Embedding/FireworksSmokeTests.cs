@@ -18,7 +18,7 @@ namespace Mailvec.CloudSmoke.Tests.Embedding;
 /// </summary>
 public class FireworksSmokeTests
 {
-    private const string ApiKeyEnvVar = "Embedding__Profiles__fireworks-smoke__Auth__ApiKey";
+    private const string ApiKeyEnvVar = "Embedding__Profiles__fireworks_smoke__Auth__ApiKey";
 
     [Fact]
     public async Task Embeds_the_production_sentinel_texts_against_the_real_hosted_API()

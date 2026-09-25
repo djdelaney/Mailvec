@@ -68,16 +68,16 @@ jobs:
           # measurement — placeholders below are the code's own comment
           # ("Fireworks qwen3-embedding-8b") and Fireworks' documented
           # serverless embeddings endpoint, not a verified deployment.
-          Embedding__ActiveProfile: fireworks-smoke
-          Embedding__Profiles__fireworks-smoke__Protocol: openai-compatible
-          Embedding__Profiles__fireworks-smoke__ProviderId: fireworks
-          Embedding__Profiles__fireworks-smoke__Endpoint: https://api.fireworks.ai/inference/v1/embeddings
-          Embedding__Profiles__fireworks-smoke__Request__Model: accounts/fireworks/models/qwen3-embedding-8b
-          Embedding__Profiles__fireworks-smoke__Request__EncodingFormat: float
-          Embedding__Profiles__fireworks-smoke__OutputDimensions: "4096"
-          Embedding__Profiles__fireworks-smoke__SpaceId: fireworks:qwen3-embedding-8b:4096:cloud-smoke
-          Embedding__Profiles__fireworks-smoke__Auth__Scheme: bearer
-          Embedding__Profiles__fireworks-smoke__Auth__ApiKey: ${{ secrets.FIREWORKS_SMOKE_API_KEY }}
+          Embedding__ActiveProfile: fireworks_smoke
+          Embedding__Profiles__fireworks_smoke__Protocol: openai-compatible
+          Embedding__Profiles__fireworks_smoke__ProviderId: fireworks
+          Embedding__Profiles__fireworks_smoke__Endpoint: https://api.fireworks.ai/inference/v1/embeddings
+          Embedding__Profiles__fireworks_smoke__Request__Model: accounts/fireworks/models/qwen3-embedding-8b
+          Embedding__Profiles__fireworks_smoke__Request__EncodingFormat: float
+          Embedding__Profiles__fireworks_smoke__OutputDimensions: "4096"
+          Embedding__Profiles__fireworks_smoke__SpaceId: fireworks:qwen3-embedding-8b:4096:cloud-smoke
+          Embedding__Profiles__fireworks_smoke__Auth__Scheme: bearer
+          Embedding__Profiles__fireworks_smoke__Auth__ApiKey: ${{ secrets.FIREWORKS_SMOKE_API_KEY }}
 
           # --- Hosted OCR (mistral-ocr) ---
           # Endpoint/Model per docs/contributing/ocr-bakeoff-2026-08-06.md
