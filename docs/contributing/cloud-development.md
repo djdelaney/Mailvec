@@ -82,9 +82,11 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
    Report `dotnet --list-sdks`, then the passed/failed/skipped totals per
    test project. The pass is 0 failed. For each failure, give the test name
    and the first lines of its error. An error loading the vec0 extension
-   means step 2 failed, so say so rather than diagnosing further. Note:
-   three tests pass trivially as root (MaildirScannerTests.cs:360 and :398,
-   AttachmentOcrServiceTests.cs:548); that is expected, not a finding.
+   means step 2 failed, so say so rather than diagnosing further. Four
+   tests return early as root, by design, and report as passed: see
+   "Running as root" in docs/contributing/cloud-development.md. Any other
+   test whose failure comes from chmod not stopping root is a finding;
+   name it.
 
 4. Machine facts, one value per line with the command's raw output:
    `cat /etc/os-release` (PRETTY_NAME), `uname -a`, `id -u`, `nproc`,
@@ -97,7 +99,10 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
    /tmp/dockerd.log and stop this step. Once the daemon answers, run
    `docker build -t mailvec-cloud-check .` with a 30-minute limit. Report
    whether it succeeded and how long it took. On failure, report the
-   failing step and its last ~20 lines, and don't try to fix it.
+   failing step and its last ~20 lines, and don't try to fix it. A
+   `curl: (60) SSL certificate problem` at `fetch-sqlite-vec.sh` is the
+   known result (see "What the machine is"): report it as "known" and
+   say whether anything about it has changed.
    Afterwards, `docker image rm mailvec-cloud-check`.
 
 End with a summary table: step, result (pass / fail / not run), and one
@@ -105,7 +110,7 @@ line of evidence each.
 ````
 
 **What passing looks like:** steps 1–3 pass with 0 failed tests. Step 5 is
-informational until it has succeeded once. When it has, image changes can be
+informational until it has succeeded once (it can't yet; see below). When it has, image changes can be
 checked in a session, not only by `publish-images.yml`, and this page should
 say so.
 
@@ -113,7 +118,9 @@ say so.
 `main`, or from the branch under test, once `.claude/settings.json` is on it.
 The first run (2026-09-25) started from a `main` that didn't have it yet. It
 showed the signature of a missing hook: a clean build, then 654 of 1,470
-tests failing with "sqlite-vec extension not found".
+tests failing with "sqlite-vec extension not found". The second run, on the
+branch with the hook, had 1,469 passing. The one failure was a fourth
+root-sensitive test, which is now gated like the other three.
 
 ## What the machine is
 
@@ -127,28 +134,46 @@ with the commands in the right-hand column:
 | User | root (uid 0) | `id -u` |
 | Resources | 4 CPUs, 15 GB RAM, no swap. ext4 on `/dev/vda`, 30 GB free for the session. | `nproc`; `free -g`; `df -hT .` |
 | .NET SDK | 10.0.112 (Ubuntu's archive build, `/usr/lib/dotnet`) | `dotnet --list-sdks` |
-| Docker | `docker` and `dockerd` installed in `/usr/bin`, **daemon not running**: no `/var/run/docker.sock` | `docker info` |
+| Docker | `docker` and `dockerd` installed in `/usr/bin`, **daemon not running**: no `/var/run/docker.sock`. `nohup dockerd &` brings one up in ~4 s (server 29.3.1). | `docker info` |
+| Outbound HTTPS | Re-signed by the session's egress proxy. The host trusts the proxy's CA (the agent reported `/root/.ccr/ca-bundle.crt`); containers don't. | `curl -sv https://github.com 2>&1 \| grep issuer` |
 
 Anthropic's [cloud environment docs](https://code.claude.com/docs/en/cloud-environments)
 list Docker as preinstalled. The binaries are there, but nothing starts the
-daemon. Whether `dockerd` can be started by hand in this VM, and then build
-the image, is what step 5 of the prompt now finds out. Until a session has
-built the image, image changes are verified by `publish-images.yml`. If
-`dockerd` does work, it belongs in the SessionStart hook, not the setup
+daemon. **The image doesn't build here yet.** Base images pull fine (the
+daemon trusts the proxy), but the first network call inside a build step
+fails: `fetch-sqlite-vec.sh` at `build 4/4` gets `curl: (60) self-signed
+certificate in certificate chain`, because the build container has only
+the base image's CA store. The Dockerfile itself was never reached, so this
+says nothing about it.
+
+Making it build means getting the proxy CA into every stage that fetches
+something: the SDK stage (curl, NuGet), the mbsync stage (`apk`), and the
+runtime stage (`apt-get`). That must not change the image the release path
+produces. The unexplored option that needs no Dockerfile edit is to
+override each `FROM` with a local CA-augmented copy through BuildKit's
+`--build-context`. Until someone does that, image changes are verified by
+`publish-images.yml`, which runs only after CI goes green on `main`, so
+Dockerfile changes are unverified before merge. If Docker does become
+usable, starting `dockerd` belongs in the SessionStart hook, not the setup
 script: the environment cache keeps files, not running processes.
 
 ## Running as root
 
-Root reads through file mode `000`, so three tests that remove read
-permission to exercise the unreadable-file path `return` early when
+Root reads through file mode `000`, so four tests that remove read
+permission to simulate an unreadable file `return` early when
 `Environment.IsPrivilegedProcess` is true. In a cloud session they report
 **passed**, not skipped. They are:
 
-- `MaildirScannerTests.cs:360` and `:398`
-- `AttachmentOcrServiceTests.cs:548`
+- `MaildirScannerTests.Unreadable_folder_is_skipped_and_deletion_reconciliation_deferred`
+- `MaildirScannerTests.Unreadable_cur_subdir_is_skipped_and_deletion_reconciliation_deferred`
+- `MaildirScannerTests.Transient_ingest_failure_on_a_changed_file_does_not_mask_the_change`.
+  This one was missed until the 2026-09-25 cloud run failed it.
+- `AttachmentOcrServiceTests.A_permission_denied_eml_backs_off_instead_of_retiring`
 
 CI is unprivileged and runs them for real, so CI remains the authority for
-these three tests. The tests that check key-file mode *bits*
+these four tests. A new test that simulates a failure with
+`SetUnixFileMode` needs the same guard, or it fails in every cloud
+session. The tests that check key-file mode *bits*
 (`EmbeddingRegistrationTests`, `VisionRegistrationTests`,
 `ConnectionFactoryTests`) inspect modes rather than attempting a read, so root
 doesn't change their outcome.
