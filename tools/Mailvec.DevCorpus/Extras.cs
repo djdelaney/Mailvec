@@ -53,7 +53,7 @@ internal static class Extras
                 new Dictionary<string, byte[]>(), new Dictionary<string, string>()),
 
             new Hazard("h03-symlink-escape",
-                "A Maildir entry that is a symlink to a file OUTSIDE the Maildir root (outside/private.eml). MaildirAttachmentReader refuses to read through such a link; the scanner (observed 2026-09-25) follows it and indexes the target. That disagreement is an open question, not a settled rule.",
+                "A Maildir entry that is a symlink to a file OUTSIDE the Maildir root (outside/private.eml). The scanner follows no link below the root, so it is skipped with a warning and never indexed — the same boundary MaildirAttachmentReader holds on read.",
                 [],
                 new Dictionary<string, byte[]>
                 {

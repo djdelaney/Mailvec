@@ -3,12 +3,7 @@ namespace Mailvec.DevCorpus.Tests;
 /// <summary>The --hazards corpus, no filler: scenarios plus the four hazard cases.</summary>
 public sealed class HazardCorpus() : IndexedCorpus(new CorpusOptions(Hazards: true, Filler: 0));
 
-/// <summary>
-/// What the real indexer does with each hazard. h03 (a symlink out of the
-/// Maildir) is deliberately NOT asserted: the scanner follows it today while
-/// MaildirAttachmentReader refuses the same path, and which of the two is
-/// right is an open decision — pinning either here would settle it by accident.
-/// </summary>
+/// <summary>What the real indexer does with each hazard.</summary>
 public class HazardTests(HazardCorpus fixture) : IClassFixture<HazardCorpus>
 {
     private string? Status(string messageId, string fileName) =>
@@ -31,6 +26,14 @@ public class HazardTests(HazardCorpus fixture) : IClassFixture<HazardCorpus>
     [Fact]
     public void The_oversize_attachment_is_skipped_undecoded() =>
         Status("h02-oversize@hazard.example", "huge-scan.pdf").ShouldBe("oversize");
+
+    [Fact]
+    public void A_symlink_out_of_the_maildir_is_not_followed()
+    {
+        fixture.Scan.SymlinksSkipped.ShouldBe(1);
+        fixture.Query("SELECT COUNT(*) FROM messages WHERE message_id = 'h03-outside@hazard.example'",
+            r => { r.Read(); return r.GetInt64(0); }).ShouldBe(0);
+    }
 
     [Fact]
     public void A_folder_named_tmp_is_not_indexed() =>

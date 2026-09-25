@@ -437,6 +437,143 @@ public class MaildirScannerTests : IDisposable
         return v;
     }
 
+    // ── Symbolic links ──────────────────────────────────────────────────
+    // The scanner never follows a link below the Maildir root (see
+    // MaildirScanner.IsSymlink). Windows symlinks need a privilege the test
+    // runner may not have, and the rule is about the POSIX targets anyway.
+
+    /// <summary>A directory beside the Maildir root, never scanned.</summary>
+    private string Outside(string name)
+    {
+        var dir = Path.Combine(Path.GetDirectoryName(_root)!, "outside", name);
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private static void WriteRawEml(string path, string messageId) =>
+        File.WriteAllText(path, $"""
+            Message-ID: <{messageId}>
+            Date: Mon, 13 Jan 2025 10:15:00 -0500
+            From: alice@example.com
+            To: bob@example.com
+            Subject: Link target
+            MIME-Version: 1.0
+            Content-Type: text/plain; charset=utf-8
+
+            Bytes that live somewhere a link points.
+
+            """);
+
+    [Fact]
+    public void A_symlinked_message_file_is_not_indexed()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        WriteEml("INBOX", "cur", "real.host:2,S", "a real message", "real@x");
+        var target = Path.Combine(Outside("files"), "private.eml");
+        WriteRawEml(target, "outside@x");
+        Directory.CreateDirectory(Path.Combine(_root, "INBOX", "cur"));
+        File.CreateSymbolicLink(Path.Combine(_root, "INBOX", "cur", "link.host:2,S"), target);
+
+        var result = _scanner.ScanAll();
+
+        result.SymlinksSkipped.ShouldBe(1);
+        result.Seen.ShouldBe(1, "a skipped link is not a file the scan saw");
+        _messages.GetByMessageId("outside@x").ShouldBeNull();
+        _messages.GetByMessageId("real@x").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void A_symlink_to_a_message_inside_the_root_is_not_followed_either()
+    {
+        // Contained, but a second path to one message: following it would put
+        // a phantom copy in folder membership.
+        if (OperatingSystem.IsWindows()) return;
+        var real = WriteEml("INBOX", "cur", "real.host:2,S", "a real message", "inside@x");
+        Directory.CreateDirectory(Path.Combine(_root, "Archive", "cur"));
+        File.CreateSymbolicLink(Path.Combine(_root, "Archive", "cur", "alias.host:2,S"), real);
+
+        var result = _scanner.ScanAll();
+
+        result.SymlinksSkipped.ShouldBe(1);
+        using var conn = _connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sync_state WHERE message_id = 'inside@x'";
+        Convert.ToInt64(cmd.ExecuteScalar()).ShouldBe(1, "only the real path is a copy of the message");
+    }
+
+    [Fact]
+    public void A_symlinked_folder_is_not_walked()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var folder = Outside("folder");
+        Directory.CreateDirectory(Path.Combine(folder, "cur"));
+        WriteRawEml(Path.Combine(folder, "cur", "m.host:2,S"), "linked-folder@x");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "Linked"), folder);
+
+        var result = _scanner.ScanAll();
+
+        result.SymlinksSkipped.ShouldBe(1);
+        _messages.GetByMessageId("linked-folder@x").ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_symlinked_cur_directory_is_not_walked()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var cur = Outside("cur-dir");
+        WriteRawEml(Path.Combine(cur, "m.host:2,S"), "linked-cur@x");
+        Directory.CreateDirectory(Path.Combine(_root, "Projects", "new"));
+        Directory.CreateSymbolicLink(Path.Combine(_root, "Projects", "cur"), cur);
+
+        var result = _scanner.ScanAll();
+
+        result.SymlinksSkipped.ShouldBe(1);
+        _messages.GetByMessageId("linked-cur@x").ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_symlinked_maildir_root_still_scans()
+    {
+        // ~/Mail -> /Volumes/… is an ordinary setup; only entries BELOW the
+        // root are subject to the rule.
+        if (OperatingSystem.IsWindows()) return;
+        WriteEml("INBOX", "cur", "m.host:2,S", "reached through a linked root", "via-root@x");
+        var linkedRoot = Path.Combine(Path.GetDirectoryName(_root)!, "MailLink");
+        Directory.CreateSymbolicLink(linkedRoot, _root);
+        var scanner = new MaildirScanner(
+            Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = linkedRoot }),
+            new InProcessParser(extractor: null), _messages, _chunks, _syncState, _connections,
+            NullLogger<MaildirScanner>.Instance);
+
+        var result = scanner.ScanAll();
+
+        result.SymlinksSkipped.ShouldBe(0);
+        result.Upserted.ShouldBe(1);
+        _messages.GetByMessageId("via-root@x").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void A_message_file_replaced_by_a_symlink_reconciles_as_gone()
+    {
+        // The link is not observed, so the row it used to back is soft-deleted
+        // (recoverable: a real file at a real path resurrects it).
+        if (OperatingSystem.IsWindows()) return;
+        // A second, real message: a walk that sees NO files is treated as a
+        // vanished Maildir and reconciles nothing (a separate safeguard).
+        WriteEml("INBOX", "cur", "stays.host:2,S", "still a real file", "stays@x");
+        var path = WriteEml("INBOX", "cur", "m.host:2,S", "was a real file", "became-link@x");
+        _scanner.ScanAll().Upserted.ShouldBe(2);
+
+        var target = Path.Combine(Outside("moved"), "m.eml");
+        File.Move(path, target);
+        File.CreateSymbolicLink(path, target);
+
+        var result = _scanner.ScanAll();
+
+        result.SymlinksSkipped.ShouldBe(1);
+        result.SoftDeleted.ShouldBe(1);
+    }
+
     [Fact]
     public void Rescan_skips_unchanged_files_via_mtime_fast_path()
     {
