@@ -26,7 +26,7 @@ Routing it through `fetch-sqlite-vec.sh` also keeps that library's SHA-256 pin
 in one place. The hook exits immediately unless `CLAUDE_CODE_REMOTE=true`, so
 on the dev Mac it does nothing.
 
-In the claude.ai environment settings for this repository:
+In the environment's settings (at [claude.ai/code](https://claude.ai/code), open the environment for editing; Anthropic's [cloud environments guide](https://code.claude.com/docs/en/cloud-environments#configure-your-environment) shows where):
 
 1. **Network access: Trusted** (the default). Setup and build need the Ubuntu
    archive, nuget.org, and GitHub release downloads
@@ -39,6 +39,16 @@ In the claude.ai environment settings for this repository:
    ```
 3. **Setup script:** paste the whole of
    [`ops/claude-cloud-setup.sh`](../../ops/claude-cloud-setup.sh).
+4. **API credential (optional, for hosted embeddings):** under **API
+   credentials**, add a **Bearer** credential: allowed website
+   `api.fireworks.ai`, header `Authorization`, prefix `Bearer`, and as the
+   value a Fireworks key **dedicated to this environment** with a low spend
+   limit, never the production key. The proxy attaches it to requests for
+   that host after they leave the VM, so it never reaches the session, and
+   the host needs no allowlist entry. It applies to every session in the
+   environment until deleted. API credentials exist on Pro and Max plans
+   only. Used by the dev corpus's `--embedding fireworks`
+   ([dev-corpus.md](dev-corpus.md#embeddings)).
 
 **The file in the repo is the master copy; the settings field holds a
 paste.** Change the script through a PR like any other file, then re-paste
@@ -66,12 +76,16 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
 
 0. Which code. Run `git fetch origin`, then report `git rev-parse --short HEAD`,
    `git branch --show-current`, and `git branch -r --points-at HEAD`.
-   The session works on its own `claude/...` branch, created from the branch
-   it was started on, so comparing against that branch proves nothing. The
-   last command is what names the code under test. If no remote branch
-   other than the session's own points at HEAD, say so at the top of your
-   report: the results describe an older commit. Test HEAD as it is; do not
-   pull.
+   The session may work on its own `claude/...` branch created from the
+   branch it was started on, or directly on that branch, so comparing
+   against the current branch proves nothing. The last command is what names
+   the code under test. If no remote branch other than a session-created
+   `claude/...` one points at HEAD, say so at the top of your report: the
+   results describe an older commit. Also quote the "Claude cloud session:
+   sqlite-vec …" line from your starting context: "installed" means a fresh
+   clone, "already installed" means this checkout existed before the session
+   started (a continued session, which never pulls). Test HEAD as it is; do
+   not pull.
 
 1. Setup script. Run `tail -1 /var/log/mailvec-setup.log` (expect
    "setup complete") and `grep -nE '^(E|W):|WARNING' /var/log/mailvec-setup.log`
@@ -114,6 +128,26 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
    say whether anything about it has changed.
    Afterwards, `docker image rm mailvec-cloud-check`.
 
+6. Hosted embeddings over a synthetic corpus. Run `dotnet build` once, then
+   `dotnet run --no-build --project tools/Mailvec.DevCorpus -- /tmp/mvdev --embedding fireworks`,
+   then, in ONE shell that has sourced /tmp/mvdev/env.sh, start each service
+   with `dotnet run --no-build --project …` in the background and stop it with
+   `kill` (SIGTERM: a background job started from a script ignores SIGINT).
+   Run src/Mailvec.Indexer until it logs "MaildirScanner: seen=…" and stop it;
+   run src/Mailvec.Embedder until `dotnet run --no-build --project src/Mailvec.Cli -- status`
+   shows every message embedded (stop it after 10 minutes regardless), then
+   stop it. Messages under Embedder:MinBodyCharsForVector (100) are stamped
+   with zero chunks by design, so "embedded" and "has chunks" differ. Report: the scanner line; the status output's Messages,
+   Embeddings, Embed model and Embed space lines; any embedder log line at
+   Warning or above (first occurrence of each, verbatim); the top 3 results
+   of `dotnet run --project src/Mailvec.Cli -- search --hybrid "greenhouse sensors"`;
+   and the summary table of
+   `dotnet run --project src/Mailvec.Cli -- eval --queries "$MAILVEC_DEV_EVAL_QUERIES"`.
+   A 401 from api.fireworks.ai means the proxy attached no working
+   credential; a 403 "Host not in allowlist" means the request bypassed the
+   agent proxy. Say which, and stop this step. Never print, search for, or try to
+   recover a key: there is none in this VM, by design.
+
 End with a summary table: step, result (pass / fail / not run), and one
 line of evidence each.
 ````
@@ -126,6 +160,25 @@ say so.
 **Start a new session for every run**, from the branch under test, and
 copy the prompt from that branch. A resumed session never pulls.
 
+**Egress is an explicit proxy** (observed 2026-09-25, run 6 on `dev-corpus`).
+A request that ignores `HTTPS_PROXY` gets a 403 "Host not in allowlist" for any
+host outside the environment's network list. API credentials are attached only
+on the proxied path. So a client that bypasses the proxy can neither reach a
+credential's host nor receive the credential. Mailvec's hosted client bypasses
+it by design (`HostedHttp`); the dev profile opts back in with
+`Proxy=environment`, which is refused for any profile holding a key. The same
+run's 401 through the proxy was a bad key in the credential, since replaced.
+
+**Hosted embeddings verified 2026-09-25** at e07f3eb (`dev-corpus`), step 6
+with the Fireworks API credential: 22 of 22 calls returned 200, all 284
+messages embedded (278 chunks; the deliberately short scenarios get none) in
+about 12 s, no embedder warning, the space identity and config hash matched,
+and hybrid search for "greenhouse sensors" put the DOCX/XLSX/PPTX message
+first on both legs while the vector leg alone surfaced two more receipts.
+The dev eval scored 1.000 in all three modes. That shows the plumbing works;
+it is not a quality number, because its queries share words with their
+targets.
+
 **Verified 2026-09-25** at eea92b9 (the merge of PR #41), from a new
 session started on `main`: steps 0–4 pass, 1,470 passed, 0 failed,
 0 skipped. Step 5 fails as described below. Getting there took five runs,
@@ -136,11 +189,13 @@ and their failure signatures are worth recognising:
   not found".
 - **A root-sensitive test without a guard** (run 2): one `SetUnixFileMode`
   test failing because root read the file anyway. See "Running as root".
-- **Stale code** (runs 3 and 4, sessions meant to be on
-  `claude-cloud-env`): HEAD behind the pushed branch, re-reporting a failure
-  already fixed. The mechanism wasn't established. It was either a resumed
-  session or a session branch created from an older base. Step 0 is there to
-  catch it.
+- **Stale code** (runs 3 and 4 on `claude-cloud-env`, and again on
+  `dev-corpus`): HEAD behind the pushed branch, re-reporting a failure
+  already fixed. The `dev-corpus` case was a continued session: its
+  starting line said sqlite-vec was "already installed", which a fresh clone
+  never says. Step 0 now reports both signs. In a continued session,
+  `git pull --ff-only` and re-running the affected step is quicker than a
+  new session.
 
 ## What the machine is
 
@@ -167,8 +222,9 @@ the base image's CA store. The Dockerfile itself was never reached, so this
 says nothing about it.
 
 Making it build means getting the proxy CA into every stage that fetches
-something: the SDK stage (curl, NuGet), the mbsync stage (`apk`), and the
-runtime stage (`apt-get`). That must not change the image the release path
+over HTTPS: the SDK stage (curl, NuGet) and the mbsync stage (`apk`). The
+runtime stage's `apt-get` uses the plain-HTTP Debian archive and fetched
+fine (observed 2026-09-25). That must not change the image the release path
 produces. The unexplored option that needs no Dockerfile edit is to
 override each `FROM` with a local CA-augmented copy through BuildKit's
 `--build-context`. Until someone does that, image changes are verified by
@@ -204,10 +260,11 @@ A cloud VM has no archive, no Maildir and no Ollama. The unit and integration
 tests build their own fixtures and fakes, so none of that matters for
 `dotnet test`. It matters for running a service by hand:
 
-- **Point it at a scratch location**, e.g. `Archive__DatabasePath=/tmp/mv/archive.sqlite
-  Ingest__MaildirRoot=/tmp/mv/Mail dotnet run --project src/Mailvec.Mcp`.
-  The migrator creates an empty schema on first open. The vec0 path resolves
-  to `runtimes/<rid>/native/` automatically.
+- **Generate a synthetic mailbox** with
+  `dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev`, then
+  `. /tmp/mvdev/env.sh` and run the indexer, CLI or MCP server from that
+  shell. See [dev-corpus.md](dev-corpus.md). The vec0 path resolves to
+  `runtimes/<rid>/native/` automatically.
 - **Without an embedding backend**, keyword search, `get_email`, `get_thread`
   and the attachment tools work. `hybrid` (the default search mode) and
   `semantic` answer with a "retry with mode=keyword" error, and the embedder
@@ -231,6 +288,6 @@ sessions.** Development doesn't need it: the test suite builds its own data.
 |---|---|---|
 | Eval runs and `baselines/` | Dev Mac | They measure the frozen real corpus. Numbers from any other corpus aren't comparable. See [local-dev-dataset.md](local-dev-dataset.md). |
 | `ops/install*.sh`, `redeploy.sh`, `stop.sh`, MCPB build and signing | Dev Mac (and refused there while frozen) | launchd and codesign are macOS-only. |
-| `tests/Mailvec.CloudSmoke.Tests` | CI (`cloud-smoke.yml`) | They need hosted-provider API keys, which don't belong in a cloud environment's settings. |
+| `tests/Mailvec.CloudSmoke.Tests` | CI (`cloud-smoke.yml`) | They need a key the test process itself holds (`Auth:Scheme=bearer`), and that doesn't belong in a cloud environment's variables. Setup step 4's API credential is different: the proxy attaches it and no process ever holds it. |
 | Releases (`ops/release.sh`, `v*` tags) | Dev Mac, on explicit approval | Cloud sessions push only to their own working branch. See Releases in `CLAUDE.md`. |
 | Deployment, the homelab, `/health` on the live stack | Dev Mac / homelab | Needs the production network and credentials, which cloud sessions don't have and shouldn't be given. |

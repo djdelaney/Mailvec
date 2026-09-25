@@ -39,6 +39,13 @@ dotnet build                 # TreatWarningsAsErrors=true — a warning fails th
 dotnet test                  # full suite, no Ollama required
 ```
 
+No real mail here (a Claude cloud session, a fresh clone)? The frozen-corpus
+block above describes the author's Mac. Read
+[`docs/contributing/cloud-development.md`](docs/contributing/cloud-development.md)
+for cloud sessions and
+[`docs/contributing/dev-corpus.md`](docs/contributing/dev-corpus.md) for a
+synthetic mailbox to run the services against.
+
 <!-- BEGIN release-approval -->
 > 🚦 **Never cut a release unless you were asked to, in that turn.**
 >

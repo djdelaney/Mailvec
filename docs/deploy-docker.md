@@ -69,6 +69,8 @@ docker compose exec mcp mailvec status
 
 The embedder then re-embeds the archive. Use the same sequence to switch back to Ollama after clearing the hosted profile. `docker compose exec` would enter an existing container with its previous environment and can select the wrong profile.
 
+The hosted client connects to the endpoint directly and ignores `HTTP(S)_PROXY`, so the `mcp` and `embedder` containers need direct outbound HTTPS to it. A profile holding a key cannot be routed through a proxy (`Proxy=environment` is refused with bearer auth; see [Security](security.md#hosted-embedding-embeddingactiveprofile)).
+
 ## Permissions and parser service
 
 The services run as `MAILVEC_UID:MAILVEC_GID` (default `10001:10001`) with Linux capabilities dropped. Own `data`, `logs`, `mail`, `mbsyncrc`, and `secrets/*` with that uid before starting or after restoring files:

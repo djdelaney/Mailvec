@@ -53,6 +53,18 @@ public sealed class EmbeddingProfileOptions
 
     public EmbeddingAuthOptions Auth { get; set; } = new();
 
+    /// <summary>
+    /// "none" (default): the hosted client connects directly and ignores any
+    /// HTTP(S)_PROXY — an ambient proxy must never see a credential or mail
+    /// it was not deliberately given. "environment": route through the proxy
+    /// HTTP(S)_PROXY / NO_PROXY name, for an egress that only works that way
+    /// (a Claude cloud session, whose proxy also attaches the provider key).
+    /// Refused with Auth:Scheme=bearer, so a key the process holds is never
+    /// routed through a proxy; hosted profiles only. Not part of the vector
+    /// identity — like Endpoint, it decides the route, not the vectors.
+    /// </summary>
+    public string Proxy { get; set; } = "none";
+
     public int? MaxBatchSize { get; set; }
     public int? RequestTimeoutSeconds { get; set; }
 }
