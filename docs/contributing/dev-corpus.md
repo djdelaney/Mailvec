@@ -30,8 +30,9 @@ file, including the shared one on the dev Mac, so a shell that sourced it runs
 against the dev corpus. **Check before running a writer:** `mailvec status`
 prints the database and Maildir it resolved on its first line.
 
-Options: `--filler N` (background messages, default 250) and `--hazards`
-(below). Output is deterministic: the same options produce the same bytes.
+Options: `--filler N` (background messages, default 250), `--hazards` and
+`--embedding fireworks` (both below). Output is deterministic: the same options
+produce the same bytes.
 
 Layout:
 
@@ -110,15 +111,46 @@ pinned by `HazardTests` where the behaviour is settled):
 Adversarial PDFs that crash or hang PDFium live in `tools/Mailvec.ParserBench`,
 not here: they are measurement fixtures, not something to index casually.
 
-## What it can't give you
+## Embeddings
 
-**Embeddings.** Indexing needs nothing external. Embedding needs Ollama (or a
-hosted profile) and OCR needs a vision model, and a cloud VM has neither.
-Without them, keyword search and every read tool work, and `hybrid` and
-`semantic` search answer "retry with mode=keyword". On the dev Mac, if the
-Ollama the shared config names is reachable, `dotnet run --project
-src/Mailvec.Embedder` from the same shell embeds the dev corpus into its own
-database (not yet tried).
+Indexing needs nothing external. Embedding needs Ollama or a hosted profile,
+and OCR needs a vision model. Without an embedding backend, keyword search and
+every read tool work, and `hybrid` and `semantic` search answer "retry with
+mode=keyword".
+
+**`--embedding fireworks`** adds a hosted profile to `env.sh`: Fireworks
+`qwen3-embedding-8b` at 1024 dimensions, the shape of the reference profile in
+[embedding-providers.md](../proposals/embedding-providers.md), with its own
+space id (`fireworks:qwen3-embedding-8b:1024:devcorpus`) and OCR switched off.
+It is how a Claude cloud session exercises the hosted embedding path
+(`OpenAiCompatibleTransport`, normalisation, sentinel fingerprints, the
+space guards) that production, running Ollama, never touches.
+
+**It carries no key, by design.** The profile uses `Auth:Scheme=none`, so
+Mailvec sends no `Authorization` header. The key is attached outside the
+session, by the cloud environment's egress proxy, from an API credential
+scoped to `api.fireworks.ai` (setup in
+[cloud-development.md](cloud-development.md#setting-up-the-environment)).
+Nothing in the session holds it: not the process, the environment, a file, or
+the transcript. Anywhere without that credential, every call is a 401.
+
+```sh
+dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev --embedding fireworks
+. /tmp/mvdev/env.sh
+dotnet run --project src/Mailvec.Indexer      # Ctrl-C once the scan logs
+dotnet run --project src/Mailvec.Embedder     # Ctrl-C once status shows full coverage
+dotnet run --project src/Mailvec.Cli -- status
+dotnet run --project src/Mailvec.Cli -- search --hybrid "greenhouse sensors"
+dotnet run --project src/Mailvec.Cli -- eval --queries "$MAILVEC_DEV_EVAL_QUERIES"
+```
+
+Sending mail text to a hosted provider is acceptable here **only** because
+the corpus is invented. The profile belongs to dev corpora and nothing else.
+
+The profile name is `fireworks_dev`, not `fireworks-dev`: it is spelled
+inside every exported variable name, and a shell refuses `-` there without
+stopping the script that sourced it. `HostedEmbeddingTests` sources the real
+`env.sh` in bash and fails on any error output for that reason.
 
 ## Changing it
 
