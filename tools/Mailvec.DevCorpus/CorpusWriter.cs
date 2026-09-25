@@ -131,10 +131,10 @@ public static class CorpusWriter
         sb.Append("# Environment variables outrank every appsettings file, including the shared\n");
         sb.Append("# one on the dev Mac, so everything run from this shell uses THIS corpus.\n");
         sb.Append("#\n");
-        sb.Append("#   dotnet run --project src/Mailvec.Indexer          # Ctrl-C once \"scan complete\" settles\n");
+        sb.Append("#   dotnet run --project src/Mailvec.Indexer          # Ctrl-C once it logs \"MaildirScanner: seen=...\"\n");
         sb.Append("#   dotnet run --project src/Mailvec.Cli -- status\n");
         sb.Append("#   dotnet run --project src/Mailvec.Cli -- search 'cedar'\n");
-        sb.Append("#   dotnet run --project src/Mailvec.Mcp              # http://127.0.0.1:3333/mcp\n");
+        sb.Append("#   dotnet run --project src/Mailvec.Mcp              # MCP at http://127.0.0.1:3333 (root path)\n");
         sb.Append("#   dotnet run --project src/Mailvec.Cli -- eval --queries \"$MAILVEC_DEV_EVAL_QUERIES\"   # needs embeddings\n");
         sb.Append($"export Archive__DatabasePath={Q(Path.Combine(state, "archive.sqlite"))}\n");
         sb.Append($"export Ingest__MaildirRoot={Q(mail)}\n");

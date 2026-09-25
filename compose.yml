@@ -159,6 +159,8 @@ x-mailvec: &mailvec-common
     Embedding__Profiles__hosted__Text__QueryPrefix: ${MAILVEC_EMBEDDING_QUERY_PREFIX:-}
     Embedding__Profiles__hosted__Auth__Scheme: bearer
     Embedding__Profiles__hosted__Auth__ApiKeyFile: /run/secrets/embedding_api_key
+    # No Embedding__Profiles__hosted__Proxy: a profile holding a key is always
+    # reached directly, and Proxy=environment is refused with bearer auth.
     # Refuse to start against a missing/empty archive (the expected state for
     # a snapshot-seeded deployment — see the entrypoint guard in Dockerfile).
     MAILVEC_REQUIRE_SEEDED_DB: ${MAILVEC_REQUIRE_SEEDED_DB:-1}

@@ -349,13 +349,6 @@ public static class EmbeddingRegistration
             EncodingFormat: profile.Request.EncodingFormat?.ToLowerInvariant());
     }
 
-    /// <summary>
-    /// Resolve bearer key material at registration time — fatal when the
-    /// scheme demands it and none exists. ApiKey (inline/env, for CI stubs
-    /// and shell runs) wins over ApiKeyFile (owner-only file, the posture
-    /// for long-running services). The value is returned to the HttpClient
-    /// closure and stored nowhere else.
-    /// </summary>
     internal static bool UsesEnvironmentProxy(IConfiguration configuration, string profileName)
     {
         var embedding = new EmbeddingOptions();
@@ -364,6 +357,13 @@ public static class EmbeddingRegistration
                && string.Equals(profile.Proxy, "environment", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Resolve bearer key material at registration time — fatal when the
+    /// scheme demands it and none exists. ApiKey (inline/env, for CI stubs
+    /// and shell runs) wins over ApiKeyFile (owner-only file, the posture
+    /// for long-running services). The value is returned to the HttpClient
+    /// closure and stored nowhere else.
+    /// </summary>
     internal static string? ResolveBearerToken(IConfiguration configuration, string profileName)
     {
         var embedding = new EmbeddingOptions();

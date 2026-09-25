@@ -20,7 +20,7 @@ dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev     # new or empty di
 dotnet run --project src/Mailvec.Indexer     # Ctrl-C once "MaildirScanner: seen=…" logs
 dotnet run --project src/Mailvec.Cli -- status
 dotnet run --project src/Mailvec.Cli -- search cedar
-dotnet run --project src/Mailvec.Mcp         # http://127.0.0.1:3333/mcp
+dotnet run --project src/Mailvec.Mcp         # MCP over HTTP at http://127.0.0.1:3333 (the root, no /mcp)
 ```
 
 `env.sh` sets `Archive__DatabasePath`, `Ingest__MaildirRoot`, an empty
@@ -28,7 +28,14 @@ dotnet run --project src/Mailvec.Mcp         # http://127.0.0.1:3333/mcp
 `MAILVEC_DEV_EVAL_QUERIES`. Environment variables outrank every appsettings
 file, including the shared one on the dev Mac, so a shell that sourced it runs
 against the dev corpus. **Check before running a writer:** `mailvec status`
-prints the database and Maildir it resolved on its first line.
+prints the `Database:` and `Maildir:` it resolved, right under the version
+line.
+
+To reach the MCP tools from a Claude Code session (cloud or local) while the
+server runs, register it for that session:
+`claude mcp add --transport http mailvec-dev http://127.0.0.1:3333` (see
+[docs/clients/claude-code.md](../clients/claude-code.md)). Keep the production
+Mailvec connector off in the same session, so the two are never confused.
 
 Options: `--filler N` (background messages, default 250), `--hazards` and
 `--embedding fireworks` (both below). Output is deterministic: the same options
@@ -119,8 +126,8 @@ every read tool work, and `hybrid` and `semantic` search answer "retry with
 mode=keyword".
 
 **`--embedding fireworks`** adds a hosted profile to `env.sh`: Fireworks
-`qwen3-embedding-8b` at 1024 dimensions, the shape of the reference profile in
-[embedding-providers.md](../proposals/embedding-providers.md), with its own
+`qwen3-embedding-8b` at 1024 dimensions (the request shape the weekly cloud
+smoke test uses, at the width production's mxbai has), with its own
 space id (`fireworks:qwen3-embedding-8b:1024:devcorpus`), OCR switched off,
 and `Proxy=environment`: a cloud session's egress only works through
 `HTTPS_PROXY`, which is also where the key is attached. Hosted clients ignore
@@ -157,8 +164,23 @@ stopping the script that sourced it. `HostedEmbeddingTests` sources the real
 
 ## Changing it
 
-Add a scenario in `tools/Mailvec.DevCorpus/Catalog.cs` with its `Expect`.
-`tests/Mailvec.DevCorpus.Tests` indexes the corpus with the real scanner and
-parser and checks every expectation, so a scenario that stops meaning what its
-description says fails CI. Keep everything invented and on reserved example
+Add a scenario in `tools/Mailvec.DevCorpus/Catalog.cs` with its `Expect`
+(fields in `Model.cs`; MIME and attachment helpers in `Mime.cs` and
+`Documents.cs`; eval queries and hazards in `Extras.cs`), then run
+`dotnet test tests/Mailvec.DevCorpus.Tests`. It indexes the corpus with the
+real scanner and parser and checks every expectation, so a scenario that stops
+meaning what its description says fails CI. Rules the tests hold you to:
+
+- A scenario must resolve to exactly one live message: by its Message-ID, or
+  by its subject when it has none (so that subject must be unique).
+- An eval target must be eligible for a vector: a body of at least
+  `Embedder:MinBodyCharsForVector` (100) characters, or attachment text.
+- A new **hazard** is not checked automatically; add its assertion to
+  `HazardTests` (or say there why it is deliberately unpinned).
+
+Filenames come from one counter shared with the filler, so a new scenario
+renames every later file. Output stays deterministic run to run, but counts
+recorded elsewhere (the "284 messages" in cloud-development.md's dated
+observations) describe the corpus as it was then. Update "What is in it"
+above by hand. Keep everything invented and on reserved example
 domains. **This repository is public: never seed the generator from real mail.**
