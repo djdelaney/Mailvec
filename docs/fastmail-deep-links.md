@@ -1,6 +1,6 @@
 # Fastmail webmail deep-links (optional)
 
-Search and get-email tool results can include a `webmailUrl` that opens the message in Fastmail's web UI. The current implementation uses Fastmail's `msgid:<RFC-Message-ID>` search-URL syntax — zero JMAP calls, zero auth, but the user lands on a search-results pane and clicks once more to open the conversation. The feature is **opt-in**: with no account id configured, no link field is emitted.
+Search and get-email tool results can include a `webmailUrl` that opens the message in Fastmail's web UI. It uses Fastmail's `msgid:<RFC-Message-ID>` search-URL syntax; the user lands on a search-results pane and clicks once more to open the conversation. The feature is **opt-in**: with no account id configured, no link field is emitted.
 
 ## Config keys
 
@@ -31,7 +31,3 @@ Single source of truth for every Mailvec binary (launchd-installed services, CLI
 then restart the affected services (`ops/redeploy.sh mcp` or `launchctl kickstart -k gui/$(id -u)/com.mailvec.mcp`). Claude Desktop's bundled MCP picks up the change on its next launch.
 
 Env vars still win as a one-off override (`Fastmail__AccountId=u1234abcd dotnet run --project src/Mailvec.Cli -- search ramen`), useful for development without editing the shared file.
-
-## Future upgrade path
-
-A "proper" upgrade to direct conversation links (resolving RFC Message-ID → JMAP Email-id via `Email/query` and emitting `mail/Inbox/<thread>.<email>?u=...`) needs a Fastmail API token and two new nullable cache columns on `messages` — see `WebmailLinkBuilder` for where to swap the URL shape.

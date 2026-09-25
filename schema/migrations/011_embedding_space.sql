@@ -1,4 +1,4 @@
--- v11: embedding-space identity (phase 1 of docs/proposals/embedding-providers.md).
+-- v11: embedding-space identity; see CLAUDE.md for the invariant.
 --
 -- Stamps metadata.embedding_space_id for existing databases from the
 -- database's OWN stored model + dimensions — not from config, which may

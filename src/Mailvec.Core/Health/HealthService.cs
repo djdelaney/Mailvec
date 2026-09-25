@@ -39,7 +39,7 @@ public sealed class HealthService(
     // Ditto for mbsync's last-successful-sync marker. Separate dep because it
     // is a separate fact written by a separate writer — see MbsyncSyncFile.
     MbsyncSyncFile? mbsyncSync = null,
-    // Where mail content gets parsed (docs/proposals/attachment-parser-isolation.md).
+    // Where mail content gets parsed (docs/security.md).
     // Optional for the same reason as the rest; null => the section is absent.
     Mailvec.Parsing.Contracts.IMailParser? parser = null,
     IOptions<ParserOptions>? parserOptions = null)
@@ -476,8 +476,7 @@ public sealed record UpReport(
     // ADDED, never renamed: existing JSONata paths are untouched, so no
     // monitor breaks. See UpOcr.
     UpOcr? Ocr = null,
-    // The provider-neutral readiness field (phase 4 of
-    // docs/proposals/embedding-providers.md). Carries the SAME value as the
+    // The provider-neutral readiness field. Carries the SAME value as the
     // ollama.reachable compatibility alias: since the classified probe
     // landed, both mean "the configured embedding profile's readiness probe
     // succeeded", whatever the provider. Monitors migrate to this path;

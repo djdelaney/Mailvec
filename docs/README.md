@@ -1,6 +1,6 @@
 # Mailvec documentation
 
-Start with one installation path. The pages below are grouped by the task you are doing; the long runbooks are reference material after the first install.
+Start with one installation path. The pages below are grouped by the task you are doing; the operation guides are reference material after the first install.
 
 ## Install and connect
 
@@ -23,12 +23,12 @@ Start with one installation path. The pages below are grouped by the task you ar
 
 - [Contributor guide](../CLAUDE.md): architecture, build conventions, and data invariants. Read it before code changes.
 - [Architecture notes](../CLAUDE.md#architecture) and [security boundary diagram](security-boundaries.svg).
-- [Local development dataset](contributing/local-dev-dataset.md): the frozen corpus and safe workflow on the development Mac.
-- [Cloud development](contributing/cloud-development.md): Claude Code cloud sessions — the environment setup script, the sqlite-vec SessionStart hook, and what stays on the Mac.
+- [Local development dataset](contributing/local-dev-dataset.md): a repeatable eval corpus and the protected development machine.
+- [Cloud development](contributing/cloud-development.md): Claude Code cloud sessions, environment setup, and sqlite-vec initialization.
 - [Test database walkthrough](dev-walkthrough.md): use a separate Maildir and SQLite archive.
 - Contributor notes: [attachment indexing](contributing/attachment-indexing.md), [OCR](contributing/attachment-ocr.md), [embedding experiments](contributing/embedding-experiments.md), [MCPB](contributing/mcpb.md), [cloud smoke tests](contributing/cloud-smoke-tests.md), and [search performance](contributing/search-performance.md).
 - [Eval baselines](../baselines/README.md) and [change history](../CHANGELOG.md).
 
-## Design history
+## Further reading
 
-The [embedding providers proposal](proposals/embedding-providers.md), [parser isolation proposal](proposals/attachment-parser-isolation.md), and [phase reviews](reviews/embedding-providers-phases-4-7.md) record past decisions; [future ideas](future-ideas.md) holds deferred work. Use the install, operation, and security guides above for current instructions.
+[Future ideas](future-ideas.md) tracks deferred work; [CHANGELOG](../CHANGELOG.md) records shipped changes.

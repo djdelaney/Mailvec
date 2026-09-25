@@ -35,7 +35,7 @@ builder.Services.AddSingleton<MessageRepository>();
 builder.Services.AddSingleton<ChunkRepository>();
 builder.Services.AddSingleton<SyncStateRepository>();
 // The parser seam (ParserRegistration): in-process here, remote in the
-// container from phase 2 of docs/proposals/attachment-parser-isolation.md.
+// container; see docs/security.md.
 builder.Services.AddMailvecParser(builder.Configuration,
     (sp, settings) => new InProcessParser(settings, sp.GetRequiredService<ILoggerFactory>()));
 builder.Services.AddSingleton<MaildirScanner>();

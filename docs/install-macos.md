@@ -4,16 +4,7 @@ How the launchd install is put together, and the traps in working against it.
 For a first install, follow [Get started on macOS](getting-started-macos.md).
 This page covers maintenance, backups, and removal.
 
-> ⛔ **This does not apply to the development box.** The Mac these docs were
-> written on runs a frozen corpus with no agents installed, and
-> `ops/install.sh` / `ops/install-all.sh` / `ops/redeploy.sh` refuse to run
-> there. Read the frozen-corpus block at the top of
-> [`CLAUDE.md`](../CLAUDE.md) before running anything here. Everything below
-> describes a machine that *is* a deployment.
-
-The macOS launchd install and the MCPB bundle both still build and are
-supported for anyone wanting a local single-machine setup. The author's own
-deployment is the Docker stack — see [`deploy-docker.md`](deploy-docker.md).
+> **Maintainers:** on a machine with `.frozen-corpus`, the install scripts refuse to run. Follow the [frozen dataset workflow](contributing/local-dev-dataset.md) instead.
 
 ## Ops scripts
 
@@ -47,13 +38,7 @@ the three .NET services) and drops a shim at `~/.local/bin/mailvec` that execs
 `dotnet ~/.local/share/mailvec/cli/Mailvec.Cli.dll`. The shim sets `DOTNET_ROOT`
 + `PATH` so it works under Claude Desktop's sanitised-PATH child processes too.
 
-- **Why a shim, not a symlink to the .dll**: .NET requires `dotnet <dll>`, not
-  direct invocation. The shim hides that detail.
-- **Why a shim, not `/usr/local/bin/mailvec`**: writing to `/usr/local/bin`
-  needs sudo or a Homebrew tap. `~/.local/bin/mailvec` is sudo-free.
-- **Re-run `ops/install.sh` (or `ops/redeploy.sh cli`) after CLI source
-  changes** — the shim is generated at install time and points at a published
-  .dll, not the working-tree source. `dotnet build` alone won't update it.
+- Re-publish the CLI after source changes; `dotnet build` does not replace the installed binary.
 
 `~/.local/bin` isn't on the default macOS `PATH`; the [getting-started guide](getting-started-macos.md#4-check-the-first-result) covers adding it.
 

@@ -2,8 +2,7 @@ namespace Mailvec.Core.Embedding;
 
 /// <summary>
 /// The purpose-aware embedding seam every consumer goes through
-/// (docs/proposals/embedding-providers.md, "Service and transport
-/// boundaries"). Queries and documents are DIFFERENT purposes:
+/// (see CLAUDE.md, "Embedding & chunking"). Queries and documents are DIFFERENT purposes:
 /// instruction-tuned models are trained asymmetrically, and the profile's
 /// query/document transforms are applied here, centrally — callers can no
 /// longer issue an untyped embed that bypasses text policy, which is how a

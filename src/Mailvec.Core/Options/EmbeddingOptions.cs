@@ -1,7 +1,7 @@
 namespace Mailvec.Core.Options;
 
 /// <summary>
-/// Named embedding profiles (phase 2 of docs/proposals/embedding-providers.md).
+/// Named embedding profiles; see CLAUDE.md for configuration invariants.
 /// When this section is absent, the legacy resolver derives an Ollama profile
 /// from <see cref="OllamaOptions"/> so existing installations select Ollama
 /// with no config change. Selection happens once, in
