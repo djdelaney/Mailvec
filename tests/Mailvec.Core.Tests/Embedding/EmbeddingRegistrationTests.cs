@@ -362,6 +362,55 @@ public class EmbeddingRegistrationTests
         await Should.ThrowAsync<HttpRequestException>(() => client.GetStringAsync("x"));
     }
 
+    // ── Proxy opt-in ────────────────────────────────────────────────────
+    // HostedHttp's no-proxy rule keeps a key this process holds away from a
+    // proxy nobody chose. Proxy=environment exists for keyless profiles whose
+    // key the egress proxy attaches (Claude cloud sessions); these pin that
+    // it stays exactly that narrow.
+
+    private static (string, string?)[] Keyless(params (string, string?)[] overrides) => FireworksConfig(
+        [("Embedding:Profiles:fw:Auth:Scheme", "none"), ("Embedding:Profiles:fw:Auth:ApiKey", null), .. overrides]);
+
+    /// <summary>The primary handler the real registration gives the hosted transport.</summary>
+    private static SocketsHttpHandler PrimaryHandler(IConfiguration config)
+    {
+        using var sp = BuildProvider(config, EmbeddingClientRole.Interactive);
+        HttpMessageHandler handler = sp.GetRequiredService<IHttpMessageHandlerFactory>().CreateHandler(nameof(OpenAiCompatibleTransport));
+        while (handler is DelegatingHandler d) handler = d.InnerHandler!;
+        return handler.ShouldBeOfType<SocketsHttpHandler>();
+    }
+
+    [Fact]
+    public void A_profile_that_holds_a_key_may_never_use_the_environment_proxy()
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(FireworksConfig(
+            ("Embedding:Profiles:fw:Proxy", "environment")))));
+        ex.Message.ShouldContain("bearer");
+    }
+
+    [Fact]
+    public void An_unknown_proxy_value_is_refused_and_ollama_profiles_take_none()
+    {
+        Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(Keyless(
+            ("Embedding:Profiles:fw:Proxy", "http://proxy.example:3128")))));
+        Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(
+            ("Embedding:ActiveProfile", "p"),
+            ("Embedding:Profiles:p:Protocol", "ollama"),
+            ("Embedding:Profiles:p:Proxy", "environment"))));
+    }
+
+    [Fact]
+    public void Only_a_keyless_profile_that_opts_in_gets_the_environment_proxy()
+    {
+        var optedIn = PrimaryHandler(Config(Keyless(("Embedding:Profiles:fw:Proxy", "environment"))));
+        optedIn.UseProxy.ShouldBeTrue();
+        optedIn.Proxy.ShouldBeSameAs(HttpClient.DefaultProxy);
+        optedIn.AllowAutoRedirect.ShouldBeFalse("opting into a proxy relaxes nothing else");
+
+        PrimaryHandler(Config(Keyless())).UseProxy.ShouldBeFalse("the default stays direct");
+        PrimaryHandler(Config(FireworksConfig())).UseProxy.ShouldBeFalse("a keyed profile stays direct");
+    }
+
     [Fact]
     public void Missing_active_profile_is_fatal_and_lists_what_exists()
     {

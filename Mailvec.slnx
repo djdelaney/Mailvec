@@ -10,11 +10,13 @@
     <Project Path="src/Mailvec.Parsing.Contracts/Mailvec.Parsing.Contracts.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/Mailvec.DevCorpus/Mailvec.DevCorpus.csproj" />
     <Project Path="tools/Mailvec.OcrBench/Mailvec.OcrBench.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Mailvec.Cli.Tests/Mailvec.Cli.Tests.csproj" />
     <Project Path="tests/Mailvec.Core.Tests/Mailvec.Core.Tests.csproj" />
+    <Project Path="tests/Mailvec.DevCorpus.Tests/Mailvec.DevCorpus.Tests.csproj" />
     <Project Path="tests/Mailvec.Embedder.Tests/Mailvec.Embedder.Tests.csproj" />
     <Project Path="tests/Mailvec.Indexer.Tests/Mailvec.Indexer.Tests.csproj" />
     <Project Path="tests/Mailvec.Mcp.Tests/Mailvec.Mcp.Tests.csproj" />

@@ -8,7 +8,7 @@ A frozen Maildir and SQLite archive make retrieval evaluations repeatable. Keep 
 
 First take a consistent snapshot with `ops/export-db.sh` and keep a separate rollback copy. Uninstall the launchd agents, including mbsync, with `ops/install.sh --uninstall`; that preserves the database, Maildir, binaries, and logs. Retain the Maildir because attachment tools, OCR, and reindexing read the original `.eml` files. Record which database path and Maildir path belong together. A `mailvec status` check gives the actual corpus and schema state; do not rely on values written in a guide.
 
-Use the small [test database walkthrough](../dev-walkthrough.md) for fast indexer iteration that does not need a full eval corpus. The full frozen archive is useful when labeled Message-IDs and realistic mail edge cases matter.
+Use the small [test database walkthrough](../dev-walkthrough.md) for fast indexer iteration that does not need a full eval corpus, or the [synthetic dev corpus](dev-corpus.md) to run the services without touching this archive (it refuses to generate anywhere a real pipeline would ingest it). The full frozen archive is useful when labeled Message-IDs and realistic mail edge cases matter.
 
 ## Day-to-day workflow
 

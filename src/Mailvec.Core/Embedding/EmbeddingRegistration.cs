@@ -106,6 +106,7 @@ public static class EmbeddingRegistration
             // and a process that starts cleanly but can't embed queries is a
             // search outage wearing a green healthcheck.
             var bearerToken = ResolveBearerToken(configuration, resolved.Name);
+            var useEnvironmentProxy = UsesEnvironmentProxy(configuration, resolved.Name);
 
             // Usage/rate-limit telemetry sink (Debug log lines the phase-6
             // audit greps). Optional by contract; TryAdd so a host can
@@ -128,8 +129,9 @@ public static class EmbeddingRegistration
             })
             // No legitimate inference call redirects, and a redirect must not
             // receive the bearer credential or a mail payload. Same rule as
-            // the hosted OCR client; HostedHttp also drops proxies.
-            .ConfigurePrimaryHttpMessageHandler(HostedHttp.CreateHandler);
+            // the hosted OCR client. HostedHttp also drops proxies, unless
+            // this (keyless — Resolve enforces it) profile opted in.
+            .ConfigurePrimaryHttpMessageHandler(() => HostedHttp.CreateHandler(useEnvironmentProxy));
 
             if (role == EmbeddingClientRole.BackgroundIngestion)
             {
@@ -310,6 +312,20 @@ public static class EmbeddingRegistration
             throw new InvalidOperationException(
                 $"Embedding profile '{name}': Auth:Scheme must be 'none' or 'bearer' — new auth behavior is code, not configuration.");
 
+        var proxy = profile.Proxy.ToLowerInvariant();
+        if (proxy is not ("none" or "environment"))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Proxy must be 'none' or 'environment'.");
+        // The no-proxy rule exists to keep a credential away from a proxy the
+        // operator never chose. A profile holding its own key keeps that rule
+        // unconditionally; opting in is only for keyless profiles, whose key
+        // (if any) is attached beyond the proxy — never by this process.
+        if (proxy == "environment" && scheme == "bearer")
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Proxy='environment' is refused with Auth:Scheme='bearer' — a key this " +
+                "process holds is never sent through a proxy. It is for keyless profiles whose key the egress proxy " +
+                "attaches (docs/contributing/dev-corpus.md).");
+
         return new ResolvedEmbeddingProfile(
             Name: name,
             Protocol: OpenAiCompatibleProtocol,
@@ -331,6 +347,14 @@ public static class EmbeddingRegistration
             SendWireModel: sendModel,
             SendDimensions: dimsPolicy == "send",
             EncodingFormat: profile.Request.EncodingFormat?.ToLowerInvariant());
+    }
+
+    internal static bool UsesEnvironmentProxy(IConfiguration configuration, string profileName)
+    {
+        var embedding = new EmbeddingOptions();
+        configuration.GetSection(EmbeddingOptions.SectionName).Bind(embedding);
+        return embedding.Profiles.TryGetValue(profileName, out var profile)
+               && string.Equals(profile.Proxy, "environment", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -397,6 +421,11 @@ public static class EmbeddingRegistration
             throw new InvalidOperationException(
                 $"Embedding profile '{name}': Endpoint must not be set on an Ollama profile — the local " +
                 "endpoint stays Ollama:BaseUrl (one setting for the server that embedding and vision share).");
+
+        if (!string.Equals(profile.Proxy, "none", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': Proxy applies to hosted profiles only — Ollama is always reached " +
+                "directly (OllamaHttp), and a setting that silently did nothing would be worse than a refusal.");
 
         if (profile.SpaceId is not null)
             throw new InvalidOperationException(

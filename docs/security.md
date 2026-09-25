@@ -44,7 +44,7 @@ Local Ollama OCR is the default. With hosted OCR enabled, the embedder sends eac
 
 ## Hosted embedding (`Embedding:ActiveProfile`)
 
-A hosted embedding profile sends indexed body and attachment text chunks to the provider, plus semantic and hybrid search queries. Switching an existing archive re-embeds the historical corpus. Review the provider's data terms and cost controls before activation. Keep the API key in the owner-only `secrets/embedding_api_key` file; only MCP and embedder need it. Identity checks refuse a mixed vector space. To return to Ollama, clear the profile and run `mailvec switch-model` as described in the [Docker runbook](deploy-docker.md#hosted-embedding-provider).
+A hosted embedding profile sends indexed body and attachment text chunks to the provider, plus semantic and hybrid search queries. Switching an existing archive re-embeds the historical corpus. Review the provider's data terms and cost controls before activation. Keep the API key in the owner-only `secrets/embedding_api_key` file; only MCP and embedder need it. Identity checks refuse a mixed vector space. The hosted client connects directly and ignores `HTTP(S)_PROXY`; a profile may opt into the environment's proxy (`Proxy=environment`) only if it holds no key (`Auth:Scheme=none`), which exists for the synthetic [dev corpus](contributing/dev-corpus.md) in Claude cloud sessions, where the egress proxy attaches the key. To return to Ollama, clear the profile and run `mailvec switch-model` as described in the [Docker runbook](deploy-docker.md#hosted-embedding-provider).
 
 ## The other shape: a loopback-only local install
 
