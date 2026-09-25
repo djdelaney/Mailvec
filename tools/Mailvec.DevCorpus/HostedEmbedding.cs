@@ -25,9 +25,9 @@ public static class HostedEmbedding
         if (name is null) return "";
         if (name != Fireworks) throw new ArgumentException($"Unknown embedding profile '{name}'.", nameof(name));
 
-        // The shape of the reference profile in docs/proposals/embedding-providers.md
-        // ("Proposed configuration"), at 1024 dims, with its own space id: a
-        // dev database must never be mistaken for any other space.
+        // Fireworks' OpenAI-compatible request shape (as the weekly cloud
+        // smoke test sends it), at 1024 dims, with its own space id: a dev
+        // database must never be mistaken for any other space.
         // The profile name must be a valid shell identifier (no '-'): it is
         // spelled inside every exported variable name, and bash refuses
         // `export A-B=…` with an error sourcing does not stop on.

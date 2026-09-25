@@ -26,7 +26,7 @@ Routing it through `fetch-sqlite-vec.sh` also keeps that library's SHA-256 pin
 in one place. The hook exits immediately unless `CLAUDE_CODE_REMOTE=true`, so
 on the dev Mac it does nothing.
 
-In the claude.ai environment settings for this repository:
+In the environment's settings (at [claude.ai/code](https://claude.ai/code), open the environment for editing; Anthropic's [cloud environments guide](https://code.claude.com/docs/en/cloud-environments#configure-your-environment) shows where):
 
 1. **Network access: Trusted** (the default). Setup and build need the Ubuntu
    archive, nuget.org, and GitHub release downloads
@@ -288,6 +288,6 @@ sessions.** Development doesn't need it: the test suite builds its own data.
 |---|---|---|
 | Eval runs and `baselines/` | Dev Mac | They measure the frozen real corpus. Numbers from any other corpus aren't comparable. See [local-dev-dataset.md](local-dev-dataset.md). |
 | `ops/install*.sh`, `redeploy.sh`, `stop.sh`, MCPB build and signing | Dev Mac (and refused there while frozen) | launchd and codesign are macOS-only. |
-| `tests/Mailvec.CloudSmoke.Tests` | CI (`cloud-smoke.yml`) | They need hosted-provider API keys, which don't belong in a cloud environment's settings. |
+| `tests/Mailvec.CloudSmoke.Tests` | CI (`cloud-smoke.yml`) | They need a key the test process itself holds (`Auth:Scheme=bearer`), and that doesn't belong in a cloud environment's variables. Setup step 4's API credential is different: the proxy attaches it and no process ever holds it. |
 | Releases (`ops/release.sh`, `v*` tags) | Dev Mac, on explicit approval | Cloud sessions push only to their own working branch. See Releases in `CLAUDE.md`. |
 | Deployment, the homelab, `/health` on the live stack | Dev Mac / homelab | Needs the production network and credentials, which cloud sessions don't have and shouldn't be given. |
