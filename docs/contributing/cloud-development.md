@@ -65,11 +65,13 @@ what you find; do not fix anything, edit files, commit, or push. Do not use
 any Mailvec or mail connector. Run each step even if an earlier one fails.
 
 0. Which code. Run `git fetch origin`, then report `git rev-parse --short HEAD`,
-   `git branch --show-current`, and
-   `git rev-parse --short origin/$(git branch --show-current)`. If HEAD is
-   not the remote tip, say so at the top of your report: the results
-   describe an older commit (a resumed session never pulls). Test HEAD
-   as it is; do not pull.
+   `git branch --show-current`, and `git branch -r --points-at HEAD`.
+   The session works on its own `claude/...` branch, created from the branch
+   it was started on, so comparing against that branch proves nothing. The
+   last command is what names the code under test. If no remote branch
+   other than the session's own points at HEAD, say so at the top of your
+   report: the results describe an older commit. Test HEAD as it is; do not
+   pull.
 
 1. Setup script. Run `tail -1 /var/log/mailvec-setup.log` (expect
    "setup complete") and `grep -nE '^(E|W):|WARNING' /var/log/mailvec-setup.log`
@@ -121,19 +123,24 @@ informational until it has succeeded once (it can't yet; see below). When it has
 checked in a session, not only by `publish-images.yml`, and this page should
 say so.
 
-**Start a new session for every run.** Don't send the prompt into an
-earlier verification session: resuming one doesn't pull, so it re-tests the
-commit it started on. Run 3 on 2026-09-25 did exactly that and reported a
-failure that had already been fixed. Step 0 now catches it. Copy the prompt
-from the branch under test, not from an older copy.
+**Start a new session for every run**, from the branch under test, and
+copy the prompt from that branch. A resumed session never pulls.
 
-**The hook only exists on branches that contain it.** Start the session from
-`main`, or from the branch under test, once `.claude/settings.json` is on it.
-The first run (2026-09-25) started from a `main` that didn't have it yet. It
-showed the signature of a missing hook: a clean build, then 654 of 1,470
-tests failing with "sqlite-vec extension not found". The second run, on the
-branch with the hook, had 1,469 passing. The one failure was a fourth
-root-sensitive test, which is now gated like the other three.
+**Verified 2026-09-25** at eea92b9 (the merge of PR #41), from a new
+session started on `main`: steps 0–4 pass, 1,470 passed, 0 failed,
+0 skipped. Step 5 fails as described below. Getting there took five runs,
+and their failure signatures are worth recognising:
+
+- **Hook missing** (run 1, a `main` without `.claude/settings.json`): a
+  clean build, then 654 of 1,470 tests failing with "sqlite-vec extension
+  not found".
+- **A root-sensitive test without a guard** (run 2): one `SetUnixFileMode`
+  test failing because root read the file anyway. See "Running as root".
+- **Stale code** (runs 3 and 4, sessions meant to be on
+  `claude-cloud-env`): HEAD behind the pushed branch, re-reporting a failure
+  already fixed. The mechanism wasn't established. It was either a resumed
+  session or a session branch created from an older base. Step 0 is there to
+  catch it.
 
 ## What the machine is
 
