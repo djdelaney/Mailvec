@@ -47,8 +47,11 @@ procedure.
 The other options keep their existing niches: the **truncated set**
 (`ops/dev-fetch-imap.py` → `~/mailvec-test`, see `docs/dev-walkthrough.md`)
 for fast indexer-loop iteration where scanning the full archive per change is
-annoying, and **artificial data** in the unit tests, which cover the
-pure-code loop with no corpus at all.
+annoying; **artificial data** in the unit tests, which cover the
+pure-code loop with no corpus at all; and the **synthetic dev corpus**
+(`tools/Mailvec.DevCorpus`, see [dev-corpus.md](dev-corpus.md)) for running the
+services by hand without touching this corpus, or where there is no real mail
+at all. It refuses to generate anywhere a real pipeline would ingest it.
 
 ## One-time teardown (done 2026-07-16 — kept as the record + the rebuild recipe)
 

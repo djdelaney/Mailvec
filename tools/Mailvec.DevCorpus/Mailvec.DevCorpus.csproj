@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Generates a SYNTHETIC Maildir (plus env.sh, an eval query set and a
+       manifest) for running Mailvec by hand where there is no real mail — a
+       Claude cloud session, or a scratch run on the dev Mac that must not
+       touch the frozen corpus. Usage: docs/contributing/dev-corpus.md.
+
+       Deliberately dependency-free: every message is written as raw bytes and
+       every attachment (PDF, Office, PNG, TIFF, ICS, vCard) is built by hand,
+       because the point is bytes that MimeKit's own writer would never produce.
+       tests/Mailvec.DevCorpus.Tests runs the output through the real scanner. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Mailvec.DevCorpus</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Mailvec.DevCorpus.Tests" />
+  </ItemGroup>
+
+</Project>

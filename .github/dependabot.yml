@@ -53,6 +53,7 @@ updates:
       - "/src/Mailvec.Parsing.Contracts"
       - "/tests/Mailvec.Cli.Tests"
       - "/tests/Mailvec.Core.Tests"
+      - "/tests/Mailvec.DevCorpus.Tests"
       - "/tests/Mailvec.Embedder.Tests"
       - "/tests/Mailvec.Indexer.Tests"
       - "/tests/Mailvec.Mcp.Tests"

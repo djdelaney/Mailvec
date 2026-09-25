@@ -204,10 +204,11 @@ A cloud VM has no archive, no Maildir and no Ollama. The unit and integration
 tests build their own fixtures and fakes, so none of that matters for
 `dotnet test`. It matters for running a service by hand:
 
-- **Point it at a scratch location**, e.g. `Archive__DatabasePath=/tmp/mv/archive.sqlite
-  Ingest__MaildirRoot=/tmp/mv/Mail dotnet run --project src/Mailvec.Mcp`.
-  The migrator creates an empty schema on first open. The vec0 path resolves
-  to `runtimes/<rid>/native/` automatically.
+- **Generate a synthetic mailbox** with
+  `dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev`, then
+  `. /tmp/mvdev/env.sh` and run the indexer, CLI or MCP server from that
+  shell. See [dev-corpus.md](dev-corpus.md). The vec0 path resolves to
+  `runtimes/<rid>/native/` automatically.
 - **Without an embedding backend**, keyword search, `get_email`, `get_thread`
   and the attachment tools work. `hybrid` (the default search mode) and
   `semantic` answer with a "retry with mode=keyword" error, and the embedder
