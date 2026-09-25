@@ -1,726 +1,83 @@
 # Security model
 
-Single-user. The pipeline runs as a compose stack on a homelab Docker VM
-([deploy-docker.md](deploy-docker.md)), and the MCP server is **exposed to the
-public internet** through a Cloudflare Tunnel gated by Cloudflare Access
-Managed OAuth ([remote-access-cloudflare.md](remote-access-cloudflare.md)).
+Mailvec is a single-account mail archive. Every client allowed to use its MCP tools can read the whole archive. Choose one deployment boundary: a local macOS install bound to loopback, or a Docker stack with no published MCP host port and, for remote clients, a tunnel protected by Cloudflare Access. See [macOS setup](getting-started-macos.md), [Docker setup](getting-started-docker.md), and [remote access](remote-access-cloudflare.md).
 
-The trust boundary is therefore two-layered:
-
-- **The Access identity gate** is the outer boundary. One identity (the owner)
-  passes it; everything else is refused at Cloudflare's edge, before any
-  traffic reaches the tunnel.
-- **The Docker VM's compose network** is the inner boundary. By default the MCP
-  server has no auth of its own inside it — it trusts anything that can reach
-  `mcp:3333`. The tunnel is the only ingress, so "anything that can reach it"
-  means the cloudflared sidecar and the other containers. Configuring
-  [`Mcp:Access`](#origin-authentication-mcpaccess) turns this inner boundary
-  into a real one: the origin then validates the Access assertion itself and
-  refuses callers that don't carry a valid one.
-
-This document captures what's exposed, what's explicitly accepted, and what's
-out of scope — read it before publishing a host port, adding an identity to the
-Access policy, adding a mutating tool, or changing the tunnel's ingress rules.
-
-> **Historical note.** This model used to read "single-user, single-Mac; outside
-> the macOS user account, Mailvec is unreachable." That has not been true since
-> the container migration + tunnel go-live. Several accepted-risk arguments below
-> originally leaned on "everything is local"; where that prop is gone, the
-> reasoning has been restated rather than quietly kept.
+![Mailvec Compose networks, mounts, and external routes](security-boundaries.svg)
 
 ## What's exposed
 
-| Surface | Binding | Auth | Who can reach it |
-| --- | --- | --- | --- |
-| **MCP HTTP (public)** | `mailvec.<domain>` via Cloudflare Tunnel → `mcp:3333` | **Cloudflare Access Managed OAuth (OAuth 2.1 / PKCE), single-identity policy** | the owner, from any Claude surface — and Anthropic's cloud, which is what actually issues the calls |
-| MCP HTTP (in-network) | `0.0.0.0:3333` inside the compose network (`Mcp__BindAddress`) | none — HostGuard only, **unless `Mcp:Access` is configured** ([below](#origin-authentication-mcpaccess)), which makes the origin validate the Access assertion itself | the cloudflared sidecar and any other container on the network. **No host port is published**; publishing one exposes this to the LAN — unauthenticated, unless origin validation is on |
-| MCP stdio | child process of the spawning agent | inherits agent's identity | dormant — retired as the Claude Desktop transport; still available for local dev |
-| `/up` (minimal: status/version + liveness booleans) | forwarded through the tunnel to `mcp:3333` | Cloudflare Access — **single layer, by design** (it's the monitoring endpoint) | the owner, plus a **path-scoped** Access service token for the external monitor (see below — the scoping is a requirement, and one worth verifying rather than assuming) |
-| `/health` (detailed) | **loopback only** (`Mcp:RestrictHealthToLoopback`, default true); 404 to anything else, and 404'd at the tunnel as well | n/a — not reachable off-box | only the loopback consumers inside the container: the compose healthcheck and `mailvec doctor` under `docker compose exec` |
-| Ollama (outbound) | the GPU VM over the LAN (`Ollama:BaseUrl`) | none | the embedder (chunk embeddings **and**, when `Vision:Provider=ollama`, rendered attachment images sent to the vision model for OCR) + MCP query embeddings — read-only against Ollama |
-| **mistral-ocr (outbound, off-network)** | **the public internet** — `Vision:Mistral:Endpoint` (an Azure AI Foundry resource or api.mistral.ai) | API key, embedder container only | **only when `Vision:Provider=mistral`** (default is `ollama`, which sends nothing off-LAN). Rendered pages of scanned PDFs and image attachments leave the network. See [below](#hosted-ocr-vision-provider-mistral) |
-| SQLite file | bind mount on the VM | unix permissions (0600, container uid 10001 by default) | the configured service uid, root on the VM, and containers that mount `./data` |
-| Maildir | bind mount on the VM | unix permissions; read-only in `mcp`, `indexer`, and `embedder`, writable in `mbsync`, absent from `parse` and `cloudflared` | those four services and root on the VM |
+| Surface | Data and boundary |
+| --- | --- |
+| MCP tools | Search, message and attachment reads. The tools do not mutate the archive or write attachment files. The CLI's explicit `extract-attachments` command does write files. |
+| `/up` | Minimal external status and liveness flags. It omits archive paths, counts, model identity, and internal URLs. Use it for monitoring. |
+| `/health` | Detailed state, including paths and model information. Loopback-only by default (`Mcp:RestrictHealthToLoopback`). |
+| Docker volumes | `./data` holds SQLite; `./mail` holds source mail. The parser has neither mount. |
+| Provider traffic | Ollama receives embeddings and, with local OCR, rendered pages. Optional hosted providers receive the data described below. |
+
+The Docker MCP service listens inside Compose but has **no published host port**. Cloudflare Tunnel is the configured external ingress; Access authorizes users at the edge. Without `Mcp:Access`, any process that can reach the MCP origin on its Compose network can call the tools. HostGuard checks `Host` and `Origin` headers against loopback and `Mcp:AllowedHosts` to prevent browser-mediated DNS rebinding; it is not authentication. If a host port is published, LAN callers can bypass Access unless origin validation is enabled.
 
 ### Docker Compose network boundaries
 
-The checked-in topology has three networks. This is the security-relevant
-membership, not a claim about any running deployment; check
-[`compose.yml`](../compose.yml) and `docker compose config` on the deployment
-host after a change. The diagram also shows which services hold the archive,
-Maildir, and credentials.
-
-![Mailvec Docker Compose services, networks, mounts, and external routes](security-boundaries.svg)
-
-| Network | Attached services | Boundary |
-| --- | --- | --- |
-| `default` | `mcp`, `embedder`, `mbsync`, `cloudflared` (when the tunnel profile is enabled) | External routing is available for IMAP, Ollama or opted-in hosted providers, and the outbound tunnel. The MCP service publishes **no host port**; cloudflared is the only configured outside ingress. Containers on this network can still address `mcp:3333` directly, so the network is not an origin-authentication control. |
-| `isolated` (`internal: true`) | `indexer` | No route off this network. The indexer also joins `parse` to send mail bytes for parsing; neither network gives it external egress. |
-| `parse` (`internal: true`) | `parse`, `indexer`, `embedder`, `mcp` | The three callers send bytes to `parse:3400`; the parser has no external route, volume, or secret. Docker reachability is symmetric, so `parse` could otherwise call the MCP server back. Compose pins this network's subnet with `MAILVEC_PARSE_SUBNET`, and `Mcp:DeniedNetworks` returns 403 to requests from it, including `/up` and tool calls. `mbsync` and `cloudflared` are not members. |
-
-`default` allows egress but does not restrict destinations to the intended
-IMAP, Ollama, Cloudflare, or hosted endpoints. A compromise of `mcp` or
-`embedder` still has network egress and access to its mounted data. The
-parser's isolation depends on **both** its network placement and the MCP
-return-path refusal; verify the 403 probe in the
-[Docker rollout checklist](deploy-docker.md#rollout-checklist) after changing
-either network.
+`compose.yml` defines the actual topology. `indexer` and `parse` use internal networks without external egress. The parser receives mail bytes over the `parse` network but has no archive, Maildir, or secret. Docker networks are bidirectional, so MCP denies inbound requests from the pinned parse subnet through `Mcp:DeniedNetworks`. Check `docker compose config` and the [deployment probe](deploy-docker.md#rollout-checklist) whenever changing network membership or `MAILVEC_PARSE_SUBNET`.
 
 ### `/up` and `/health`
 
-Both are unauthenticated at the origin by default (see
-[origin validation](#origin-authentication-mcpaccess) for the exception), and
-they carry very different data, so they have deliberately different postures:
-`/up` is the internet-facing monitoring endpoint and `/health` is its detailed,
-loopback-only sibling.
+External monitors should use `/up`, protected by a service token scoped to that exact path. The root Access application must not use **Any Access Service Token**, which would admit monitoring credentials to the mail tools. Verify with the monitoring token: `/up` returns JSON, while a `tools/list` request to `/` is denied. The Access policy lives outside this repository; [the remote-access guide](remote-access-cloudflare.md#scope-a-monitoring-credential) gives the setup and probe.
 
-**`/up` — the minimal monitoring endpoint.** The rule for its body is
-**booleans yes, values no**: `status`, `version`, and the flags an external
-monitor queries — `ollama.reachable`, `embedder.stuck`,
-`embeddings.modelMismatch`, and per-service `stale`/`known`. Enough to say
-*something is wrong and which thing*, with nothing that says what anything **is**
-— no archive path, no corpus counts, no model identity, no Ollama address.
-Status codes are identical to `/health` (200 ok / 503 degraded), because
-monitors alert on the code. Uptime Kuma polls it end-to-end *through the
-tunnel*, which also catches tunnel / Access / edge / cert failures an in-network
-probe can't. Single-layer Access is the accepted trade for having an external
-probe — and with this body there is nothing left that would warrant
-defense-in-depth.
-
-**The cost of `/health` being loopback-only, stated as accepted.** From 0.2.0
-there is **no way to see detailed health from outside the LAN** — no embedding
-coverage percentage, no `consecutiveFailures`, no `expectedIntervalSeconds`, no
-database block. That is the point of the change, not a side effect, but it is a
-real loss: the next remote debugging session will reach for it and find a 404.
-The replacement is `docker compose exec mcp curl -fsS http://127.0.0.1:3333/health`,
-which needs host access. If that trade ever stops being worth it, the answer is
-to widen `/up`'s body deliberately — a conversation about the trust boundary —
-not to re-expose `/health`.
-
-**`/health` — detailed, for callers that have already earned it.** Status,
-corpus counts, embedding model and dimensions, embedder failure detail, OCR
-backlog, per-service liveness, the archive's filesystem path, and the internal
-Ollama LAN URL. Its consumers are all local: the compose healthcheck (loopback,
-inside the container) and `mailvec doctor`'s HTTP probe (`docker compose exec`).
-Nothing outside the VM needs this body.
-
-**Why two paths rather than one endpoint with less detail.** Path is the axis
-Access scopes on, so it's the axis on which different callers can be served
-different detail. That was originally the *only* axis, because the origin could
-not authenticate anyone. It still stands with
-[origin validation](#origin-authentication-mcpaccess) on — that adds an audience
-check per endpoint, but the two Access applications are still distinguished by
-path at the edge, and the trimmed `/up` body is what limits the damage when the
-edge scoping is wrong. Two layers, not one replacing the other.
-
-**The name `/up` is load-bearing.** Access path wildcards partial-match *inside*
-a segment (`example.com/foo*/bar` covers `/food/bar`), so had this been
-`/healthz`, an app scoped `health*` would have covered `/health` too — handing
-the monitor the detailed body and quietly undoing the split. No wildcard over
-"health" reaches "up". **If either path is ever renamed, keep the two names
-prefix-disjoint.**
-
-**The split only holds if the monitoring credential is actually scoped**, and
-that lives in Cloudflare's control plane rather than in this repo — so it is a
-requirement to verify, never a property to assume. Two rules and a check:
-
-- The monitor's service token belongs on a **path-scoped Access application for
-  the exact path `up`** — never a wildcard, since Access path wildcards
-  partial-match inside a segment (`example.com/foo*/bar` covers `/food/bar`), so
-  `up*` or `health*` quietly widens what the token reaches.
-- **Never `Any Access Service Token` on the root application.** That rule admits
-  every service token in the account — including ones created later, for
-  unrelated things — and the root app is the whole MCP surface, i.e. the whole
-  mailbox. Name the specific token instead.
-
-  > ⚠️ **Read the rule, never the policy name.** Access lists policies by name
-  > and shows the rule only when you open one, so a policy *named* for a single
-  > token can carry an any-token rule underneath and read as already-scoped at a
-  > glance. This is not hypothetical: in this project's own deployment a policy
-  > called `Claude Code token` carried `Include · Any Access Service Token` for
-  > roughly a year — through two passes over this very document — which silently
-  > made the monitoring credential owner-equivalent. Audit by opening the rule.
-  >
-  > **Ordering, when fixing or rebuilding these credentials: narrow the root
-  > policy LAST.** An any-token rule is what makes a zero-downtime migration
-  > possible — mint a scoped monitoring token → repoint the monitors → create
-  > the path-scoped `/up` application → *then* narrow the root. Tightening first
-  > locks out the monitors and your own agent clients simultaneously.
-
-**Verify** (with the monitoring token, from outside the network): `/up` returns
-the status JSON, and **`/health` and `/` are both denied**. If either returns
-content, the token is being admitted by the root application — historically that
-was the `Any Access Service Token` rule above — and the monitoring credential can
-read mail. Treat it as owner-equivalent until that's fixed. This check is the
-authority on the question; the dated report above is not.
-
-**No other HTTP surface carries mail.** A plain-REST `/tray/*` surface once
-served the macOS menu-bar app — full message bodies, the folder map, full-text
-search, the IMAP account, plus mutating POSTs, all unauthenticated at the
-origin. It was kept off the internet by an origin disable, a startup guard and a
-tunnel path-404. **The tray and those endpoints have been removed**, so the
-routes no longer exist in any build, and the config knob
-(`Mcp:EnableTrayEndpoints`) and its `TrayExposureGuard` are gone with them. The
-mail-bearing surface is the MCP endpoint alone, gated by Access — which is what
-the verification above already covers, so there is no separate check to run for
-this.
-
-The tunnel may still carry a `/tray/` 404 ingress rule; it is vestigial and
-harmless. **Don't treat its presence as protection** — it now 404s a path
-nothing serves, so it proves nothing about the origin either way.
+`/health` is for the container's loopback healthcheck and `mailvec doctor`. Inspect it with `docker compose exec mcp curl -fsS http://127.0.0.1:3333/health`. A tunnel ingress rule can also return 404 for `/health`, but the origin's loopback restriction is the local control.
 
 ## Container hardening
 
-Every acceptance above is about who can *call* Mailvec. This section is about
-what happens after something is already running code inside it — a distinct
-question, because the parsers eat attacker-chosen bytes by design. Anyone who
-can send mail can put a PDF or image in front of PDFium/SkiaSharp, and the
-embedder's OCR pass feeds them **unattended**, with no tool call and no user in
-the loop. "The MCP tools are read-only" is a statement about the tool surface,
-not a boundary that survives a compromised process.
+Mail content and attachments are untrusted input. In Docker, MIME, HTML, Office, PDF, and image parsers run in the `parse` service. The build strips parser libraries from indexer, embedder, MCP, and CLI outputs. `parse` has no mounted data or secrets, no external route, and runs as an unprivileged user. It can restart after a timeout or request limit. A compromised parser can see in-flight documents and return false parsed content; it should not be able to read the archive or call MCP back.
 
-**In the container, exactly one process parses attacker-chosen bytes, and it
-holds nothing** (see the [network boundaries](#docker-compose-network-boundaries)
-above). Every mail-content parser — MimeKit, AngleSharp, PdfPig,
-OpenXml, PDFium/SkiaSharp, LibTiff — runs only in the `parse` service
-([deploy-docker.md](deploy-docker.md#the-parse-service)); the indexer, embedder,
-and mcp (including CLI commands run inside mcp) ship it `.eml` bytes over an
-`internal: true` network and receive plain data back. The image build
-**deletes every parser library from their
-directories and asserts it**, so a caller that tried to parse in-process fails
-loudly rather than quietly regaining the surface. `parse` mounts no volume,
-reads no secret, has no route out, runs as `nobody` (`65534:65534`), and exits
-on its own after a request timeout or `MAILVEC_PARSER_MAX_REQUESTS`, so a
-compromised instance has a bounded lifetime. This is the boundary the rest of
-this section used to lack: a decode bomb or a memory-safety bug in a parser now
-lands in a process that can reach neither the archive nor the mailbox.
+Compose also uses non-root service users, dropped capabilities, `no-new-privileges`, read-only root filesystems for .NET services, temporary writable storage, and memory and PID limits. The mounted archive, Maildir, logs, and credentials must be owned by the configured service uid. Limits and network placement are in `compose.yml`, which is the source of truth. Check the [Docker runbook](deploy-docker.md#permissions-and-parser-service) when changing ownership or limits.
 
-One wrinkle had to be closed for that sentence to be true. mcp joins the
-`parse` network to *call* the parse service, and Docker networks are
-symmetric — so the parse service could call `mcp:3333` back, present an
-allowlisted `Host: mcp`, and with origin validation off, read the mailbox
-through `search_emails`. An independent review reproduced it. The `parse`
-network's subnet is therefore pinned in compose (`MAILVEC_PARSE_SUBNET`) and
-mcp refuses every request from it before any route (`Mcp:DeniedNetworks`,
-`NetworkGuard`), loopback excepted; the indexer and embedder listen on
-nothing. `Mcp:Access` origin validation, where a tunnel exists, is the
-stronger layer on top — it demands proof of identity rather than denying one
-known network — and the two compose. The deny-list is what holds in the
-default posture, with no Cloudflare in the picture.
-
-The stack applies these controls (with the identity exceptions shown):
-
-| Control | What it buys |
-| --- | --- |
-| `cap_drop: [ALL]` | No Linux capabilities. Removes `DAC_OVERRIDE` (bypassing file permission bits), `FOWNER`, `NET_RAW` (raw sockets / spoofing), `SETUID`, and the rest. Nothing here needs any: the .NET services bind 3333 (unprivileged), mbsync makes outbound TLS connections, cloudflared dials out. |
-| Non-root users | `mcp`, `indexer`, `embedder`, and `mbsync` run as configurable uid/gid 10001 by default; `parse` runs as `nobody` (65534); the cloudflared image defaults to `nonroot` (65532). With `cap_drop`, none can bypass file permissions. The mounted paths for Mailvec and mbsync must be owned by their configured uid; the entrypoints refuse to start otherwise. |
-| `security_opt: [no-new-privileges:true]` | A setuid binary can't raise privileges — so a dropped capability stays dropped, and a dropped uid stays dropped. |
-| `Mcp__DeniedNetworks__0` = the pinned `parse` subnet (mcp only) | The parse service cannot call mcp back over the network they share. Without it, a compromised parser reaches the mail tools and the "holds nothing" claim above is false. Verified by a container on the `parse` network getting 403 on `/up` and on a tool call. |
-| `mem_limit` | Caps blast radius per service — values in `compose.yml`, which is the source of truth (at 2026-09-23: mcp 3g, parse/indexer/embedder 2g, mbsync 1g, cloudflared 256m). A decode bomb or a parser leak kills **one container** — and since the parsers moved, that container is `parse`, which holds nothing — instead of the Docker VM. |
-| `pids_limit` | Bounds task count — values in `compose.yml` (at 2026-09-23: 512 for mcp/indexer/embedder, 128 for parse and mbsync, 256 for cloudflared) — so a fork bomb can't exhaust the VM's pid space. The cgroup controller counts threads, not just processes. |
-
-Two consequences worth knowing rather than rediscovering:
-
-- **A seeded archive must belong to the service uid.** The services run as
-  uid 10001 by default and have no `DAC_OVERRIDE` capability. A 0600 archive
-  copied in by another host user is unreadable, surfacing as SQLite "unable to
-  open database file". The [migration steps](deploy-docker.md#migrating-the-archive-from-a-macos-install)
-  chown it to `10001:10001` (or your configured `MAILVEC_UID` and `MAILVEC_GID`).
-- **`mem_limit` charges page cache to the cgroup.** mcp's is deliberately roomy
-  because search latency depends on ~1.2 GB of chunk vectors sitting in the OS
-  file cache (process RSS is ~22 MB — they are not in the .NET heap). Tuning it
-  toward the working set doesn't OOM anything; the kernel just reclaims those
-  pages, and search degrades from ~0.3 s to ~2-3 s permanently, silently. See
-  [search-performance.md](contributing/search-performance.md).
-
-**Also applied**: `read_only: true` + a `noexec,nosuid` `/tmp` tmpfs on the
-four .NET services, so a compromised process cannot persist anything outside
-the explicit mounts. The [network table](#docker-compose-network-boundaries)
-shows why the indexer and `parse` have no external route. The indexer no longer
-parses attachments itself — it was the service that combined "reads attacker
-bytes" with "writes the archive", and the split removed that combination.
-
-**Not yet done**, and each for a stated reason rather than oversight:
-
-- **gVisor (`runtime: runsc`) on `parse`.** The strongest isolation available
-  for the one process that needs it most, and a one-line addition once the
-  Docker VM has gVisor installed — an ops change outside this repo. Trigger:
-  the VM gets gVisor for any other reason.
-- **Egress restriction for embedder and mcp.** Both must reach Ollama over the
-  LAN, so `internal: true` is not available to them; limiting them to that one
-  host needs firewall or network-policy rules on the Docker host, which Compose
-  cannot express. The indexer above is the part that *was* expressible.
-- **`read_only` on mbsync and cloudflared.** mbsync starts, loops and beats
-  under an immutable rootfs, but that observation never ran a real IMAP sync —
-  the path that writes `.mbsyncstate` — so it stays off until tested against
-  live credentials. cloudflared is untested and runs no Mailvec code.
-- **A read-only database connection for mcp**, which today needs write access
-  because `SchemaMigrator.EnsureUpToDate` runs at startup.
-
-So a compromised indexer, embedder or mcp process can still write `./data` —
-that is what those services are for — but it does so as uid 10001 with no
-capabilities, no writable rootfs, and (since 2026-09-17) no root to fall back
-on; these controls narrow the exit routes, they don't remove them. What
-changed with the parser split is which process an attacker's bytes reach
-first: the parsers, the likeliest way in, now run where there is nothing to
-write. Non-root was deferred for a while on the grounds that the failure it
-introduces — root-owned mounts unwritable by the service — could not be
-reproduced on a developer Mac (Docker Desktop virtualises bind-mount
-ownership). It was reproduced instead on named volumes, which have real
-ownership semantics, and the entrypoint now turns that failure into a refusal
-with the fix in it; the migration is one chown, in
-[deploy-docker.md](deploy-docker.md#moving-to-non-root).
+The MCP parser return-path denial depends on the configured subnet matching the actual `parse` network. Probe MCP from that network and expect 403. The parser client also rejects redirects and oversized responses. Search can continue during a parser outage, while ingest, OCR, and attachment rendering wait or fail temporarily.
 
 ## Executable supply chain
 
-Everything above assumes the code we run is the code we reviewed. Three inputs
-arrive from outside the repo and execute, so each is pinned to something that
-can't be re-pointed under us:
-
-| Input | Pin | Why this one |
-| --- | --- | --- |
-| **sqlite-vec** (`vec0.dylib` / `.so`) | SHA-256 per version+RID in `ops/fetch-sqlite-vec.sh`, verified **before** `tar` runs | Loaded into every Mailvec process via SQLite's extension API — arbitrary code execution by design, with the services' full mailbox and DB access. A release asset can be replaced after its tag exists, so the tag alone doesn't identify what we reviewed. No bypass flag; an unrecorded version fails closed. Bump procedure in [`ops/UPGRADING.md`](../ops/UPGRADING.md#sqlite-vec-dylib) |
-| **cloudflared** | image digest in `compose.yml` (version tag kept alongside for humans) | Holds the tunnel credential and is the only thing that can reach the unauthenticated mcp origin — the highest-value container in the stack. Was `:latest`, i.e. every `compose pull` could swap it silently |
-| **Dockerfile bases** (`dotnet/sdk`, `dotnet/aspnet`, `alpine`) | image digests, version tag in the comment | Same reasoning one step earlier in the chain: `10.0` is a moving pointer, so it isn't what a reproducible build should resolve |
-| **GitHub Actions** | full commit SHAs, version in a trailing comment | A major tag like `v7` is repointable by the action's owner, and these run with the repo's token — `publish-images.yml` grants `packages: write` |
-| **BuildKit** (the `# syntax=` frontend in `Dockerfile`, and the buildx builder image in `publish-images.yml`) | image digest, version tag alongside | Both execute every build step, and the builder holds the GHCR push. Left unpinned they are `docker/dockerfile:1` and `moby/buildkit:buildx-stable-1`, moving tags pulled fresh on every build. **Not covered by Dependabot** (neither ecosystem parses a `# syntax=` line or a `driver-opts` string) — bump by hand alongside the SDK base, resolving the digest with `docker buildx imagetools inspect` |
-
-**A pin with nothing bumping it is its own failure mode**: it trades supply-chain
-risk for running a known-vulnerable version forever, and that risk is sharpest
-for the Dockerfile bases, whose moving tags are how .NET servicing patches
-arrive. `.github/dependabot.yml` therefore covers the `docker`,
-`docker-compose` and `github-actions` ecosystems as well as NuGet, and
-Dependabot understands both pin forms (it rewrites digest and comment
-together). **`docker` and `docker-compose` are separate ecosystems** — the
-first reads Dockerfiles and the second reads `compose.yml`, so declaring only
-`docker` leaves the cloudflared pin uncovered while the config looks complete
-(it did, until 2026-08-15). **If Dependabot is ever
-turned off, revert the base images to tags** rather than sitting on a frozen
-base — the pin is only safe because something is bumping it. sqlite-vec is the
-exception either way: it's fetched by a shell script no ecosystem parses, so its
-bump is the manual loop in `ops/UPGRADING.md`.
-
-CI additionally fails on any known-vulnerable NuGet package
-(`dotnet list package --vulnerable --include-transitive`, transitive included
-because that's where they land). This catches the window between Dependabot's
-weekly runs — an advisory published against an already-pinned version produces
-no PR until the next run, and nothing else in CI would notice. Published images
-carry SLSA provenance and an SBOM as OCI attestations, so "which commit produced
-this digest?" is answerable from the registry.
-
-**Deliberately not done**: container image/filesystem scanning, and
-environment/approval gates on publishing. Both are artifacts for a team with
-someone to show them to; on a single-owner homelab where the operator builds and
-deploys the image themselves, they generate review work with no reviewer. The
-NuGet gate above is the exception because it's a real automated check with a
-real failure mode, not a report.
+The sqlite-vec download is checked against a version-and-platform SHA-256 in `ops/fetch-sqlite-vec.sh` before extraction. Docker base images, cloudflared, BuildKit, and GitHub Actions are pinned; update them through their documented dependency workflows. CI checks NuGet packages for known vulnerabilities, including transitive packages. See [dependency upgrades](../ops/UPGRADING.md) and the checked-in build files for current pins.
 
 ## Hosted OCR (`Vision:Provider=mistral`)
 
-**Default is `ollama`.** Everything below applies only when the provider is
-switched, and switching it is a threat-model decision, not a tuning knob.
-
-The OCR pass exists to make scanned documents searchable, and scanned documents
-are disproportionately the sensitive ones: bank statements, tax forms, medical
-letters, signed contracts, anything photographed rather than typed. The local
-provider was chosen for exactly that reason — the bytes never leave the LAN.
-
-With `mistral`, each rendered page (JPEG, long edge ≤1536px) is POSTed as a
-base64 data URI to the configured endpoint. What that changes:
-
-- **It is unattended.** Unlike `view_attachment` or `get_attachment_page_image`,
-  which run because a user asked, the OCR pass feeds documents to the provider
-  on its own schedule with no tool call and no user in the loop. Every eligible
-  scanned attachment in the archive is sent, eventually, without anyone
-  choosing it. That is the property to weigh; it is the same one that makes the
-  pass useful.
-- **Retention is the provider's, not ours.** Nothing in this repo governs how
-  long the endpoint keeps a submitted page. Check the deployment's own data
-  policy — a self-hosted Azure AI Foundry deployment in your own tenant is a
-  materially different answer from the public API.
-- **The blast radius of the key is OCR calls**, and the key is scoped to the
-  **embedder container only** (`compose.yml`). MCP and the CLI probe the
-  provider for `/health` and `mailvec doctor` and are deliberately left without
-  credentials — they degrade to reporting OCR unavailable. That keeps the key
-  off the internet-fronted container and stops an OCR misconfiguration from
-  crashlooping the search surface.
-- **Keep the key in the gitignored `.env`**, never in
-  `~/Library/Application Support/Mailvec/appsettings.Local.json` — that file is
-  world-readable (0644) by design, holding ordinary user settings.
-- **Egress.** The embedder needs outbound 443 to the endpoint. It previously
-  only ever dialled a LAN address, so verify the host firewall actually permits
-  this rather than assuming it.
-- No document is uploaded to blob storage or exposed at a fetchable URL; the
-  request carries the bytes inline and the response is per-page markdown.
-
-Turning it off is `Vision:Provider=ollama` (or `Embedder:OcrEnabled=false` /
-`Embedder:ImageOcrEnabled=false` to stop OCR entirely). Note that neither
-un-sends anything already transmitted, and neither removes text already stored —
-use `mailvec reocr` for that.
+Local Ollama OCR is the default. With hosted OCR enabled, the embedder sends each eligible rendered PDF page or image to the configured endpoint automatically, without a user tool call. Such documents can contain sensitive data. Review the provider's retention, training, and residency terms before enabling it. The OCR credential belongs to the embedder only; use the supported file-secret or environment channel, never a checked-in config file. Disabling hosted OCR stops future sends but cannot retract submitted pages or remove previously stored OCR text.
 
 ## Hosted embedding (`Embedding:ActiveProfile`)
 
-**Default is Ollama, and the section applies only when a hosted profile is
-activated** — a threat-model decision with a substantially larger boundary
-change than hosted OCR, because embedding touches everything:
-
-- **What leaves the network.** The embedder sends EVERY indexed body and
-  extracted-attachment chunk; MCP and the CLI send every semantic/hybrid
-  search query; a `switch-model` re-embed sends the historical corpus in bulk
-  with no user present per request. Four fixed non-mail sentinel texts are
-  also embedded periodically (the drift check) — deliberately non-mail, so
-  the integrity mechanism itself discloses nothing.
-- **Retention/training/residency are the provider's terms.** Fireworks'
-  documented serverless terms were reviewed for the first experiment; any
-  OTHER provider or deployment mode needs its own review before activation —
-  a profile edit is one line, and the line moves the mailbox.
-- **The key** lives in `secrets/embedding_api_key` (the `fastmail_password`
-  pattern: owner-only file beside `compose.yml`, mounted read-only at
-  `/run/secrets/embedding_api_key`), and is mounted into **mcp and embedder
-  only** — unlike the OCR key, MCP needs it, because query embedding is what
-  makes semantic search work. The indexer and mbsync never see it; the
-  indexer's embedding registration is identity-only and cannot read key
-  material by construction. It is never placed in the shared env anchor, the
-  shared `appsettings.Local.json` (world-readable by design), or the profile
-  object that health/doctor display.
-- **Two credentials default to environment variables but can move to file
-  secrets** — the Mistral OCR key (`Vision__Mistral__ApiKey`) and the
-  Cloudflare tunnel token (`TUNNEL_TOKEN`), both from `.env`. Environment is a
-  weaker channel than a file mount: it is readable through `docker inspect`,
-  `/proc/1/environ` and crash dumps, none of which a `/run/secrets` mount
-  exposes. Reading any of them requires **root on the Docker VM**, which is
-  outside this threat model (see the scope section), so the two channels are
-  equivalent against every attacker this document defends against — which is
-  why the switch is opt-in rather than forced (compose refuses to start on a
-  missing secret file, so forcing it would break the next deploy of every
-  existing install). Both now have a file channel, commented in `compose.yml`
-  with the steps: `Vision:Mistral:ApiKeyFile` (mirrors `EmbeddingAuthOptions`)
-  and cloudflared's own `TUNNEL_TOKEN_FILE` / `--token-file`. **An earlier
-  revision of this bullet said cloudflared had no `_FILE` convention; it has
-  one** (verified in the 2026.9.1 source, `cmd/cloudflared/tunnel/subcommands.go`),
-  so no entrypoint wrapper is needed — only a token file readable by the
-  image's uid, 65532. **If the threat model ever widens to include a local
-  unprivileged account on the VM, flip both.** Scoping is already correct
-  either way: the OCR key reaches the embedder only, never the
-  internet-fronted mcp.
-- **Where a credential may come from is enforced, not advised.** A key file
-  (`*ApiKeyFile`) must not be readable by other users or writable by anyone but
-  its owner (group-read is allowed), and an inline key (`Auth:ApiKey`,
-  `Vision:Mistral:ApiKey`) is refused when it comes from a JSON config file —
-  the shared `appsettings.Local.json` is world-readable by design — while an
-  environment variable is accepted. `SecretConfig` holds both rules. Keys are
-  trimmed, so a pasted trailing newline doesn't turn into a 401.
-- **Blast radius of a compromised mcp container** therefore now includes a
-  reusable hosted-inference credential in addition to mail-search access. Use
-  a dedicated provider account/key with a conservative monthly spend limit,
-  and rotate on any doubt — the file's contents are the only thing to change.
-- **Bearer-only, HTTPS-only, no redirects, no proxy, and a bounded response**
-  are enforced in code (registration validation and `HostedHttp`, the handler
-  both hosted clients — this one and mistral-ocr — are built on), not
-  convention. The single exception is an embedding profile that opts in with
-  `Proxy=environment`, which registration accepts only for a profile holding
-  no key (`Auth:Scheme=none`): the key, if any, is attached beyond the proxy
-  and never by Mailvec. Its request bodies do pass through that proxy, which
-  is what opting in means. It exists for the synthetic dev corpus in Claude
-  cloud sessions (`docs/contributing/dev-corpus.md`).
-- **Egress**: mcp and embedder need outbound 443 to the configured endpoint.
-
-Deactivation is `MAILVEC_EMBEDDING_PROFILE=` (empty → Ollama) — but note the
-vectors already built under the hosted space stay, and the space-identity
-guards will (correctly) refuse mixed use until `mailvec switch-model`
-rebuilds; and as with OCR, nothing un-sends what was transmitted.
+A hosted embedding profile sends indexed body and attachment text chunks to the provider, plus semantic and hybrid search queries. Switching an existing archive re-embeds the historical corpus. Review the provider's data terms and cost controls before activation. Keep the API key in the owner-only `secrets/embedding_api_key` file; only MCP and embedder need it. Identity checks refuse a mixed vector space. The hosted client connects directly and ignores `HTTP(S)_PROXY`; a profile may opt into the environment's proxy (`Proxy=environment`) only if it holds no key (`Auth:Scheme=none`), which exists for the synthetic [dev corpus](contributing/dev-corpus.md) in Claude cloud sessions, where the egress proxy attaches the key. To return to Ollama, clear the profile and run `mailvec switch-model` as described in the [Docker runbook](deploy-docker.md#hosted-embedding-provider).
 
 ## The other shape: a loopback-only local install
 
-`ops/install-all.sh` still produces the original single-Mac deployment — launchd services, MCP bound to `127.0.0.1:3333`, the MCPB bundle for Claude Desktop. It remains supported and is what [`docs/clients/`](clients/README.md) documents. Its model is the one this page used to describe in full:
-
-- **The trust boundary is the macOS user account.** Inside it, any local process can call any tool; outside, Mailvec is unreachable.
-- **Loopback is per-host, not per-user.** A second account on the same Mac can `curl http://127.0.0.1:3333/` and read your mail. Accepted because the realistic adversary already has unix-level read access to `~/Mail/` and `~/Library/Application Support/Mailvec/archive.sqlite` and doesn't need MCP to extract them.
-- **No inbound external traffic**, hence no inbound TLS and no auth. HostGuard is the only network-facing control, and it defends solely against browser-mediated DNS rebinding.
-- **The parsers run in-process here** (`Parser:Mode=inprocess`, the default): the launchd install has no `parse` container, so PDFium and the managed parsers run inside the indexer, embedder and MCP server exactly as they did before the split, and the residual above does not apply — a parser compromise here is a compromise of a process that holds the archive. The on-demand exposure is smaller only in reach (loopback), not in kind; the embedder's unattended OCR pass is the dominant surface either way.
-
-The two shapes are not meant to be mixed. Everything else on this page describes the container + tunnel deployment; if you're running loopback-only, read the accepted-risk conditions below as *already satisfied* rather than as live constraints.
+The macOS install binds HTTP to `127.0.0.1:3333` and can serve stdio clients. A process under another account on the same machine can still reach loopback, so protect the Maildir and archive with OS permissions. Parsers run in-process on macOS; the separate Docker parser boundary does not apply. Do not expose the loopback service through a port forward without adding authentication.
 
 ## Tools and data flow
 
-All seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) are **read-only against the database** — none mutate `messages`, `chunks`, or `attachments` — and, as of the attachment-in-memory rework, **none write to the filesystem** either. `view_attachment` and `get_attachment_page_image` decode attachment bytes out of the Maildir *in memory* (inlining an image / small text file, or rasterising a PDF page) and persist nothing; `get_attachment_text` is a pure DB read of stored `extracted_text`. The only attachment writes to disk come from the explicit, user-initiated download path — `mailvec extract-attachments` — which goes through `AttachmentExtractor.Extract` and its [defense-in-depth path checks](../src/Mailvec.Core/Attachments/AttachmentExtractor.cs):
-
-- `Path.GetFileName` strips directory components from caller-supplied filenames
-- canonical-path containment refuses any target outside the configured download dir
-- a `ReparsePoint` check refuses to overwrite an existing symlink at the destination (TOCTOU mitigation)
-- write-then-rename so a concurrent reader never sees a partial file — to a **randomly named** temp file created with `FileMode.CreateNew` (`open(O_CREAT|O_EXCL)`, which fails on an existing path rather than following it). The old `<target>.part` was guessable *and* written with `File.WriteAllBytes`, which follows symlinks: the target was guarded, the sibling wasn't, so anything able to pre-place that one file redirected the attachment bytes anywhere the user could write. The final `rename(2)` replaces the destination entry itself and never follows a symlink there, so the swap stays safe even if the target check raced.
-
-`MaildirAttachmentReader`'s containment guard **fails closed**: its symlink probe used to swallow every exception and report "not a link", so an unreadable or erroring path silently skipped symlink resolution and fell back to the lexical check alone — which by construction cannot catch a symlinked component escaping the Maildir root. "Couldn't tell" now refuses the read.
-
-`AttachmentDownloadDir` is intentionally `~/Downloads/mailvec/` (visible to the user). Don't move it to a hidden directory or `~/Library/Caches/` — that hides forensic evidence if a tool ever does write something unexpected.
+The seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) read the archive. Attachment viewing decodes source files in memory. `get_attachment_text` reads extracted text from SQLite. The explicit CLI `extract-attachments` path writes files under its configured download directory and checks path containment and symlinks. See [attachment behavior](attachments.md).
 
 ## Host / origin validation (DNS-rebinding guard)
 
-Loopback binding stops other *hosts* on the network from routing to `:3333`, but it does **not** stop a web page the user visits from reaching it. A page on `evil.com` can hold a connection, let its DNS TTL expire, re-resolve `evil.com` to `127.0.0.1`, and then issue requests the browser treats as *same-origin* — at which point page JavaScript could POST to the MCP endpoint and read the response. Statelessness makes that a single request: no handshake, no session header, so one `tools/call` runs `search_emails` or `get_email` and the page reads mail straight out of the reply.
-
-Every HTTP request (MCP, `/health`, `/up`) therefore passes through a guard ([`HostGuard`](../src/Mailvec.Mcp/HostGuard.cs), wired in [`Program.cs`](../src/Mailvec.Mcp/Program.cs) `RunHttp`) that returns **403** unless:
-
-- the `Host` header's hostname is an allowed name (`localhost` / `127.0.0.1` / `::1` always, plus anything in `Mcp:AllowedHosts`), and
-- the `Origin` header, when present, also resolves to an allowed name.
-
-After a rebind the browser still sends `Host: evil.com`, so the request is refused before reaching any handler. Native clients (Claude Code's MCP transport) connect to loopback and send no `Origin`, so they're unaffected. This is **not** authentication — a hostile local process can still spoof the `Host` header; it defends specifically against the browser-mediated cross-origin vector.
-
-**The tunnel depends on this.** cloudflared forwards the original public `Host` header, so `MCP_PUBLIC_HOSTNAME` must be set in the VM's `.env` (compose wires it into `Mcp:AllowedHosts`, alongside `mcp` for in-network access) or **every request through the tunnel 403s**. See [remote-access-cloudflare.md](remote-access-cloudflare.md).
-
-The guard is defense-in-depth, **not** the auth boundary — that's Cloudflare Access. A `Host` header is trivially spoofed by anything that can already reach the origin, so HostGuard buys nothing against a caller inside the compose network or on the LAN if a port were published. It defends specifically against the browser-mediated rebinding vector. See [the endpoint posture above](#up-and-health) for how `/up` and `/health` differ.
+HostGuard returns 403 unless the request's `Host` and any `Origin` match loopback or `Mcp:AllowedHosts`. Set `MCP_PUBLIC_HOSTNAME` for a tunnel deployment so the forwarded public Host is allowed. A caller that can reach the origin directly can spoof these headers; use Access and, where appropriate, origin authentication for identity.
 
 ## Origin authentication (`Mcp:Access`)
 
-The origin can validate Cloudflare Access's `Cf-Access-Jwt-Assertion` itself
-rather than trusting whatever reaches `mcp:3333`. Source:
-[`AccessAuth.cs`](../src/Mailvec.Mcp/AccessAuth.cs) +
-[`AccessOptions.cs`](../src/Mailvec.Core/Options/AccessOptions.cs).
-
-**Why bother, when Access already gates the tunnel.** Three reasons, in order of
-how likely they are to matter:
-
-1. **The edge policy isn't in this repo.** It's Cloudflare dashboard state — no
-   version control, no review, no test. "The gate is correct" has been an
-   assumption verified by remembering to go and look. Origin validation makes
-   the origin's half checkable in CI.
-2. **It makes the `/up` split real.** The section above says the monitoring
-   token must reach `/up` and nothing else, and openly concedes that this "lives
-   in Cloudflare's control plane rather than in this repo — so it is a
-   requirement to verify, never a property to assume." With `MonitoringAudience`
-   set, an assertion carrying the monitoring app's audience is **rejected at
-   the origin** on `/` and `/health`. Pinned by `AccessAuthTests`. **This
-   does not make the edge policy irrelevant**: Cloudflare stamps the audience
-   of whichever Access app *matched the request*, and the origin checks only
-   `aud` — no identity claim. If the root app's policy admits the monitoring
-   token (e.g. `Include · Any Access Service Token`), that token calling `/`
-   carries the *root* audience and the audience check accepts it. That is
-   what `Mcp:Access:AllowedIdentities` (`MCP_ACCESS_ALLOWED_IDENTITIES`) is
-   for: a comma-separated list of the emails and service-token client ids
-   allowed on `/` and `/health`, checked against the assertion's `email` /
-   `common_name` claim whatever the edge policy admitted. Empty keeps the
-   audience-only behaviour and logs a warning at boot. A rejection logs the
-   presented identity, so a forgotten legitimate caller shows up in
-   `docker compose logs mcp` as a one-line fix.
-3. **It survives a published port.** The single most dangerous config change in
-   this stack — uncommenting the mcp `ports:` mapping — currently hands the
-   whole mailbox to the LAN with no OAuth. With validation on, those callers
-   carry no assertion and get a 401.
-
-**What is validated**: signature (against the team's JWKS at
-`<team-domain>/cdn-cgi/access/certs`, fetched at startup and refreshed by
-`ConfigurationManager` — **not** via OIDC discovery, which Cloudflare Access
-does not publish at the team domain; see `AccessCertsRetriever`), issuer,
-`exp`/`nbf` with a 60s skew,
-and audience — coarse at the scheme (is this token for this deployment) then
-narrow per endpoint (for *this* endpoint). Unsigned `alg:none`, wrong-issuer,
-wrong-audience, expired, and malformed assertions all 401; a valid assertion for
-the wrong application 403s.
-
-**What is deliberately NOT trusted**: the `Cf-Access-Authenticated-User-Email`
-header on its own — trivially forged by anything that can reach the origin, and
-meaningful only when covered by a validated assertion. Nor the `Authorization`
-header: on a claude.ai connector request that carries the connector's own OAuth
-token, a different credential entirely, and JwtBearer's default fallback to it
-is explicitly suppressed.
-
-**Loopback is exempt** (`AllowLoopback`, default true). The compose healthcheck
-curls `127.0.0.1:3333/health` from inside the mcp container and `mailvec doctor`
-does the same under `docker compose exec`; neither has an assertion. Not a hole:
-cloudflared and every sibling container connect to `mcp:3333` over the compose
-network and arrive with a real address, so they are never exempt.
-
-**Off by default, and that's not the same as a gap.** The loopback/launchd
-install has no Cloudflare in front of it, no team domain and no assertion on any
-request — defaulting this on would break that shape at startup. Fail-closed here
-means *once configured, never silently degrade to allowing*: an `Enabled` with a
-missing team domain or audience **refuses to start** (naming the missing knob),
-a monitoring audience equal to the owner's refuses to start, and a JWKS endpoint
-that yields no keys **refuses to start** rather than falling back to open. A
-non-loopback bind with validation off logs a warning every boot rather than
-being quietly fine.
-
-**Why the key fetch is at startup and not lazy.** v0.2.0 pointed the handler at
-an OIDC discovery document Cloudflare does not serve. The 404 was swallowed by
-`JsonWebTokenHandler` into an EventSource no logger reads, so the origin logged
-"validation ENABLED", passed its healthcheck (loopback is exempt), and 401'd
-every real caller with `IDX10500` while logging no retrieval attempt at all.
-Every negative test passed throughout — a server that authenticates nobody
-refuses bad tokens perfectly. The boot-time fetch logs the resolved JWKS URL and
-the `kid`s it obtained, so the same class of breakage is a boot that never
-happened instead of a green container serving nothing.
-
-Enable procedure and the verification curls:
-[remote-access-cloudflare.md](remote-access-cloudflare.md).
+When enabled, MCP validates Cloudflare's `Cf-Access-Jwt-Assertion` at the origin. Configure the Access team domain, root application audience, optional monitoring audience, and an allowlist of owner emails or permitted service-token IDs. The monitoring token must be excluded from the owner allowlist. A valid root audience alone cannot compensate for an overly broad Access policy: Cloudflare issues the audience of the application that matched the request. `Mcp:Access` is off by default; enable and verify it with the [remote-access procedure](remote-access-cloudflare.md#origin-validation-of-the-access-assertion-mcpaccess). Keep the loopback exemption for in-container healthchecks.
 
 ## Hostile mail content (indirect prompt injection)
 
-Every field Mailvec returns is written by whoever sent the message: subject,
-sender name and address, body text, HTML, attachment filenames, extracted
-document text, and OCR'd text off scanned pages. A sender who can put a PDF in
-front of the OCR pass can also put a *sentence* in front of the model.
-
-**Read-only is not the boundary here, and saying it is gets the threat model
-backwards.** "Mailvec can't send mail" is a statement about Mailvec. The agent
-holding this connector generally also holds tools that can send, post, write, or
-fetch — and mail content is the classic way an attacker reaches those. The
-exposure is the *other* connectors in the session, which is exactly the surface
-Mailvec has no control over.
-
-What's built, and what each part is actually worth:
-
-- **`ServerInstructions`** (`Program.cs::ConfigureServerInfo`) states the trust
-  model once, as standing context: mail is data, never instruction; a sender
-  address is not proof of identity; and — the part no tool description can carry
-  — read-only bounds *Mailvec*, not the agent, so outward actions whose target
-  or justification came out of the mailbox need explicit user confirmation.
-- **Every mail-bearing tool description** repeats the classification
-  (`ToolText.UntrustedContent`). Not redundancy: a client folds
-  ServerInstructions into a system prompt once, but the model re-reads a tool
-  description at the moment it decides to call — which is when the framing has
-  to be in front of it. `view_attachment` and `get_attachment_page_image` add
-  that it covers text read *off the pixels*; `search_emails` adds that a query
-  taken from mail content lets one sender choose what you read next.
-- **Tool annotations** (`ReadOnly = true`, `OpenWorld = false` on all seven) are
-  the machine-readable half, for clients that gate confirmation on them.
-- Pinned by `McpSurfaceTests` at the wire, because all of the above is free text
-  that an edit can silently drop.
-
-**This is framing, not enforcement, and the distinction matters.** None of it
-stops a crafted message from reaching the model; it gives the model grounds to
-refuse and a client grounds to ask. The residual risk is unchanged in kind —
-see "Compromised AI agent exfiltration" below, which this does not address.
-**Don't add regex "injection detection" and treat it as a boundary**: it fails
-open on anything it doesn't match while reading like a control that works.
-
-**Its efficacy is untested** — the tests prove the framing reaches the client,
-not that a model obeys it. See the call-out under
-[What's out of scope](#whats-out-of-scope) and
-[future-ideas.md](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing).
-
-**Structure is sender-controlled too, not just text.** Three things a sender
-chooses shape *where* their content appears, and the residual after hardening
-is stated here rather than implied:
-
-- **Thread membership.** `thread_id` is the first entry of the sender-written
-  `References` header, so anyone who knows one Message-ID in a thread — any past
-  correspondent, any public list archive — can attach mail to it, with a spoofed
-  `From`. Fixing that needs sender-authentication results (DKIM/DMARC), which
-  Mailvec does not store. What is bounded: `get_thread` caps the thread in SQL
-  and never loads HTML (a padded thread cannot exhaust mcp's memory), and the
-  message the caller asked about is always in the answer however many are
-  attached. **Accepted residual:** an attacker's message can appear inside a
-  real thread, and a flood can fill the capped view (`truncated`/`totalCount`
-  report it).
-- **Dates.** `date_sent` is clamped at ingest to no later than a day past
-  arrival (the original `Date:` stays in `raw_headers`), so future-dated mail
-  cannot pin itself to the top of "recent mail" or make `latestDate` claim
-  2099. **Accepted residual:** backdating has no trusted lower bound — the
-  initial bulk import stamped all history with the import day — so a message
-  can still claim to be old and sort first in a thread.
-- **Labels in server-written text.** Attachment filenames and content types
-  spliced into a tool's own framing go through `ToolText.Label` (control, bidi
-  and separator characters stripped, quotes neutralised, length capped), so a
-  filename carrying `%0A` cannot forge a server line. JSON fields were already
-  escaped by the serializer.
+Mail bodies, attachments, sender fields, headers, and filenames are attacker-controlled. MCP responses frame that content as untrusted, and labels in server-written text are sanitized. Those measures do not prove an AI client will ignore instructions inside a message. Treat any agent allowed to call Mailvec as able to read the whole archive and evaluate its other connected tools accordingly. See [future work](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing) for model-level testing.
 
 ## Response bounds
 
-Not a confidentiality control — a blast-radius one. MCP tool calls are limited
-to 8 concurrent requests with a queue of 32 by default; excess requests get
-503. This bounds work in flight, but there is no per-identity request-rate
-limit (see below).
-
-- **Search** is bounded by `Mcp:SearchMaxLimit`, **attachment text** by its
-  `maxChars`/`offset` window — both caller-supplied.
-- **`get_thread` is the one whose size the caller doesn't choose**: a thread is
-  as long as whoever replied to it made it. It's therefore capped by
-  `Mcp:ThreadMaxMessages` (100) and, for `includeBodies=true`, an aggregate
-  `Mcp:ThreadMaxBodyChars` (200k) budget spent oldest-first. Truncation is
-  always reported (`truncated`, `totalCount`, per-entry `bodyTruncated`) —
-  silent truncation is worse than none, because the model summarises half a
-  thread as if it saw all of it. The message cap is applied in the SQL, and
-  the thread query never loads `body_html`, so the cap bounds memory as well
-  as the response.
-- **`get_email`** is how a truncated thread entry is read in full, so its
-  bound (`Mcp:EmailMaxBodyChars`, 1M chars) is set past any real message
-  rather than as a budget; before it, a body was limited only by the parse
-  service's 64 MB response ceiling. A cut is reported (`bodyTruncated`,
-  `bodyTextChars`). It loads attachment *lengths*, not their extracted text.
+MCP limits concurrent requests and queue length. Search limits results; attachment text is paged; thread and message bodies have explicit size caps with truncation reported in the response. These controls bound memory and response size, not the amount of mail an authorized client can read over multiple calls.
 
 ## What's accepted
 
-These are explicit decisions, not oversights:
-
-- **The MCP origin has no auth of its own *unless `Mcp:Access` is configured*; otherwise Cloudflare Access is the entire gate.** With it unset — the default, and how this stack has always run — anything that can reach `mcp:3333` inside the compose network can call any tool. That was a deliberate division of labour (the origin stays simple, the edge does identity) and it holds precisely as long as the tunnel is the only ingress. **Publishing the mcp container's `ports:` mapping breaks it**: port 3333 then answers any host on the LAN with no OAuth at all, and several of the acceptances below stop holding. Turning on origin validation ([below](#origin-authentication-mcpaccess)) removes this acceptance rather than mitigating it — the server then refuses anything without a valid assertion, LAN callers included.
-- **No per-tool authorization.** Any caller that clears the Access gate and can invoke `search_emails` can also invoke `view_attachment`. Trivially simple while every tool is read-only and every caller that clears the gate is owner-equivalent — which means the Claude Code service token as well as the owner's OAuth session, so it's a property of the Access policy rather than of the number of humans involved ([above](#up-and-health)). Revisit if a write tool ever lands, or if a caller who *shouldn't* be owner-equivalent is admitted (sending mail is out of scope, but the principle applies if anything in that direction ever gets considered).
-- **Untrusted mail is parsed by one process that holds nothing, and the two tools that drive it on demand are exposed over the tunnel.** PDFtoImage/PDFium (PDF rasterisation) and SkiaSharp (image decode) are native C++ libraries, so a malicious PDF/image is a memory-safety attack surface the managed extractors (`PdfPig` / `OpenXml`) aren't — and those managed parsers have their own unbounded-work failures (phase 0 of the [isolation proposal](proposals/attachment-parser-isolation.md) measured PDFium OOM-killed by a 100 KB PDF and a 958-byte PDF rendering past 180 s, uncancellably). Parsing is triggered in **two** places: `get_attachment_page_image` / `view_attachment` (on demand, via MCP) and the **embedder's OCR pass**, which renders scanned PDFs and images *automatically and unattended* for every such attachment that arrives by mail — plus every message the indexer ingests.
-
-  **In the container, all of it runs in the `parse` service** ([above](#container-hardening)): no volume, no secret, no egress, non-root, a bounded lifetime. The accepted **residual** is precise. Code execution inside `parse` yields the document being parsed and any others in flight, and the ability to return **attacker-chosen output** for those requests — a lying `ParsedMessage` (wrong sender, planted body text, fabricated attachment text), a JPEG the vision model or Claude then sees, a wrong page count — and nothing else. The lying-output channel is real, but it is the channel an attacker already has by writing the email that way: parser output is untrusted content to every tool description and to the indexer's storage. What the split removes is the lie being *written into the archive directly*, and the parser's crash or hang taking the archive-holding process down with it — a wedge that, before, stopped all indexing for anyone who could send mail. "Nothing else" includes the mail tools: mcp refuses the parse network outright (`Mcp:DeniedNetworks`, [above](#container-hardening)), so the shared network is a one-way road, and the client that sends the parser bytes follows no redirect and buffers no response over `Parser:MaxResponseBytes`, so the parser cannot turn its callers into an exfiltration path or exhaust them either.
-
-  `Mcp:DisabledTools` (which drops tools from both tools/list and tools/call at the server) is staged-but-**commented** in compose.yml, so the on-demand pair stays reachable through the tunnel. That's a deliberate call, resting on two things:
-
-  1. **The unattended pass dominates the on-demand one.** The embedder already feeds every scanned PDF and image that arrives by mail to PDFium/SkiaSharp, with no tool call, as a side effect of delivery. An attacker who can mail you a malicious PDF already reaches those parsers. Disabling the two tools would not close that path — it would only remove the *smaller*, attended half of the same exposure.
-  2. **Every caller the gate admits is already owner-equivalent.** The "remotely-reachable native parser" concern the earlier revision of this doc raised assumed an exposed origin; with the tunnel as sole ingress, no caller reaches the tools without clearing Access first.
-
-     **Read that as written — it is deliberately weaker than "one identity", which is what this bullet used to claim.** Two kinds of caller clear the gate on the root application, and only one of them is a human:
-
-     - the **owner**, via Access Managed OAuth;
-     - the **named Claude Code service token**, the owner's own agent credential.
-
-     Both are the owner. But "owner-equivalent" is the honest frame rather than "one identity", because *which* credentials are owner-equivalent is a Cloudflare-side fact this repo cannot see — and one that has been wrong before: an `Any Access Service Token` rule on the root application silently makes every token in the account owner-equivalent, monitoring credentials included ([above](#up-and-health)). **Verify it rather than inheriting this sentence's assumption**, and don't let the acceptance drift back to resting on a claim whose truth lives in a dashboard nobody re-reads.
-
-     So the durable form: **if a credential that clears this gate ever stops being owner-equivalent, this acceptance is void.** Note also what scoping the credentials does *not* change — a leaked owner-equivalent credential still has the whole mailbox through `search_emails` + `get_email`, no native parsing involved. Trimming the two tools would narrow what *else* such a leak reaches, and that is a real difference in kind (data disclosure vs. a memory-safety surface) — but point 1 is what makes it an acceptable trade: the same parsers are fed unattended by anything that arrives in the mailbox, so an attacker who wants them can simply *send mail* and wait. The tools are a faster path to a surface they hold either way, not a new one. And since the split, what that surface yields is the residual above, not the archive.
-
-  **This acceptance is conditional. It stops holding if any of these change** — reinstate the `Mcp__DisabledTools__*` lines in compose.yml if so:
-  - the mcp container publishes a host port (unauthenticated LAN callers, no OAuth);
-  - a **human** identity other than the owner is added to the Access policy;
-  - the root application admits a service token that **isn't** owner-equivalent. Two shapes to watch for: the policy reverting to `Any Access Service Token` (which admits every token in the account, so it widens by *creating a token anywhere*, with no edit to Mailvec's policy and no signal here), or a scoped credential — the monitor's — being re-authorized on the root app instead of its path-scoped one;
-  - the tunnel's ingress rules stop 404-ing the unauthenticated surfaces;
-  - a mutating tool lands, changing what a parser compromise gets you;
-  - `parse` gains a volume, a secret, a non-internal network, or `Parser__Mode=inprocess` is set on any other container (the image build's strip-and-assert makes the last one a loud failure, not a quiet regression);
-  - `Mcp__DeniedNetworks__0` stops matching the `parse` network's subnet — both read `MAILVEC_PARSE_SUBNET`, so changing one in compose without the other, or a second network that mcp and parse share, reopens the return path. A malformed entry is fatal at startup, but a *wrong* subnet is not detectable by the server; the verification is a container on the parse network getting 403.
-
-  See [remote-access-cloudflare.md](remote-access-cloudflare.md) and [Future ideas](future-ideas.md).
-- **No per-identity request-rate limit.** The MCP concurrency and queue limits above bound simultaneous work, but a chatty agent can keep that queue full and burn VM CPU on SQLite reads and GPU-VM time on embedding queries. The Access gate bounds who can do this to owner-equivalent callers; Cloudflare's edge absorbs unauthenticated flood traffic before it reaches the tunnel.
-- **`Mcp:LogToolCalls` is off by default.** When on, the server logs each tool call's arguments **and a summary of its results**. Both halves carry mailbox PII, and the result half is the one that surprises people:
-  - `search_emails` — the free-text query and `fromContains` / `fromExact` filters, plus the **top 5 hits' sender addresses, subjects and dates**.
-  - `get_email` — sender address and subject.
-  - `get_thread` — the root subject and up to 5 participant addresses.
-  - `view_attachment` — attachment filename and content type.
-
-  In the container these land in `MAILVEC_LOG_DIR=/logs` *and* in `docker logs` via the Serilog console sink — the latter goes to the Docker host's logging backend, which no Mailvec-side setting governs. Turning it on is a deliberate choice with a clear "off when done" expectation; recall the rolling files are 10MB each with the 14 most recent retained.
-
-  **You often don't need it.** The always-on `mcp-tool` line carries tool name, latency, and (where meaningful) result count and search mode — enough for "was that slow, and did it return anything?" without any PII. Reach for `LogToolCalls` only when you specifically need the content.
-- **Logs may incidentally contain sender / subject text** even with tool-call logging off. The indexer logs parse failures with file paths, the embedder logs which messages it embedded, etc. None of these include body content, but they aren't sanitized either. Treat the log directory as confidential.
-- **`~/Documents` is unreadable** to Claude Desktop's spawned children regardless of Full Disk Access — a TCC quirk, not an intentional control. Don't rely on it as a security boundary; it's a `com.apple.macl` ACL that a different stdio client might or might not be subject to.
+- Authorized clients can call every read tool, including on-demand attachment rendering. There is no per-tool or per-identity scope. Do not admit a client that should see less than the entire mailbox.
+- With `Mcp:Access` disabled, the Compose origin trusts reachable network peers. Keep its host port unpublished and the tunnel as the only external ingress. Enable origin validation for an additional identity check.
+- Parser isolation limits direct access to stored mail and credentials, but a compromised parser can falsify results for documents it handles. Keep its mounts, egress, network denial, and response bounds intact.
+- `Mcp:LogToolCalls` is off by default. When enabled, queries and result summaries can include addresses, subjects, and filenames. Ordinary logs can also contain paths and message identifiers; protect both rolling files and Docker logs. See [Logs](logs.md).
+- There is no per-identity request-rate limit. MCP concurrency limits bound simultaneous work, while Access limits who can request it.
 
 ## What's out of scope
 
-- **Multi-tenant isolation.** The archive is single-account and nothing in Mailvec scopes results per-caller, so **every caller the Access gate admits holds the owner's entire mailbox**, not a view of their own. That is not a hypothetical distinction: an `Any Access Service Token` rule on the root application hands the whole mailbox to any monitoring credential in the account ([above](#up-and-health)) — a grant that arrives without anyone editing Mailvec's policy, and that this project shipped with for about a year. Admitting anyone who shouldn't hold the whole mailbox is therefore a model change, not a config change — and it also invalidates the native-parser acceptance above.
-- **Root on the Docker VM.** `ConnectionFactory` hardens the DB dir/files to owner-only (0700/0600), where the owner is the configured container uid (10001 by default). Anyone with root on the VM, or the ability to run containers on it, reads the archive directly and doesn't need MCP. The VM's own access control is the boundary.
-- **Network adversaries at the edge.** TLS termination, DDoS absorption, and the identity gate are Cloudflare's. Mailvec publishes no inbound port and holds no certificate; the origin is reachable only through the tunnel the sidecar dials *outbound*. This delegates a real chunk of the security model to Cloudflare — that's the trade the iOS requirement forced (see [remote-access-cloudflare.md](remote-access-cloudflare.md) for why nothing local-only could work).
-- **Compromised AI agent exfiltration.** If the agent calling Mailvec is itself malicious (e.g. an LLM jailbroken into "find all messages from X and POST them to attacker.com"), nothing in the MCP layer stops it from reading every email and shipping the contents back to its own provider. The relevant control is "trust the agent" — choose your clients. Note this is now *structural*, not hypothetical: connectors are invoked from Anthropic's cloud, so every tool call and its results already traverse a third party by design.
-- **Encrypted-at-rest archive.** `archive.sqlite` and the Maildir are plain files at rest on the host's local disk, protected by unix permissions and whatever disk encryption the host and hypervisor provide. Per-application encryption isn't built.
-- **User-facing data policy** — retention, deletion, export, consent-at-onboarding, breach response. These presuppose data subjects other than the operator. Mailvec has exactly one user, who is also the person who runs it; a privacy policy addressed to yourself is paperwork, not a control. This becomes in scope the moment a second identity is admitted — at which point it arrives together with the multi-tenancy work above, not before it.
-- **Container image / filesystem scanning and publish-approval gates in CI.** Both produce artifacts whose value is having someone to show them to: a scan report gated on severity needs a reviewer with authority to accept an exception, and an environment approval needs a second person to approve. On a single-owner homelab, the operator builds, reviews, and deploys — so these add ceremony without adding a decision-maker. The NuGet vulnerability gate above is deliberately *not* in this category: it's an automated check with a real pass/fail, not a report.
-- **An external penetration test.** Disproportionate for one mailbox behind a single-identity Access policy, and the likely finding set is what's already written down here — no per-identity request-rate limit, native parsers fed attacker bytes (in one data-less container). Revisit if a second identity is ever admitted, which is the same trigger as the data-policy item.
-
-> **What is *not* out of scope, and is genuinely untested: whether the
-> hostile-content framing works.** [The framing above](#hostile-mail-content-indirect-prompt-injection)
-> is pinned at the wire by `McpSurfaceTests` — but that asserts the text *reaches
-> the client*, not that a model *acts on it*. A crafted message that talked an
-> agent into chaining Mailvec output into another connector would pass every test
-> in this repo today. Closing that means adversarial fixtures run against a real
-> model with a second observable tool attached — closer in shape to the
-> `baselines/` eval harness than to a unit test. Until it exists, treat the
-> framing as a mitigation of unmeasured strength, not a control. Tracked, with
-> what it would take and when to un-defer, in
-> [future-ideas.md → Adversarial testing of the prompt-injection framing](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing).
-
-## More local clients don't change the threat model
-
-Pointing another MCP-capable client at Mailvec multiplies the *number of trusted callers* but not the *trust boundary*. Each such client either clears the same Access gate as any other remote caller, or — if pointed at a local install — runs as the user against a database they can already read directly. Either way it lands inside an existing boundary rather than opening a new one. This was written when a "Phase 5" was going to add Gemini CLI / Codex CLI / ChatGPT desktop as local clients; that phase was dropped (CHANGELOG, 2026-08-10) because the hosted endpoint made per-provider wiring unnecessary, but the reasoning is what matters and it is unchanged.
-
-What *would* change the model is per-client differentiation: moving from "one identity, all tools" to per-client scopes (Access service tokens per client, per-tool authorization, MCP token issuance). That's a much bigger lift and stays parked in [Future ideas](future-ideas.md) — note it's also the prerequisite for the cross-vendor path, since a ChatGPT or Gemini connector means handing a *second vendor's cloud* the same unscoped access to the whole mailbox that Anthropic's has today.
-
-The near-term risk more clients introduce is more places where `LogToolCalls=on` is tempting (capturing real usage while debugging a client-specific quirk). Each of those is a deliberate per-debug-session choice with a clear "off when done" expectation, not a default-on switch.
+Mailvec does not provide multi-tenant mail separation, application-level encryption at rest, or a defense against a malicious or compromised client that is already authorized to read mail. Host administrators with root or Docker control can read the mounted files directly. Adding another identity or a mutating tool requires revisiting the authorization model.

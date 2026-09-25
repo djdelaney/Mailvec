@@ -6,7 +6,7 @@ using Mailvec.Parsing.Contracts;
 namespace Mailvec.Core.Tests.Parsing;
 
 /// <summary>
-/// The project boundary IS the isolation (docs/proposals/attachment-parser-isolation.md):
+/// The project boundary IS the isolation (docs/security.md):
 /// the processes that hold the mailbox reference Core, Core references only
 /// the Contracts, and every parser lives in Mailvec.Parsing, which never
 /// references Core. A parser package creeping back into Core — or Core

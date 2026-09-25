@@ -18,7 +18,7 @@ All three take the email (`id` or `messageId`) plus `partIndex` from the `get_em
 - **Small text-ish files** (`text/*`, `application/json`, `application/xml`, etc., under `Mcp:AttachmentInlineTextMaxBytes` — default 256 KB) have their decoded UTF-8 text included as a text block. The displayed text is capped at the same 50,000-char window `get_attachment_text` uses (with a notice giving the total); page the rest via `get_attachment_text` `maxChars`/`offset`.
 - **Any other binary type** (PDF, DOCX, zip, …) returns just a short summary pointing at the right tool: `get_attachment_text` for the document's extracted text, or `get_attachment_page_image` to view a PDF page.
 
-It deliberately does **not** ship arbitrary binary back through MCP — Claude.ai's bridge maps every non-image blob to an image block and rejects it as "unsupported image format" (which is why only `image/*` is inlined). It also no longer persists the file to `~/Downloads/mailvec/`: writing mail content to disk on every read was a needless privacy footprint (see the pre-go-live data-leak review) and is meaningless in a containerised deployment, where that path isn't the user's Downloads folder.
+The tool returns summaries for other binary types; it does not write viewed attachments to disk.
 
 **Need the actual file on disk?** Use `mailvec extract-attachments` — the explicit, user-initiated download path. `Mcp:AttachmentDownloadDir` (default `~/Downloads/mailvec/`) configures where it writes.
 

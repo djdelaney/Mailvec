@@ -5,10 +5,8 @@ using ModelContextProtocol.Server;
 namespace Mailvec.Mcp.Tests;
 
 /// <summary>
-/// Mcp:DisabledTools resolution — the server-side half of trimming the
-/// remote tool surface before the tunnel goes live (docs/security.md
-/// requires dropping the native-parser tools from any internet-fronted
-/// deployment). Misresolution here is a security bug, not a cosmetic one:
+/// Mcp:DisabledTools resolution for deployments that trim the tool surface.
+/// Misresolution here is a security bug, not a cosmetic one:
 /// a silently-ignored entry leaves the tool it meant to disable exposed.
 /// </summary>
 public class ToolSurfaceTests

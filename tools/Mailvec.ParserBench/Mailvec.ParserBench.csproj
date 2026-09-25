@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Phase-0 measurement harness for docs/proposals/attachment-parser-isolation.md.
+  <!-- Parser stress measurement harness; see docs/security.md.
        Deliberately NOT in Mailvec.slnx (same treatment as tests/Mailvec.CloudSmoke.Tests):
        it generates adversarial PDFs and runs the real parsers on them, which is a
        one-off measurement, not a CI check.

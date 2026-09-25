@@ -752,8 +752,7 @@ public sealed class EmbeddingWorker(
     }
 
     /// <summary>
-    /// The artifact-pinning half of the stability hybrid (decision 2 of
-    /// docs/proposals/embedding-providers.md): the stored vectors were
+    /// The artifact-pinning half of the embedding-space guard: the stored vectors were
     /// produced by a specific model ARTIFACT, and a re-pulled tag with
     /// different weights is a new vector space wearing the old name — a
     /// change no name, dimension, or config hash can see. First observation
