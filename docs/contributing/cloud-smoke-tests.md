@@ -73,17 +73,23 @@ inclusion somewhere, degrades safely instead of failing red.
 Export the same env vars `cloud-smoke.yml` sets (your own keys, in your own
 shell — never share them in chat or commit them):
 
+The profile name is spelled inside every variable name, so it must be a valid
+shell identifier: `fireworks_smoke`, never `fireworks-smoke`. A shell rejects
+`export A-B=…` and a pasted block carries on past the error, leaving the
+profile unconfigured (the workflow's YAML `env:` block has no such limit,
+which is how the hyphenated name went unnoticed).
+
 ```sh
-export Embedding__ActiveProfile=fireworks-smoke
-export Embedding__Profiles__fireworks-smoke__Protocol=openai-compatible
-export Embedding__Profiles__fireworks-smoke__ProviderId=fireworks
-export Embedding__Profiles__fireworks-smoke__Endpoint=https://api.fireworks.ai/inference/v1/embeddings
-export Embedding__Profiles__fireworks-smoke__Request__Model=accounts/fireworks/models/qwen3-embedding-8b
-export Embedding__Profiles__fireworks-smoke__Request__EncodingFormat=float
-export Embedding__Profiles__fireworks-smoke__OutputDimensions=4096
-export Embedding__Profiles__fireworks-smoke__SpaceId=fireworks:qwen3-embedding-8b:4096:cloud-smoke
-export Embedding__Profiles__fireworks-smoke__Auth__Scheme=bearer
-export Embedding__Profiles__fireworks-smoke__Auth__ApiKey=<your Fireworks key>
+export Embedding__ActiveProfile=fireworks_smoke
+export Embedding__Profiles__fireworks_smoke__Protocol=openai-compatible
+export Embedding__Profiles__fireworks_smoke__ProviderId=fireworks
+export Embedding__Profiles__fireworks_smoke__Endpoint=https://api.fireworks.ai/inference/v1/embeddings
+export Embedding__Profiles__fireworks_smoke__Request__Model=accounts/fireworks/models/qwen3-embedding-8b
+export Embedding__Profiles__fireworks_smoke__Request__EncodingFormat=float
+export Embedding__Profiles__fireworks_smoke__OutputDimensions=4096
+export Embedding__Profiles__fireworks_smoke__SpaceId=fireworks:qwen3-embedding-8b:4096:cloud-smoke
+export Embedding__Profiles__fireworks_smoke__Auth__Scheme=bearer
+export Embedding__Profiles__fireworks_smoke__Auth__ApiKey=<your Fireworks key>
 
 export Vision__Provider=mistral
 export Vision__Mistral__Endpoint=<your Azure AI Foundry resource URL>
