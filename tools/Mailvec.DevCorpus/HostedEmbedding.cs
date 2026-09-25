@@ -51,6 +51,9 @@ public static class HostedEmbedding
         // printf, not $'…': the value carries a newline and env.sh stays POSIX-sourceable.
         sb.Append($"export {p}Text__QueryPrefix=\"$(printf 'Instruct: Given a web search query, retrieve relevant passages that answer the query\\nQuery: ')\"\n");
         sb.Append($"export {p}Auth__Scheme='none'\n");
+        sb.Append("# Route through HTTPS_PROXY: the cloud session's egress only works that way,\n");
+        sb.Append("# and it is where the key is attached. Refused for a profile holding a key.\n");
+        sb.Append($"export {p}Proxy='environment'\n");
         sb.Append("# No vision model here either: skip the OCR pass rather than log it failing.\n");
         sb.Append("export Embedder__OcrEnabled='false'\n");
         return sb.ToString();

@@ -56,7 +56,8 @@ internal static class Filler
         var qty = rng.Next(1, 5);
         var total = qty * (rng.Next(150, 4000) / 100m);
         return ("Receipts", $"{shop} <receipts@{Slug(shop)}.example>", $"Your receipt from {shop} (#{10000 + n})",
-            $"Thanks for shopping at {shop}.\n\nItem: {item} x{qty}\nTotal: {total:0.00} GBP\n\nKeep this email as your receipt.\n");
+            $"Thanks for shopping at {shop}.\n\nItem: {item} x{qty}\nTotal: {total:0.00} GBP\n\n"
+            + "Keep this email as your receipt. Returns are accepted within 30 days with proof of purchase.\n");
     }
 
     private static (string, string, string, string) Newsletter(Random rng)
@@ -72,7 +73,8 @@ internal static class Filler
         var (name, addr) = People[rng.Next(People.Length)];
         var topic = FamilyTopics[rng.Next(FamilyTopics.Length)];
         return ("INBOX", $"{name} <{addr}>", $"About {topic}",
-            $"Hi Sam,\n\nQuick one about {topic} — does the weekend still work? Let me know.\n\n{name.Split(' ')[0]}\n");
+            $"Hi Sam,\n\nQuick one about {topic} — does the weekend still work? If not, next week is\n"
+            + $"fine too; I'd just like to have it sorted before the end of the month. Let me know.\n\n{name.Split(' ')[0]}\n");
     }
 
     private static (string, string, string, string) Work(Random rng)
@@ -80,7 +82,8 @@ internal static class Filler
         var code = Codenames[rng.Next(Codenames.Length)];
         var status = Statuses[rng.Next(Statuses.Length)];
         return ("Archive", "Project Bot <bot@example.com>", $"Project {code} status: {status}",
-            $"Project {code} is {status}.\n\nOpen items: {rng.Next(2, 30)}. Next review in {rng.Next(1, 4)} weeks.\n");
+            $"Project {code} is {status}.\n\nOpen items: {rng.Next(2, 30)}. Next review in {rng.Next(1, 4)} weeks.\n"
+            + $"Owners should update their tickets before the review so the {code} board reflects reality.\n");
     }
 
     private static (string, string, string, string) Travel(Random rng, int n)
@@ -88,7 +91,8 @@ internal static class Filler
         var dest = Destinations[rng.Next(Destinations.Length)];
         var reference = $"NW{n:0000}{(char)('A' + rng.Next(26))}";
         return ("INBOX", "Northwind Travel <bookings@northwind.example>", $"Booking confirmation {reference}: {dest}",
-            $"Your trip to {dest} is confirmed.\n\nBooking reference: {reference}\nTravellers: {rng.Next(1, 5)}\n");
+            $"Your trip to {dest} is confirmed.\n\nBooking reference: {reference}\nTravellers: {rng.Next(1, 5)}\n\n"
+            + $"Check in online from 48 hours before departure. Your itinerary for {dest} is attached to your account.\n");
     }
 
     private static string Slug(string s) => new string(s.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());

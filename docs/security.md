@@ -417,7 +417,12 @@ change than hosted OCR, because embedding touches everything:
 - **Bearer-only, HTTPS-only, no redirects, no proxy, and a bounded response**
   are enforced in code (registration validation and `HostedHttp`, the handler
   both hosted clients — this one and mistral-ocr — are built on), not
-  convention.
+  convention. The single exception is an embedding profile that opts in with
+  `Proxy=environment`, which registration accepts only for a profile holding
+  no key (`Auth:Scheme=none`): the key, if any, is attached beyond the proxy
+  and never by Mailvec. Its request bodies do pass through that proxy, which
+  is what opting in means. It exists for the synthetic dev corpus in Claude
+  cloud sessions (`docs/contributing/dev-corpus.md`).
 - **Egress**: mcp and embedder need outbound 443 to the configured endpoint.
 
 Deactivation is `MAILVEC_EMBEDDING_PROFILE=` (empty → Ollama) — but note the

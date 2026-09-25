@@ -11,7 +11,11 @@ namespace Mailvec.Core.Embedding;
 /// mail payload to a <c>Location</c> the responder chose.</item>
 /// <item><b>No proxy</b> — an <c>HTTP_PROXY</c>/<c>HTTPS_PROXY</c> in a
 /// container's environment would otherwise route the credential and every
-/// request through it. These endpoints are reached directly.</item>
+/// request through it. These endpoints are reached directly. The one
+/// exception is an embedding profile that opts in with
+/// <c>Proxy=environment</c>, which registration permits only for a profile
+/// holding no key (Auth:Scheme=none) — see
+/// <c>EmbeddingProfileOptions.Proxy</c>.</item>
 /// <item><b>A response ceiling</b> — the provider's answer is buffered and
 /// parsed inside the archive-holding process; a compromised or misbehaving
 /// provider (or a TLS-intercepting middlebox) should not decide how much
@@ -24,10 +28,17 @@ public static class HostedHttp
 {
     public const long MaxResponseBytes = 64L * 1024 * 1024;
 
-    public static SocketsHttpHandler CreateHandler() => new()
+    public static SocketsHttpHandler CreateHandler() => CreateHandler(useEnvironmentProxy: false);
+
+    /// <param name="useEnvironmentProxy">
+    /// Route through the proxy the environment names (HTTP(S)_PROXY, NO_PROXY).
+    /// Only a keyless embedding profile may ask for it; every other rule stands.
+    /// </param>
+    public static SocketsHttpHandler CreateHandler(bool useEnvironmentProxy) => new()
     {
         AllowAutoRedirect = false,
-        UseProxy = false,
+        UseProxy = useEnvironmentProxy,
+        Proxy = useEnvironmentProxy ? HttpClient.DefaultProxy : null,
         UseCookies = false,
     };
 
