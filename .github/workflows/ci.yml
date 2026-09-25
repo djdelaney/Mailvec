@@ -198,6 +198,22 @@ jobs:
       - name: Fetch sqlite-vec extension
         run: ./ops/fetch-sqlite-vec.sh
 
+      # The Claude cloud-session scripts (docs/contributing/cloud-development.md)
+      # are run by nothing else in this repo: the setup script is a paste in
+      # claude.ai settings, and the hook fires only when CLAUDE_CODE_REMOTE is
+      # "true". Run the hook here, after the fetch it would otherwise perform:
+      # it must recognise that install as current. If fetch-sqlite-vec.sh's
+      # VERSION line changes shape, the hook's parse comes back empty, it
+      # quietly re-downloads on every session, and this step is what notices.
+      - name: Claude cloud-session scripts parse, and the hook sees the install
+        run: |
+          bash -n ops/claude-cloud-setup.sh
+          bash -n ops/claude-session-start.sh
+          jq -e '.hooks.SessionStart[0].hooks[0].command | contains("ops/claude-session-start.sh")' .claude/settings.json
+          out=$(CLAUDE_CODE_REMOTE=true bash ops/claude-session-start.sh)
+          echo "$out"
+          grep -q 'sqlite-vec already installed' <<<"$out"
+
       - name: Build
         run: dotnet build --configuration Release
 
