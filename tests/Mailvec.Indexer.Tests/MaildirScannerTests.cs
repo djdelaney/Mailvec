@@ -523,6 +523,12 @@ public class MaildirScannerTests : IDisposable
         // than the file's mtime — so without the NULL-content_hash retry
         // marker the mtime fast path would skip the file on every future
         // scan and the change would be silently masked forever.
+        //
+        // The transient failure is simulated with mode 000, which root reads
+        // straight through (Claude cloud sessions run as root) — the scenario
+        // is untestable there, same as the unreadable-folder tests above.
+        if (Environment.IsPrivilegedProcess) return;
+
         var path = WriteEml("INBOX", "cur", "flaky.host:2,S", "original body", "flaky@x");
         _scanner.ScanAll();
         _messages.GetByMessageId("flaky@x").ShouldNotBeNull().BodyText.ShouldNotBeNull().ShouldContain("original body");
