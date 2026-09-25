@@ -103,7 +103,7 @@ public sealed class MaildirScanner(
     /// <paramref name="Seen"/> is a prefix of the corpus and nothing was
     /// reconciled. The next scan retries; see <see cref="IngestOutcome.ParserUnavailable"/>.
     /// </param>
-    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted, bool Incomplete = false, int DeletionsHeld = 0);
+    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted, bool Incomplete = false, int DeletionsHeld = 0, int SymlinksSkipped = 0);
 
     private bool IsMassDeletion(int gone, int tracked) =>
         gone >= Math.Max(1, _indexer.MassDeletionMinimum)
@@ -170,6 +170,7 @@ public sealed class MaildirScanner(
         // for) each remaining file. A partial observedPaths is the reason
         // reconciliation is then skipped — see the veto below.
         var parserUnavailable = false;
+        var symlinksSkipped = 0;
 
         // One connection + a rolling transaction for the whole file walk.
         // The previous design opened a fresh connection for every Get/Upsert
@@ -188,7 +189,7 @@ public sealed class MaildirScanner(
             {
                 logger.LogWarning(ex, "Cannot enumerate {Path}; skipping this directory.", dir);
                 enumerationFailures++;
-            }))
+            }, onSymlink: path => SkipSymlink(path, ref symlinksSkipped)))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (parserUnavailable) break;
@@ -199,6 +200,11 @@ public sealed class MaildirScanner(
                     if (parserUnavailable) break;
                     var sub = Path.Combine(folderDir, subdir);
                     if (!Directory.Exists(sub)) continue;
+                    if (IsSymlink(new DirectoryInfo(sub)))
+                    {
+                        SkipSymlink(sub, ref symlinksSkipped);
+                        continue;
+                    }
 
                     // Eager GetFiles (not the lazy Enumerate) so a permission
                     // error surfaces here, where it can be scoped to this one
@@ -218,6 +224,13 @@ public sealed class MaildirScanner(
                     foreach (var file in files)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        // Not observed, so a message previously indexed from
+                        // this path reconciles as gone — deliberately.
+                        if (IsSymlink(new FileInfo(file)))
+                        {
+                            SkipSymlink(file, ref symlinksSkipped);
+                            continue;
+                        }
                         seen++;
                         observedPaths.Add(file);
 
@@ -271,7 +284,7 @@ public sealed class MaildirScanner(
                 "MaildirScanner: the parse service is unavailable; scan abandoned after {Seen} file(s) " +
                 "(upserted={Upserted} unchanged={Unchanged}). Nothing reconciled; the next scan retries.",
                 seen, upserted, unchanged);
-            return new ScanResult(seen, upserted, unchanged, failed, 0, Incomplete: true);
+            return new ScanResult(seen, upserted, unchanged, failed, 0, Incomplete: true, SymlinksSkipped: symlinksSkipped);
         }
 
         if (unrefreshed > 0 || enumerationFailures > 0)
@@ -296,7 +309,7 @@ public sealed class MaildirScanner(
                 "skipping deletion reconciliation this scan to avoid soft-deleting live messages. " +
                 "seen={Seen} upserted={Upserted} unchanged={Unchanged} parseFailed={Failed}",
                 unrefreshed, enumerationFailures, seen, upserted, unchanged, failed);
-            return new ScanResult(seen, upserted, unchanged, failed, 0);
+            return new ScanResult(seen, upserted, unchanged, failed, 0, SymlinksSkipped: symlinksSkipped);
         }
 
         // Tracked paths this walk never enumerated. Under the old scheme this
@@ -319,7 +332,7 @@ public sealed class MaildirScanner(
                 "skipping deletion reconciliation (empty/vanished Maildir root?). " +
                 "If the mailbox was genuinely emptied, reconciliation resumes when any file appears.",
                 _maildirRoot, stale.Count);
-            return new ScanResult(0, upserted, unchanged, failed, 0);
+            return new ScanResult(0, upserted, unchanged, failed, 0, SymlinksSkipped: symlinksSkipped);
         }
 
         // Sort each vanished path into "the message is gone" and "the message
@@ -372,7 +385,7 @@ public sealed class MaildirScanner(
                     "this. If the mail is back on the next scan nothing happens; do NOT run purge-deleted until this " +
                     "is explained.",
                     goneMessageIds.Count, trackedAtStart, _massDeletionHeldSince.Value, hold.TotalMinutes);
-                return new ScanResult(seen, upserted, unchanged, failed, 0, DeletionsHeld: goneMessageIds.Count);
+                return new ScanResult(seen, upserted, unchanged, failed, 0, DeletionsHeld: goneMessageIds.Count, SymlinksSkipped: symlinksSkipped);
             }
             logger.LogWarning(
                 "MaildirScanner: the mass deletion of {Gone} message(s) has persisted for {Held:F0} min; applying it " +
@@ -469,7 +482,7 @@ public sealed class MaildirScanner(
             "MaildirScanner: seen={Seen} upserted={Upserted} unchanged={Unchanged} parseFailed={Failed} softDeleted={SoftDeleted}",
             seen, upserted, unchanged, failed, softDeleted);
 
-        return new ScanResult(seen, upserted, unchanged, failed, softDeleted);
+        return new ScanResult(seen, upserted, unchanged, failed, softDeleted, SymlinksSkipped: symlinksSkipped);
     }
 
     /// <summary>
@@ -762,7 +775,50 @@ public sealed class MaildirScanner(
     /// indexing, and under launchd KeepAlive a throw here at startup becomes
     /// a permanent crash-restart loop.
     /// </summary>
-    private IEnumerable<string> EnumerateMaildirFolders(string root, Action<string, Exception> onEnumerationError)
+    /// <summary>
+    /// The scanner never follows a symbolic link below the Maildir root —
+    /// not a message file, not a folder, not a <c>cur</c>/<c>new</c>
+    /// directory — whether it points outside the root or back inside it.
+    /// mbsync never creates one, so a link is something else's doing, and
+    /// following it would index bytes from wherever it points (the same
+    /// boundary <c>MaildirAttachmentReader</c> refuses to read across) or a
+    /// second copy of a message already in the tree. The root itself may be
+    /// a link (<c>~/Mail</c> on another volume is an ordinary setup): only
+    /// entries beneath it are checked.
+    /// </summary>
+    /// <remarks>
+    /// A path that vanished between enumeration and this check (an mbsync
+    /// rename mid-walk) is reported as not-a-link, so it takes exactly the
+    /// path it took before this rule existed.
+    /// </remarks>
+    internal static bool IsSymlink(FileSystemInfo info)
+    {
+        try
+        {
+            return info.LinkTarget is not null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Counts a skipped link and warns about it once per process, not once per scan.</summary>
+    private void SkipSymlink(string path, ref int skipped)
+    {
+        skipped++;
+        if (_symlinksWarned.Add(path))
+        {
+            logger.LogWarning(
+                "MaildirScanner: {Path} is a symbolic link; the scanner does not follow links below the Maildir root, " +
+                "so it is not indexed (and a message previously indexed from it reconciles as gone). Replace the link " +
+                "with the real file or folder if it should be searchable.", path);
+        }
+    }
+
+    private readonly HashSet<string> _symlinksWarned = new(StringComparer.Ordinal);
+
+    private IEnumerable<string> EnumerateMaildirFolders(string root, Action<string, Exception> onEnumerationError, Action<string> onSymlink)
     {
         var stack = new Stack<string>();
         stack.Push(root);
@@ -809,6 +865,15 @@ public sealed class MaildirScanner(
                             "(a Maildir-internal name) — its messages will NOT be indexed. Rename the IMAP folder to fix.",
                             sub, leaf);
                     }
+                    continue;
+                }
+                // Never descend through a link: see IsSymlink. Checked after the
+                // cur/new/tmp skip, which the file loop's own check covers, so
+                // one link is counted once. The root itself was pushed without
+                // this check, so a symlinked root works.
+                if (IsSymlink(new DirectoryInfo(sub)))
+                {
+                    onSymlink(sub);
                     continue;
                 }
                 stack.Push(sub);

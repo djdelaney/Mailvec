@@ -105,14 +105,14 @@ vision model the OCR pass has something real to transcribe.
 ## `--hazards`
 
 These are the cases Mailvec refuses or degrades on by design. They're off by
-default so a plain corpus indexes clean. Outcomes as observed 2026-09-25 (and
-pinned by `HazardTests` where the behaviour is settled):
+default so a plain corpus indexes clean. Each outcome is pinned by
+`HazardTests`:
 
 | Case | Outcome |
 |---|---|
 | `h01` DOCX zip bomb | attachment `failed`, fast; the message is indexed |
 | `h02` 26 MB attachment | `oversize`, never decoded |
-| `h03` symlink from the Maildir to `outside/` | **followed by the scanner**, which indexes the target, while `MaildirAttachmentReader` refuses the same path. Which of the two is right is undecided, so it isn't pinned |
+| `h03` symlink from the Maildir to `outside/` | skipped with a warning; not indexed. The scanner follows no symlink below the Maildir root |
 | `h04` a folder literally named `tmp` | skipped with a warning; not indexed |
 
 Adversarial PDFs that crash or hang PDFium live in `tools/Mailvec.ParserBench`,

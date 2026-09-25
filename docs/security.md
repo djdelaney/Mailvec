@@ -52,7 +52,7 @@ The macOS install binds HTTP to `127.0.0.1:3333` and can serve stdio clients. A 
 
 ## Tools and data flow
 
-The seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) read the archive. Attachment viewing decodes source files in memory. `get_attachment_text` reads extracted text from SQLite. The explicit CLI `extract-attachments` path writes files under its configured download directory and checks path containment and symlinks. See [attachment behavior](attachments.md).
+The seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) read the archive. Attachment viewing decodes source files in memory. `get_attachment_text` reads extracted text from SQLite. The explicit CLI `extract-attachments` path writes files under its configured download directory and checks path containment and symlinks. The indexer follows no symbolic link below the Maildir root (a file, a folder, or `cur`/`new`), so nothing outside the root, or a second path to a message, reaches the archive; the root itself may be a link. See [attachment behavior](attachments.md).
 
 ## Host / origin validation (DNS-rebinding guard)
 
