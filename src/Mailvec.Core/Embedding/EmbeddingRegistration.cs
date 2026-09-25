@@ -271,7 +271,7 @@ public static class EmbeddingRegistration
             throw new InvalidOperationException(
                 $"Embedding profile '{name}': hosted profiles must assert an explicit SpaceId " +
                 "(e.g. 'fireworks:qwen3-embedding-8b:1024:adopted-2026-08'). A wire model string is not " +
-                "proof of vector compatibility — see docs/proposals/embedding-providers.md, decision 3.");
+                "proof of vector compatibility; configure an explicit embedding SpaceId.");
 
         var modelPolicy = profile.Request.ModelParameter.ToLowerInvariant();
         if (modelPolicy is not ("required" or "placeholder" or "omit"))

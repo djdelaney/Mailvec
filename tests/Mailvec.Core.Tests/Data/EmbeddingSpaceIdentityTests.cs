@@ -8,7 +8,7 @@ namespace Mailvec.Core.Tests.Data;
 /// <summary>
 /// v11 embedding-space identity: the metadata stamps, the migration's
 /// derive-from-stored rule, the code-side config-hash stamping, and the
-/// switch-model atomicity. Phase 1 of docs/proposals/embedding-providers.md.
+/// switch-model atomicity. See CLAUDE.md for the embedding-space invariant.
 /// </summary>
 public class EmbeddingSpaceIdentityTests
 {

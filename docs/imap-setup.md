@@ -7,7 +7,7 @@ brew install isync                     # the binary is `mbsync`; Homebrew names 
 mkdir -p ~/Mail/Fastmail
 ```
 
-The shipped `ops/mbsyncrc.example` uses Fastmail because that's the author's setup. Any IMAP server works — swap the `Host` / `User` / `PassCmd` lines and the rest of the pipeline (Maildir → SQLite → embeddings → MCP) is unchanged. Gmail and iCloud both require an app-specific password issued from their respective account-security UIs. See `man mbsync` for fancier auth (XOAUTH2, etc.).
+The shipped `ops/mbsyncrc.example` uses Fastmail as an example. Other IMAP servers work — swap the `Host` / `User` / `PassCmd` lines and the rest of the pipeline (Maildir → SQLite → embeddings → MCP) is unchanged. Gmail and iCloud both require an app-specific password issued from their respective account-security UIs. See `man mbsync` for fancier auth (XOAUTH2, etc.).
 
 ## Stash your IMAP password in the macOS Keychain
 

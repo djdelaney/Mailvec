@@ -3,7 +3,7 @@ namespace Mailvec.Core.Embedding;
 /// <summary>
 /// Provider-neutral embedding failure classification — the
 /// <see cref="Vision.VisionFailureKind"/> lesson applied to the embed path
-/// (docs/proposals/embedding-providers.md, "Failure model and retries").
+/// (see CLAUDE.md for embedding failure handling).
 /// The distinction that must never collapse: only <see cref="Transient"/>
 /// failures are evidence *against a message*; the provider-wide kinds
 /// (<see cref="Backpressure"/>, <see cref="AuthOrConfig"/>,
