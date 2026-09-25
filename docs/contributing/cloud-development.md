@@ -76,12 +76,16 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
 
 0. Which code. Run `git fetch origin`, then report `git rev-parse --short HEAD`,
    `git branch --show-current`, and `git branch -r --points-at HEAD`.
-   The session works on its own `claude/...` branch, created from the branch
-   it was started on, so comparing against that branch proves nothing. The
-   last command is what names the code under test. If no remote branch
-   other than the session's own points at HEAD, say so at the top of your
-   report: the results describe an older commit. Test HEAD as it is; do not
-   pull.
+   The session may work on its own `claude/...` branch created from the
+   branch it was started on, or directly on that branch, so comparing
+   against the current branch proves nothing. The last command is what names
+   the code under test. If no remote branch other than a session-created
+   `claude/...` one points at HEAD, say so at the top of your report: the
+   results describe an older commit. Also quote the "Claude cloud session:
+   sqlite-vec …" line from your starting context: "installed" means a fresh
+   clone, "already installed" means this checkout existed before the session
+   started (a continued session, which never pulls). Test HEAD as it is; do
+   not pull.
 
 1. Setup script. Run `tail -1 /var/log/mailvec-setup.log` (expect
    "setup complete") and `grep -nE '^(E|W):|WARNING' /var/log/mailvec-setup.log`
@@ -165,6 +169,16 @@ it by design (`HostedHttp`); the dev profile opts back in with
 `Proxy=environment`, which is refused for any profile holding a key. The same
 run's 401 through the proxy was a bad key in the credential, since replaced.
 
+**Hosted embeddings verified 2026-09-25** at e07f3eb (`dev-corpus`), step 6
+with the Fireworks API credential: 22 of 22 calls returned 200, all 284
+messages embedded (278 chunks; the deliberately short scenarios get none) in
+about 12 s, no embedder warning, the space identity and config hash matched,
+and hybrid search for "greenhouse sensors" put the DOCX/XLSX/PPTX message
+first on both legs while the vector leg alone surfaced two more receipts.
+The dev eval scored 1.000 in all three modes. That shows the plumbing works;
+it is not a quality number, because its queries share words with their
+targets.
+
 **Verified 2026-09-25** at eea92b9 (the merge of PR #41), from a new
 session started on `main`: steps 0–4 pass, 1,470 passed, 0 failed,
 0 skipped. Step 5 fails as described below. Getting there took five runs,
@@ -175,11 +189,13 @@ and their failure signatures are worth recognising:
   not found".
 - **A root-sensitive test without a guard** (run 2): one `SetUnixFileMode`
   test failing because root read the file anyway. See "Running as root".
-- **Stale code** (runs 3 and 4, sessions meant to be on
-  `claude-cloud-env`): HEAD behind the pushed branch, re-reporting a failure
-  already fixed. The mechanism wasn't established. It was either a resumed
-  session or a session branch created from an older base. Step 0 is there to
-  catch it.
+- **Stale code** (runs 3 and 4 on `claude-cloud-env`, and again on
+  `dev-corpus`): HEAD behind the pushed branch, re-reporting a failure
+  already fixed. The `dev-corpus` case was a continued session: its
+  starting line said sqlite-vec was "already installed", which a fresh clone
+  never says. Step 0 now reports both signs. In a continued session,
+  `git pull --ff-only` and re-running the affected step is quicker than a
+  new session.
 
 ## What the machine is
 
