@@ -33,8 +33,7 @@ public interface IEmbeddingTransport
     /// <summary>
     /// Content digest of the model ARTIFACT serving embeddings, when the
     /// provider makes one observable (Ollama tags resolve to manifest
-    /// digests). This is the local half of the stability hybrid
-    /// (docs/proposals/embedding-providers.md, decision 2): the embedder
+    /// digests). This is the local model-artifact guard: the embedder
     /// records it and refuses when it changes — a re-pulled tag with
     /// different weights is a new vector space wearing the old name.
     /// Null means "not observable right now" (provider unreachable, digest

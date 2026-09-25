@@ -1,4 +1,4 @@
-// Phase-0 measurement harness for docs/proposals/attachment-parser-isolation.md.
+// Parser stress measurement harness; see docs/security.md.
 //
 //   gen <outdir>                 write the adversarial fixtures
 //   run <outdir> [timeoutSec]    run every (fixture, op) pair in a CHILD process,

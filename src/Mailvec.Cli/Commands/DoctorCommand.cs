@@ -276,7 +276,7 @@ internal static class DoctorCommand
         // install (this binary carries the parsers); in the container every
         // parse crosses to the `parse` service, and while THAT is down new mail
         // is not indexed, OCR pauses and the two attachment viewer tools fail —
-        // search keeps working. See docs/proposals/attachment-parser-isolation.md.
+        // search keeps working. See docs/security.md.
         // ---------------------------------------------------------------
         checks.Add(await CheckParserAsync(sp, skipNet, ct).ConfigureAwait(false));
 

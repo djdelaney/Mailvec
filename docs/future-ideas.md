@@ -9,7 +9,7 @@ public MCP endpoint ([current wiring](remote-access-cloudflare.md)). A second
 cloud connector could use it, but Mailvec has no per-client or per-tool scope:
 it would receive the same access to the whole mailbox. Defer until there is a
 reason to add a non-Claude cloud client, then design that scope before adding
-its credential. The [security model](security.md#more-local-clients-dont-change-the-threat-model)
+its credential. The [security model](security.md#whats-out-of-scope)
 covers the existing boundary.
 
 ## Multi-user / federated identity

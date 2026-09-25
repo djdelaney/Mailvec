@@ -276,9 +276,8 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     [Fact]
     public async Task Disabled_tool_is_absent_from_tools_list()
     {
-        // docs/security.md requires dropping the two native-parser tools from
-        // any internet-fronted deployment. ToolSurfaceTests proves Resolve()
-        // filters the type list; this proves the client can't see the tool.
+        // ToolSurfaceTests proves Resolve() filters disabled tools; this
+        // proves the client cannot see them on the wire.
         using var trimmed = WithConfig(
             ("Mcp:DisabledTools:0", "view_attachment"),
             ("Mcp:DisabledTools:1", "get_attachment_page_image"));

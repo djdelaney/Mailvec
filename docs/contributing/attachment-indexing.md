@@ -27,14 +27,11 @@ stable `attachments.extraction_status` enum:
 
 ## Formats we extract (indexer)
 
-Everything here is **pure-managed — no native deps, no shell-out, no OCR** in the
-indexer path. (The only native dep besides `sqlite-vec` — PDFium/SkiaSharp, in
-`Mailvec.Parsing` behind `IMailParser` — is reached only by the embedder, for OCR
-rasterisation, and the MCP server, for `get_attachment_page_image` rendering and
-`view_attachment` image normalisation; never the indexer. "Pure-managed" is not
-"memory-safe by construction", though: MimeKit's parser core is `unsafe` pointer
-code and PdfPig/OpenXml inflate through the runtime's native zlib — see
-`docs/proposals/attachment-parser-isolation.md`.)
+The indexer's text extraction uses no PDFium or SkiaSharp; rendering and image
+normalisation run through `IMailParser` for OCR and the MCP attachment viewers.
+MimeKit's parser core uses `unsafe` code, and PdfPig/OpenXml inflate through
+native zlib, so this path is not memory-safe by construction. See
+[Container hardening](../security.md#container-hardening).
 
 | Format | Library | What we pull |
 |--------|---------|--------------|

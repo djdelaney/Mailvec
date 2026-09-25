@@ -13,7 +13,7 @@ namespace Mailvec.Core.Embedding;
 /// provider it is derived — <c>ollama:&lt;model&gt;:&lt;dimensions&gt;</c> —
 /// because a locally pulled tag is operator-controlled; future hosted
 /// profiles must assert it explicitly (see
-/// docs/proposals/embedding-providers.md, "Embedding-space identity"), since
+/// CLAUDE.md, "Schema & data invariants"), since
 /// a wire model string is not proof of vector compatibility.</para>
 ///
 /// <para><c>embedding_config_hash</c> proves how Mailvec invoked the space: a

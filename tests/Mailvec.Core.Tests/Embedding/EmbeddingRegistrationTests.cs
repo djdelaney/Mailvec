@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 namespace Mailvec.Core.Tests.Embedding;
 
 /// <summary>
-/// Phase-2 registration/config contract (docs/proposals/embedding-providers.md):
+/// Registration/config contract (CLAUDE.md):
 /// one resolution, identical in every executable; absent config preserves the
 /// legacy Ollama behavior byte-for-byte; unknown protocols are fatal, never a
 /// fallback; and profile overrides cannot split-brain against consumers that

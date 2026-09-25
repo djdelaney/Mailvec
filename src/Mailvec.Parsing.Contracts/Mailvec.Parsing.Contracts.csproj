@@ -6,7 +6,7 @@
        Mailvec.Core references this so it can talk to a parser without linking
        one, and Mailvec.Parsing references it so the parser can be built without
        Core (no SQLite, no config loader, no options that know where secrets
-       live). See docs/proposals/attachment-parser-isolation.md.
+       live). See docs/security.md.
 
        Types moved here from Core keep their original namespaces
        (Mailvec.Core.Parsing / .Attachments / .Models) so the move is a

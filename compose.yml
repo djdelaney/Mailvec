@@ -138,8 +138,8 @@ x-mailvec: &mailvec-common
     Vision__Mistral__Endpoint: ${MAILVEC_MISTRAL_ENDPOINT:-}
     Vision__Mistral__Model: ${MAILVEC_MISTRAL_MODEL:-}
     Vision__Mistral__Route: ${MAILVEC_MISTRAL_ROUTE:-providers/mistral/azure/ocr}
-    # Hosted embedding profile (docs/proposals/embedding-providers.md, phase
-    # 5). INERT until MAILVEC_EMBEDDING_PROFILE=hosted — Ollama stays the
+    # Hosted embedding profile (see docs/deploy-docker.md). Inert until
+    # MAILVEC_EMBEDDING_PROFILE=hosted; Ollama stays the
     # default, and the inactive profile is never validated. These are
     # deliberately in the SHARED anchor: they are non-secret identity/config
     # that the indexer needs too (it stamps the profile's space id on a fresh
@@ -414,7 +414,7 @@ services:
   # Parser__MaxRequestsBeforeExit requests (bounding how long a compromised
   # process persists); `restart: unless-stopped` brings it back in seconds,
   # and the callers classify the gap as "unavailable", never as a fault of any
-  # document. See docs/proposals/attachment-parser-isolation.md.
+  # document. See docs/security.md#container-hardening.
   parse:
     <<: *mailvec-common
     command: ["dotnet", "/app/parse/Mailvec.Parse.dll"]

@@ -6,7 +6,7 @@
        NOTHING else of ours — no Mailvec.Core, so no SQLite, no shared-config
        loader, no options that know where secrets live. In compose it runs
        non-root with no volumes, no secrets and no egress; see
-       docs/proposals/attachment-parser-isolation.md. -->
+       docs/security.md. -->
 
   <PropertyGroup>
     <RootNamespace>Mailvec.Parse</RootNamespace>
