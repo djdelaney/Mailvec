@@ -64,6 +64,13 @@ This is a verification run of this cloud environment for Mailvec. Report
 what you find; do not fix anything, edit files, commit, or push. Do not use
 any Mailvec or mail connector. Run each step even if an earlier one fails.
 
+0. Which code. Run `git fetch origin`, then report `git rev-parse --short HEAD`,
+   `git branch --show-current`, and
+   `git rev-parse --short origin/$(git branch --show-current)`. If HEAD is
+   not the remote tip, say so at the top of your report: the results
+   describe an older commit (a resumed session never pulls). Test HEAD
+   as it is; do not pull.
+
 1. Setup script. Run `tail -1 /var/log/mailvec-setup.log` (expect
    "setup complete") and `grep -nE '^(E|W):|WARNING' /var/log/mailvec-setup.log`
    (expect no output). If the log is missing, say so. That means the setup
@@ -113,6 +120,12 @@ line of evidence each.
 informational until it has succeeded once (it can't yet; see below). When it has, image changes can be
 checked in a session, not only by `publish-images.yml`, and this page should
 say so.
+
+**Start a new session for every run.** Don't send the prompt into an
+earlier verification session: resuming one doesn't pull, so it re-tests the
+commit it started on. Run 3 on 2026-09-25 did exactly that and reported a
+failure that had already been fixed. Step 0 now catches it. Copy the prompt
+from the branch under test, not from an older copy.
 
 **The hook only exists on branches that contain it.** Start the session from
 `main`, or from the branch under test, once `.claude/settings.json` is on it.
