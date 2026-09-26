@@ -37,6 +37,10 @@ server runs, register it for that session:
 [docs/clients/claude-code.md](../clients/claude-code.md)). Keep the production
 Mailvec connector off in the same session, so the two are never confused.
 
+The README screenshot is captured against this corpus plus a few hand-written
+messages, through Claude Desktop over stdio. The procedure is in
+[`assets/screenshots/README.md`](../../assets/screenshots/README.md).
+
 Options: `--filler N` (background messages, default 250), `--hazards` and
 `--embedding fireworks` (both below). Output is deterministic: the same options
 produce the same bytes.

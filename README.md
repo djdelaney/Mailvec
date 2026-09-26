@@ -3,11 +3,11 @@
 Mailvec pulls one IMAP account into a searchable local archive and gives MCP clients access to it. Search combines keyword (FTS5) and semantic (sqlite-vec) results. [`mbsync`](https://isync.sourceforge.io/) handles the pull-only mail sync, so Fastmail, iCloud, Gmail, and other IMAP servers can be used.
 
 <p align="center">
-  <img src="assets/screenshots/claude-desktop-answer.png" alt="Claude Desktop answering from the archive" width="480"/><br/>
+  <img src="assets/screenshots/claude-desktop-answer.png" alt="Claude Desktop using Mailvec to answer how much a contractor quoted for bathroom work, with an itemised table from the attached PDF estimate" width="560"/><br/>
   <em>Claude Desktop using Mailvec</em>
 </p>
 
-<sub>Screenshot uses a synthetic demo archive — no real mail.</sub>
+<sub>Screenshot uses a synthetic demo mailbox — no real mail.</sub>
 
 ## What you get
 
