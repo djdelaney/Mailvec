@@ -17,7 +17,22 @@ Alpine 3.24 packages) was checked by hand against a fake TLS IMAP server on
 certificate verification, EXAMINEs (read-only) a folder whose name has a
 space, runs passwordCMD, and runs onNewMail within ~1s of `* n EXISTS`. A
 rejected login, a missing folder, and an unreachable server each exit 1.
-Re-check those if the package version moves.
+
+The same build (Alpine 3.24, goimapnotify 2.5.4-r4) was then run live against
+Fastmail from the built image on 2026-10-03, watching INBOX with a 60 s
+interval: passwordCMD ran and LOGIN was accepted with the generated config;
+the start-up event ran the hook, consumed its token and caused no second sync;
+a real arrival produced exactly one wake-triggered sync (event 21 s after the
+message's Date header, sync 4 s later) and the timer resumed 60 s from that
+sync. The macOS run of this suite passes too; the loop's heredoc and
+kill_group below carry the two portability notes.
+
+Re-check all of the above if the package version moves. To repeat the live
+run from a Mac with Docker Desktop: mount the whole scratch directory (config,
+Maildir, secret) as ONE bind mount and point the config and MBSYNC_* at paths
+inside it. A bind mount's root, including a single-file mount of the secret,
+appears root-owned inside the VM and fails the loop's preflight; entries below
+the root keep the host uid.
 """
 import os
 import pathlib
