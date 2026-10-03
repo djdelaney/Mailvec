@@ -95,14 +95,14 @@ By default the `mbsync` service syncs every `MBSYNC_INTERVAL_SECONDS` (60). To h
 MBSYNC_IDLE_FOLDERS=INBOX,Junk Mail,homelab
 ```
 
-The sidecar then holds one IMAP IDLE connection per folder. When one reports new mail, the next sync starts as soon as the current one is at least 5 seconds old, instead of waiting out the interval. Only new mail triggers this. Flag changes, moves and deletions in any folder still wait for the interval.
+The sidecar then runs [goimapnotify](https://gitlab.com/shackra/goimapnotify), which holds one IMAP IDLE connection per folder. When one reports new mail, the next sync starts as soon as the current one is at least 5 seconds old, instead of waiting out the interval. Only new mail triggers this. Flag changes, moves and deletions in any folder still wait for the interval.
 
-- **Names.** Use folder names as mbsync names them: the path under `./mail/Fastmail/` with the example's `Subfolders Verbatim`. Names may contain spaces; a `/` is translated to the server's hierarchy delimiter. The folder must also be included by `Patterns` in `mbsyncrc`, or the sync it triggers won't pull it.
+- **Names.** Use folder names exactly as the IMAP server lists them; names may contain spaces. To see them, enable IDLE with any valid folder such as `INBOX`, then run `docker compose exec mbsync goimapnotify -conf /tmp/mbsync-idle.yaml -list`. The folder must also be included by `Patterns` in `mbsyncrc`, or the sync it triggers won't pull it.
 - **Limits.** Up to 10 folders, each one IMAP connection on top of mbsync's own. Mail that fails SPF, DKIM or DMARC usually lands in Junk Mail, so watch it too if you test mail paths.
-- **Connection.** The watcher reads Host, Port, User and Pass/PassCmd from the first `IMAPAccount` block of `mbsyncrc` and connects with implicit TLS (`TLSType IMAPS`, which the example uses). It refuses any other TLS mode. It opens folders read-only (`EXAMINE`), so watching changes nothing on the server.
-- **Apply.** Recreate the service so it reads the new environment: `docker compose up -d mbsync`. Its log should show `IDLE enabled for: …` followed by one `mbsync-idle: watching '…'` line per folder.
+- **Connection.** The watcher's config is generated at startup from the first `IMAPAccount` block of `mbsyncrc` (Host, Port, User, Pass or PassCmd). It connects with implicit TLS and certificate verification only (`TLSType IMAPS`, which the example uses) and refuses other TLS modes. It opens folders read-only (`EXAMINE`), so watching changes nothing on the server.
+- **Apply.** Recreate the service so it reads the new environment: `docker compose up -d mbsync`. Its log should show `IDLE enabled for: …`, then one `Watching mailbox` line per folder.
 
-This is a latency optimisation only. If the watcher can't log in, loses its connection, or names a folder that doesn't exist, it says so in `docker compose logs mbsync`, retries where retrying can help, and syncing continues on the interval. A rejected login is retried every 15 minutes so a revoked app password can't lock the account. Neither `/health` nor `/up` reports on the watcher itself. Whether syncs are succeeding is still reported by `/up`'s `mail.syncStale`, and to Claude sessions by `search_emails`' `mailSync` field.
+This is a latency optimisation only, and every failure falls back to the interval. A rejected login, a folder name the server doesn't recognise, or an unreachable server stops the watcher for **all** folders. The sidecar restarts it after 30 seconds, doubling up to 15 minutes, so a revoked app password or a typo can't hammer the account. Check `docker compose logs mbsync` for `IDLE watcher exited` lines if mail seems slow. Neither `/health` nor `/up` reports on the watcher itself. Whether syncs are succeeding is still reported by `/up`'s `mail.syncStale`, and to Claude sessions by `search_emails`' `mailSync` field.
 
 ## Resource limits
 

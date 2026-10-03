@@ -474,8 +474,9 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 1g
     # The sh loop, one mbsync child, one sleep — single digits in practice.
-    # With MBSYNC_IDLE_FOLDERS set, add the IDLE watcher: one python3 process
-    # plus one thread per folder (capped at 10), still well inside this.
+    # With MBSYNC_IDLE_FOLDERS set, add goimapnotify: one Go process (its
+    # runtime threads count here too) and one connection per folder, capped at
+    # 10. Still well inside this.
     pids_limit: 128
     environment:
       MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-60}
