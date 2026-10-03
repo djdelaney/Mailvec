@@ -280,6 +280,20 @@ republish_cadence
 # `wait "$child"` mid-sync, and the interrupted status reads as a failed sync.
 # Only onNewMail is configured: flag changes and deletions wait for the timer.
 #
+# goimapnotify also runs onNewMail once per folder right after it connects (the
+# "fake IMAP Event for first time sync" in its watch.go) -- on every start, so
+# on every supervisor restart too. Taken as a wake, that is an unconditional
+# extra `mbsync -a` seconds after the one that just ran. The supervisor
+# therefore drops one start-up token per folder (${WAKE}.start.N) before each
+# start, and the hook consumes a token instead of touching the wake file while
+# any remain. `rm` is the atomic claim: hooks for different folders run
+# concurrently, and exactly one of them can remove a given token. The start-up
+# event precedes any real IDLE event on its connection, so a token never
+# swallows real mail; a watcher that dies before using its tokens gets a fresh
+# set on the next start, and tokens still unused 30s after a start expire, so a
+# folder goimapnotify skipped rather than failed on cannot leave one behind to
+# eat a later wake.
+#
 # The wake file is removed just BEFORE each sync starts, never after: mail
 # signalled while a sync is running must survive it and trigger the next one.
 #
@@ -307,8 +321,13 @@ MBSYNC_IDLE_MIN_GAP_SECONDS=5
 MBSYNC_IDLE_MAX_FOLDERS=10
 
 # One setting from the first IMAPAccount block of mbsyncrc, unquoted the way
-# isync reads it (a leading + on PassCmd dropped, surrounding quotes removed,
-# backslash escapes resolved). Prints nothing when the key is absent.
+# isync reads it (surrounding quotes removed, backslash escapes resolved, and a
+# leading + on PassCmd dropped). isync strips that + AFTER unquoting
+# (drv_imap.c, cred_from_cmd), so `PassCmd "+gpg ..."` is the form its parser
+# accepts and the strip here must follow the unquote too: done before it, the
+# + stayed inside the quotes and goimapnotify was handed `+gpg ...` to run.
+# The + only means "flush the progress line before running", nothing the
+# container needs. Prints nothing when the key is absent.
 imap_setting() {
     awk -v want="$1" '
         { line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t\r]+$/, "", line) }
@@ -328,6 +347,7 @@ imap_setting() {
                     val = val c
                 }
             }
+            sub(/^\+[ \t]*/, "", val)
             print val; exit
         }' "${MBSYNC_CONFIG}"
 }
@@ -361,7 +381,23 @@ write_idle_config() {
     case "${port:=993}" in
         *[!0-9]*) say "IDLE disabled: Port '${port}' in ${MBSYNC_CONFIG} is not a number"; return 1 ;;
     esac
+    # isync feeds the PassCmd output to the server as the OAuth2 access token
+    # when AuthMechs names XOAUTH2 (Gmail, Office 365); goimapnotify does the
+    # same only with xoAuth2 true. Without it the watcher sends the token as a
+    # LOGIN password, is refused, and exits: an "IDLE watcher exited (status 1)"
+    # at every backoff, forever, with nothing saying why.
+    xoauth2=false
+    case " $(imap_setting authmechs | tr '[:lower:]' '[:upper:]') " in
+        *" XOAUTH2 "*)
+            if [ -z "${passcmd}" ]; then
+                say "IDLE disabled: AuthMechs XOAUTH2 needs a PassCmd that prints the access token, not a literal Pass"; return 1
+            fi
+            xoauth2=true ;;
+    esac
 
+    # The hook: claim a start-up token if any remain (see the comment above),
+    # else signal the loop. goimapnotify runs it through `sh -c`.
+    hook="for t in '${WAKE}'.start.*; do rm \"\$t\" 2>/dev/null && exit 0; done; touch '${WAKE}'"
     boxes=""; count=0
     set -f; old_ifs="${IFS}"; IFS=,
     for folder in ${MBSYNC_IDLE_FOLDERS}; do
@@ -370,7 +406,7 @@ write_idle_config() {
         count=$((count + 1))
         boxes="${boxes}      -
         mailbox: $(yaml_quote "${folder}")
-        onNewMail: $(yaml_quote "touch '${WAKE}'")
+        onNewMail: $(yaml_quote "${hook}")
 "
     done
     IFS="${old_ifs}"; set +f
@@ -380,6 +416,7 @@ write_idle_config() {
     if [ "${count}" -gt "${MBSYNC_IDLE_MAX_FOLDERS}" ]; then
         say "IDLE disabled: MBSYNC_IDLE_FOLDERS names ${count} folders; the limit is ${MBSYNC_IDLE_MAX_FOLDERS} (each holds an IMAP connection)"; return 1
     fi
+    IDLE_FOLDER_COUNT="${count}"
 
     if [ -n "${passcmd}" ]; then
         secret="    passwordCMD: $(yaml_quote "${passcmd}")"
@@ -390,7 +427,7 @@ write_idle_config() {
            printf '%s\n' "configurations:" "  -" \
                "    host: $(yaml_quote "${host}")" "    port: ${port}" "    tls: true" \
                "    tlsOptions:" "      rejectUnauthorized: true" "      starttls: false" \
-               "    username: $(yaml_quote "${user}")" "${secret}" "    boxes:" > "${IDLE_CONF}.tmp" &&
+               "    username: $(yaml_quote "${user}")" "${secret}" "    xoAuth2: ${xoauth2}" "    boxes:" > "${IDLE_CONF}.tmp" &&
            printf '%s' "${boxes}" >> "${IDLE_CONF}.tmp" &&
            mv -f "${IDLE_CONF}.tmp" "${IDLE_CONF}" ); then
         say "IDLE disabled: could not write ${IDLE_CONF}"; rm -f "${IDLE_CONF}.tmp"; return 1
@@ -406,7 +443,12 @@ if [ -n "${MBSYNC_IDLE_FOLDERS}" ] && write_idle_config; then
         delay=30
         while :; do
             started="$(date +%s)"
+            # One start-up token per folder for this start (see above); the
+            # sweeper expires whatever this start never used.
+            rm -f "${WAKE}".start.*
+            n=1; while [ "${n}" -le "${IDLE_FOLDER_COUNT}" ]; do : > "${WAKE}.start.${n}"; n=$((n + 1)); done
             goimapnotify -conf "${IDLE_CONF}" & gin=$!
+            ( sleep 30; rm -f "${WAKE}".start.* ) &
             wait "$gin"; rc=$?; gin=
             ran=$(( $(date +%s) - started ))
             [ "${ran}" -lt 600 ] || delay=30
@@ -420,8 +462,11 @@ if [ -n "${MBSYNC_IDLE_FOLDERS}" ] && write_idle_config; then
 fi
 
 # The pause between syncs. Without IDLE, one sleep for the whole interval,
-# exactly as before IDLE existed. With it, one-second steps that end early once
-# a wake is pending and the gap floor has passed.
+# exactly as before IDLE existed. With it, steps of the gap floor that end
+# early once a wake is pending: a wake costs at most one step of latency on
+# top of the floor, and the number of sleep forks per interval is bounded by
+# the step, not the interval (one-second steps were 600 forks per cycle at a
+# 600s interval, for nothing the floor didn't already delay).
 nap() {
     if [ -z "${idler}" ]; then
         sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
@@ -434,9 +479,11 @@ nap() {
             echo "mbsync: new mail signalled by IDLE; syncing now" >&2
             return
         fi
-        sleep 1 & child=$!
+        step=$((MBSYNC_INTERVAL_SECONDS - waited))
+        [ "${step}" -le "${MBSYNC_IDLE_MIN_GAP_SECONDS}" ] || step="${MBSYNC_IDLE_MIN_GAP_SECONDS}"
+        sleep "${step}" & child=$!
         wait "$child"
-        waited=$((waited + 1))
+        waited=$((waited + step))
     done
 }
 

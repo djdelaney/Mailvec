@@ -21,7 +21,8 @@ public class SearchEmailsToolTests
         FastmailOptions? fastmailOpts = null,
         OllamaOptions? ollamaOpts = null,
         Mailvec.Core.Embedding.ResolvedEmbeddingProfile? profile = null,
-        Mailvec.Core.Health.MbsyncSyncFile? syncFile = null)
+        Mailvec.Core.Health.MbsyncSyncFile? syncFile = null,
+        ToolCallLogger? callLog = null)
     {
         profile ??= LegacyProfile;
         var messages = new MessageRepository(db.Connections);
@@ -35,7 +36,7 @@ public class SearchEmailsToolTests
             Helpers.Mcp(mcpOpts),
             Helpers.Fastmail(fastmailOpts),
             Helpers.Ollama(ollamaOpts),
-            Helpers.NoopLogger(),
+            callLog ?? Helpers.NoopLogger(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance,
             profile,
             syncFile);
@@ -111,6 +112,25 @@ public class SearchEmailsToolTests
 
         resp.MailSync.ShouldNotBeNull();
         resp.MailSync.Stale.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_tool_call_log_records_what_the_client_was_told_about_sync_freshness()
+    {
+        // The log is the only server-side record of a response. A client that
+        // tells the user "mail sync has stopped" on `stale` must be checkable
+        // against it after the marker has moved on.
+        using var db = new TempDatabase();
+        using var marker = new SyncMarker(DateTimeOffset.UtcNow.AddHours(-2), intervalSeconds: 60);
+        var sink = new RecordingLogger();
+        var callLog = new ToolCallLogger(sink, Microsoft.Extensions.Options.Options.Create(new McpOptions { LogToolCalls = true }));
+
+        await Build(db, syncFile: marker.Reader, callLog: callLog).SearchEmails(query: null);
+
+        var result = sink.Messages.Single(m => m.Contains("mcp-result"));
+        result.ShouldContain("\"mailSync\":{");
+        result.ShouldContain("\"stale\":true");
+        result.ShouldContain("\"ageSeconds\":");
     }
 
     [Fact]

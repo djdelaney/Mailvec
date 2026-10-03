@@ -59,11 +59,13 @@ public sealed class SearchEmailsTool(
         "reaches the present) so you can gauge actual scope, and `appliedFilters` echoing the filters you used. " +
         "Where the deployment reports it, responses also include `mailSync`: when mail was last pulled from the " +
         "mail server (`lastSyncAt`, `ageSeconds`), how often it is pulled (`intervalSeconds`), and whether pulling " +
-        "has stopped working (`stale`). New mail becomes searchable within seconds of a pull, and " +
-        "`archiveStats.latestDate` is a sender-supplied date that cannot tell you this. So when looking for mail that " +
-        "may have reached the server after `lastSyncAt` (e.g. a test message that was just sent), an empty result " +
-        "does NOT mean it never arrived: wait about `intervalSeconds` and search again. If `stale` is true, new mail " +
-        "is not arriving at all — tell the user rather than retrying. " +
+        "has stopped working (`stale`). Pulled mail is keyword-searchable within seconds (`mode=keyword`, or " +
+        "`hybrid`, whose keyword leg sees it); `mode=semantic` lags until the embedder's next pass, typically a " +
+        "minute or more, so check for just-arrived mail with keyword or hybrid. `archiveStats.latestDate` is a " +
+        "sender-supplied date that cannot tell you any of this. So when looking for mail that may have reached " +
+        "the server after `lastSyncAt` (e.g. a test message that was just sent), an empty result does NOT mean it " +
+        "never arrived: wait about `intervalSeconds` and search again. If `stale` is true, new mail is not " +
+        "arriving at all — tell the user rather than retrying. " +
         "Strongly prefer setting `dateFrom`/`dateTo` whenever the user's question implies a time window " +
         "('last week', 'last quarter', 'in 2023', 'recently', 'before I left $job', 'this year'); across a " +
         "full mailbox this size, an unbounded query skews toward old mail and dilutes recent context. When in " +
@@ -247,6 +249,10 @@ public sealed class SearchEmailsTool(
     {
         mode = r.Mode,
         count = r.Count,
+        // What the client was told about sync freshness. A client acting on
+        // `stale` ("your mail sync has stopped") is otherwise unverifiable
+        // from the server's own log once the marker moves on.
+        mailSync = r.MailSync is { } s ? new { lastSyncAt = s.LastSyncAt, ageSeconds = s.AgeSeconds, stale = s.Stale } : null,
         // Top hits give enough context to correlate the call against the archive
         // without dumping full bodies into the log.
         top = r.Results.Take(5).Select(h => new

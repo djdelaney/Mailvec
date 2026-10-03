@@ -149,7 +149,7 @@ serialized runner. Re-measure on the target deployment before implementing it.
 **Push via IMAP IDLE is implemented** (2026-10-03, optional `MBSYNC_IDLE_FOLDERS`;
 [Docker deployment](deploy-docker.md#new-mail-push-imap-idle)). It wakes the
 single serialized runner above rather than adding a second one (the watcher is
-goimapnotify, whose only hook touches a wake file), and only new mail wakes it. Still open: the watcher has no health signal of its own. A dead
+goimapnotify, whose only hook touches a wake file; its per-folder start-up event is absorbed, not synced), and only new mail wakes it. Still open: the watcher has no health signal of its own. A dead
 IDLE connection degrades silently to the timer, visible only in the sidecar's
 log. The macOS launchd install has no equivalent.
 
