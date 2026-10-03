@@ -364,7 +364,11 @@ write_idle_config() {
     [ -n "${tls}" ] || tls="$(imap_setting ssltype)"
     case "$(printf '%s' "${tls:-STARTTLS}" | tr '[:lower:]' '[:upper:]')" in
         IMAPS) ;;
-        *) say "IDLE disabled: it needs TLSType IMAPS in ${MBSYNC_CONFIG} (found ${tls:-none, i.e. isync's default STARTTLS})"; return 1 ;;
+        # No apostrophe inside the ${...} default: bash (macOS /bin/sh) reads a
+        # quote inside a parameter expansion within double quotes as syntax and
+        # refuses the whole script. ash and dash accept it, so only a Mac run
+        # of ops/tests ever saw the failure.
+        *) say "IDLE disabled: it needs TLSType IMAPS in ${MBSYNC_CONFIG} (found ${tls:-none; isync defaults to STARTTLS})"; return 1 ;;
     esac
     host="$(imap_setting host)"; user="$(imap_setting user)"; port="$(imap_setting port)"
     passcmd="$(imap_setting passcmd)"; pass="$(imap_setting pass)"

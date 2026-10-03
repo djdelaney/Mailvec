@@ -119,10 +119,20 @@ class LoopTests(unittest.TestCase):
 
     @staticmethod
     def kill_group(proc):
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        # Sweeps up whatever the loop's TERM trap left mid-exit (its beater,
+        # the fake watcher, an in-flight sleep). macOS answers a group signal
+        # with EPERM while any member is still exiting, which is exactly the
+        # moment this runs; Linux doesn't. Retry briefly, then stop: nothing
+        # has been observed to survive it, and raising here turned a passing
+        # test into an error on every Mac.
+        for _ in range(40):
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+                return
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                time.sleep(0.05)
 
     def captured(self):
         self.assertTrue(self.capture.exists(), "goimapnotify was never started")
