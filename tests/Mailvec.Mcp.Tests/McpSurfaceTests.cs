@@ -231,6 +231,45 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task MailSync_fields_reach_clients_where_the_sidecar_reports_a_sync()
+    {
+        // mailSync is how a client tells "not arrived" from "not pulled yet",
+        // and the tool description names these four fields — so they are a
+        // locked wire contract like archiveStats. Read through the real
+        // MbsyncSyncFile registration: the marker sits beside a Maildir root.
+        var dir = Path.Combine(Path.GetTempPath(), "mailvec-surface-sync-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(dir, "Fastmail");
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, Mailvec.Core.Health.MbsyncSyncFile.FileName),
+                $"{DateTimeOffset.UtcNow.AddSeconds(-30).UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}\n60\n");
+            using var configured = WithConfig(("Ingest:MaildirRoot", root));
+            await using var client = await ConnectAsync(configured);
+
+            var body = await CallJsonAsync(client, "search_emails", new());
+
+            ShouldHaveKeys(body.GetProperty("mailSync"), "lastSyncAt", "ageSeconds", "intervalSeconds", "stale");
+            body.GetProperty("mailSync").GetProperty("stale").GetBoolean().ShouldBeFalse();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task MailSync_is_omitted_when_no_sync_is_on_record()
+    {
+        await using var client = await ConnectAsync();
+
+        var body = await CallJsonAsync(client, "search_emails", new());
+
+        body.TryGetProperty("mailSync", out _).ShouldBeFalse(
+            "no marker means unknown, and unknown must be absent rather than a guessed value");
+    }
+
+    [Fact]
     public async Task Webmail_link_fields_are_emitted_when_the_account_is_configured()
     {
         // webmailLink is the pre-escaped Markdown link clients render verbatim —
