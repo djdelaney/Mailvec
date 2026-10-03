@@ -87,6 +87,23 @@ All mail-content parsing runs in `parse`. It has no archive or Maildir mount, se
 
 The MCP service shares the internal `parse` network to call the parser and rejects calls back from that network with `Mcp:DeniedNetworks`. If `MAILVEC_PARSE_SUBNET` changes, verify the corresponding MCP setting still matches. From a container on the parse network, a request to `http://mcp:3333/up` must return 403. See [Security model](security.md#container-hardening).
 
+## New-mail push (IMAP IDLE)
+
+By default the `mbsync` service syncs every `MBSYNC_INTERVAL_SECONDS` (60). To have new mail land within seconds, which helps when a Claude session is waiting on a test message, list folders to watch in `.env`:
+
+```sh
+MBSYNC_IDLE_FOLDERS=INBOX,Junk Mail,homelab
+```
+
+The sidecar then holds one IMAP IDLE connection per folder. When one reports new mail, the next sync starts as soon as the current one is at least 5 seconds old, instead of waiting out the interval. Only new mail triggers this. Flag changes, moves and deletions in any folder still wait for the interval.
+
+- **Names.** Use folder names as mbsync names them: the path under `./mail/Fastmail/` with the example's `Subfolders Verbatim`. Names may contain spaces; a `/` is translated to the server's hierarchy delimiter. The folder must also be included by `Patterns` in `mbsyncrc`, or the sync it triggers won't pull it.
+- **Limits.** Up to 10 folders, each one IMAP connection on top of mbsync's own. Mail that fails SPF, DKIM or DMARC usually lands in Junk Mail, so watch it too if you test mail paths.
+- **Connection.** The watcher reads Host, Port, User and Pass/PassCmd from the first `IMAPAccount` block of `mbsyncrc` and connects with implicit TLS (`TLSType IMAPS`, which the example uses). It refuses any other TLS mode. It opens folders read-only (`EXAMINE`), so watching changes nothing on the server.
+- **Apply.** Recreate the service so it reads the new environment: `docker compose up -d mbsync`. Its log should show `IDLE enabled for: …` followed by one `mbsync-idle: watching '…'` line per folder.
+
+This is a latency optimisation only. If the watcher can't log in, loses its connection, or names a folder that doesn't exist, it says so in `docker compose logs mbsync`, retries where retrying can help, and syncing continues on the interval. A rejected login is retried every 15 minutes so a revoked app password can't lock the account. Neither `/health` nor `/up` reports on the watcher itself. Whether syncs are succeeding is still reported by `/up`'s `mail.syncStale`, and to Claude sessions by `search_emails`' `mailSync` field.
+
 ## Resource limits
 
 `compose.yml` sets memory and PID limits for each service. Size them for your corpus and parser workload; do not infer a suitable limit from process RSS alone because SQLite's vector page cache is also charged to the container. Check `docker stats` and the service's cgroup memory peak after indexing and search. If the limit causes cache churn or OOM restarts, increase it and recreate with `docker compose up -d`. For search measurement, see [Search performance](contributing/search-performance.md).
