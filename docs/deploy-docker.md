@@ -114,7 +114,8 @@ This is a latency optimisation only, and every failure falls back to the interva
 2. Start the stack and run `docker compose exec mcp mailvec doctor` and `mailvec status`. Confirm the first IMAP sync, indexing, and embedding progress.
 3. If OCR is enabled, test a real PDF or image render to verify native libraries load.
 4. Confirm `parse` is healthy and that calls from the parse network to MCP get 403.
-5. Test `/health` on MCP loopback and `/up` through the configured remote access path. Verify that `/health` and MCP tools are unavailable to the monitoring token.
-6. Confirm backups and any corpus-specific eval baseline before changing images or embedding profiles.
+5. If `MBSYNC_IDLE_FOLDERS` is set, `docker compose logs mbsync` shows `IDLE enabled for: …` and one `Watching mailbox` line per folder, and a test message to a watched folder is searchable within seconds. Compare with `mailSync.lastSyncAt` in a `search_emails` response.
+6. Test `/health` on MCP loopback and `/up` through the configured remote access path. Verify that `/health` and MCP tools are unavailable to the monitoring token.
+7. Confirm backups and any corpus-specific eval baseline before changing images or embedding profiles.
 
 Record observed deployment state in your operator notes, not in this repository. The checked-in [Compose file](../compose.yml) is the source of truth for defaults and mounts; `docker compose config` shows the resolved settings for a particular host.
