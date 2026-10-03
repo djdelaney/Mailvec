@@ -239,6 +239,16 @@ Sessions often search for mail sent seconds earlier — a test message on an SMT
 - **`lastSyncAt` is when the last successful sync finished**, so mail that reached the server mid-sync may not be in it — hence "retry after an interval", not a hard cut-off. `ageSeconds` is computed server-side and clamped at zero.
 - **Omitted, never guessed, when the marker is unknown** (macOS launchd installs, a deployment that has never synced). The MCP test fixture now points `Ingest:MaildirRoot` at its own temp directory so a developer's leftover marker can't leak into `/health` or `mailSync` assertions.
 
+## ✅ New-mail push via IMAP IDLE (no schema change, 2026-10-03)
+
+Optional and off by default. `MBSYNC_IDLE_FOLDERS` (comma-separated) makes the mbsync sidecar hold one read-only IMAP IDLE connection per folder; new mail in one starts the next sync within seconds instead of at the end of `MBSYNC_INTERVAL_SECONDS`. Motivated by Claude sessions waiting on just-sent test mail (SMTP paths, DMARC work), with `mailSync` above telling them when to retry.
+
+- **The watcher wakes the loop; it never runs mbsync.** `ops/mbsync-idle.py` (Python stdlib, installed as `/usr/local/bin/mbsync-idle`) creates a wake file; the loop's sleep becomes one-second steps that end once a wake is pending and 5 s have passed since the last sync. The loop stays the single serialized runner, so `.mbsyncstate` never sees two writers, and the success marker still means a full `mbsync -a` succeeded. With the variable unset the loop sleeps exactly as before.
+- **Only new mail (`EXISTS`) wakes it**; flags, moves and deletions wait for the timer. A reconnect wakes once, for mail that arrived while disconnected.
+- **Settings come from `mbsyncrc`** (first `IMAPAccount`: Host, Port, User, Pass/PassCmd). Implicit TLS only; anything else is refused. Folder names are mbsync's (`/` → the server's delimiter, modified UTF-7 for non-ASCII). At most 10 folders.
+- **Every failure degrades to the timer.** Lost connections back off 5 s → 5 min; a rejected login retries every 15 min; a missing folder or a server without IDLE stops that watch and logs why. The image gains `python3`.
+- **Tests run in CI for the first time for this sidecar**: `ops/tests/test_mbsync_idle.py` drives the protocol against a scripted IMAP server and runs the Dockerfile's loop heredoc itself under `/bin/sh` with fake `mbsync`/watcher binaries (verified by mutation: clearing the wake file after the sync, or ignoring it, each fail). The image itself was not built in the authoring session (no Docker daemon); the first build is `publish-images` after merge.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

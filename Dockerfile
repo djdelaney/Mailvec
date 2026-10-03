@@ -82,7 +82,11 @@ RUN set -eux; \
 # (see ops/mbsyncrc.container.example); the Fastmail app password from a
 # compose file-secret the config's PassCmd cats.
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS mbsync
-RUN apk add --no-cache isync ca-certificates
+# python3 runs the optional IMAP IDLE watcher (ops/mbsync-idle.py, standard
+# library only). Installed unconditionally so turning IDLE on is an env change,
+# not an image rebuild.
+RUN apk add --no-cache isync ca-certificates python3
+COPY --chmod=0755 ops/mbsync-idle.py /usr/local/bin/mbsync-idle
 RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 #!/bin/sh
 # Interval loop replacing the launchd StartInterval job.
@@ -263,9 +267,79 @@ republish_cadence() {
 }
 republish_cadence
 
+# --- optional IMAP IDLE: wake the loop early when new mail arrives ---
+#
+# MBSYNC_IDLE_FOLDERS (comma-separated; unset = off, the default) starts
+# mbsync-idle, which holds one IDLE connection per folder and creates
+# ${WAKE} when one reports new mail. The sleep below then ends early and THIS
+# loop runs the next `mbsync -a`.
+#
+# THE WATCHER NEVER RUNS mbsync ITSELF. This loop stays the single serialized
+# runner: two mbsync processes race on .mbsyncstate and its lock, which is the
+# failure the "Polling below one minute" note in docs/future-ideas.md warns
+# about. A file rather than a signal because a trapped signal interrupts
+# `wait "$child"` mid-sync, and the interrupted status reads as a failed sync.
+#
+# The wake file is removed just BEFORE each sync starts, never after: mail
+# signalled while a sync is running must survive it and trigger the next one.
+#
+# Everything here is latency only. A dead or misconfigured watcher degrades to
+# the timer, and mcp's mailSync / mail.syncStale report the sync outcome as
+# before. Exit status 2 from the watcher is configuration a retry cannot fix,
+# so the supervisor stops restarting it; anything else restarts after 30s.
+: "${MBSYNC_IDLE_FOLDERS:=}"
+# Overridable only so the tests (ops/tests) can run loops side by side.
+: "${MBSYNC_WAKE_FILE:=/tmp/mbsync-wake}"
+WAKE="${MBSYNC_WAKE_FILE}"
+# Floor between the end of one sync and a wake-triggered start of the next, so
+# a burst of arrivals is one sync rather than several back to back.
+MBSYNC_IDLE_MIN_GAP_SECONDS=5
+idler=
+if [ -n "${MBSYNC_IDLE_FOLDERS}" ]; then
+    rm -f "${WAKE}"
+    (
+        py=
+        trap 'if [ -n "$py" ]; then kill "$py" 2>/dev/null; fi; exit 0' TERM INT
+        while :; do
+            MBSYNC_CONFIG="${MBSYNC_CONFIG}" MBSYNC_WAKE_FILE="${WAKE}" \
+                MBSYNC_IDLE_FOLDERS="${MBSYNC_IDLE_FOLDERS}" mbsync-idle & py=$!
+            wait "$py"; rc=$?; py=
+            if [ "$rc" -eq 2 ]; then
+                echo "mbsync: IDLE watcher stopped on its configuration; syncing every ${MBSYNC_INTERVAL_SECONDS}s only" >&2
+                exit 0
+            fi
+            echo "mbsync: IDLE watcher exited (status $rc); restarting in 30s" >&2
+            sleep 30 & py=$!
+            wait "$py"; py=
+        done
+    ) & idler=$!
+    echo "mbsync: IDLE enabled for: ${MBSYNC_IDLE_FOLDERS}" >&2
+fi
+
+# The pause between syncs. Without IDLE, one sleep for the whole interval,
+# exactly as before IDLE existed. With it, one-second steps that end early once
+# a wake is pending and the gap floor has passed.
+nap() {
+    if [ -z "${idler}" ]; then
+        sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
+        wait "$child"
+        return
+    fi
+    waited=0
+    while [ "${waited}" -lt "${MBSYNC_INTERVAL_SECONDS}" ]; do
+        if [ -e "${WAKE}" ] && [ "${waited}" -ge "${MBSYNC_IDLE_MIN_GAP_SECONDS}" ]; then
+            echo "mbsync: new mail signalled by IDLE; syncing now" >&2
+            return
+        fi
+        sleep 1 & child=$!
+        wait "$child"
+        waited=$((waited + 1))
+    done
+}
+
 child=
 beater=
-trap 'if [ -n "$beater" ]; then kill "$beater" 2>/dev/null; fi; if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child"; fi; exit 0' TERM INT
+trap 'for p in "$beater" "$idler"; do if [ -n "$p" ]; then kill "$p" 2>/dev/null; fi; done; if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child"; fi; exit 0' TERM INT
 
 # The beat runs on its own timer for the life of the container, NOT after each
 # sync. This is the same rule the .NET services follow (HeartbeatService is a
@@ -286,6 +360,7 @@ beat
 ( while :; do sleep "${MBSYNC_BEAT_SECONDS}"; beat; done ) & beater=$!
 
 while :; do
+    rm -f "${WAKE}"
     mbsync -c "${MBSYNC_CONFIG}" -a & child=$!
     # Capture the status explicitly rather than reading $? inside a branch.
     # It happens to survive both `|| cmd` and an if/else today, but it is one
@@ -298,8 +373,7 @@ while :; do
     else
         echo "mbsync: sync failed (exit $rc)" >&2
     fi
-    sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
-    wait "$child"
+    nap
 done
 EOF
 RUN chmod +x /usr/local/bin/mbsync-loop

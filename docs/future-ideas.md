@@ -146,18 +146,12 @@ if provider throttling or SQLite contention is measured. It would change
 freshness for labels, moves, deletions, and flags, and would need a single
 serialized runner. Re-measure on the target deployment before implementing it.
 
-**Push via IMAP IDLE (motivating case found 2026-10-03).** Claude sessions
-search for mail sent seconds earlier (SMTP path tests, DMARC work), so the
-"measure first" condition above now has a concrete user. mbsync has no IDLE
-support; the usual shape is a watcher (e.g. `goimapnotify`) holding one IDLE
-connection per folder that *wakes the existing sync loop early*, never runs its
-own `mbsync` (two writers race on `.mbsyncstate`). Folders: **INBOX**, **Junk
-Mail** (mail that fails SPF/DKIM/DMARC lands there) and the owner's
-**homelab** folder (Fastmail rules route lab mail there). Labels, moves and
-deletions stay on the timed full sync. Needs its own health signal: a dead IDLE
-connection degrades silently to the timer. `search_emails`' `mailSync` field
-already tells clients how fresh the mirror is, so this is a latency
-improvement, not a correctness one.
+**Push via IMAP IDLE is implemented** (2026-10-03, optional `MBSYNC_IDLE_FOLDERS`;
+[Docker deployment](deploy-docker.md#new-mail-push-imap-idle)). It wakes the
+single serialized runner above rather than adding a second one, and only new
+mail wakes it. Still open: the watcher has no health signal of its own. A dead
+IDLE connection degrades silently to the timer, visible only in the sidecar's
+log. The macOS launchd install has no equivalent.
 
 ## Still open (small)
 
