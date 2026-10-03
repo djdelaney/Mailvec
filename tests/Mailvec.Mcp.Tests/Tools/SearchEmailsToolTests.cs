@@ -20,7 +20,9 @@ public class SearchEmailsToolTests
         McpOptions? mcpOpts = null,
         FastmailOptions? fastmailOpts = null,
         OllamaOptions? ollamaOpts = null,
-        Mailvec.Core.Embedding.ResolvedEmbeddingProfile? profile = null)
+        Mailvec.Core.Embedding.ResolvedEmbeddingProfile? profile = null,
+        Mailvec.Core.Health.MbsyncSyncFile? syncFile = null,
+        ToolCallLogger? callLog = null)
     {
         profile ??= LegacyProfile;
         var messages = new MessageRepository(db.Connections);
@@ -34,9 +36,122 @@ public class SearchEmailsToolTests
             Helpers.Mcp(mcpOpts),
             Helpers.Fastmail(fastmailOpts),
             Helpers.Ollama(ollamaOpts),
-            Helpers.NoopLogger(),
+            callLog ?? Helpers.NoopLogger(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance,
-            profile);
+            profile,
+            syncFile);
+    }
+
+    // ---------- mailSync (mbsync's last-successful-sync marker) ----------
+
+    /// <summary>
+    /// A Maildir root in a fresh temp directory, optionally with the sidecar's
+    /// sync marker beside it — written in the sidecar's own format (ISO UTC
+    /// line, then the interval) so the real reader parses it.
+    /// </summary>
+    private sealed class SyncMarker : IDisposable
+    {
+        private readonly string _dir = Path.Combine(Path.GetTempPath(), "mailvec-sync-" + Guid.NewGuid().ToString("N"));
+
+        public SyncMarker(DateTimeOffset? lastSyncAt, int intervalSeconds = 60)
+        {
+            Directory.CreateDirectory(Path.Combine(_dir, "Fastmail"));
+            if (lastSyncAt is { } at)
+            {
+                File.WriteAllText(Path.Combine(_dir, Mailvec.Core.Health.MbsyncSyncFile.FileName),
+                    $"{at.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}\n{intervalSeconds}\n");
+            }
+            Reader = new Mailvec.Core.Health.MbsyncSyncFile(Microsoft.Extensions.Options.Options.Create(
+                new IngestOptions { MaildirRoot = Path.Combine(_dir, "Fastmail") }));
+        }
+
+        public Mailvec.Core.Health.MbsyncSyncFile Reader { get; }
+
+        public void Dispose()
+        {
+            try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Responses_report_when_mail_was_last_pulled()
+    {
+        using var db = new TempDatabase();
+        new MessageRepository(db.Connections).Upsert(
+            Helpers.Sample("a@x", body: "ramen"), "INBOX", "INBOX/cur", "a", DateTimeOffset.UtcNow);
+        var lastSync = DateTimeOffset.UtcNow.AddSeconds(-90);
+        using var marker = new SyncMarker(lastSync, intervalSeconds: 60);
+
+        var tool = Build(db, syncFile: marker.Reader);
+
+        // Both paths: "did my test message arrive?" is as likely to be a
+        // query-less browse of INBOX as a keyword search.
+        foreach (var resp in new[]
+                 {
+                     await tool.SearchEmails(query: null),
+                     await tool.SearchEmails(query: "ramen", mode: "keyword"),
+                 })
+        {
+            resp.MailSync.ShouldNotBeNull();
+            resp.MailSync.LastSyncAt.ShouldBe(lastSync, TimeSpan.FromSeconds(1));
+            resp.MailSync.AgeSeconds.ShouldBeInRange(89, 120);
+            resp.MailSync.IntervalSeconds.ShouldBe(60);
+            resp.MailSync.Stale.ShouldBeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task A_sync_that_stopped_succeeding_is_reported_stale()
+    {
+        using var db = new TempDatabase();
+        // Past MbsyncSyncFile's 30-minute floor: syncing is broken, and a
+        // client should say so rather than wait for mail that isn't coming.
+        using var marker = new SyncMarker(DateTimeOffset.UtcNow.AddHours(-2), intervalSeconds: 60);
+
+        var resp = await Build(db, syncFile: marker.Reader).SearchEmails(query: null);
+
+        resp.MailSync.ShouldNotBeNull();
+        resp.MailSync.Stale.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_tool_call_log_records_what_the_client_was_told_about_sync_freshness()
+    {
+        // The log is the only server-side record of a response. A client that
+        // tells the user "mail sync has stopped" on `stale` must be checkable
+        // against it after the marker has moved on.
+        using var db = new TempDatabase();
+        using var marker = new SyncMarker(DateTimeOffset.UtcNow.AddHours(-2), intervalSeconds: 60);
+        var sink = new RecordingLogger();
+        var callLog = new ToolCallLogger(sink, Microsoft.Extensions.Options.Options.Create(new McpOptions { LogToolCalls = true }));
+
+        await Build(db, syncFile: marker.Reader, callLog: callLog).SearchEmails(query: null);
+
+        var result = sink.Messages.Single(m => m.Contains("mcp-result"));
+        result.ShouldContain("\"mailSync\":{");
+        result.ShouldContain("\"stale\":true");
+        result.ShouldContain("\"ageSeconds\":");
+    }
+
+    [Fact]
+    public async Task No_marker_means_no_mailSync_never_a_guess()
+    {
+        // The macOS launchd install has no sidecar and a fresh deployment has
+        // never synced: unknown is omitted, not reported stale or fresh.
+        using var db = new TempDatabase();
+        using var marker = new SyncMarker(lastSyncAt: null);
+
+        (await Build(db, syncFile: marker.Reader).SearchEmails(query: null)).MailSync.ShouldBeNull();
+        (await Build(db).SearchEmails(query: null)).MailSync.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_marker_written_by_a_clock_ahead_of_ours_reports_age_zero()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var health = new Mailvec.Core.Health.MailHealth(now.AddSeconds(5), 60, SyncStale: false, Known: true);
+
+        MailSyncStatus.From(health, now)!.AgeSeconds.ShouldBe(0);
     }
 
     // ---------- Browse path (no query) ----------

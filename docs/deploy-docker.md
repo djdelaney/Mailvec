@@ -87,6 +87,23 @@ All mail-content parsing runs in `parse`. It has no archive or Maildir mount, se
 
 The MCP service shares the internal `parse` network to call the parser and rejects calls back from that network with `Mcp:DeniedNetworks`. If `MAILVEC_PARSE_SUBNET` changes, verify the corresponding MCP setting still matches. From a container on the parse network, a request to `http://mcp:3333/up` must return 403. See [Security model](security.md#container-hardening).
 
+## New-mail push (IMAP IDLE)
+
+By default the `mbsync` service syncs every `MBSYNC_INTERVAL_SECONDS` (60). To have new mail land within seconds, which helps when a Claude session is waiting on a test message, list folders to watch in `.env`:
+
+```sh
+MBSYNC_IDLE_FOLDERS=INBOX,Junk Mail,homelab
+```
+
+The sidecar then runs [goimapnotify](https://gitlab.com/shackra/goimapnotify), which holds one IMAP IDLE connection per folder. When one reports new mail, the next sync starts within about 5 seconds (the wake is checked in 5-second steps, and never sooner than 5 seconds after the previous sync), instead of waiting out the interval. That 5 seconds is Mailvec's share only; the server's own delivery time comes first and usually dominates. Observed 2026-10-03 against Fastmail: the IDLE event arrived 21 s after the message's `Date:` header, and the sync started 4 s after that. A wake 20 to 30 s after sending is the watcher working, not failing. Only new mail triggers this. Flag changes, moves and deletions in any folder still wait for the interval. The event goimapnotify itself raises for every folder when it starts is not a wake: a container start or watcher restart adds no extra sync.
+
+- **Names.** Use folder names exactly as the IMAP server lists them; names may contain spaces. To see them, enable IDLE with any valid folder such as `INBOX`, then run `docker compose exec mbsync goimapnotify -conf /tmp/mbsync-idle.yaml -list`. The folder must also be included by `Patterns` in `mbsyncrc`, or the sync it triggers won't pull it.
+- **Limits.** Up to 10 folders, each one IMAP connection on top of mbsync's own. Mail that fails SPF, DKIM or DMARC usually lands in Junk Mail, so watch it too if you test mail paths.
+- **Connection.** The watcher's config is generated at startup from the first `IMAPAccount` block of `mbsyncrc` (Host, Port, User, Pass or PassCmd). It connects with implicit TLS and certificate verification only (`TLSType IMAPS`, which the example uses) and refuses other TLS modes. `AuthMechs XOAUTH2` (Gmail, Office 365) is carried over: the watcher then sends the `PassCmd` output as the OAuth2 token, as mbsync does, so the same token command serves both; a literal `Pass` with XOAUTH2 leaves IDLE off with a reason. It opens folders read-only (`EXAMINE`), so watching changes nothing on the server.
+- **Apply.** The `mbsync` image must be from the release that introduced this setting or later; an older image has no goimapnotify and ignores the variable **silently**, with no log line at all. Then recreate the service so it reads the new environment: `docker compose up -d mbsync`. Its log should show `IDLE enabled for: …`, then one `Watching mailbox` line per folder. If neither appears, check the running image with `docker inspect` before suspecting the configuration.
+
+This is a latency optimisation only, and every failure falls back to the interval. A rejected login, a folder name the server doesn't recognise, or an unreachable server stops the watcher for **all** folders. The sidecar restarts it after 30 seconds, doubling up to 15 minutes, so a revoked app password or a typo can't hammer the account. Check `docker compose logs mbsync` for `IDLE watcher exited` lines if mail seems slow. Neither `/health` nor `/up` reports on the watcher itself. Whether syncs are succeeding is still reported by `/up`'s `mail.syncStale`, and to Claude sessions by `search_emails`' `mailSync` field.
+
 ## Resource limits
 
 `compose.yml` sets memory and PID limits for each service. Size them for your corpus and parser workload; do not infer a suitable limit from process RSS alone because SQLite's vector page cache is also charged to the container. Check `docker stats` and the service's cgroup memory peak after indexing and search. If the limit causes cache churn or OOM restarts, increase it and recreate with `docker compose up -d`. For search measurement, see [Search performance](contributing/search-performance.md).
@@ -97,7 +114,8 @@ The MCP service shares the internal `parse` network to call the parser and rejec
 2. Start the stack and run `docker compose exec mcp mailvec doctor` and `mailvec status`. Confirm the first IMAP sync, indexing, and embedding progress.
 3. If OCR is enabled, test a real PDF or image render to verify native libraries load.
 4. Confirm `parse` is healthy and that calls from the parse network to MCP get 403.
-5. Test `/health` on MCP loopback and `/up` through the configured remote access path. Verify that `/health` and MCP tools are unavailable to the monitoring token.
-6. Confirm backups and any corpus-specific eval baseline before changing images or embedding profiles.
+5. If `MBSYNC_IDLE_FOLDERS` is set, `docker compose logs mbsync` shows `IDLE enabled for: …` and one `Watching mailbox` line per folder, and a test message to a watched folder is keyword-searchable within seconds (`mode=keyword` or `hybrid`; semantic results follow the embedder's next pass). Compare with `mailSync.lastSyncAt` in a `search_emails` response.
+6. Test `/health` on MCP loopback and `/up` through the configured remote access path. Verify that `/health` and MCP tools are unavailable to the monitoring token.
+7. Confirm backups and any corpus-specific eval baseline before changing images or embedding profiles.
 
 Record observed deployment state in your operator notes, not in this repository. The checked-in [Compose file](../compose.yml) is the source of truth for defaults and mounts; `docker compose config` shows the resolved settings for a particular host.

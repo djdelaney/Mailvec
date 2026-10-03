@@ -64,19 +64,24 @@ public class ToolCallLoggerTests
         public SelfReferential Self => this;
     }
 
-    private sealed class RecordingLogger : ILogger<ToolCallLogger>
+}
+
+/// <summary>
+/// Captures every formatted message a <see cref="ToolCallLogger"/> emits.
+/// Shared with the tool tests that assert what the result summary records.
+/// </summary>
+internal sealed class RecordingLogger : ILogger<ToolCallLogger>
+{
+    public List<string> Messages { get; } = new();
+
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+    public bool IsEnabled(LogLevel logLevel) => true;
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+        Messages.Add(formatter(state, exception));
+
+    private sealed class NullScope : IDisposable
     {
-        public List<string> Messages { get; } = new();
-
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
-        public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
-
-        private sealed class NullScope : IDisposable
-        {
-            public static readonly NullScope Instance = new();
-            public void Dispose() { }
-        }
+        public static readonly NullScope Instance = new();
+        public void Dispose() { }
     }
 }
