@@ -37,7 +37,7 @@ docker compose exec mcp mailvec status
 docker compose exec mcp mailvec search "a phrase from a known email"
 ```
 
-The services run as uid 10001 by default. If a service refuses to start, `docker compose logs <service>` gives the missing ownership or configuration step. Replace the sample search phrase with something in your mail after the first sync. The first IMAP pull and embedding pass can take hours or days; message counts and embedding coverage in `status` should increase. Verify a real OCR render if OCR is enabled; the [rollout checklist](deploy-docker.md#rollout-checklist) covers the remaining checks.
+The services run as uid 10001 by default. If a service refuses to start, `docker compose logs <service>` gives the missing ownership or configuration step. Replace the sample search phrase with something in your mail after the first sync. The first IMAP pull and embedding pass can take hours or days; message counts and embedding coverage in `status` should increase. Verify a real OCR render if OCR is enabled; the [rollout checklist](deploy-docker.md#rollout-checklist) covers the remaining checks. New mail arrives on a 60-second sync timer; to have it land within seconds, see the optional [new-mail push](deploy-docker.md#new-mail-push-imap-idle).
 
 ## 4. Connect a client
 

@@ -173,6 +173,24 @@ Ships inside `SQLitePCLRaw.bundle_e_sqlite3` — bump the bundle to bump SQLite.
 - **Vision model (OCR):** `Ollama:VisionModel`, default `qwen2.5vl:7b`, used by the embedder's scanned-PDF OCR pass (`Embedder:OcrEnabled`, on by default). Pull it with `ollama pull qwen2.5vl:7b`. Unlike the embedding model it is **not** schema-coupled — swap it freely (no reindex); only newly-OCR'd PDFs use the new model, and you can re-run OCR on existing ones by resetting their `extraction_status` from `ocr` back to `no_text`. If it isn't pulled, OCR logs a warning and skips (scanned PDFs stay `no_text`); `mailvec doctor` flags it. Loaded on demand, not pinned — see the OCR design doc. There is no hard version floor today; `/api/generate` with `images` is long-standing.
 
 
+## Alpine base image (the mbsync sidecar: isync, goimapnotify)
+
+The `mbsync` image is `alpine:<minor>@<digest>` plus two packages, `isync` and `goimapnotify`, installed unpinned from that Alpine branch. Dependabot's digest bumps (`docker-all` group) can therefore move either package, and a new Alpine **minor** usually does. Check what a candidate base ships before merging the bump:
+
+```sh
+docker run --rm alpine:<minor>@<digest> sh -c 'apk add -q --no-cache isync goimapnotify && apk list -I isync goimapnotify'
+```
+
+Then run the sidecar's own tests **inside the candidate image**, not just in CI. CI runs the loop under dash with Ubuntu's awk and sed; the image runs it under busybox for all three, and busybox moves with every Alpine release. This is the only check that sees a busybox difference in the `mbsyncrc` parser or the config generation (verified 2026-10-03 against 3.24: all 13 pass):
+
+```sh
+docker build --target mbsync -t mailvec-mbsync:check .
+docker run --rm --user root -v "$PWD:/src:ro" mailvec-mbsync:check \
+  sh -c 'apk add -q --no-cache python3 && cd /src && python3 -m unittest discover -s ops/tests'
+```
+
+If `goimapnotify` moved, re-check by hand the behaviour the optional IDLE support (`MBSYNC_IDLE_FOLDERS`) relies on: the generated config keys (`tls`, `tlsOptions.starttls` / `rejectUnauthorized`, `passwordCMD`, `boxes[].mailbox` / `onNewMail`) are still read, folders are opened read-only, and a rejected login or unknown folder still **exits** (the supervisor's backoff is what bounds retries; a version that instead retried internally without backoff would hammer the account). The tests use a stand-in binary and cannot see any of this; [`ops/tests/test_mbsync_idle.py`](tests/test_mbsync_idle.py)'s docstring records what was verified for 2.5.4 and how. A real IMAP account with IDLE enabled is the final check: `docker compose logs mbsync` shows one `Watching mailbox` line per folder.
+
 ## Upgrading an older compose deployment across the embedding-providers change
 
 `compose.yml` now unconditionally declares the `embedding_api_key` secret

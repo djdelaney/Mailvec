@@ -42,7 +42,11 @@ SyncState *
 # Read-only sync: changes in Fastmail flow down, never up.
 Sync    Pull
 Expunge Near
-# Example Cap each folder to the 6000 newest messages. mbsync has no date-range
+# Example: cap each folder to the 6000 newest messages. mbsync has no date-range
 # filter; this is the closest knob and works well if you don't want to
 # pull years of archive on first sync. Remove the line to sync everything.
+# It bounds READ mail only: isync never expires unread messages unless
+# ExpireUnread is yes, so a folder full of unread mail is pulled in full
+# whatever the cap (observed 2026-10-03: MaxMessages 20 pulled 220 from an
+# INBOX on first sync). Size the first pull on the unread count, not this.
 #MaxMessages 6000

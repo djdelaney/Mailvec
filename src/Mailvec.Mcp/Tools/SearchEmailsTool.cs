@@ -34,7 +34,11 @@ public sealed class SearchEmailsTool(
     ILogger<SearchEmailsTool> logger,
     // Provider-aware error translation (phase 4): remediation must name the
     // configured provider's fix, not tell a Fireworks user to `ollama pull`.
-    Mailvec.Core.Embedding.ResolvedEmbeddingProfile? embeddingProfile = null)
+    Mailvec.Core.Embedding.ResolvedEmbeddingProfile? embeddingProfile = null,
+    // The mbsync sidecar's last-successful-sync marker, surfaced as `mailSync`
+    // so a client can tell "not arrived" from "not pulled yet". Null (and the
+    // field omitted) where nothing writes the marker — see MailSyncStatus.
+    Mailvec.Core.Health.MbsyncSyncFile? syncFile = null)
 {
     private readonly McpOptions _mcp = mcpOptions.Value;
     private readonly FastmailOptions _fastmail = fastmailOptions.Value;
@@ -53,6 +57,15 @@ public sealed class SearchEmailsTool(
         "The mailbox may span 10+ years and hundreds of thousands of messages; every response includes " +
         "`archiveStats` (totalMessages, oldestDate, latestDate — latestDate tracks the user's newest mail, so it " +
         "reaches the present) so you can gauge actual scope, and `appliedFilters` echoing the filters you used. " +
+        "Where the deployment reports it, responses also include `mailSync`: when mail was last pulled from the " +
+        "mail server (`lastSyncAt`, `ageSeconds`), how often it is pulled (`intervalSeconds`), and whether pulling " +
+        "has stopped working (`stale`). Pulled mail is keyword-searchable within seconds (`mode=keyword`, or " +
+        "`hybrid`, whose keyword leg sees it); `mode=semantic` lags until the embedder's next pass, typically a " +
+        "minute or more, so check for just-arrived mail with keyword or hybrid. `archiveStats.latestDate` is a " +
+        "sender-supplied date that cannot tell you any of this. So when looking for mail that may have reached " +
+        "the server after `lastSyncAt` (e.g. a test message that was just sent), an empty result does NOT mean it " +
+        "never arrived: wait about `intervalSeconds` and search again. If `stale` is true, new mail is not " +
+        "arriving at all — tell the user rather than retrying. " +
         "Strongly prefer setting `dateFrom`/`dateTo` whenever the user's question implies a time window " +
         "('last week', 'last quarter', 'in 2023', 'recently', 'before I left $job', 'this year'); across a " +
         "full mailbox this size, an unbounded query skews toward old mail and dilutes recent context. When in " +
@@ -122,6 +135,7 @@ public sealed class SearchEmailsTool(
         var resolvedLimit = ClampLimit(limit);
         var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType);
         var archiveStats = messages.GetArchiveStats();
+        var mailSync = ReadMailSync();
         var appliedFilters = AppliedFilters.From(filters);
         // Non-null only when the archive has zero messages: tells the client
         // LLM WHY it's empty (installer never ran vs indexer hasn't caught up)
@@ -135,7 +149,7 @@ public sealed class SearchEmailsTool(
         {
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
             var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
-            var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters, setupHint);
+            var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters, setupHint, mailSync);
             callLog.LogResult(ToolName, BuildResultSummary(browseResp), startTs,
                 count: browseResp.Count, mode: browseResp.Mode);
             return browseResp;
@@ -218,16 +232,27 @@ public sealed class SearchEmailsTool(
                 "including the configured endpoint.");
         }
 
-        var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters, setupHint);
+        var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters, setupHint, mailSync);
         callLog.LogResult(ToolName, BuildResultSummary(response), startTs,
             count: response.Count, mode: response.Mode);
         return response;
+    }
+
+    private MailSyncStatus? ReadMailSync()
+    {
+        if (syncFile is null) return null;
+        var now = DateTimeOffset.UtcNow;
+        return MailSyncStatus.From(syncFile.Read(now), now);
     }
 
     private static object BuildResultSummary(SearchEmailsResponse r) => new
     {
         mode = r.Mode,
         count = r.Count,
+        // What the client was told about sync freshness. A client acting on
+        // `stale` ("your mail sync has stopped") is otherwise unverifiable
+        // from the server's own log once the marker moves on.
+        mailSync = r.MailSync is { } s ? new { lastSyncAt = s.LastSyncAt, ageSeconds = s.AgeSeconds, stale = s.Stale } : null,
         // Top hits give enough context to correlate the call against the archive
         // without dumping full bodies into the log.
         top = r.Results.Take(5).Select(h => new
@@ -289,7 +314,47 @@ public sealed record SearchEmailsResponse(
     // Additive (nullable, omitted-when-null for older clients' purposes is
     // fine — it serializes as null): populated only when the archive has zero
     // messages, explaining why and what to do. See SetupHints.
-    string? SetupHint = null);
+    string? SetupHint = null,
+    // Additive, omitted when null: present only where the mbsync sidecar
+    // writes its sync marker (the container deployment). See MailSyncStatus.
+    MailSyncStatus? MailSync = null);
+
+/// <summary>
+/// When mail was last pulled from the mail server, from the mbsync sidecar's
+/// last-successful-sync marker (<see cref="Mailvec.Core.Health.MbsyncSyncFile"/>
+/// — the same fact <c>/up</c> reports as <c>mail.syncStale</c>).
+///
+/// <para><b>Why it is on search responses.</b> Sessions often look for mail
+/// that was sent seconds ago — a test message on an SMTP path, a DMARC probe —
+/// and an empty result is ambiguous between "never arrived" and "not pulled
+/// yet". <c>archiveStats.latestDate</c> cannot settle it: it is the newest
+/// message's <c>Date:</c> header, the sender's clock, not ours.</para>
+///
+/// <para><b><see cref="LastSyncAt"/> is when the last successful sync
+/// FINISHED</b> (the sidecar stamps the marker after <c>mbsync -a</c> exits 0).
+/// Mail that reached the server while that sync was running may not be in it,
+/// which is why the tool description tells clients to retry after about one
+/// interval rather than treating <c>lastSyncAt</c> as a hard cut-off.
+/// <see cref="AgeSeconds"/> is computed server-side because a client model's
+/// sense of the current time is unreliable, and is clamped at zero against a
+/// marker written by a clock slightly ahead of ours.</para>
+///
+/// <para><b>Absent, never guessed, when the marker is unknown</b> — no sidecar
+/// (the macOS launchd install), a fresh deployment that has never synced, or
+/// an unreadable file. Same rule as every other liveness signal here: unknown
+/// is not stale.</para>
+/// </summary>
+public sealed record MailSyncStatus(
+    DateTimeOffset LastSyncAt,
+    long AgeSeconds,
+    int IntervalSeconds,
+    bool Stale)
+{
+    public static MailSyncStatus? From(Mailvec.Core.Health.MailHealth health, DateTimeOffset now) =>
+        health is { Known: true, LastSyncAt: { } at, ExpectedIntervalSeconds: { } interval }
+            ? new MailSyncStatus(at, Math.Max(0L, (long)(now - at).TotalSeconds), interval, health.SyncStale)
+            : null;
+}
 
 /// <summary>
 /// Echo of the filters the server actually applied for this call. Surfaced on

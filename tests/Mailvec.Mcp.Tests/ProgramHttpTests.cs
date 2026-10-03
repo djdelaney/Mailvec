@@ -486,6 +486,9 @@ public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
 
     public string DatabasePath => _dbPath;
 
+    /// <summary>A Maildir root inside the factory's temp directory, with no mbsync markers beside it.</summary>
+    public string MaildirRoot => Path.Combine(_tempDir, "mail", "Fastmail");
+
     public MailvecMcpFactory()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "mailvec-mcp-factory-" + Guid.NewGuid().ToString("N"));
@@ -515,6 +518,11 @@ public class MailvecMcpFactory : WebApplicationFactory<Program>, IDisposable
                 // on that machine and only for them. Tests that want links on
                 // set the account id themselves.
                 ["Fastmail:AccountId"] = "",
+                // Same reason, for the mbsync markers read beside the Maildir
+                // root: the default ~/Mail/Fastmail would let a stale marker
+                // from a developer's old install reach /health and
+                // search_emails' mailSync. An empty temp root reads unknown.
+                ["Ingest:MaildirRoot"] = MaildirRoot,
             });
         });
 

@@ -474,9 +474,16 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 1g
     # The sh loop, one mbsync child, one sleep — single digits in practice.
+    # With MBSYNC_IDLE_FOLDERS set, add goimapnotify: one Go process (its
+    # runtime threads count here too) and one connection per folder, capped at
+    # 10. Still well inside this.
     pids_limit: 128
     environment:
       MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-60}
+      # Optional push: comma-separated folders to watch with IMAP IDLE (empty
+      # = off). New mail in one starts the next sync within seconds instead of
+      # at the end of the interval. See docs/deploy-docker.md "New-mail push".
+      MBSYNC_IDLE_FOLDERS: ${MBSYNC_IDLE_FOLDERS:-}
       HOME: /tmp
       # Liveness beat (read by mcp's /health via MbsyncHeartbeatFile) lands at
       # dirname(MBSYNC_MAILDIR)/.mailvec-mbsync-heartbeat. MBSYNC_MAILDIR

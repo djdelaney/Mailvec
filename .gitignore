@@ -90,3 +90,6 @@ logs/
 # than left loose here — and ignoring them stops a stray `git add -A` sweeping
 # them in, which is exactly how two of them got committed.
 /*REVIEW*.md
+
+# Python bytecode from ops/tests (the mbsync IDLE watcher tests)
+__pycache__/
