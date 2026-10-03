@@ -82,3 +82,5 @@ That's the file to tail when triaging a Claude Desktop / extension-install issue
 ## mbsync
 
 mbsync (the only non-.NET service) writes to small launchd-captured files in `~/Library/Logs/Mailvec/mailvec-mbsync.{out,err}.log`. These don't rotate — mbsync emits at most a few lines per 10-minute sync (`StartInterval` 600 in the plist), so size isn't a concern.
+
+In the Docker deployment mbsync logs to stderr only, so `docker compose logs mbsync` is the record: one line per failed sync, and, with the optional IMAP IDLE support enabled, goimapnotify's `Watching mailbox` / `scheduled syncing` lines and any `IDLE watcher exited … restarting in …` from its supervisor. Compose's `json-file` limits bound it (see `x-logging` in `compose.yml`).

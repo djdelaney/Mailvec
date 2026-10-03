@@ -18,7 +18,7 @@ The Docker MCP service listens inside Compose but has **no published host port**
 
 ### Docker Compose network boundaries
 
-`compose.yml` defines the actual topology. `indexer` and `parse` use internal networks without external egress. The parser receives mail bytes over the `parse` network but has no archive, Maildir, or secret. Docker networks are bidirectional, so MCP denies inbound requests from the pinned parse subnet through `Mcp:DeniedNetworks`. Check `docker compose config` and the [deployment probe](deploy-docker.md#rollout-checklist) whenever changing network membership or `MAILVEC_PARSE_SUBNET`.
+`compose.yml` defines the actual topology. `indexer` and `parse` use internal networks without external egress. The parser receives mail bytes over the `parse` network but has no archive, Maildir, or secret. Docker networks are bidirectional, so MCP denies inbound requests from the pinned parse subnet through `Mcp:DeniedNetworks`. `mbsync` is the one service with egress to the IMAP server and the only holder of the mail password. With the optional IMAP IDLE support (`MBSYNC_IDLE_FOLDERS`), a second process in that container, goimapnotify, obtains the same password through the same `PassCmd` and holds one more IMAP connection per watched folder. Its generated config (`/tmp/mbsync-idle.yaml`, mode 0600, inside the container) contains the password only when `mbsyncrc` uses a literal `Pass`; with the shipped `PassCmd` it holds the command, not the secret. Check `docker compose config` and the [deployment probe](deploy-docker.md#rollout-checklist) whenever changing network membership or `MAILVEC_PARSE_SUBNET`.
 
 ### `/up` and `/health`
 
