@@ -82,11 +82,10 @@ RUN set -eux; \
 # (see ops/mbsyncrc.container.example); the Fastmail app password from a
 # compose file-secret the config's PassCmd cats.
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS mbsync
-# python3 runs the optional IMAP IDLE watcher (ops/mbsync-idle.py, standard
-# library only). Installed unconditionally so turning IDLE on is an env change,
-# not an image rebuild.
-RUN apk add --no-cache isync ca-certificates python3
-COPY --chmod=0755 ops/mbsync-idle.py /usr/local/bin/mbsync-idle
+# goimapnotify is the optional IMAP IDLE watcher (MBSYNC_IDLE_FOLDERS; see the
+# loop below). Installed unconditionally so turning IDLE on is an env change,
+# not an image rebuild. A single Go binary (~13 MB), packaged by Alpine.
+RUN apk add --no-cache isync ca-certificates goimapnotify
 RUN cat <<'EOF' > /usr/local/bin/mbsync-loop
 #!/bin/sh
 # Interval loop replacing the launchd StartInterval job.
@@ -269,48 +268,152 @@ republish_cadence
 
 # --- optional IMAP IDLE: wake the loop early when new mail arrives ---
 #
-# MBSYNC_IDLE_FOLDERS (comma-separated; unset = off, the default) starts
-# mbsync-idle, which holds one IDLE connection per folder and creates
-# ${WAKE} when one reports new mail. The sleep below then ends early and THIS
-# loop runs the next `mbsync -a`.
+# MBSYNC_IDLE_FOLDERS (comma-separated; unset = off, the default) runs
+# goimapnotify, which holds one IDLE connection per folder and, on new mail,
+# runs `touch ${WAKE}`. The sleep below then ends early and THIS loop runs the
+# next `mbsync -a`.
 #
 # THE WATCHER NEVER RUNS mbsync ITSELF. This loop stays the single serialized
 # runner: two mbsync processes race on .mbsyncstate and its lock, which is the
 # failure the "Polling below one minute" note in docs/future-ideas.md warns
 # about. A file rather than a signal because a trapped signal interrupts
 # `wait "$child"` mid-sync, and the interrupted status reads as a failed sync.
+# Only onNewMail is configured: flag changes and deletions wait for the timer.
 #
 # The wake file is removed just BEFORE each sync starts, never after: mail
 # signalled while a sync is running must survive it and trigger the next one.
 #
-# Everything here is latency only. A dead or misconfigured watcher degrades to
-# the timer, and mcp's mailSync / mail.syncStale report the sync outcome as
-# before. Exit status 2 from the watcher is configuration a retry cannot fix,
-# so the supervisor stops restarting it; anything else restarts after 30s.
+# Its config is generated from the first IMAPAccount block of mbsyncrc, so the
+# host, user and PassCmd live in one place. Implicit TLS only (TLSType IMAPS):
+# the watcher holds the password, and anything else is refused here.
+#
+# Everything here is latency only: every failure degrades to the timer. Note
+# what goimapnotify 2.5 does on failure (observed against a fake server): a
+# rejected login, a folder that doesn't exist, or a server unreachable for
+# ~15s each make the WHOLE process exit 1, all folders' watches with it. The
+# supervisor therefore backs off 30s, doubling to 15 minutes, and resets only
+# after a run of 10 minutes: without that, a revoked app password or a
+# misspelled folder would log in every 30 seconds forever.
 : "${MBSYNC_IDLE_FOLDERS:=}"
 # Overridable only so the tests (ops/tests) can run loops side by side.
 : "${MBSYNC_WAKE_FILE:=/tmp/mbsync-wake}"
 WAKE="${MBSYNC_WAKE_FILE}"
+IDLE_CONF="$(dirname "${WAKE}")/mbsync-idle.yaml"
 # Floor between the end of one sync and a wake-triggered start of the next, so
 # a burst of arrivals is one sync rather than several back to back.
 MBSYNC_IDLE_MIN_GAP_SECONDS=5
+# Each folder holds its own IMAP connection, on top of mbsync's own, and
+# providers cap concurrent connections per account.
+MBSYNC_IDLE_MAX_FOLDERS=10
+
+# One setting from the first IMAPAccount block of mbsyncrc, unquoted the way
+# isync reads it (a leading + on PassCmd dropped, surrounding quotes removed,
+# backslash escapes resolved). Prints nothing when the key is absent.
+imap_setting() {
+    awk -v want="$1" '
+        { line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t\r]+$/, "", line) }
+        line == "" || line ~ /^#/ { next }
+        { key = tolower(line); sub(/[ \t].*$/, "", key)
+          val = line; sub(/^[^ \t]+[ \t]*/, "", val) }
+        key == "imapaccount" { if (seen) exit; seen = 1; next }
+        !seen { next }
+        key == "imapstore" || key == "maildirstore" || key == "channel" || key == "group" { exit }
+        key == want {
+            sub(/^\+[ \t]*/, "", val)
+            if (length(val) >= 2 && substr(val, 1, 1) == "\"" && substr(val, length(val), 1) == "\"") {
+                inner = substr(val, 2, length(val) - 2); val = ""
+                for (i = 1; i <= length(inner); i++) {
+                    c = substr(inner, i, 1)
+                    if (c == "\\" && i < length(inner)) { i++; c = substr(inner, i, 1) }
+                    val = val c
+                }
+            }
+            print val; exit
+        }' "${MBSYNC_CONFIG}"
+}
+
+# A YAML single-quoted scalar: the only escape is '' for '.
+yaml_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
+# Writes ${IDLE_CONF} (mode 0600: it may hold a literal Pass) or explains, in
+# one line, why IDLE stays off.
+write_idle_config() {
+    tls="$(imap_setting tlstype)"
+    [ -n "${tls}" ] || tls="$(imap_setting ssltype)"
+    case "$(printf '%s' "${tls:-STARTTLS}" | tr '[:lower:]' '[:upper:]')" in
+        IMAPS) ;;
+        *) say "IDLE disabled: it needs TLSType IMAPS in ${MBSYNC_CONFIG} (found ${tls:-none, i.e. isync's default STARTTLS})"; return 1 ;;
+    esac
+    host="$(imap_setting host)"; user="$(imap_setting user)"; port="$(imap_setting port)"
+    passcmd="$(imap_setting passcmd)"; pass="$(imap_setting pass)"
+    if [ -z "${host}" ] || [ -z "${user}" ]; then
+        say "IDLE disabled: the first IMAPAccount in ${MBSYNC_CONFIG} needs Host and User"; return 1
+    fi
+    if [ -z "${passcmd}" ] && [ -z "${pass}" ]; then
+        say "IDLE disabled: the first IMAPAccount in ${MBSYNC_CONFIG} needs Pass or PassCmd"; return 1
+    fi
+    case "${passcmd}" in
+        # goimapnotify printf-formats any command containing %s.
+        *%s*) say "IDLE disabled: goimapnotify cannot run a PassCmd containing %s"; return 1 ;;
+    esac
+    case "${port:=993}" in
+        *[!0-9]*) say "IDLE disabled: Port '${port}' in ${MBSYNC_CONFIG} is not a number"; return 1 ;;
+    esac
+
+    boxes=""; count=0
+    set -f; old_ifs="${IFS}"; IFS=,
+    for folder in ${MBSYNC_IDLE_FOLDERS}; do
+        folder="$(printf '%s' "${folder}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "${folder}" ] || continue
+        count=$((count + 1))
+        boxes="${boxes}      -
+        mailbox: $(yaml_quote "${folder}")
+        onNewMail: $(yaml_quote "touch '${WAKE}'")
+"
+    done
+    IFS="${old_ifs}"; set +f
+    if [ "${count}" -eq 0 ]; then
+        say "IDLE disabled: MBSYNC_IDLE_FOLDERS names no folders"; return 1
+    fi
+    if [ "${count}" -gt "${MBSYNC_IDLE_MAX_FOLDERS}" ]; then
+        say "IDLE disabled: MBSYNC_IDLE_FOLDERS names ${count} folders; the limit is ${MBSYNC_IDLE_MAX_FOLDERS} (each holds an IMAP connection)"; return 1
+    fi
+
+    if [ -n "${passcmd}" ]; then
+        secret="    passwordCMD: $(yaml_quote "${passcmd}")"
+    else
+        secret="    password: $(yaml_quote "${pass}")"
+    fi
+    if ! ( umask 077
+           printf '%s\n' "configurations:" "  -" \
+               "    host: $(yaml_quote "${host}")" "    port: ${port}" "    tls: true" \
+               "    tlsOptions:" "      rejectUnauthorized: true" "      starttls: false" \
+               "    username: $(yaml_quote "${user}")" "${secret}" "    boxes:" > "${IDLE_CONF}.tmp" &&
+           printf '%s' "${boxes}" >> "${IDLE_CONF}.tmp" &&
+           mv -f "${IDLE_CONF}.tmp" "${IDLE_CONF}" ); then
+        say "IDLE disabled: could not write ${IDLE_CONF}"; rm -f "${IDLE_CONF}.tmp"; return 1
+    fi
+}
+
 idler=
-if [ -n "${MBSYNC_IDLE_FOLDERS}" ]; then
+if [ -n "${MBSYNC_IDLE_FOLDERS}" ] && write_idle_config; then
     rm -f "${WAKE}"
     (
-        py=
-        trap 'if [ -n "$py" ]; then kill "$py" 2>/dev/null; fi; exit 0' TERM INT
+        gin=
+        trap 'if [ -n "$gin" ]; then kill "$gin" 2>/dev/null; fi; exit 0' TERM INT
+        delay=30
         while :; do
-            MBSYNC_CONFIG="${MBSYNC_CONFIG}" MBSYNC_WAKE_FILE="${WAKE}" \
-                MBSYNC_IDLE_FOLDERS="${MBSYNC_IDLE_FOLDERS}" mbsync-idle & py=$!
-            wait "$py"; rc=$?; py=
-            if [ "$rc" -eq 2 ]; then
-                echo "mbsync: IDLE watcher stopped on its configuration; syncing every ${MBSYNC_INTERVAL_SECONDS}s only" >&2
-                exit 0
-            fi
-            echo "mbsync: IDLE watcher exited (status $rc); restarting in 30s" >&2
-            sleep 30 & py=$!
-            wait "$py"; py=
+            started="$(date +%s)"
+            goimapnotify -conf "${IDLE_CONF}" & gin=$!
+            wait "$gin"; rc=$?; gin=
+            ran=$(( $(date +%s) - started ))
+            [ "${ran}" -lt 600 ] || delay=30
+            echo "mbsync: IDLE watcher exited (status ${rc}) after ${ran}s; restarting in ${delay}s" >&2
+            sleep "${delay}" & gin=$!
+            wait "$gin"; gin=
+            delay=$((delay * 2)); [ "${delay}" -le 900 ] || delay=900
         done
     ) & idler=$!
     echo "mbsync: IDLE enabled for: ${MBSYNC_IDLE_FOLDERS}" >&2

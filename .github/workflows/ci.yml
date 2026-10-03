@@ -225,12 +225,13 @@ jobs:
       - name: Test
         run: dotnet test --configuration Release --no-build --logger "console;verbosity=normal"
 
-      # The mbsync sidecar's IMAP IDLE watcher (ops/mbsync-idle.py) and the
-      # sync loop it wakes. The loop is a heredoc inside the Dockerfile, and
-      # images are only built after main goes green, so without this nothing
-      # runs either before merge. The loop tests extract the heredoc and run it
-      # under /bin/sh (dash here; busybox ash in the image, both POSIX
-      # Almquist shells). Python stdlib only, no setup step needed.
-      - name: mbsync sidecar tests (IDLE watcher + sync loop)
+      # The mbsync sidecar's sync loop and its optional IMAP IDLE support
+      # (goimapnotify config generation, wake path, supervisor backoff). The
+      # loop is a heredoc inside the Dockerfile, and images are only built
+      # after main goes green, so without this nothing runs it before merge.
+      # The tests extract the heredoc and run it under /bin/sh (dash here;
+      # busybox ash in the image, both POSIX Almquist shells) with stand-in
+      # binaries. Python stdlib only, no setup step needed.
+      - name: mbsync sidecar tests (sync loop + IDLE)
         run: python3 -m unittest discover -s ops/tests -v
 
