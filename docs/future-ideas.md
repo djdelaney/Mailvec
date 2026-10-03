@@ -146,6 +146,19 @@ if provider throttling or SQLite contention is measured. It would change
 freshness for labels, moves, deletions, and flags, and would need a single
 serialized runner. Re-measure on the target deployment before implementing it.
 
+**Push via IMAP IDLE (motivating case found 2026-10-03).** Claude sessions
+search for mail sent seconds earlier (SMTP path tests, DMARC work), so the
+"measure first" condition above now has a concrete user. mbsync has no IDLE
+support; the usual shape is a watcher (e.g. `goimapnotify`) holding one IDLE
+connection per folder that *wakes the existing sync loop early*, never runs its
+own `mbsync` (two writers race on `.mbsyncstate`). Folders: **INBOX**, **Junk
+Mail** (mail that fails SPF/DKIM/DMARC lands there) and the owner's
+**homelab** folder (Fastmail rules route lab mail there). Labels, moves and
+deletions stay on the timed full sync. Needs its own health signal: a dead IDLE
+connection degrades silently to the timer. `search_emails`' `mailSync` field
+already tells clients how fresh the mirror is, so this is a latency
+improvement, not a correctness one.
+
 ## Still open (small)
 
 Carried forward from the original design doc — none are committed work, all gated on a problem actually being observed:
@@ -157,4 +170,4 @@ Carried forward from the original design doc — none are committed work, all ga
 
 ## Out of scope entirely
 
-Sending mail, modifying server-side state (marking read, moving, deleting), multi-account support, calendar/contacts/files (even though Fastmail offers these via CalDAV/CardDAV/WebDAV — this project is mail-only), a web UI, and real-time push notifications (mbsync is timer-driven, not IDLE/JMAP push).
+Sending mail, modifying server-side state (marking read, moving, deleting), multi-account support, calendar/contacts/files (even though Fastmail offers these via CalDAV/CardDAV/WebDAV — this project is mail-only), a web UI. (Real-time push is no longer here: see "Polling below one minute" for the IMAP IDLE design.)

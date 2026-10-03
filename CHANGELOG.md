@@ -231,6 +231,14 @@ An independent review of the branch found six things the suite did not cover. Al
 - **`backfill-inline-images` counts its rows again.** The increments were dropped in the phase 1 refactor and no test asserted the summary, so every run reported zero rows added. Two tests now do.
 - **The CLI backfills ride out the parse host's routine recycle instead of stopping.** The host exits on purpose every `MaxRequestsBeforeExit` (500) requests and is back in seconds; phase 3's stop-on-`Unavailable` turned an 82k-message `extract-attachments` into ~160 reruns and made `rebuild-bodies` — which re-selects every row each run — unfinishable. `RetryOnUnavailable` now decorates the parser for the three commands: probe `/up` every 2 s for up to `Parser:UnavailableWaitSeconds` (60), retry, and rethrow only if the service stays down, so the `STOPPED` path is unchanged for a real outage. `Crashed` is never retried. Six decorator tests with injected sleeps, plus one recycle-spanning run per command.
 
+## ✅ Sync freshness on search responses (no schema change, 2026-10-03)
+
+Sessions often search for mail sent seconds earlier — a test message on an SMTP path, a DMARC probe — and an empty result could not distinguish "never arrived" from "not pulled yet". `archiveStats.latestDate` looked like an answer and wasn't: it is the newest message's `Date:` header, the sender's clock.
+
+- **`search_emails` responses carry `mailSync`** (`lastSyncAt`, `ageSeconds`, `intervalSeconds`, `stale`), read from the mbsync sidecar's existing last-successful-sync marker (`MbsyncSyncFile`, the fact `/up` already reports as `mail.syncStale`). The tool description tells clients to wait about one interval and search again before concluding mail never arrived, and to report a stale sync instead of retrying. Additive MCP surface change (a **minor** bump when released).
+- **`lastSyncAt` is when the last successful sync finished**, so mail that reached the server mid-sync may not be in it — hence "retry after an interval", not a hard cut-off. `ageSeconds` is computed server-side and clamped at zero.
+- **Omitted, never guessed, when the marker is unknown** (macOS launchd installs, a deployment that has never synced). The MCP test fixture now points `Ingest:MaildirRoot` at its own temp directory so a developer's leftover marker can't leak into `/health` or `mailSync` assertions.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
