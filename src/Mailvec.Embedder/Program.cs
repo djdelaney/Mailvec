@@ -94,4 +94,10 @@ var host = builder.Build();
         host.Services.GetRequiredService<IOptions<OllamaOptions>>().Value.BaseUrl, logger);
 }
 
+// Resolved before Run, which disposes the host on the way out.
+var worker = host.Services.GetServices<IHostedService>().OfType<EmbeddingWorker>().Single();
 host.Run();
+
+// Embedder:ExitWhenDrained only: a one-shot run that stopped on repeated
+// failures must not read as "drained" to the script driving it.
+return worker.GaveUp ? 1 : 0;

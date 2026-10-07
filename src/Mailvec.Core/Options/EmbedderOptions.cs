@@ -6,6 +6,17 @@ public sealed class EmbedderOptions
 
     public int PollIntervalSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// Stop the process the first time a poll finds nothing to OCR or embed,
+    /// instead of sleeping until the next one. For one-shot re-embeds of an
+    /// experiment database copy (<c>ops/embedding-experiment.sh</c>), so a run
+    /// ends on its own rather than needing someone to watch
+    /// <c>mailvec status</c> and Ctrl-C. Never set it on a service: under
+    /// launchd KeepAlive or compose <c>restart: unless-stopped</c> it restarts
+    /// every poll interval. Messages left quarantined are logged, not waited on.
+    /// </summary>
+    public bool ExitWhenDrained { get; set; }
+
     // mxbai-embed-large has a 512-token context. Our chunker estimates tokens
     // at 4 chars each, but real BPE on email text can run as low as 1-2
     // chars/token (CJK, dense URLs, base64, marketing-email punctuation). No
