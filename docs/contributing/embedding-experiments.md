@@ -298,4 +298,12 @@ corpus is too small to rank models.
   about. Worth repeating on the full archive before believing either way.
 - A model that was never pulled stopped the run after five failed embed
   cycles (exit 1), and re-running resumed at the embed stage.
+- **embeddinggemma-2:270m @768** (the shipped profile, Ollama 0.40.0):
+  semantic 0.851 (+0.003), hybrid 0.909 (+0.004), semantic latency −5 ms
+  (−20%); re-embed time about the same as mxbai. Parity on the aggregates,
+  but heavy per-query churn underneath — hybrid had 4 queries gain more than
+  0.2 and 3 drop more than 0.2 (q063 −0.43, q028 −0.37, q072 −0.37) — so the
+  two models get *different* queries right. That is exactly where the
+  Fireworks run failed its tail gate (4 drops), so the full-archive run
+  should be judged on the tail, not the means.
 
