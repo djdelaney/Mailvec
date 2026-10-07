@@ -56,7 +56,11 @@ public sealed record ResolvedEmbeddingProfile(
     // displayable record by construction.
     bool SendWireModel = true,
     bool SendDimensions = false,
-    string? EncodingFormat = null);
+    string? EncodingFormat = null,
+    // Matryoshka truncation: the width the model returns, cut down to
+    // OutputDimensions by EmbeddingService. Null = no truncation, and then
+    // the config hash is byte-identical to before the field existed.
+    int? NativeDimensions = null);
 
 /// <summary>
 /// One place that decides which embedding provider a process gets — the
@@ -302,6 +306,12 @@ public static class EmbeddingRegistration
         ArgumentOutOfRangeException.ThrowIfLessThan(dims, 1, nameof(profile.OutputDimensions));
         ArgumentOutOfRangeException.ThrowIfGreaterThan(dims, 8192, nameof(profile.OutputDimensions));
 
+        var nativeDims = ResolveNativeDimensions(name, profile, dims);
+        if (nativeDims is not null && dimsPolicy == "send")
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': NativeDimensions with Request:DimensionsParameter='send' is contradictory — " +
+                "the provider already returns OutputDimensions-wide vectors. Use one or the other.");
+
         if (profile.Request.EncodingFormat is { } enc && !string.Equals(enc, "float", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 $"Embedding profile '{name}': EncodingFormat '{enc}' is unsupported — only 'float' " +
@@ -346,7 +356,8 @@ public static class EmbeddingRegistration
             RequestTimeoutSeconds: Positive(profile.RequestTimeoutSeconds, 60, name, "RequestTimeoutSeconds"),
             SendWireModel: sendModel,
             SendDimensions: dimsPolicy == "send",
-            EncodingFormat: profile.Request.EncodingFormat?.ToLowerInvariant());
+            EncodingFormat: profile.Request.EncodingFormat?.ToLowerInvariant(),
+            NativeDimensions: nativeDims);
     }
 
     internal static bool UsesEnvironmentProxy(IConfiguration configuration, string profileName)
@@ -457,7 +468,21 @@ public static class EmbeddingRegistration
             DocumentPrefix: profile.Text.DocumentPrefix ?? "",
             DocumentSuffix: profile.Text.DocumentSuffix ?? "",
             MaxBatchSize: Positive(profile.MaxBatchSize, ollama.MaxBatchSize, name, "MaxBatchSize"),
-            RequestTimeoutSeconds: Positive(profile.RequestTimeoutSeconds, ollama.RequestTimeoutSeconds, name, "RequestTimeoutSeconds"));
+            RequestTimeoutSeconds: Positive(profile.RequestTimeoutSeconds, ollama.RequestTimeoutSeconds, name, "RequestTimeoutSeconds"),
+            NativeDimensions: ResolveNativeDimensions(name, profile, dims));
+    }
+
+    private static int? ResolveNativeDimensions(string name, EmbeddingProfileOptions profile, int outputDims)
+    {
+        if (profile.NativeDimensions is not { } native) return null;
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(native, 8192, nameof(profile.NativeDimensions));
+        // Equal would be a no-op that still changed the config hash — a
+        // second identity for the same vectors. Smaller is not truncation.
+        if (native <= outputDims)
+            throw new InvalidOperationException(
+                $"Embedding profile '{name}': NativeDimensions ({native}) must exceed OutputDimensions ({outputDims}) — " +
+                "it is the model's full width, which Mailvec truncates to OutputDimensions. Omit it for no truncation.");
+        return native;
     }
 
     private static int Positive(int? value, int fallback, string profile, string field)

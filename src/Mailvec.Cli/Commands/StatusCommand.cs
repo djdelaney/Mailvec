@@ -58,7 +58,7 @@ internal static class StatusCommand
         WriteOcrLines(@out, ocrCounts, metadata, embedder);
         @out.WriteLine();
         var profile = sp.GetRequiredService<Mailvec.Core.Embedding.ResolvedEmbeddingProfile>();
-        @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={profile.WireModel} ({profile.OutputDimensions}d)  [profile {profile.Name}]");
+        @out.WriteLine($"Embed model: schema={schemaModel} ({schemaDim}d)  config={profile.WireModel} ({profile.OutputDimensions}d{(profile.NativeDimensions is { } native ? $" of {native}" : "")})  [profile {profile.Name}]");
 
         // v11 space identity: the stored space id names the vector space; the
         // config-hash comparison catches a vector-affecting setting change

@@ -1,6 +1,7 @@
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
 using Mailvec.Core.Options;
+using Mailvec.Core.Tests.Embedding;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Mailvec.Core.Tests.Data;
@@ -180,6 +181,33 @@ public class EmbeddingSpaceIdentityTests
         // can never serialize identically.
         EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "px", "", "", "")
             .ShouldNotBe(EmbeddingSpace.ComputeConfigHash("s", "m", 1024, "p", "x", "", ""));
+    }
+
+    [Fact]
+    public void An_untruncated_profile_hashes_exactly_as_databases_already_stamped_it()
+    {
+        // Observed, not derived: the config hash stamped in a real database
+        // (the subset dev corpus, mxbai-embed-large @1024, no transforms)
+        // before Matryoshka truncation existed. If adding an identity field
+        // ever moves this, every stamped database refuses to embed and to
+        // search semantically until a needless switch-model — the reason the
+        // truncation field is optional-trailing rather than a v3.
+        EmbeddingSpace.ForProfile(TestProfiles.Legacy()).ConfigHash
+            .ShouldBe("1dc6ab7dbac527dc5378ac96e8142dc25b976ff91456dc6c045ae12cbbca1e8a");
+    }
+
+    [Fact]
+    public void Truncation_is_part_of_the_identity_and_its_native_width_matters()
+    {
+        var plain = TestProfiles.Legacy() with { OutputDimensions = 512, SpaceId = "ollama:mxbai-embed-large:512" };
+        var from1024 = plain with { NativeDimensions = 1024 };
+        var from2048 = plain with { NativeDimensions = 2048 };
+
+        // Same space id (model + kept width) — the hash is what tells them
+        // apart, exactly as for a text transform.
+        EmbeddingSpace.ForProfile(from1024).SpaceId.ShouldBe(EmbeddingSpace.ForProfile(plain).SpaceId);
+        EmbeddingSpace.ForProfile(from1024).ConfigHash.ShouldNotBe(EmbeddingSpace.ForProfile(plain).ConfigHash);
+        EmbeddingSpace.ForProfile(from1024).ConfigHash.ShouldNotBe(EmbeddingSpace.ForProfile(from2048).ConfigHash);
     }
 
     private static ResolvedEmbeddingProfile HostedProfile(int dims = 1024) => new(

@@ -95,6 +95,10 @@ public sealed class EvalReportEmbedding
     public string ProviderId { get; set; } = string.Empty;
     public string Model { get; set; } = string.Empty;
     public int Dimensions { get; set; }
+
+    /// <summary>Matryoshka: the model's full width, truncated to <see cref="Dimensions"/>. Null when not truncated.</summary>
+    public int? TruncatedFromDimensions { get; set; }
+
     public string SpaceId { get; set; } = string.Empty;
     public string ConfigHash { get; set; } = string.Empty;
 

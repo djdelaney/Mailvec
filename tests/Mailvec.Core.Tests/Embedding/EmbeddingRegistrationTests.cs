@@ -80,6 +80,59 @@ public class EmbeddingRegistrationTests
     }
 
     [Fact]
+    public void An_ollama_profile_can_truncate_a_matryoshka_model()
+    {
+        var resolved = EmbeddingRegistration.Resolve(Config(
+            ("Embedding:ActiveProfile", "qwen4b"),
+            ("Embedding:Profiles:qwen4b:Protocol", "ollama"),
+            ("Embedding:Profiles:qwen4b:Request:Model", "qwen3-embedding:4b"),
+            ("Embedding:Profiles:qwen4b:OutputDimensions", "1024"),
+            ("Embedding:Profiles:qwen4b:NativeDimensions", "2560")));
+
+        resolved.OutputDimensions.ShouldBe(1024);
+        resolved.NativeDimensions.ShouldBe(2560);
+        // The vec0 table and the space id are the KEPT width.
+        resolved.SpaceId.ShouldBe("ollama:qwen3-embedding:4b:1024");
+
+        // Absent means no truncation.
+        EmbeddingRegistration.Resolve(Config(
+                ("Embedding:ActiveProfile", "plain"),
+                ("Embedding:Profiles:plain:Protocol", "ollama"),
+                ("Embedding:Profiles:plain:Request:Model", "qwen3-embedding:4b"),
+                ("Embedding:Profiles:plain:OutputDimensions", "2560")))
+            .NativeDimensions.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("1024")]   // equal: a no-op that would still mint a second identity
+    [InlineData("512")]    // smaller: not truncation
+    public void Native_dimensions_must_exceed_the_output_width(string native)
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(
+            ("Embedding:ActiveProfile", "qwen4b"),
+            ("Embedding:Profiles:qwen4b:Protocol", "ollama"),
+            ("Embedding:Profiles:qwen4b:Request:Model", "qwen3-embedding:4b"),
+            ("Embedding:Profiles:qwen4b:OutputDimensions", "1024"),
+            ("Embedding:Profiles:qwen4b:NativeDimensions", native))));
+        ex.Message.ShouldContain("must exceed OutputDimensions");
+    }
+
+    [Fact]
+    public void A_hosted_profile_cannot_both_request_dimensions_and_truncate()
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => EmbeddingRegistration.Resolve(Config(
+            ("Embedding:ActiveProfile", "fw"),
+            ("Embedding:Profiles:fw:Protocol", "openai-compatible"),
+            ("Embedding:Profiles:fw:Endpoint", "https://api.example.test/v1/embeddings"),
+            ("Embedding:Profiles:fw:Request:Model", "accounts/fireworks/models/qwen3-embedding-8b"),
+            ("Embedding:Profiles:fw:Request:DimensionsParameter", "send"),
+            ("Embedding:Profiles:fw:OutputDimensions", "1024"),
+            ("Embedding:Profiles:fw:NativeDimensions", "4096"),
+            ("Embedding:Profiles:fw:SpaceId", "fireworks:qwen3-embedding-8b:1024:test"))));
+        ex.Message.ShouldContain("contradictory");
+    }
+
+    [Fact]
     public void The_resolved_profile_is_the_single_identity_source_and_options_stay_untouched()
     {
         // The phase-2a PostConfigure bridge is retired: consumers read the

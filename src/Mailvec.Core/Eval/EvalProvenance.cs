@@ -37,6 +37,7 @@ public static class EvalProvenance
                 ProviderId = profile.ProviderId,
                 Model = profile.WireModel,
                 Dimensions = profile.OutputDimensions,
+                TruncatedFromDimensions = profile.NativeDimensions,
                 SpaceId = spaceId,
                 ConfigHash = configHash,
                 ModelDigest = NullIfEmpty(metadata.Get(EmbeddingSpace.ModelDigestKey)),

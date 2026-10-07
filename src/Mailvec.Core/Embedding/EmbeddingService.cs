@@ -57,18 +57,29 @@ public sealed class EmbeddingService(IEmbeddingTransport client, ResolvedEmbeddi
         if (vectors.Length != expectedCount)
             throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
                 $"Provider returned {vectors.Length} vectors for {expectedCount} inputs.");
+        // Matryoshka profiles validate against the model's full width, never
+        // "at least OutputDimensions": a model returning some other width is
+        // the wrong model (or a misconfigured one), not something to slice.
+        var expectedWidth = profile.NativeDimensions ?? profile.OutputDimensions;
         for (int i = 0; i < vectors.Length; i++)
         {
             var vec = vectors[i];
-            if (vec.Length != profile.OutputDimensions)
+            if (vec.Length != expectedWidth)
                 throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
-                    $"Vector {i} has {vec.Length} dimensions; profile '{profile.Name}' requires {profile.OutputDimensions}.");
+                    $"Vector {i} has {vec.Length} dimensions; profile '{profile.Name}' requires {expectedWidth}" +
+                    (profile.NativeDimensions is null ? "." : $" (truncated to {profile.OutputDimensions})."));
             for (int j = 0; j < vec.Length; j++)
             {
                 if (!float.IsFinite(vec[j]))
                     throw new EmbeddingException(EmbeddingFailureKind.InvalidResponse,
                         $"Vector {i} contains a non-finite value at index {j} — refusing to serialize it into sqlite-vec.");
             }
+            // Truncate BEFORE normalizing: the kept prefix of a unit vector is
+            // shorter than unit, and vec0's L2 KNN ranks like cosine only on
+            // unit vectors. Applied here, once, so documents and queries can't
+            // be cut differently.
+            if (profile.NativeDimensions is not null)
+                vectors[i] = vec = vec[..profile.OutputDimensions];
             VectorMath.NormalizeInPlaceIfNeeded(vec);
         }
     }

@@ -91,7 +91,9 @@ internal static class DoctorCommand
             var embProfile = sp.GetRequiredService<Mailvec.Core.Embedding.ResolvedEmbeddingProfile>();
             checks.Add(DoctorCheck.Ok("Embedding profile",
                 $"{embProfile.Name} ({embProfile.Protocol}, provider {embProfile.ProviderId}) — " +
-                $"{embProfile.WireModel} @{embProfile.OutputDimensions}d, space {embProfile.SpaceId}",
+                $"{embProfile.WireModel} @{embProfile.OutputDimensions}d" +
+                (embProfile.NativeDimensions is { } native ? $" (truncated from {native}d)" : "") +
+                $", space {embProfile.SpaceId}",
                 "config"));
         }
 
