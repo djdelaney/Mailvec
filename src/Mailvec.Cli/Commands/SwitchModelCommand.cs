@@ -122,10 +122,10 @@ internal static class SwitchModelCommand
         else
         {
             @out.WriteLine($"  1. ollama pull {targetModel}");
-            @out.WriteLine($"  2. Make sure the embedder runs with Ollama:EmbeddingModel={targetModel} and");
-            @out.WriteLine($"     Ollama:EmbeddingDimensions={targetDims} (Ollama__* env vars or appsettings.Local.json)");
-            @out.WriteLine("  3. Start the embedder to rebuild vectors (dotnet run --project src/Mailvec.Embedder");
-            @out.WriteLine("     with the same env vars for an experiment DB; ops/redeploy.sh embedder for the live DB).");
+            @out.WriteLine($"  2. Make sure the embedder resolves the same profile ({targetModel} @{targetDims}d —");
+            @out.WriteLine("     the Embedding:* profile or Ollama:* values this command just used).");
+            @out.WriteLine("  3. Start the embedder to rebuild vectors. For an experiment copy, prefer");
+            @out.WriteLine("     ops/embedding-experiment.sh, which does this and the steps below unattended.");
         }
         @out.WriteLine("  4. After the re-embed completes, VACUUM the database. The drop+rebuild leaves the new");
         @out.WriteLine("     vectors fragmented across freed pages, which makes KNN scans ~10x slower until then:");
