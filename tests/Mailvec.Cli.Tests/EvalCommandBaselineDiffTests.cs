@@ -119,4 +119,43 @@ public sealed class EvalCommandBaselineDiffTests
         text.ShouldContain("baseline has no latency data");
         text.ShouldNotContain("Δp95");
     }
+
+    private static EvalReportProvenance Prov(string space, string hash = "h", int chunks = 100, int unembedded = 0) => new()
+    {
+        MessageCount = 50,
+        ChunkCount = chunks,
+        UnembeddedCount = unembedded,
+        Embedding = new EvalReportEmbedding { SpaceId = space, ConfigHash = hash },
+    };
+
+    [Fact]
+    public void A_diff_across_vector_spaces_or_chunkings_says_so_in_the_header()
+    {
+        var current = new[] { new EvalModeResult(EvalMode.Hybrid, TopK: 10, Queries: [Q("q001", 0.7)]) };
+        var baseline = BaselineOf(new EvalModeResult(EvalMode.Hybrid, TopK: 10, Queries: [Q("q001", 0.7)]));
+        baseline.Provenance = Prov("ollama:mxbai-embed-large:1024");
+
+        var sw = new StringWriter();
+        EvalCommand.PrintBaselineDiff(current, baseline, includeTiming: false, sw,
+            currentProvenance: Prov("ollama:embeddinggemma-2:768", chunks: 80, unembedded: 3));
+        var text = AnsiPattern.Replace(sw.ToString(), string.Empty);
+
+        text.ShouldContain("vector space: ollama:mxbai-embed-large:1024 → ollama:embeddinggemma-2:768");
+        text.ShouldContain("chunks: 100 → 80");
+        text.ShouldContain("3 messages not yet embedded");
+    }
+
+    [Fact]
+    public void Same_space_with_a_different_hash_is_named_as_a_transform_change()
+    {
+        EvalCommand.ProvenanceDifferences(Prov("s", "a"), Prov("s", "b"))
+            .ShouldBe(["embedding config hash differs (same space id — a text transform changed)"]);
+    }
+
+    [Fact]
+    public void Identical_or_v1_provenance_adds_nothing()
+    {
+        EvalCommand.ProvenanceDifferences(Prov("s"), Prov("s")).ShouldBeEmpty();
+        EvalCommand.ProvenanceDifferences(null, Prov("s")).ShouldBeEmpty();
+    }
 }
