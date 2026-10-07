@@ -2,9 +2,11 @@ using System.Net;
 using System.Net.Http.Json;
 using Mailvec.Core.Data;
 using Mailvec.Core.Embedding;
+using Mailvec.Core.Health;
 using Mailvec.Core.Ollama;
 using Mailvec.Core.Options;
 using Mailvec.Embedder.Services;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -487,6 +489,88 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     [Fact]
+    public async Task ExitWhenDrained_stops_the_application_once_the_backlog_is_embedded()
+    {
+        InsertMessage("one@x", subject: "Hello", body: new string('a', 300));
+        InsertMessage("two@x", subject: "Hello", body: new string('b', 300));
+        var lifetime = new RecordingLifetime();
+        var worker = BuildWorker(
+            new FakeEmbeddingClient(inputs => inputs.Select((_, i) => HotVector(i)).ToArray()),
+            embedderOpts: new EmbedderOptions
+            {
+                // Long poll: a worker that slept instead of exiting would
+                // blow the wait below rather than pass by luck.
+                PollIntervalSeconds = 600, ChunkSizeTokens = 200, ChunkOverlapTokens = 32,
+                MinBodyCharsForVector = 100, OcrEnabled = false, ImageOcrEnabled = false,
+                ExitWhenDrained = true,
+            },
+            lifetime: lifetime);
+
+        await worker.StartAsync(default);
+        await WaitUntilAsync(() => lifetime.StopRequested, TimeSpan.FromSeconds(5));
+        await worker.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        EmbeddedAt(GetMessageId("one@x")).ShouldNotBeNull();
+        EmbeddedAt(GetMessageId("two@x")).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task ExitWhenDrained_gives_up_after_repeated_failures_instead_of_spinning()
+    {
+        InsertMessage("stuck@x", subject: "Hello", body: new string('a', 300));
+        var lifetime = new RecordingLifetime();
+        var worker = BuildWorker(
+            new FakeEmbeddingClient(_ => throw new EmbeddingException(
+                EmbeddingFailureKind.ModelUnavailable, "model 'not-pulled' not found")),
+            embedderOpts: new EmbedderOptions
+            {
+                PollIntervalSeconds = 1, ChunkSizeTokens = 200, ChunkOverlapTokens = 32,
+                MinBodyCharsForVector = 100, OcrEnabled = false, ImageOcrEnabled = false,
+                ExitWhenDrained = true,
+            },
+            lifetime: lifetime);
+
+        await worker.StartAsync(default);
+        await worker.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(EmbeddingWorker.ExitWhenDrainedFailureLimit + 10));
+
+        worker.GaveUp.ShouldBeTrue();
+        lifetime.StopRequested.ShouldBeTrue();
+        EmbeddedAt(GetMessageId("stuck@x")).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Without_ExitWhenDrained_an_idle_worker_keeps_polling()
+    {
+        var lifetime = new RecordingLifetime();
+        var worker = BuildWorker(
+            new FakeEmbeddingClient(inputs => inputs.Select((_, i) => HotVector(i)).ToArray()),
+            lifetime: lifetime);
+
+        await worker.StartAsync(default);
+        try
+        {
+            await WaitUntilAsync(
+                () => _metadata.Get(ServiceHeartbeat.CycleKey(ServiceHeartbeat.Embedder)) is not null,
+                TimeSpan.FromSeconds(5));
+            worker.ExecuteTask!.IsCompleted.ShouldBeFalse();
+            lifetime.StopRequested.ShouldBeFalse();
+        }
+        finally
+        {
+            await worker.StopAsync(default);
+        }
+    }
+
+    private sealed class RecordingLifetime : IHostApplicationLifetime
+    {
+        public volatile bool StopRequested;
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public void StopApplication() => StopRequested = true;
+    }
+
+    [Fact]
     public async Task ExecuteAsync_records_failure_beat_when_embedding_throws()
     {
         // A throwing provider drives the generic catch → RecordBatchFailure,
@@ -664,8 +748,9 @@ public class EmbeddingWorkerTests : IDisposable
     private EmbeddingWorker BuildWorker(
         IEmbeddingTransport client,
         EmbedderOptions? embedderOpts = null,
-        OllamaOptions? ollamaOpts = null)
-        => Assemble(client, embedderOpts, ollamaOpts ?? DefaultOllamaOptions());
+        OllamaOptions? ollamaOpts = null,
+        IHostApplicationLifetime? lifetime = null)
+        => Assemble(client, embedderOpts, ollamaOpts ?? DefaultOllamaOptions(), lifetime);
 
     private static OllamaOptions DefaultOllamaOptions() => new()
     {
@@ -674,7 +759,9 @@ public class EmbeddingWorkerTests : IDisposable
         MaxBatchSize = 16,
     };
 
-    private EmbeddingWorker Assemble(IEmbeddingTransport client, EmbedderOptions? embedderOpts, OllamaOptions ollamaOptions)
+    private EmbeddingWorker Assemble(
+        IEmbeddingTransport client, EmbedderOptions? embedderOpts, OllamaOptions ollamaOptions,
+        IHostApplicationLifetime? lifetime = null)
     {
         var ollamaOptionsW = Options.Create(ollamaOptions);
         var embedderOptionsW = Options.Create(embedderOpts ?? new EmbedderOptions
@@ -700,7 +787,7 @@ public class EmbeddingWorkerTests : IDisposable
 
         return new EmbeddingWorker(
             migrator, _metadata, _messages, _chunks, chunker, new EmbeddingService(client, profile),
-            profile, embedderOptionsW, NullLogger<EmbeddingWorker>.Instance);
+            profile, embedderOptionsW, NullLogger<EmbeddingWorker>.Instance, lifetime: lifetime);
     }
 
     private static HttpResponseMessage Ok(float[][] embeddings) =>

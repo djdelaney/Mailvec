@@ -19,10 +19,26 @@ public sealed class EmbeddingWorker(
     ResolvedEmbeddingProfile embeddingProfile,
     IOptions<EmbedderOptions> embedderOptions,
     ILogger<EmbeddingWorker> logger,
-    AttachmentOcrService? ocr = null)
+    AttachmentOcrService? ocr = null,
+    IHostApplicationLifetime? lifetime = null)
     : BackgroundService
 {
     private int _processedThisRun;
+
+    /// <summary>
+    /// Consecutive failed cycles after which an <see cref="EmbedderOptions.ExitWhenDrained"/>
+    /// run gives up. A service retries forever (the next poll IS the backoff),
+    /// but a one-shot experiment run against a model nobody pulled would
+    /// otherwise spin unattended until someone looked.
+    /// </summary>
+    internal const int ExitWhenDrainedFailureLimit = 5;
+
+    /// <summary>
+    /// True when an <see cref="EmbedderOptions.ExitWhenDrained"/> run stopped
+    /// on repeated failures rather than an empty queue — Program turns it into
+    /// a non-zero exit so the driving script doesn't read it as done.
+    /// </summary>
+    internal bool GaveUp { get; private set; }
 
     // Test seam: guarded-write skips must not count as processed.
     internal int ProcessedThisRun => _processedThisRun;
@@ -111,6 +127,7 @@ public sealed class EmbeddingWorker(
             pollInterval.TotalSeconds,
             messages.CountUnembedded());
 
+        var failedCyclesInARow = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -131,6 +148,7 @@ public sealed class EmbeddingWorker(
                 var ocred = await RunOcrIfEnabledAsync(stoppingToken).ConfigureAwait(false);
 
                 var processed = await ProcessNextBatchAsync(batchSize, stoppingToken).ConfigureAwait(false);
+                failedCyclesInARow = 0;
                 RecordPollCycle();
                 if (processed > 0)
                 {
@@ -143,6 +161,17 @@ public sealed class EmbeddingWorker(
                     // the last *attempted* batch, not "the embedder is alive".
                     // (The poll-cycle stamp above is the signal that DOES mean
                     // "alive"; see ServiceHeartbeat on why the two are split.)
+                    if (embedderOptions.Value.ExitWhenDrained)
+                    {
+                        // Anything still unembedded here is quarantined (the
+                        // enumeration excludes it) — report it, don't wait.
+                        logger.LogInformation(
+                            "Queue drained; stopping (Embedder:ExitWhenDrained). Embedded {Processed} message(s) this run; " +
+                            "{Remaining} still unembedded ({Quarantined} quarantined).",
+                            _processedThisRun, messages.CountUnembedded(), _quarantined.Count);
+                        lifetime?.StopApplication();
+                        break;
+                    }
                     await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
                 }
                 // (ocred > 0 && processed == 0: OCR re-queued work — loop
@@ -168,6 +197,16 @@ public sealed class EmbeddingWorker(
                     // this catch exists to provide. The heartbeat is telemetry;
                     // losing one beat is fine.
                     logger.LogWarning(recordEx, "Also failed to record the batch-failure heartbeat; continuing.");
+                }
+                failedCyclesInARow++;
+                if (embedderOptions.Value.ExitWhenDrained && failedCyclesInARow >= ExitWhenDrainedFailureLimit)
+                {
+                    logger.LogError(ex,
+                        "Giving up after {Failures} consecutive failed cycles (Embedder:ExitWhenDrained); " +
+                        "{Remaining} message(s) still unembedded.", failedCyclesInARow, messages.CountUnembedded());
+                    GaveUp = true;
+                    lifetime?.StopApplication();
+                    break;
                 }
                 logger.LogError(ex, "Embedding batch failed ({Consecutive} consecutive); will retry after poll interval", _consecutiveBatchFailures);
                 await Task.Delay(pollInterval, stoppingToken).ConfigureAwait(false);
