@@ -41,6 +41,19 @@ public sealed class EmbeddingProfileOptions
     public int? OutputDimensions { get; set; }
 
     /// <summary>
+    /// Matryoshka truncation: the width the model actually returns. When set,
+    /// every vector must arrive exactly this wide, and Mailvec keeps its first
+    /// <see cref="OutputDimensions"/> values and re-normalizes — documents and
+    /// queries alike, in <c>EmbeddingService</c>. Only meaningful for models
+    /// trained for it (qwen3-embedding, embeddinggemma, mxbai-embed-large);
+    /// on any other model it silently produces a worse space, which no check
+    /// here can detect. Must exceed OutputDimensions. Part of the config hash.
+    /// Refused alongside a hosted <c>Request:DimensionsParameter=send</c>,
+    /// where the provider already returns OutputDimensions-wide vectors.
+    /// </summary>
+    public int? NativeDimensions { get; set; }
+
+    /// <summary>
     /// Operator-asserted embedding-space identity — REQUIRED for hosted
     /// protocols (decision 3: no provider exposes anything trustworthy to
     /// derive it from) and FORBIDDEN for Ollama profiles, where it is derived

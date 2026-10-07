@@ -123,6 +123,49 @@ public class EmbeddingServiceTests
         }
     }
 
+    [Fact]
+    public async Task A_matryoshka_profile_keeps_the_leading_dimensions_and_renormalizes()
+    {
+        // 4-wide unit vector cut to 2: the prefix [0.5, 0.5] has norm ~0.707
+        // and must come back unit-length, or L2 KNN stops ranking like cosine.
+        var profile = TestProfiles.Legacy() with { OutputDimensions = 2, NativeDimensions = 4 };
+        // A fresh client per call: RawClient returns the same arrays every
+        // time, and the service replaces each vector with its truncation.
+        EmbeddingService Service() => new(new RawClient([[0.5f, 0.5f, 0.5f, 0.5f]]), profile);
+
+        var doc = (await Service().EmbedDocumentsAsync(["x"]))[0];
+        doc.Length.ShouldBe(2);
+        doc[0].ShouldBe(MathF.Sqrt(0.5f), tolerance: 1e-6f);
+        doc[1].ShouldBe(MathF.Sqrt(0.5f), tolerance: 1e-6f);
+
+        // Queries take the same path — documents and queries cut differently
+        // would be two spaces in one table.
+        var query = await Service().EmbedQueryAsync("q");
+        query.ShouldBe(doc);
+    }
+
+    [Fact]
+    public async Task A_matryoshka_profile_requires_the_native_width_exactly()
+    {
+        // Already OutputDimensions wide (a provider honouring `dimensions`, or
+        // the wrong model): refused, never passed through untruncated...
+        foreach (var vectors in new[] { new[] { new[] { 1f, 0f } }, new[] { new[] { 1f, 0f, 0f, 0f, 0f } } })
+        {
+            var ex = await Should.ThrowAsync<EmbeddingException>(
+                () => new EmbeddingService(new RawClient(vectors),
+                        TestProfiles.Legacy() with { OutputDimensions = 2, NativeDimensions = 4 })
+                    .EmbedDocumentsAsync(["x"]));
+            ex.Kind.ShouldBe(EmbeddingFailureKind.InvalidResponse);
+            ex.Message.ShouldContain("requires 4 (truncated to 2)");
+        }
+
+        // ...and the probe agrees, so readiness can't report a model that
+        // every real embed would refuse.
+        (await new EmbeddingService(new RawClient([[1f, 0f]]),
+                TestProfiles.Legacy() with { OutputDimensions = 2, NativeDimensions = 4 }).ProbeAsync())
+            .Status.ShouldBe(EmbeddingProbeStatus.InvalidResponse);
+    }
+
     private sealed class RawClient(float[][] vectors) : IEmbeddingTransport
     {
         public Task<float[][]> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default) =>

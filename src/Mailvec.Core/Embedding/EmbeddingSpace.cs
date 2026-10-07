@@ -143,6 +143,13 @@ public static class EmbeddingSpace
     public const string NormalizationPolicy = "l2-unit-v1";
 
     /// <summary>
+    /// How a Matryoshka profile cuts vectors down: keep the leading
+    /// OutputDimensions values, then the normalization pass above. Bump the
+    /// suffix if that ever changes — it is vector-affecting.
+    /// </summary>
+    public const string TruncationPolicy = "mrl-prefix-v1";
+
+    /// <summary>
     /// Derived space id for the Ollama provider:
     /// <c>ollama:&lt;model&gt;:&lt;dimensions&gt;</c>. The v11 migration stamps
     /// exactly this shape from a database's own stored metadata, so keep the
@@ -163,10 +170,19 @@ public static class EmbeddingSpace
     /// stored v1 hash exists outside development machines (a dev DB
     /// self-heals by deleting the stored key; the vectors are unaffected
     /// because every added field was empty under v1).
+    ///
+    /// <para><paramref name="truncatedFromDimensions"/> (Matryoshka) is an
+    /// OPTIONAL trailing field, written only when set. Deliberately not a v3:
+    /// bumping the version token would change the hash of every untruncated
+    /// profile, and every stamped database would then refuse to embed and to
+    /// search semantically until someone ran switch-model on vectors that had
+    /// not changed. Length-prefixing keeps "field present" and "field absent"
+    /// from ever serializing alike.</para>
     /// </summary>
     public static string ComputeConfigHash(
         string spaceId, string wireModel, int dimensions,
-        string queryPrefix, string querySuffix, string documentPrefix, string documentSuffix)
+        string queryPrefix, string querySuffix, string documentPrefix, string documentSuffix,
+        int? truncatedFromDimensions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(spaceId);
         ArgumentException.ThrowIfNullOrWhiteSpace(wireModel);
@@ -181,6 +197,8 @@ public static class EmbeddingSpace
         AppendField(sb, "documentPrefix", documentPrefix);
         AppendField(sb, "documentSuffix", documentSuffix);
         AppendField(sb, "normalization", NormalizationPolicy);
+        if (truncatedFromDimensions is { } native)
+            AppendField(sb, "truncation", $"{TruncationPolicy}:{native.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
         return Convert.ToHexStringLower(hash);
@@ -198,7 +216,8 @@ public static class EmbeddingSpace
     public static (string SpaceId, string ConfigHash) ForProfile(ResolvedEmbeddingProfile profile) =>
         (profile.SpaceId, ComputeConfigHash(
             profile.SpaceId, profile.WireModel, profile.OutputDimensions,
-            profile.QueryPrefix, profile.QuerySuffix, profile.DocumentPrefix, profile.DocumentSuffix));
+            profile.QueryPrefix, profile.QuerySuffix, profile.DocumentPrefix, profile.DocumentSuffix,
+            profile.NativeDimensions));
 
     /// <summary>
     /// Legacy-shaped identity straight from <see cref="OllamaOptions"/> (no
