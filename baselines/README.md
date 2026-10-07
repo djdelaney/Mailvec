@@ -36,9 +36,17 @@ against ground truth before it ships.
 
 ## Snapshot provenance (what the JSON doesn't record)
 
-The report format captures `ranAt`, `topK`, `querySetPath` and the per-mode
-runs — **not** which archive, embedding model, or Ollama endpoint produced it.
-So anything unusual about a run has to be written down here or it's lost.
+Reports from **version 2** on carry a `provenance` block: database path,
+message / chunk / not-yet-embedded counts, Mailvec version, and the embedding
+identity (profile, model, dims, space id, config hash, Ollama digest, text
+transforms, and whether queries hit a loopback endpoint — a boolean, so a
+committed file never holds a LAN address). `--baseline` prints what differs
+between the two reports above the deltas, and `mailvec eval` warns when the
+corpus isn't fully embedded. **Every snapshot below is version 1** and records
+only `ranAt`, `topK`, `querySetPath` and the runs, so for those, anything
+unusual about a run had to be written down here or it was lost. Write down
+what the block can't see — chunk size (an embed-time setting; the chunk count
+is its only trace), a scratch copy vs the real archive, the query set's state.
 
 - **`2026-08-07-post-tray-removal.json`** — confirmation run after the tray
   removal (−9,160 lines), the MCP SDK 2.0.0 → 2.1.0 bump, and AngleSharp

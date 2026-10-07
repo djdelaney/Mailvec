@@ -3,8 +3,11 @@ using System.Diagnostics;
 using System.Globalization;
 using Mailvec.Core;
 using Mailvec.Core.Data;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Eval;
+using Mailvec.Core.Options;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Mailvec.Cli.Commands;
 
@@ -110,6 +113,21 @@ internal static class EvalCommand
             }
             Console.Error.WriteLine();
 
+            var provenance = EvalProvenance.Capture(
+                sp.GetRequiredService<ConnectionFactory>(),
+                sp.GetRequiredService<MetadataRepository>(),
+                sp.GetRequiredService<MessageRepository>(),
+                sp.GetRequiredService<ResolvedEmbeddingProfile>(),
+                PathExpansion.Expand(sp.GetRequiredService<IOptions<ArchiveOptions>>().Value.DatabasePath),
+                typeof(EvalCommand).Assembly.GetName().Version?.ToString(3));
+            Console.Error.WriteLine(
+                $"Vector space {provenance.Embedding?.SpaceId}, {provenance.MessageCount:N0} messages, {provenance.ChunkCount:N0} chunks.");
+            if (provenance.UnembeddedCount > 0)
+                Console.Error.WriteLine(
+                    $"WARNING: {provenance.UnembeddedCount:N0} messages are not embedded yet — semantic and hybrid " +
+                    "numbers describe a partial corpus.");
+            Console.Error.WriteLine();
+
             PrintAggregate(modeResults, topK, set.Queries.Count);
 
             if (timing)
@@ -126,14 +144,14 @@ internal static class EvalCommand
             {
                 if (!File.Exists(baselinePath)) { Console.Error.WriteLine($"Baseline {baselinePath} not found."); return 2; }
                 var baseline = EvalReport.Load(baselinePath);
-                PrintBaselineDiff(modeResults, baseline, includeTiming: timing);
+                PrintBaselineDiff(modeResults, baseline, includeTiming: timing, currentProvenance: provenance);
             }
 
             if (jsonPath is not null)
             {
                 // Collapse ~ so committed baseline reports don't embed the
                 // local username in the recorded query-set path.
-                EvalReport.From(modeResults, querySetPath: PathExpansion.Collapse(path), topK: topK).Save(jsonPath);
+                EvalReport.From(modeResults, querySetPath: PathExpansion.Collapse(path), topK: topK, provenance).Save(jsonPath);
                 Console.WriteLine($"\nWrote report → {jsonPath}");
             }
 
@@ -320,11 +338,15 @@ internal static class EvalCommand
     /// prefix, which read as the per-query rows being mis-ordered — that passed
     /// on re-run and never reproduced locally.
     /// </remarks>
-    internal static void PrintBaselineDiff(IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming, TextWriter? @out = null)
+    internal static void PrintBaselineDiff(
+        IReadOnlyList<EvalModeResult> current, EvalReport baseline, bool includeTiming,
+        TextWriter? @out = null, EvalReportProvenance? currentProvenance = null)
     {
         var w = @out ?? Console.Out;
         w.WriteLine();
         w.WriteLine($"Baseline ({baseline.RanAt:u}, top-{baseline.TopK}):");
+        foreach (var line in ProvenanceDifferences(baseline.Provenance, currentProvenance))
+            w.WriteLine(Colors.Dim($"  {line}"));
         w.WriteLine();
         w.WriteLine($"  {"Mode",-10}  {"ΔNDCG",8}  {"ΔMRR",8}  {"ΔRecall",8}");
         w.WriteLine(Colors.Dim($"  {new string('-', 10)}  {new string('-', 8)}  {new string('-', 8)}  {new string('-', 8)}"));
@@ -412,6 +434,34 @@ internal static class EvalCommand
                     $"({Colors.DeltaSigned(d, d.ToString("+0.000;-0.000", CultureInfo.InvariantCulture))})");
             }
         }
+    }
+
+    /// <summary>
+    /// What changed underneath the numbers, so a diff across embedding models
+    /// or corpora says so instead of reading as a same-setup regression. Empty
+    /// when either side lacks provenance (v1 baselines) or nothing differs.
+    /// </summary>
+    internal static IEnumerable<string> ProvenanceDifferences(EvalReportProvenance? baseline, EvalReportProvenance? current)
+    {
+        if (baseline is null || current is null) yield break;
+
+        var (be, ce) = (baseline.Embedding, current.Embedding);
+        if (be is not null && ce is not null)
+        {
+            if (!string.Equals(be.SpaceId, ce.SpaceId, StringComparison.Ordinal))
+                yield return $"vector space: {be.SpaceId} → {ce.SpaceId}";
+            else if (!string.Equals(be.ConfigHash, ce.ConfigHash, StringComparison.Ordinal))
+                yield return "embedding config hash differs (same space id — a text transform changed)";
+            if (be.ModelDigest is not null && ce.ModelDigest is not null
+                && !string.Equals(be.ModelDigest, ce.ModelDigest, StringComparison.Ordinal))
+                yield return $"model digest: {be.ModelDigest} → {ce.ModelDigest}";
+        }
+        if (baseline.MessageCount != current.MessageCount)
+            yield return $"messages: {baseline.MessageCount:N0} → {current.MessageCount:N0}";
+        if (baseline.ChunkCount != current.ChunkCount)
+            yield return $"chunks: {baseline.ChunkCount:N0} → {current.ChunkCount:N0}";
+        if (current.UnembeddedCount > 0)
+            yield return $"this run: {current.UnembeddedCount:N0} messages not yet embedded — vector leg measured on a partial corpus";
     }
 
     internal static string Delta(double d)

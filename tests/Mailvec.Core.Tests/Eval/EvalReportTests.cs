@@ -54,7 +54,8 @@ public sealed class EvalReportTests : IDisposable
 
         var report = EvalReport.From(modeResults, querySetPath: "/tmp/q.json", topK: 10);
 
-        report.Version.ShouldBe(1);
+        report.Version.ShouldBe(2);
+        report.Provenance.ShouldBeNull();
         report.QuerySetPath.ShouldBe("/tmp/q.json");
         report.TopK.ShouldBe(10);
         report.Runs.Count.ShouldBe(2);
@@ -129,5 +130,43 @@ public sealed class EvalReportTests : IDisposable
         File.WriteAllText(path, "null");
 
         Should.Throw<InvalidDataException>(() => EvalReport.Load(path));
+    }
+
+    [Fact]
+    public void Provenance_round_trips_and_a_v1_report_loads_without_it()
+    {
+        var report = EvalReport.From(
+            new[] { new EvalModeResult(EvalMode.Hybrid, 10, new[] { Q("q1", ndcg: 1.0, latency: 1, 1) }) },
+            querySetPath: null, topK: 10,
+            provenance: new EvalReportProvenance
+            {
+                MessageCount = 80_000,
+                ChunkCount = 400_000,
+                Embedding = new EvalReportEmbedding
+                {
+                    SpaceId = "ollama:qwen3-embedding:0.6b:1024",
+                    ConfigHash = "abc",
+                    QueryPrefix = "Instruct: x\nQuery: ",
+                },
+            });
+        var path = Path.Combine(_tempRoot, "v2.json");
+        report.Save(path);
+
+        var loaded = EvalReport.Load(path);
+        loaded.Provenance.ShouldNotBeNull();
+        loaded.Provenance.ChunkCount.ShouldBe(400_000);
+        loaded.Provenance.Embedding!.SpaceId.ShouldBe("ollama:qwen3-embedding:0.6b:1024");
+        loaded.Provenance.Embedding.QueryPrefix.ShouldBe("Instruct: x\nQuery: ");
+        // Empty transforms are omitted, not written as "".
+        File.ReadAllText(path).ShouldNotContain("documentPrefix");
+
+        // The shape every committed baseline before v2 has.
+        var v1 = Path.Combine(_tempRoot, "v1.json");
+        File.WriteAllText(v1, """
+            { "version": 1, "ranAt": "2026-08-07T00:00:00+00:00", "topK": 10, "runs": [] }
+            """);
+        var old = EvalReport.Load(v1);
+        old.Version.ShouldBe(1);
+        old.Provenance.ShouldBeNull();
     }
 }
