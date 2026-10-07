@@ -201,9 +201,15 @@ fi
 
 # --- 4. switch-model -------------------------------------------------------
 
+# --force, always: a profile that only changes the chunk size (or anything
+# else outside the vector identity) is "already on this model" to
+# switch-model, which would then do nothing and leave the old chunks in
+# place to be measured as the experiment.
+
 if ! done_stage switch; then
     banner "switch-model to the experiment profile"
-    cli_profile switch-model --yes
+    cli_profile switch-model --yes --force
+    [[ "$(unembedded)" != "0" ]] || die "switch-model queued nothing to embed — refusing to measure the old vectors."
     mark_stage switch
 fi
 
