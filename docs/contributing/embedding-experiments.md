@@ -63,7 +63,7 @@ every step after the baseline. The candidates in
 | `qwen3-embedding-0.6b.env` | qwen3 0.6b @1024 + query instruction | measured 2026-06-11 (tie with mxbai) |
 | `qwen3-embedding-0.6b-chunk512.env` | the same with 512-token chunks | never run; compare against the 0.6b run |
 | `qwen3-embedding-4b-1024.env` | qwen3 4b truncated 2560 → 1024 | never run; needs Matryoshka support (below) |
-| `embeddinggemma-2-768.env` | embeddinggemma-2 @768, task prefixes | never run; **prefixes and tag unverified** — read the file |
+| `embeddinggemma-2-768.env` | embeddinggemma-2 @768, task prefixes | never run; prefixes confirmed from the model card, text-only tag not — read the file |
 
 The keys a profile sets:
 
