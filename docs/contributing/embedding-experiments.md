@@ -151,6 +151,15 @@ steps, and because they apply to any run done by hand.
   from 1.4s to 21.5s on the full archive. A faster embedding host shortens
   the query embed and the re-embed, not that scan, which runs wherever the
   database is. `--timing` is always on in the script.
+- **The baseline scans soft-deleted mail; the experiment doesn't.** The
+  archive keeps chunks for soft-deleted messages until `purge-deleted`, and
+  every KNN scan reads them before the `deleted_at` filter drops them.
+  `switch-model` re-embeds live mail only, so the experiment's vector set is
+  smaller: on the frozen corpus 344,084 → 284,463 chunks (54,555 belonged to
+  the 6,318 soft-deleted messages). Quality is unaffected — deleted mail is
+  filtered out of results either way — but the latency delta flatters every
+  candidate by roughly that 16%. For a fair latency comparison, re-embed an
+  mxbai control through the same script.
 - **A small corpus says little.** The 662-message subset corpus is right for
   checking that a run works; 70 queries over it can't separate models a few
   hundredths apart. Decide on the full archive.
@@ -308,3 +317,53 @@ corpus is too small to rank models.
   Fireworks run failed its tail gate (4 drops), so the full-archive run
   should be judged on the tail, not the means.
 
+
+### 2026-10-09 — full archive: embeddinggemma-2 @768 and @512, qwen3-embedding:4b @1024
+
+Three runs of `ops/embedding-experiment.sh` on the full frozen corpus
+(75,414 live messages, 70 queries, top-10), on a Mac Studio (M5 Max, 128 GB)
+with Ollama 0.40.1 and commit `f6fc09e`. All three diff against the one
+baseline measured in the first run. **That baseline reproduced
+`baselines/2026-08-07-post-tray-removal.json` exactly** (keyword 0.8590 /
+semantic 0.8141 / hybrid 0.9165), so the copy is the corpus the committed
+baselines describe.
+
+| profile | semantic NDCG | hybrid NDCG | hybrid drops > 0.2 | hybrid gains > 0.2 | re-embed |
+|---|---|---|---|---|---|
+| mxbai-embed-large @1024 (baseline) | 0.814 | 0.916 | — | — | — |
+| embeddinggemma-2:270m @768 | 0.822 (+0.008) | 0.905 (−0.011) | 5 | 4 | 61 min |
+| embeddinggemma-2:270m @512 (MRL) | 0.814 (=0.000) | 0.898 (−0.019) | 6 | 3 | 62 min |
+| qwen3-embedding:4b @1024 (MRL) | **0.842 (+0.028)** | 0.897 (−0.019) | 6 | 2 | 5 h 21 min |
+
+Against the gate (semantic ≥ +0.02, hybrid ≥ +0.01, at most 3 hybrid drops
+over 0.2), **all three fail**. qwen3-4b@1024 passes the semantic leg and
+fails the other two.
+
+- **Tails.** gemma@768 drops q072 −0.61, q054 −0.50, q063 −0.43,
+  q028 −0.37, q055 −0.29; @512 adds q047 −0.24. qwen drops q028, q066,
+  q069 (−0.37 each), q055 −0.29, q065 −0.24, q047 −0.20. **q028 and q055
+  drop under all three models**, and q063/q028/q072 were already the drops
+  in the 2026-10-07 subset run of embeddinggemma-2. These queries are where
+  mxbai's ranking is hard to replace; inspect them before the next
+  candidate.
+- **Truncation is cheap; the starting point isn't.** Diffing @512 directly
+  against @768: −0.008 NDCG on both legs, and only one hybrid query moving
+  more than 0.2 (q047 −0.61). Halving the vectors costs little, but @768 is
+  already below mxbai on hybrid.
+- **qwen3-4b truncated to 1024 kept its semantic edge and lost its hybrid
+  one.** At 2560d (2026-06-12) it was +0.044 semantic / +0.005 hybrid; at
+  1024d it is +0.028 / −0.019. Like the Fireworks 8b run, a better vector
+  leg made the fused ranking worse.
+- **Latency** (semantic / hybrid mean): baseline 442 / 673 ms; gemma@768
+  299 / 491; gemma@512 266 / 430; qwen@1024 386 / 588. Every one of those
+  improvements is partly the soft-deleted-chunks caveat above, not the model.
+- **Re-embed throughput** on this machine: gemma ~77 chunks/s, qwen3-4b
+  ~12.6 chunks/s (~235 msg/min). That is about the ~255 msg/min the
+  2026-06-12 entry records for the 4b on the Mac mini, a rate that implies
+  ~5 h for that corpus. Its 25 h wall time was therefore lost to something
+  other than embedding speed. The entry doesn't say what; the 0.6b run
+  before it records sharing Ollama with the live stack and an overnight gap.
+  Plan a 4b re-embed at ~5–6 h, not overnight.
+
+**Verdict**: mxbai-embed-large stays live. No candidate so far beats it on
+hybrid on the full archive.
