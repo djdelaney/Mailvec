@@ -423,8 +423,9 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
         // Mailvec to users as a static "archive" (see Program.cs).
         await using var client = await ConnectAsync();
 
-        client.ServerInfo.Name.ShouldBe("mailvec");
-        client.ServerInfo.Title.ShouldBe("Mailvec");
+        var info = client.ServerInfo.ShouldNotBeNull();
+        info.Name.ShouldBe("mailvec");
+        info.Title.ShouldBe("Mailvec");
 
         // Shape only, deliberately. ConfigureServerInfo reads
         // Assembly.GetEntryAssembly(), which in-process resolves to the xunit
@@ -432,8 +433,8 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
         // the value can only be pinned against a real process — /health's
         // version field is the assertion that does that, and the live-server
         // check in ops/UPGRADING.md is the manual one.
-        client.ServerInfo.Version.ShouldNotBeNull();
-        client.ServerInfo.Version.ShouldMatch(@"^\d+\.\d+\.\d+$");
+        info.Version.ShouldNotBeNull();
+        info.Version.ShouldMatch(@"^\d+\.\d+\.\d+$");
 
         client.ServerInstructions.ShouldNotBeNullOrWhiteSpace();
         client.ServerInstructions.ShouldContain("read-only");
