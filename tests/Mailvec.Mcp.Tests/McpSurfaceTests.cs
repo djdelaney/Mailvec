@@ -47,7 +47,7 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     /// </summary>
     public static TheoryData<string, string[], string[]> LockedInputSchemas() => new()
     {
-        { "search_emails", ["query", "mode", "limit", "folder", "dateFrom", "dateTo", "fromContains", "fromExact", "hasAttachments", "attachmentType", "unread"], [] },
+        { "search_emails", ["query", "mode", "limit", "folder", "dateFrom", "dateTo", "fromContains", "fromExact", "toContains", "hasAttachments", "attachmentType", "unread"], [] },
         { "get_email", ["id", "messageId", "includeHtml"], [] },
         { "get_thread", ["id", "messageId", "includeBodies"], [] },
         { "list_folders", [], [] },
@@ -353,6 +353,35 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
         email.GetProperty("isRead").GetBoolean().ShouldBeFalse();
         var thread = await CallJsonAsync(client, "get_thread", new() { ["messageId"] = "read-state-unread@x" });
         thread.GetProperty("messages")[0].GetProperty("isRead").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ToContains_finds_mail_by_recipient_and_is_echoed_in_applied_filters()
+    {
+        // The plus-address case end to end: the daily triage agent finds its
+        // high-priority alerts by the address they were sent TO, whoever sent
+        // them. Recipients are stored with `+` escaped as +, so this also
+        // proves the decode reaches the wire.
+        await using var client = await ConnectAsync();
+        var repo = new MessageRepository(new ConnectionFactory(
+            Options.Create(new ArchiveOptions { DatabasePath = _factory.DatabasePath })));
+        repo.Upsert(Helpers.Sample("to-alert@x", body: "pierogi alert") with
+            { ToAddresses = [new Mailvec.Core.Models.EmailAddress(null, "dan+alert@hactar.com")] },
+            "INBOX", "INBOX/cur/to-alert@x", "to-alert@x", DateTimeOffset.UtcNow);
+        repo.Upsert(Helpers.Sample("to-plain@x", body: "pierogi plain") with
+            { ToAddresses = [new Mailvec.Core.Models.EmailAddress(null, "dan@hactar.com")] },
+            "INBOX", "INBOX/cur/to-plain@x", "to-plain@x", DateTimeOffset.UtcNow);
+
+        var body = await CallJsonAsync(client, "search_emails", new()
+        {
+            ["query"] = "pierogi",
+            ["mode"] = "keyword",
+            ["toContains"] = "dan+alert@hactar.com",
+        });
+
+        body.GetProperty("appliedFilters").GetProperty("toContains").GetString().ShouldBe("dan+alert@hactar.com");
+        body.GetProperty("results").EnumerateArray().Select(h => h.GetProperty("messageId").GetString())
+            .ShouldBe(["to-alert@x"]);
     }
 
     [Fact]

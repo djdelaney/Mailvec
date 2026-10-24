@@ -122,6 +122,8 @@ internal static class SearchFilterSql
                             WHERE ss_unread.message_id = m.message_id AND ss_unread.seen = 0)
                     """);
         }
+        if (!string.IsNullOrEmpty(filters.ToContains))
+            AppendRecipientMatch(sql, cmd, filters.ToContains);
         // FromExact takes precedence over FromContains — exact match is strictly
         // narrower, and Claude can hit either depending on what it knows about
         // the sender. Don't AND both clauses; that's confusing semantics.
@@ -139,6 +141,32 @@ internal static class SearchFilterSql
             sql.Append("\n  AND (LOWER(m.from_address) LIKE $from_like ESCAPE '\\' OR LOWER(m.from_name) LIKE $from_like ESCAPE '\\')");
             cmd.Parameters.AddWithValue("$from_like", "%" + EscapeLike(filters.FromContains.ToLowerInvariant()) + "%");
         }
+    }
+
+    // To/Cc recipient match. Recipients are JSON arrays of {Name, Address}
+    // written by System.Text.Json's DEFAULT encoder, which escapes `+` as
+    // + (and `'`, `<`, `>`, `&`, non-ASCII). A LIKE on the raw column
+    // therefore never matches a plus-address — the very thing this filter is
+    // for — so the clause decodes through json_each/json_extract. Invalid JSON
+    // (none is written today) reads as no recipients rather than failing the
+    // whole query: json_each on a malformed value raises.
+    private static void AppendRecipientMatch(StringBuilder sql, SqliteCommand cmd, string value)
+    {
+        cmd.Parameters.AddWithValue("$to_like", "%" + EscapeLike(value.ToLowerInvariant()) + "%");
+        sql.Append("\n  AND (");
+        var first = true;
+        foreach (var column in new[] { "m.to_addresses", "m.cc_addresses" })
+        {
+            if (!first) sql.Append(" OR ");
+            first = false;
+            sql.Append($"""
+                EXISTS (
+                      SELECT 1 FROM json_each(CASE WHEN json_valid({column}) THEN {column} ELSE '[]' END) rcpt
+                      WHERE LOWER(json_extract(rcpt.value, '$.Address')) LIKE $to_like ESCAPE '\'
+                         OR LOWER(json_extract(rcpt.value, '$.Name')) LIKE $to_like ESCAPE '\')
+                """);
+        }
+        sql.Append(')');
     }
 
     // Escape the LIKE wildcards (% and _) and the escape char itself so a
