@@ -88,7 +88,9 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
 
         var names = (await client.ListToolsAsync()).Select(t => t.Name).ToList();
 
-        names.ShouldBe(ToolSurface.All.Keys, ignoreOrder: true);
+        // The core surface only: mark_read exists solely where the optional
+        // component is configured (see the mark-read section below).
+        names.ShouldBe(ToolSurface.Core.Keys, ignoreOrder: true);
     }
 
     [Fact]
@@ -186,6 +188,82 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
             annotations.OpenWorldHint.ShouldBe(false,
                 $"{tool.Name} operates on the user's own mailbox — a closed domain");
         }
+    }
+
+    // ---------- the optional mark-read component ----------
+    //
+    // Off is the default and the configuration most deployments run, so every
+    // test above runs with it off — including the read-only annotation test,
+    // which must pass with NO exemption there. These run with it on.
+
+    private WebApplicationFactory<Program> WithMarkRead() =>
+        WithConfig(("Mcp:MarkRead:QueueDirectory", Path.Combine(Path.GetTempPath(), "mailvec-mark-read-" + Guid.NewGuid().ToString("N"))));
+
+    [Fact]
+    public async Task Without_the_component_mark_read_is_absent_and_the_instructions_say_read_only()
+    {
+        await using var client = await ConnectAsync();
+
+        (await client.ListToolsAsync()).Select(t => t.Name).ShouldNotContain(ToolSurface.MarkRead);
+        client.ServerInstructions!.ShouldContain("The surface is read-only: you can search");
+    }
+
+    [Fact]
+    public async Task With_the_component_mark_read_is_the_one_tool_that_is_not_read_only()
+    {
+        using var configured = WithMarkRead();
+        await using var client = await ConnectAsync(configured);
+
+        var tools = await client.ListToolsAsync();
+        tools.Select(t => t.Name).ShouldBe(ToolSurface.All.Keys, ignoreOrder: true);
+        foreach (var tool in tools.Where(t => t.Name != ToolSurface.MarkRead))
+            tool.ProtocolTool.Annotations!.ReadOnlyHint.ShouldBe(true, $"{tool.Name} must stay read-only");
+
+        // Pinned exactly: clients decide what needs confirmation from these.
+        var markRead = tools.Single(t => t.Name == ToolSurface.MarkRead).ProtocolTool.Annotations!;
+        markRead.ReadOnlyHint.ShouldBe(false);
+        markRead.DestructiveHint.ShouldBe(false);
+        markRead.IdempotentHint.ShouldBe(true);
+        markRead.OpenWorldHint.ShouldBe(true, "its effect reaches the mail server");
+
+        var schema = tools.Single(t => t.Name == ToolSurface.MarkRead).JsonSchema;
+        foreach (var name in new[] { "ids", "messageIds", "read" })
+            Properties(schema).TryGetProperty(name, out _).ShouldBeTrue($"mark_read must expose '{name}'");
+        Required(schema).ShouldBeEmpty();
+
+        // The instructions name the exception rather than claiming read-only.
+        var instructions = client.ServerInstructions!;
+        instructions.ShouldContain("ONE exception: mark_read");
+        instructions.ShouldNotContain("The surface is read-only: you can search");
+        instructions.ShouldContain("does not bound you", Case.Insensitive);
+    }
+
+    [Fact]
+    public async Task Mark_read_disabled_by_name_stays_absent_even_with_the_queue_configured()
+    {
+        using var configured = WithConfig(
+            ("Mcp:MarkRead:QueueDirectory", Path.GetTempPath()),
+            ("Mcp:DisabledTools:0", ToolSurface.MarkRead));
+        await using var client = await ConnectAsync(configured);
+
+        (await client.ListToolsAsync()).Select(t => t.Name).ShouldNotContain(ToolSurface.MarkRead);
+        client.ServerInstructions!.ShouldContain("The surface is read-only: you can search");
+    }
+
+    [Fact]
+    public async Task Mark_read_response_fields_reach_clients()
+    {
+        using var configured = WithMarkRead();
+        await using var client = await ConnectAsync(configured);
+        var id = Seed("mark-read-wire@x", body: "teriyaki");
+
+        // No applier marker in the fresh queue directory: unavailable, which
+        // still exercises every field of the per-message result.
+        var body = await CallJsonAsync(client, "mark_read", new() { ["ids"] = new[] { id } });
+
+        ShouldHaveKeys(body, "results", "queuedCount");
+        var result = body.GetProperty("results")[0];
+        ShouldHaveKeys(result, "id", "messageId", "requested", "status");
     }
 
     [Fact]
@@ -374,7 +452,7 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
         names.ShouldNotContain("view_attachment");
         names.ShouldNotContain("get_attachment_page_image");
         names.ShouldContain("get_attachment_text"); // the pure-DB read stays
-        names.Count.ShouldBe(ToolSurface.All.Count - 2);
+        names.Count.ShouldBe(ToolSurface.Core.Count - 2);
     }
 
     [Fact]

@@ -25,9 +25,8 @@ namespace Mailvec.Mcp;
 /// </summary>
 internal static class ToolSurface
 {
-    // Keep in lockstep with the [McpServerTool(Name = ...)] attributes; a
-    // test reflects the attributes and fails on drift.
-    internal static readonly IReadOnlyDictionary<string, Type> All =
+    // The read-only surface every deployment gets.
+    internal static readonly IReadOnlyDictionary<string, Type> Core =
         new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase)
         {
             ["search_emails"] = typeof(SearchEmailsTool),
@@ -40,13 +39,31 @@ internal static class ToolSurface
         };
 
     /// <summary>
-    /// The tool classes to register after removing <paramref name="disabledTools"/>.
+    /// The one write tool, part of the optional mark-read component
+    /// (<c>Mcp:MarkRead:QueueDirectory</c>). Not registered unless the
+    /// component is on — a deployment without it keeps a surface that is
+    /// read-only in fact, not merely by refusal.
+    /// </summary>
+    internal const string MarkRead = "mark_read";
+
+    // Every tool class that exists. Keep in lockstep with the
+    // [McpServerTool(Name = ...)] attributes; a test reflects the attributes
+    // and fails on drift.
+    internal static readonly IReadOnlyDictionary<string, Type> All =
+        new Dictionary<string, Type>(Core, StringComparer.OrdinalIgnoreCase)
+        {
+            [MarkRead] = typeof(MarkReadTool),
+        };
+
+    /// <summary>
+    /// The tool classes to register: the core surface, plus <c>mark_read</c>
+    /// only when <paramref name="markReadEnabled"/>, minus <paramref name="disabledTools"/>.
     /// Throws on a name that isn't a known tool: this option exists for
     /// security posture, and a typo'd entry would silently leave the tool it
     /// meant to disable exposed — fail startup loudly instead (the container
     /// restart policy makes that visible immediately).
     /// </summary>
-    internal static IReadOnlyList<Type> Resolve(IEnumerable<string>? disabledTools)
+    internal static IReadOnlyList<Type> Resolve(IEnumerable<string>? disabledTools, bool markReadEnabled = false)
     {
         var disabled = new HashSet<string>(
             (disabledTools ?? []).Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()),
@@ -61,6 +78,10 @@ internal static class ToolSurface
                 "Refusing to start — a typo here would silently leave the tool it meant to disable exposed.");
         }
 
-        return All.Where(kv => !disabled.Contains(kv.Key)).Select(kv => kv.Value).ToList();
+        return All
+            .Where(kv => !disabled.Contains(kv.Key))
+            .Where(kv => markReadEnabled || !string.Equals(kv.Key, MarkRead, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Value)
+            .ToList();
     }
 }

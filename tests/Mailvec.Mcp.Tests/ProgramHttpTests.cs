@@ -444,7 +444,7 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
         // The locked surface (CLAUDE.md "MCP API stability"), reachable without
         // an initialize handshake.
         tools.ShouldContain("search_emails");
-        tools.Count.ShouldBe(ToolSurface.All.Count);
+        tools.Count.ShouldBe(ToolSurface.Core.Count);
     }
 
     /// <summary>

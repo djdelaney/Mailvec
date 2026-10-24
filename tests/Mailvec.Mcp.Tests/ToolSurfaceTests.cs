@@ -20,6 +20,20 @@ public class ToolSurfaceTests
     }
 
     [Fact]
+    public void Mark_read_is_registered_only_when_the_component_is_enabled()
+    {
+        ToolSurface.Resolve(null).ShouldNotContain(ToolSurface.All[ToolSurface.MarkRead]);
+
+        var enabled = ToolSurface.Resolve(null, markReadEnabled: true);
+        enabled.Count.ShouldBe(8);
+        enabled.ShouldContain(ToolSurface.All[ToolSurface.MarkRead]);
+
+        // DisabledTools still wins, and naming it is valid even when it's off.
+        ToolSurface.Resolve([ToolSurface.MarkRead], markReadEnabled: true).Count.ShouldBe(7);
+        ToolSurface.Resolve([ToolSurface.MarkRead]).Count.ShouldBe(7);
+    }
+
+    [Fact]
     public void Disabling_the_remote_surface_tools_removes_exactly_those()
     {
         var enabled = ToolSurface.Resolve(["view_attachment", "get_attachment_page_image"]);
