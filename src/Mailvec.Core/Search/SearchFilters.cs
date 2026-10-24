@@ -31,6 +31,13 @@ namespace Mailvec.Core.Search;
 /// application/octet-stream) and name files freely.
 /// Implies messages with attachments, independent of <see cref="HasAttachments"/>.
 /// </param>
+/// <param name="ToContains">
+/// Case-insensitive substring match against any To or Cc recipient's address
+/// OR display name — e.g. a plus-address like <c>dan+alert@hactar.com</c>, to
+/// find mail routed to it whoever sent it. Matched through SQLite's JSON
+/// functions, never against the raw column: recipients are stored as
+/// System.Text.Json output, which escapes <c>+</c> as <c>+</c>.
+/// </param>
 /// <param name="Unread">
 /// Read state, from the per-copy Maildir <c>S</c> flag (<c>sync_state.seen</c>).
 /// True restricts to messages with at least one live copy that is unseen;
@@ -46,7 +53,8 @@ public sealed record SearchFilters(
     string? FromExact = null,
     bool? HasAttachments = null,
     string? AttachmentType = null,
-    bool? Unread = null)
+    bool? Unread = null,
+    string? ToContains = null)
 {
     public static readonly SearchFilters None = new();
 
@@ -54,5 +62,5 @@ public sealed record SearchFilters(
         Folder is null && DateFrom is null && DateTo is null
         && string.IsNullOrEmpty(FromContains) && string.IsNullOrEmpty(FromExact)
         && HasAttachments is null && string.IsNullOrEmpty(AttachmentType)
-        && Unread is null;
+        && Unread is null && string.IsNullOrEmpty(ToContains);
 }

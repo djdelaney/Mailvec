@@ -75,6 +75,7 @@ public sealed class SearchEmailsTool(
         "`matchedAttachment` with the attachment's partIndex and filename (semantic matches report it; keyword-only matches " +
         "can't attribute a specific attachment, so its absence doesn't mean the body matched) — use those with " +
         "`get_attachment_text` to read the document (or `get_attachment_page_image` for a PDF page, `view_attachment` for an image). " +
+        "To find mail sent TO an address (an alert plus-address, a role mailbox) regardless of sender, set `toContains`. " +
         "Use a result's id or messageId with get_email/get_thread for follow-up. " +
         "Each result also carries `isRead` (true = read, false = unread, null = read state unknown), and `unread` " +
         "filters on it — e.g. `unread=true` with no query lists unread mail newest first. A message counts as unread " +
@@ -122,6 +123,9 @@ public sealed class SearchEmailsTool(
         string? fromContains = null,
         [Description("Case-insensitive exact match on from_address (the email address only, not the display name). Use for 'all email from <addr>' lookups.")]
         string? fromExact = null,
+        [Description("Case-insensitive substring against any To or Cc recipient's address OR display name. Use it to find mail sent TO an " +
+                     "address whoever sent it, e.g. a plus-address that routes alerts (`dan+alert@example.com`) or a shared/role mailbox.")]
+        string? toContains = null,
         [Description("true = only messages with at least one attachment (including inline images); false = only messages without. " +
                      "Combine with omitted `query` to browse 'recent mail with attachments from X'.")]
         bool? hasAttachments = null,
@@ -136,10 +140,10 @@ public sealed class SearchEmailsTool(
         bool? unread = null,
         CancellationToken ct = default)
     {
-        var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType, unread });
+        var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact, toContains, hasAttachments, attachmentType, unread });
 
         var resolvedLimit = ClampLimit(limit);
-        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType, unread);
+        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType, unread, toContains);
         var archiveStats = messages.GetArchiveStats();
         var mailSync = ReadMailSync();
         var appliedFilters = AppliedFilters.From(filters);
@@ -300,7 +304,7 @@ public sealed class SearchEmailsTool(
     private static string NormaliseMode(string mode) =>
         mode?.Trim().ToLowerInvariant() ?? "hybrid";
 
-    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains, string? fromExact, bool? hasAttachments, string? attachmentType, bool? unread)
+    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains, string? fromExact, bool? hasAttachments, string? attachmentType, bool? unread, string? toContains)
     {
         return new SearchFilters(
             Folder: string.IsNullOrWhiteSpace(folder) ? null : folder.Trim(),
@@ -310,7 +314,8 @@ public sealed class SearchEmailsTool(
             FromExact: string.IsNullOrWhiteSpace(fromExact) ? null : fromExact.Trim(),
             HasAttachments: hasAttachments,
             AttachmentType: string.IsNullOrWhiteSpace(attachmentType) ? null : attachmentType.Trim(),
-            Unread: unread);
+            Unread: unread,
+            ToContains: string.IsNullOrWhiteSpace(toContains) ? null : toContains.Trim());
     }
 
     // Delegates to the shared Core parser so the "date-only dateTo means end
@@ -391,7 +396,8 @@ public sealed record AppliedFilters(
     string? FromExact,
     bool? HasAttachments = null,
     string? AttachmentType = null,
-    bool? Unread = null)
+    bool? Unread = null,
+    string? ToContains = null)
 {
     public static AppliedFilters From(Mailvec.Core.Search.SearchFilters f) => new(
         Folder: f.Folder,
@@ -401,7 +407,8 @@ public sealed record AppliedFilters(
         FromExact: f.FromExact,
         HasAttachments: f.HasAttachments,
         AttachmentType: f.AttachmentType,
-        Unread: f.Unread);
+        Unread: f.Unread,
+        ToContains: f.ToContains);
 }
 
 /// <summary>
