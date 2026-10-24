@@ -1,6 +1,6 @@
 # Proposal: read state and an optional `mark_read` component
 
-**Status:** Part 1 implemented (2026-10-24); part 2 implemented (2026-10-24), not yet run against a live Fastmail account. Supersedes the earlier draft that offered
+**Status:** Part 1 implemented (2026-10-24); part 2 implemented (2026-10-24) and run live against Fastmail the same day (see open question 2). Supersedes the earlier draft that offered
 "local Maildir rename from mcp" (A) or "direct JMAP write" (B).
 **Release impact:** MCP tool-surface change + schema migration → **minor** bump.
 
@@ -417,5 +417,15 @@ Dockerfile heredoc with a stand-in `mbsync`)
    interplay and anything Fastmail-specific.
 2. Confirm Fastmail maps `\Seen` stored on one label's UID to the email-level
    `$seen` keyword, so other label copies follow on the next pull.
+   **Partly settled 2026-10-24**, by a live run against the author's Fastmail
+   account with the full stack and scratch storage:
+   - `mark_read` over MCP was picked up in about 3 s and pushed exactly one flag;
+   - an independent pull-only store showed `\Seen` on the server;
+   - `read: false` cleared it again, and the index agreed both times.
+
+   **Propagation could not be tested.** That account is in Fastmail's
+   *folder* mode, where a message is in exactly one mailbox, so the
+   all-copies rule never comes into play there. It still matters for
+   label-mode accounts (Fastmail labels, Gmail) and stays unverified.
 3. Should the 15-minute expiry be configurable? It probably doesn't need to
    be until someone asks.

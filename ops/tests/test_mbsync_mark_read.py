@@ -18,8 +18,10 @@ against a local Dovecot 2.4.5 server:
   600 s interval.
 
 That run is also where isync's `new/<base>:2,` shape for unseen mail turned
-up; see the test for it below. Still unchecked: that a provider keeping read
-state per email (Fastmail) spreads the flag to the message's other labels.
+up; see the test for it below. A live Fastmail run on 2026-10-24 (folder-mode
+account) also confirmed the push and the unread round trip. Still unchecked:
+whether a provider in LABEL mode spreads the flag to the message's other
+labels. A folder-mode account never has a message in two mailboxes.
 Re-check all of this when the isync package version moves.
 """
 import os
