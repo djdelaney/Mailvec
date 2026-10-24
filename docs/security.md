@@ -8,7 +8,7 @@ Mailvec is a single-account mail archive. Every client allowed to use its MCP to
 
 | Surface | Data and boundary |
 | --- | --- |
-| MCP tools | Search, message and attachment reads. The tools do not mutate the archive or write attachment files. The CLI's explicit `extract-attachments` command does write files. |
+| MCP tools | Search, message and attachment reads. The tools do not mutate the archive or write attachment files. The CLI's explicit `extract-attachments` command does write files. The one exception is the optional `mark_read` tool, registered only with `compose.mark-read.yml`; see [Optional mark-read](#optional-mark-read). |
 | `/up` | Minimal external status and liveness flags. It omits archive paths, counts, model identity, and internal URLs. Use it for monitoring. |
 | `/health` | Detailed state, including paths and model information. Loopback-only by default (`Mcp:RestrictHealthToLoopback`). |
 | Docker volumes | `./data` holds SQLite; `./mail` holds source mail. The parser has neither mount. |
@@ -52,7 +52,7 @@ The macOS install binds HTTP to `127.0.0.1:3333` and can serve stdio clients. A 
 
 ## Tools and data flow
 
-The seven MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) read the archive. Attachment viewing decodes source files in memory. `get_attachment_text` reads extracted text from SQLite. The explicit CLI `extract-attachments` path writes files under its configured download directory and checks path containment and symlinks. The indexer follows no symbolic link below the Maildir root (a file, a folder, or `cur`/`new`), so nothing outside the root, or a second path to a message, reaches the archive; the root itself may be a link. See [attachment behavior](attachments.md).
+The seven core MCP tools (`search_emails`, `get_email`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) read the archive. An eighth, `mark_read`, exists only where the optional component is configured. Attachment viewing decodes source files in memory. `get_attachment_text` reads extracted text from SQLite. The explicit CLI `extract-attachments` path writes files under its configured download directory and checks path containment and symlinks. The indexer follows no symbolic link below the Maildir root (a file, a folder, or `cur`/`new`), so nothing outside the root, or a second path to a message, reaches the archive; the root itself may be a link. See [attachment behavior](attachments.md).
 
 ## Host / origin validation (DNS-rebinding guard)
 
@@ -66,13 +66,26 @@ When enabled, MCP validates Cloudflare's `Cf-Access-Jwt-Assertion` at the origin
 
 Mail bodies, attachments, sender fields, headers, and filenames are attacker-controlled. MCP responses frame that content as untrusted, and labels in server-written text are sanitized. Those measures do not prove an AI client will ignore instructions inside a message. Treat any agent allowed to call Mailvec as able to read the whole archive and evaluate its other connected tools accordingly. See [future work](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing) for model-level testing.
 
+## Optional mark-read
+
+`compose.mark-read.yml` adds the one tool that changes anything: `mark_read` sets or clears the Maildir `S` (seen) flag, which mbsync then pushes to the server. Without that overlay the tool is not registered, the server instructions say the surface is read-only, and nothing below applies.
+
+- **mcp gains no Maildir write and no credential.** It writes request files into `./mark-read`, its only new writable mount. The `mbsync` sidecar, already the only Maildir writer and the only credential holder, applies them between syncs.
+- **The sidecar trusts nothing in a request.** It re-checks every line against its own `MBSYNC_MARK_READ_FOLDERS`, never the marker file mcp can also write. It refuses traversal, symlinks and malformed files, and drops requests older than 15 minutes. It only ever adds or removes `S`: with `PushFlags`, any other flag would reach the server, and `T` becomes `\Deleted`.
+- **The allowlist covers every copy.** On providers that keep read state per email, marking one label's copy read marks every copy read. So `mark_read` refuses a message if any of its folders is outside the allowlist.
+- **What a prompt-injected agent can now do:** mark mail read or unread in the allowed folders, which can hide a real alert there. Bounded by the allowlist, the always-on `mark_read` log line, the sidecar's `./mark-read/done/` record, and `read: false` to undo. Mailvec cannot stop an agent being talked into it; the audit trail is how it gets noticed.
+- **What a compromised mcp can now do:** write arbitrary request files, which the sidecar bounds as above. It could already read all mail.
+- **It is exposed to every MCP client** the deployment admits, like every other tool.
+
+This is the trigger [future work](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing) names for un-deferring adversarial testing of the prompt-injection framing.
+
 ## Response bounds
 
 MCP limits concurrent requests and queue length. Search limits results; attachment text is paged; thread and message bodies have explicit size caps with truncation reported in the response. These controls bound memory and response size, not the amount of mail an authorized client can read over multiple calls.
 
 ## What's accepted
 
-- Authorized clients can call every read tool, including on-demand attachment rendering. There is no per-tool or per-identity scope. Do not admit a client that should see less than the entire mailbox.
+- Authorized clients can call every read tool, including on-demand attachment rendering, and `mark_read` where that component is enabled. There is no per-tool or per-identity scope. Do not admit a client that should see less than the entire mailbox.
 - With `Mcp:Access` disabled, the Compose origin trusts reachable network peers. Keep its host port unpublished and the tunnel as the only external ingress. Enable origin validation for an additional identity check.
 - Parser isolation limits direct access to stored mail and credentials, but a compromised parser can falsify results for documents it handles. Keep its mounts, egress, network denial, and response bounds intact.
 - `Mcp:LogToolCalls` is off by default. When enabled, queries and result summaries can include addresses, subjects, and filenames. Ordinary logs can also contain paths and message identifiers; protect both rolling files and Docker logs. See [Logs](logs.md).

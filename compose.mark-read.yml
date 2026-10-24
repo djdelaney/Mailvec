@@ -1,0 +1,42 @@
+# OPTIONAL: the mark-read component. Lets the `mark_read` MCP tool set or
+# clear the read flag on mail in the folders you allow. Without this file the
+# stack is read-only exactly as before: mark_read is not registered, mcp's
+# Maildir mount stays :ro, and mbsync never runs the component.
+#
+# Enable (all three, or the sidecar's preflight logs why it stays off):
+#   1. In .env:
+#        COMPOSE_FILE=compose.yml:compose.mark-read.yml
+#        MBSYNC_MARK_READ_FOLDERS=Alerts            # comma-separated; * = every folder
+#   2. In ./mbsyncrc, change `Sync Pull` to `Sync Pull PushFlags`.
+#   3. mkdir -p ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read
+#   then `docker compose up -d`.
+#
+# Disable: remove both .env lines, put `Sync Pull` back, `docker compose up -d`.
+# Requests still queued are simply never applied.
+#
+# How it works: mcp never touches the Maildir and holds no mail credential. It
+# writes requests into ./mark-read; the mbsync sidecar — already the only
+# Maildir writer and the only credential holder — re-validates each one
+# against MBSYNC_MARK_READ_FOLDERS, adds or removes the `S` in the filename
+# between syncs, and PushFlags carries it to the server. The allowlist lives
+# only here, on the sidecar; it publishes it to mcp in ./mark-read/.applier.
+# See docs/deploy-docker.md "Optional: mark-read" and
+# docs/proposals/read-state.md.
+#
+# Verify it is ON:  docker compose logs mbsync | grep 'mark-read: on for folders'
+#                   cat ./mark-read/.applier     (timestamp moves every minute)
+# Verify it is OFF: docker compose exec mcp ls /mark-read   (fails: no mount)
+
+services:
+  mcp:
+    environment:
+      Mcp__MarkRead__QueueDirectory: /mark-read
+    volumes:
+      - ./mark-read:/mark-read
+
+  mbsync:
+    environment:
+      MBSYNC_MARK_READ_QUEUE: /mark-read
+      MBSYNC_MARK_READ_FOLDERS: ${MBSYNC_MARK_READ_FOLDERS:-}
+    volumes:
+      - ./mark-read:/mark-read

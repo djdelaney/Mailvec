@@ -40,6 +40,11 @@ Patterns *
 Create  Near
 SyncState *
 # Read-only sync: changes in Fastmail flow down, never up.
+# With the optional mark-read component (compose.mark-read.yml), use
+#   Sync    Pull PushFlags
+# instead, so a read flag set here reaches the server. Only flags go up: new
+# mail and deletions still flow down only. The sidecar refuses to run the
+# component without a Sync line that pushes flags.
 Sync    Pull
 Expunge Near
 # Example: cap each folder to the 6000 newest messages. mbsync has no date-range

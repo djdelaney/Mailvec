@@ -22,6 +22,9 @@ public sealed record SyncStateEntry(
     DateTimeOffset? FileMtimeUtc = null,
     long? FileSize = null);
 
+/// <summary>One live Maildir copy of a message, as <c>mark_read</c> sees it.</summary>
+public sealed record SyncStateCopy(string MaildirFullPath, string? Folder, bool Seen);
+
 public sealed class SyncStateRepository(ConnectionFactory connections)
 {
     /// <summary>
@@ -222,6 +225,35 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         var list = new List<string>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read()) list.Add(reader.GetString(0));
+        return list;
+    }
+
+    /// <summary>
+    /// Every tracked copy of a message — the files <c>mark_read</c> would
+    /// change, and the folders its allowlist check must cover (a provider that
+    /// keeps seen state per email propagates a change on one copy to all of
+    /// them, so checking one copy's folder is not enough).
+    /// </summary>
+    public IReadOnlyList<SyncStateCopy> CopiesForMessageId(string messageId)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT maildir_full_path, folder, seen FROM sync_state
+            WHERE message_id = $mid
+            ORDER BY maildir_full_path
+            """;
+        cmd.Parameters.AddWithValue("$mid", messageId);
+
+        var list = new List<SyncStateCopy>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new SyncStateCopy(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetInt64(2) == 1));
+        }
         return list;
     }
 

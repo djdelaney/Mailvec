@@ -104,6 +104,33 @@ The sidecar then runs [goimapnotify](https://gitlab.com/shackra/goimapnotify), w
 
 This is a latency optimisation only, and every failure falls back to the interval. A rejected login, a folder name the server doesn't recognise, or an unreachable server stops the watcher for **all** folders. The sidecar restarts it after 30 seconds, doubling up to 15 minutes, so a revoked app password or a typo can't hammer the account. Check `docker compose logs mbsync` for `IDLE watcher exited` lines if mail seems slow. Neither `/health` nor `/up` reports on the watcher itself. Whether syncs are succeeding is still reported by `/up`'s `mail.syncStale`, and to Claude sessions by `search_emails`' `mailSync` field.
 
+## Optional: mark-read
+
+The `mark_read` MCP tool lets an agent set or clear the read flag on mail, for example a scheduled agent that triages monitoring alerts and marks the routine ones read. It is off unless you add it, and a deployment without it stays read-only. Security implications: [Security model](security.md#optional-mark-read).
+
+To enable it:
+
+1. In `.env`, add the overlay and name the folders it may change. Use the folder names `list_folders` reports, comma-separated; `*` means every folder and is never implied.
+
+   ```sh
+   COMPOSE_FILE=compose.yml:compose.mark-read.yml
+   MBSYNC_MARK_READ_FOLDERS=Alerts
+   ```
+
+2. In `./mbsyncrc`, change `Sync Pull` to `Sync Pull PushFlags`, so flags set locally reach the server. New mail and deletions still flow down only.
+3. Create the queue directory, owned by the service uid: `mkdir -p ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read`.
+4. `docker compose up -d`.
+
+Verify it:
+
+- `docker compose logs mbsync` shows `mark-read: on for folders: …`. If a step was missed it shows `mark-read: OFF:` with the reason; mail keeps syncing, and `mark_read` answers `unavailable` without queueing anything.
+- `cat ./mark-read/.applier`: its timestamp moves every minute while the sidecar runs.
+- `mark_read` appears in the client's tool list. After a call, the sidecar logs `applied <file>` and the outcome of each line is in `./mark-read/done/` (kept 30 days).
+
+A message is refused (`forbidden_folder`) unless **every** folder it is in is allowed, because marking one copy read marks the whole email read on the server. Requests wake the sync loop, so a change usually reaches the server within about 5 seconds.
+
+To disable it, remove both `.env` lines, put `Sync Pull` back, and run `docker compose up -d`. Requests still queued are never applied.
+
 ## Resource limits
 
 `compose.yml` sets memory and PID limits for each service. Size them for your corpus and parser workload; do not infer a suitable limit from process RSS alone because SQLite's vector page cache is also charged to the container. Check `docker stats` and the service's cgroup memory peak after indexing and search. If the limit causes cache churn or OOM restarts, increase it and recreate with `docker compose up -d`. For search measurement, see [Search performance](contributing/search-performance.md).

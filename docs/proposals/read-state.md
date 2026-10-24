@@ -1,6 +1,6 @@
 # Proposal: read state and an optional `mark_read` component
 
-**Status:** Part 1 implemented (2026-10-24); part 2 proposed. Supersedes the earlier draft that offered
+**Status:** Part 1 implemented (2026-10-24); part 2 implemented (2026-10-24), not yet run against a live Fastmail account. Supersedes the earlier draft that offered
 "local Maildir rename from mcp" (A) or "direct JMAP write" (B).
 **Release impact:** MCP tool-surface change + schema migration → **minor** bump.
 
@@ -168,6 +168,7 @@ values must agree and a mismatch is undetectable.)
 (`.tmp`-then-`mv`):
 
 ```
+mailvec-mark-read-applier v1
 2026-10-24T07:00:05Z      # last beat
 60                        # beat cadence, seconds (MBSYNC_BEAT_SECONDS)
 Alerts                   # allowlist, one folder per line
@@ -398,8 +399,22 @@ Dockerfile heredoc with a stand-in `mbsync`)
 
 ## Open questions
 
-1. Confirm the Alpine 3.24 isync accepts `Sync Pull PushFlags`, and that
-   `Expunge Near` is unaffected.
+1. ~~Confirm the Alpine 3.24 isync accepts `Sync Pull PushFlags`.~~
+   **Observed 2026-10-24** with the built `mbsync` image (isync 1.5.1) against
+   a local Dovecot 2.4.5 server:
+   - it accepts the line;
+   - a locally renamed `S` reaches the server on the next sync, and further
+     pulls don't revert it;
+   - `read: false` clears it on the server too;
+   - a read made on the server still pulls down;
+   - under plain `Sync Pull` a local `S` never reaches the server and is
+     *left in place*, so local and server disagree. That is why the preflight
+     refuses it.
+
+   The run also found that isync delivers unseen mail into `new/` **with** an
+   empty info suffix (`new/<base>:2,`), not the spec's bare `new/<base>`. The
+   sidecar's lookup now accepts both. Not yet observed: `Expunge Near`
+   interplay and anything Fastmail-specific.
 2. Confirm Fastmail maps `\Seen` stored on one label's UID to the email-level
    `$seen` keyword, so other label copies follow on the next pull.
 3. Should the 15-minute expiry be configurable? It probably doesn't need to

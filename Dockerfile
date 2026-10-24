@@ -472,16 +472,24 @@ fi
 # the step, not the interval (one-second steps were 600 forks per cycle at a
 # 600s interval, for nothing the floor didn't already delay).
 nap() {
-    if [ -z "${idler}" ]; then
+    if [ -z "${idler}" ] && [ -z "${mark_read}" ]; then
         sleep "${MBSYNC_INTERVAL_SECONDS}" & child=$!
         wait "$child"
         return
     fi
     waited=0
     while [ "${waited}" -lt "${MBSYNC_INTERVAL_SECONDS}" ]; do
-        if [ -e "${WAKE}" ] && [ "${waited}" -ge "${MBSYNC_IDLE_MIN_GAP_SECONDS}" ]; then
-            echo "mbsync: new mail signalled by IDLE; syncing now" >&2
-            return
+        if [ "${waited}" -ge "${MBSYNC_IDLE_MIN_GAP_SECONDS}" ]; then
+            if [ -e "${WAKE}" ]; then
+                echo "mbsync: new mail signalled by IDLE; syncing now" >&2
+                return
+            fi
+            # A queued mark_read request is a wake too, so a read flag
+            # reaches the server in seconds rather than one full interval.
+            if [ -n "${mark_read}" ] && mbsync-mark-read pending; then
+                echo "mbsync: mark-read request queued; syncing now" >&2
+                return
+            fi
         fi
         step=$((MBSYNC_INTERVAL_SECONDS - waited))
         [ "${step}" -le "${MBSYNC_IDLE_MIN_GAP_SECONDS}" ] || step="${MBSYNC_IDLE_MIN_GAP_SECONDS}"
@@ -510,11 +518,32 @@ trap 'for p in "$beater" "$idler"; do if [ -n "$p" ]; then kill "$p" 2>/dev/null
 # has to be killed each time, which orphans its in-flight `sleep` onto PID 1
 # and leaks a zombie per sync. Beat once first so a fresh container isn't
 # "unknown" for a full cadence.
-beat
-( while :; do sleep "${MBSYNC_BEAT_SECONDS}"; beat; done ) & beater=$!
+#
+# The optional mark-read component (MBSYNC_MARK_READ_QUEUE; unset = off, the
+# default) rides the same timer: its applier marker is how mcp knows requests
+# will be applied, judged stale on the same beat scale. It is decided here,
+# BEFORE the beater forks, because the subshell cannot see a later assignment.
+# With the variable unset nothing below calls mbsync-mark-read at all.
+mark_read=
+if [ -n "${MBSYNC_MARK_READ_QUEUE:-}" ] && mbsync-mark-read preflight; then
+    mark_read=1
+fi
+publish() {
+    beat
+    if [ -n "${mark_read}" ]; then mbsync-mark-read marker "${MBSYNC_BEAT_SECONDS}"; fi
+}
+publish
+( while :; do sleep "${MBSYNC_BEAT_SECONDS}"; publish; done ) & beater=$!
 
 while :; do
     rm -f "${WAKE}"
+    # Queued read flags are applied BEFORE the sync, by this loop, so the
+    # rename can't race mbsync and the sync that follows pushes it.
+    if [ -n "${mark_read}" ]; then
+        mbsync-mark-read apply
+    elif [ -n "${MBSYNC_MARK_READ_QUEUE:-}" ]; then
+        echo "mbsync: mark-read is OFF (see the preflight message at startup); queued requests are not applied" >&2
+    fi
     mbsync -c "${MBSYNC_CONFIG}" -a & child=$!
     # Capture the status explicitly rather than reading $? inside a branch.
     # It happens to survive both `|| cmd` and an if/else today, but it is one
@@ -531,6 +560,223 @@ while :; do
 done
 EOF
 RUN chmod +x /usr/local/bin/mbsync-loop
+RUN cat <<'EOF' > /usr/local/bin/mbsync-mark-read
+#!/bin/sh
+# The sidecar half of the OPTIONAL mark-read component
+# (docs/proposals/read-state.md). mcp writes requests into
+# MBSYNC_MARK_READ_QUEUE; this applies them to the Maildir, and mbsync's
+# PushFlags carries the change upstream on the sync that follows.
+#
+# Called only by mbsync-loop, and only when MBSYNC_MARK_READ_QUEUE is set: a
+# deployment without the component never runs a line of this file.
+#
+#   mbsync-mark-read preflight      once at startup; non-zero means stay off
+#   mbsync-mark-read marker <secs>  publish the applier marker (beat timer)
+#   mbsync-mark-read apply          apply every queued request (before a sync)
+#   mbsync-mark-read pending        exit 0 when a request is waiting
+#
+# TRUST: mcp is the internet-facing process and this one holds the credential,
+# so nothing in a request file is trusted. Every line is re-validated here,
+# against THIS process's own MBSYNC_MARK_READ_FOLDERS (never the marker, which
+# mcp can write), and the only change ever made is adding or removing the `S`
+# in a Maildir filename. Never touch another flag: with PushFlags a stray `T`
+# becomes \Deleted on the server.
+#
+# Runs between syncs, from the loop itself, so a rename can never race an
+# `mbsync -a` (two writers on .mbsyncstate and the Maildir is the hazard the
+# loop's single-runner rule exists for).
+set -u
+Q="${MBSYNC_MARK_READ_QUEUE:?MBSYNC_MARK_READ_QUEUE is not set}"
+: "${MBSYNC_MAILDIR:=/mail/Fastmail}"
+: "${MBSYNC_CONFIG:=/etc/mbsyncrc}"
+: "${MBSYNC_MARK_READ_FOLDERS:=}"
+# A request that waited out an applier outage must not overwrite what the user
+# did in another client meanwhile. Overridable only for ops/tests.
+: "${MBSYNC_MARK_READ_EXPIRE_MINUTES:=15}"
+: "${MBSYNC_MARK_READ_KEEP_DAYS:=30}"
+ROOT="${MBSYNC_MAILDIR}"
+MARKER="${Q}/.applier"
+NL='
+'
+say() { echo "mbsync: mark-read: $*" >&2; }
+trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
+
+# Whether any Sync line in mbsyncrc pushes flags. isync takes a list of
+# directions (Pull, Push) and operations (New, Old, Upgrade, Gone, Flags) and
+# applies their cross product; All/Full and PushFlags push flags outright, a
+# bare Push with no operation pushes everything, and Flags pushes when paired
+# with Push or given with no direction at all. No Sync line is isync's default,
+# Sync All. Approximate by design: this is a preflight that stops a renamed
+# flag from never reaching the server, not a parser for isync.
+pushes_flags() {
+    lines="$(grep -iE '^[[:space:]]*Sync([[:space:]]|$)' "${MBSYNC_CONFIG}" 2>/dev/null)" || return 0
+    old_ifs="$IFS"; IFS="$NL"
+    for line in $lines; do
+        IFS="$old_ifs"
+        push=0; dir=0; op=0; flags=0
+        set -f; set -- $line; set +f; shift
+        for t in "$@"; do
+            case "$(printf '%s' "$t" | tr 'A-Z' 'a-z')" in
+                all|full|pushflags) IFS="$old_ifs"; return 0 ;;
+                push) push=1; dir=1 ;;
+                pull|push*|pull*) dir=1 ;;
+                flags) flags=1; op=1 ;;
+                new|old|upgrade|gone) op=1 ;;
+            esac
+        done
+        [ "$push" -eq 1 ] && [ "$op" -eq 0 ] && { IFS="$old_ifs"; return 0; }
+        [ "$flags" -eq 1 ] && { [ "$push" -eq 1 ] || [ "$dir" -eq 0 ]; } && { IFS="$old_ifs"; return 0; }
+        IFS="$NL"
+    done
+    IFS="$old_ifs"
+    return 1
+}
+
+# The allowlist, one folder per line, blanks dropped. `*` is every folder and
+# is never implied: an empty list keeps the component off.
+folders() {
+    set -f; old_ifs="$IFS"; IFS=,
+    for f in ${MBSYNC_MARK_READ_FOLDERS}; do
+        IFS="$old_ifs"; f="$(trim "$f")"; [ -z "$f" ] || printf '%s\n' "$f"; IFS=,
+    done
+    IFS="$old_ifs"; set +f
+}
+
+allowed() {
+    old_ifs="$IFS"; IFS="$NL"; set -f
+    for f in $(folders); do
+        if [ "$f" = '*' ] || [ "$f" = "$1" ]; then IFS="$old_ifs"; set +f; return 0; fi
+    done
+    IFS="$old_ifs"; set +f
+    return 1
+}
+
+# No symlink anywhere below the root on the way to this folder's cur/new — the
+# indexer's rule (it follows none), and the containment this rename relies on.
+# The root itself may be a link.
+no_links() {
+    p="${ROOT}"
+    if [ "$1" != . ]; then
+        old_ifs="$IFS"; IFS=/; set -f
+        for c in $1; do
+            p="${p}/${c}"
+            if [ -L "$p" ]; then IFS="$old_ifs"; set +f; return 1; fi
+        done
+        IFS="$old_ifs"; set +f
+    fi
+    [ -d "$p" ] && [ ! -L "$p/cur" ] && [ ! -L "$p/new" ]
+}
+
+# One request line -> one outcome word on stdout:
+# ok | unchanged | not_found | forbidden_folder | rejected | error
+apply_one() {
+    action="$1"; folder="$2"; base="$3"
+    case "$action" in read|unread) ;; *) echo rejected; return ;; esac
+    case "$folder" in
+        .) ;;
+        ''|/*|*/|*//*|..|../*|*/..|*/../*|./*|*/./*|*/.) echo rejected; return ;;
+    esac
+    case "$base" in ''|.*|*[!A-Za-z0-9._,=-]*) echo rejected; return ;; esac
+
+    # Folder names follow MaildirScanner.FolderNameFor: the root itself is INBOX.
+    if [ "$folder" = . ]; then name=INBOX; dir="${ROOT}"; else name="$folder"; dir="${ROOT}/${folder}"; fi
+    allowed "$name" || { echo forbidden_folder; return; }
+    no_links "$folder" || { echo rejected; return; }
+
+    # Three shapes: the spec's bare `new/<base>`, isync's `new/<base>:2,`
+    # (isync 1.5 delivers unseen mail into new/ WITH an empty info suffix;
+    # observed against Dovecot, 2026-10-24), and `cur/<base>:2,<flags>`.
+    file=; count=0
+    for f in "${dir}/new/${base}" "${dir}/new/${base}:2,"* "${dir}/cur/${base}:2,"*; do
+        { [ -f "$f" ] && [ ! -L "$f" ]; } || continue
+        file="$f"; count=$((count + 1))
+    done
+    # None: mbsync moved or expunged it since mcp looked. More than one is not a
+    # state mbsync produces, and guessing between them is how the wrong file
+    # gets renamed.
+    [ "$count" -eq 1 ] || { echo not_found; return; }
+
+    case "$file" in *:2,*) flags="${file##*:2,}" ;; *) flags= ;; esac
+    case "$flags" in *S*) seen=1 ;; *) seen=0 ;; esac
+    if [ "$action" = read ]; then
+        [ "$seen" -eq 0 ] || { echo unchanged; return; }
+        # The Maildir spec wants flags in ASCII order.
+        new="$(printf '%sS' "$flags" | fold -w 1 | LC_ALL=C sort | tr -d '\n')"
+    else
+        [ "$seen" -eq 1 ] || { echo unchanged; return; }
+        new="$(printf '%s' "$flags" | tr -d S)"
+    fi
+    # Always into cur/: a message that has been looked at is no longer new,
+    # and isync tracks it by the ,U= in its name wherever it sits.
+    target="${dir}/cur/${base}:2,${new}"
+    [ ! -e "$target" ] || { echo not_found; return; }
+    if mv "$file" "$target"; then echo ok; else echo error; fi
+}
+
+# Field count and control characters, for every line, before anything is
+# applied: a request that is malformed anywhere is not trusted anywhere.
+well_formed() {
+    [ "$(head -n 1 "$1")" = "mailvec-mark-read v1" ] || return 1
+    awk -F '\t' 'NR > 1 { if (NF != 3) bad = 1; for (i = 1; i <= NF; i++) if ($i ~ /[[:cntrl:]]/) bad = 1 } END { exit bad }' "$1"
+}
+
+apply_all() {
+    mkdir -p "${Q}/done" || { say "could not create ${Q}/done"; return 1; }
+    for req in "${Q}"/*.req; do
+        [ -e "$req" ] || continue
+        name="$(basename "$req")"
+        if [ -L "$req" ] || [ ! -f "$req" ]; then rm -f "$req"; say "removed ${name}: not a regular file"; continue; fi
+        out="${Q}/done/${name}"
+        if [ -n "$(find "$req" -mmin +"${MBSYNC_MARK_READ_EXPIRE_MINUTES}" 2>/dev/null)" ]; then
+            tail -n +2 "$req" | while IFS= read -r line; do printf 'expired\t%s\n' "$line"; done > "${out}.tmp"
+        elif ! well_formed "$req"; then
+            printf 'rejected\t(malformed request file; nothing applied)\n' > "${out}.tmp"
+        else
+            tail -n +2 "$req" | while IFS='	' read -r action folder base; do
+                printf '%s\t%s\t%s\t%s\n' "$(apply_one "$action" "$folder" "$base")" "$action" "$folder" "$base"
+            done > "${out}.tmp"
+        fi
+        mv -f "${out}.tmp" "$out" && rm -f "$req"
+        say "applied ${name}: $(cut -f 1 "$out" | LC_ALL=C sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
+    done
+    find "${Q}/done" -type f -mtime +"${MBSYNC_MARK_READ_KEEP_DAYS}" -exec rm -f {} \; 2>/dev/null
+    return 0
+}
+
+case "${1:-}" in
+    preflight)
+        fail=
+        if [ ! -d "$Q" ] || [ ! -w "$Q" ]; then
+            fail="${Q} is missing or not writable by uid $(id -u). On the host: mkdir -p ./mark-read && sudo chown $(id -u):$(id -g) ./mark-read"
+        elif [ -z "$(folders)" ]; then
+            fail="MBSYNC_MARK_READ_FOLDERS is empty. Name the folders mark_read may change (comma-separated), or * for every folder."
+        elif ! pushes_flags; then
+            fail="no Sync line in ${MBSYNC_CONFIG} pushes flags, so a change made here would never reach the server. Use 'Sync Pull PushFlags'."
+        fi
+        if [ -n "$fail" ]; then
+            # mcp reads a missing marker as "unavailable" and queues nothing.
+            rm -f "$MARKER" 2>/dev/null
+            say "OFF: ${fail}"
+            exit 1
+        fi
+        say "on for folders: $(folders | tr '\n' ' ')"
+        ;;
+    marker)
+        if ! { { printf '%s\n%s\n%s\n' "mailvec-mark-read-applier v1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${2:?cadence}"; folders; } \
+               > "${MARKER}.tmp" && mv -f "${MARKER}.tmp" "$MARKER"; }; then
+            say "could not write ${MARKER} (mcp will report mark_read unavailable)"
+            rm -f "${MARKER}.tmp" 2>/dev/null
+        fi
+        ;;
+    apply) apply_all ;;
+    pending)
+        for req in "${Q}"/*.req; do [ -e "$req" ] && exit 0; done
+        exit 1
+        ;;
+    *) echo "usage: mbsync-mark-read preflight|marker <seconds>|apply|pending" >&2; exit 2 ;;
+esac
+EOF
+RUN chmod +x /usr/local/bin/mbsync-mark-read
 # Non-root by default, not only when compose says so. compose.yml sets
 # `user:` on every service, but a plain `docker run` of the published image,
 # or a compose override that drops the line, used to run as root. The uid

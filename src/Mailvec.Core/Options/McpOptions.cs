@@ -50,6 +50,13 @@ public sealed class McpOptions
     public string[] DisabledTools { get; set; } = [];
 
     /// <summary>
+    /// The optional <c>mark_read</c> component. Off (empty
+    /// <see cref="MarkReadOptions.QueueDirectory"/>) by default, and off means
+    /// the tool is not registered at all. See <see cref="MarkReadOptions"/>.
+    /// </summary>
+    public MarkReadOptions MarkRead { get; set; } = new();
+
+    /// <summary>
     /// Cloudflare Access assertion validation at the origin. Off by default —
     /// see <see cref="AccessOptions"/> for why that's the right default rather
     /// than a gap.
