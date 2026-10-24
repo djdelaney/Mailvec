@@ -266,6 +266,14 @@ The first tool that changes anything, and it changes only the seen flag. Off unl
 - **Evaluated in the built image** (Alpine BusyBox, isync 1.5.1). The ops tests pass there. A round trip against Dovecot 2.4.5 pushes and clears `\Seen`, survives later pulls, and lands through the real loop in 4 s. That run found isync delivering unseen mail as `new/<base>:2,`, which the first version of the sidecar reported as `not_found`; fixed and pinned by a test. Then run live against Fastmail on 2026-10-24, with the full stack from the working tree (indexer, mcp, sidecar container) syncing only Homelab and Archive into scratch storage. `unread=true` returned the morning's 11 Homelab alerts. `mark_read` was picked up in about 3 s and pushed one flag (`Far: *1`); an independent pull-only store confirmed `\Seen` on the server, and `read: false` cleared it. Not tested: label propagation, because the account is in folder mode.
 - Tool-surface change: a **minor** bump when released. It is also the trigger for the deferred [prompt-injection testing](docs/future-ideas.md#adversarial-testing-of-the-prompt-injection-framing).
 
+## ✅ String-encoded booleans bind (no schema change, unreleased)
+
+`hasAttachments: "false"`, `unread: "true"`, `includeHtml: "true"` and `mark_read`'s `read: "false"` used to fail inside argument binding. The client saw only "An error occurred invoking 'search_emails'". The SDK reads numbers from strings but System.Text.Json has no equivalent for booleans. It surfaced on the v0.10.0 deploy, when a connector session holding the pre-release schema didn't know `unread`'s type.
+
+- **`BooleanArgumentCoercion`, a call-tool filter**, rewrites a string `"true"`/`"false"` (case-insensitive, trimmed) to a JSON boolean before binding. It acts only where that tool's own advertised schema declares the parameter `boolean`, and not where the schema also allows `string`. Anything else (`"yes"`, `"1"`) is still refused.
+- **Not a JSON converter.** A lenient `bool` converter passed to `WithTools` was tried first and made the schema exporter drop `"type": "boolean"` from every boolean parameter. Advertising "anything" would have been worse than the bug. With the filter, every advertised schema is byte-identical to v0.10.0's (diffed), pinned by `McpSurfaceTests.Boolean_parameters_still_advertise_type_boolean`.
+- Mutation-checked both ways: without the filter registration the wire tests fail, and with the converter instead the schema guard fails. The existing pinned-limitation test for an unbindable argument now uses `"yes"`, since `"true"` binds.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

@@ -56,7 +56,11 @@ static async Task RunStdio(string[] args)
     builder.Services
         .AddMcpServer(o => ConfigureServerInfo(o, MarkReadEnabled(builder.Configuration)))
         .WithStdioServerTransport()
-        .WithTools(EnabledTools(builder.Configuration));
+        .WithTools(EnabledTools(builder.Configuration))
+        // String-encoded booleans ("true"), coerced against each tool's own
+        // schema before binding. A filter, not a JSON converter: a converter
+        // strips "type": "boolean" from the advertised schemas. See the class.
+        .WithRequestFilters(f => f.AddCallToolFilter(BooleanArgumentCoercion.Filter));
 
     var host = builder.Build();
     WarnIfInstallerNeverRan(host.Services);
@@ -76,7 +80,11 @@ static async Task RunHttp(string[] args)
     builder.Services
         .AddMcpServer(o => ConfigureServerInfo(o, MarkReadEnabled(builder.Configuration)))
         .WithHttpTransport()
-        .WithTools(EnabledTools(builder.Configuration));
+        .WithTools(EnabledTools(builder.Configuration))
+        // String-encoded booleans ("true"), coerced against each tool's own
+        // schema before binding. A filter, not a JSON converter: a converter
+        // strips "type": "boolean" from the advertised schemas. See the class.
+        .WithRequestFilters(f => f.AddCallToolFilter(BooleanArgumentCoercion.Filter));
 
     var mcpOpts = builder.Configuration.GetSection(McpOptions.SectionName).Get<McpOptions>() ?? new McpOptions();
 

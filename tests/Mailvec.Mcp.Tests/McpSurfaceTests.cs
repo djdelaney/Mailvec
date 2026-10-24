@@ -496,6 +496,79 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task String_encoded_booleans_are_coerced_at_the_json_boundary()
+    {
+        // The boolean twin of the number test above, and the bug it fixes was
+        // seen live: a client holding a schema without `unread` sent "true",
+        // and the call died inside binding as a bare "An error occurred". The
+        // SDK coerces numbers but not booleans; BooleanArgumentCoercion does.
+        await using var client = await ConnectAsync();
+        Seed("coerce-bool-unseen@x", body: "soba noodles");
+        Seed("coerce-bool-seen@x", body: "soba broth");
+        var connections = new ConnectionFactory(Options.Create(new ArchiveOptions { DatabasePath = _factory.DatabasePath }));
+        var syncState = new SyncStateRepository(connections);
+        using (var conn = connections.Open())
+        using (var tx = conn.BeginTransaction())
+        {
+            syncState.Upsert(conn, tx, "/mail/INBOX/cur/cb1.host,U=1:2,", "coerce-bool-unseen@x", DateTimeOffset.UtcNow, "h", "INBOX", null, null);
+            syncState.Upsert(conn, tx, "/mail/INBOX/cur/cb2.host,U=2:2,S", "coerce-bool-seen@x", DateTimeOffset.UtcNow, "h", "INBOX", null, null);
+            tx.Commit();
+        }
+
+        async Task<IEnumerable<string?>> Ids(Dictionary<string, object?> args) =>
+            (await CallJsonAsync(client, "search_emails", args)).GetProperty("results").EnumerateArray()
+                .Select(h => h.GetProperty("messageId").GetString());
+
+        (await Ids(new() { ["query"] = "soba", ["mode"] = "keyword", ["unread"] = "true" }))
+            .ShouldBe(["coerce-bool-unseen@x"]);
+        (await Ids(new() { ["query"] = "soba", ["mode"] = "keyword", ["unread"] = " FALSE " }))
+            .ShouldBe(["coerce-bool-seen@x"]);
+        (await Ids(new() { ["query"] = "soba", ["mode"] = "keyword", ["hasAttachments"] = "false" }))
+            .Count().ShouldBe(2);
+
+        var email = await CallJsonAsync(client, "get_email", new() { ["messageId"] = "coerce-bool-seen@x", ["includeHtml"] = "true" });
+        email.GetProperty("isRead").GetBoolean().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Boolean_parameters_still_advertise_type_boolean()
+    {
+        // The guard on the fix itself. The first attempt (a lenient bool JSON
+        // converter) made every one of these advertise no type at all, which
+        // tells clients a boolean parameter accepts anything. Checked with the
+        // component on so mark_read's `read` is covered too.
+        using var configured = WithMarkRead();
+        await using var client = await ConnectAsync(configured);
+
+        var checkedCount = 0;
+        foreach (var tool in await client.ListToolsAsync())
+        {
+            var type = ToolSurface.All[tool.Name];
+            var method = type.GetMethods().Single(m => m.GetCustomAttributes(typeof(ModelContextProtocol.Server.McpServerToolAttribute), false).Length > 0);
+            foreach (var p in method.GetParameters().Where(p => p.ParameterType == typeof(bool) || p.ParameterType == typeof(bool?)))
+            {
+                Properties(tool.JsonSchema).TryGetProperty(p.Name!, out var schema).ShouldBeTrue($"{tool.Name}.{p.Name}");
+                schema.GetProperty("type").ToString().ShouldContain("boolean", Case.Sensitive,
+                    $"{tool.Name}.{p.Name} must still advertise type boolean");
+                checkedCount++;
+            }
+        }
+        checkedCount.ShouldBeGreaterThanOrEqualTo(5); // includeHtml, includeBodies, hasAttachments, unread, read
+    }
+
+    [Fact]
+    public async Task Mark_read_accepts_a_string_encoded_read_flag()
+    {
+        using var configured = WithMarkRead();
+        await using var client = await ConnectAsync(configured);
+        var id = Seed("mark-read-string-bool@x", body: "ramen");
+
+        var body = await CallJsonAsync(client, "mark_read", new() { ["ids"] = new[] { id }, ["read"] = "false" });
+
+        body.GetProperty("results")[0].GetProperty("requested").GetBoolean().ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Domain_errors_come_back_as_isError_with_a_readable_message()
     {
         // A tool-level failure must arrive as a tool result Claude can read and
@@ -516,20 +589,25 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     [Fact]
     public async Task Argument_binding_failure_is_reported_without_naming_the_parameter()
     {
-        // KNOWN LIMITATION, pinned deliberately. A string where the schema says
-        // boolean fails to bind, and the client is told only "An error occurred
-        // invoking 'search_emails'." — no parameter name, no expected type, so
-        // the model has nothing to self-correct from and typically retries the
-        // same call. Contrast the domain-error test above, which names the id.
-        // If a future SDK version enriches this, update the assertion (and
-        // consider dropping any workaround built on top of it) — do not delete
-        // the test, the shape of a binding failure is a client-facing contract.
+        // KNOWN LIMITATION, pinned deliberately. An argument that fails to bind
+        // tells the client only "An error occurred invoking 'search_emails'." —
+        // no parameter name, no expected type, so the model has nothing to
+        // self-correct from and typically retries the same call. Contrast the
+        // domain-error test above, which names the id. If a future SDK version
+        // enriches this, update the assertion — do not delete the test, the
+        // shape of a binding failure is a client-facing contract.
+        //
+        // This used to be exercised with hasAttachments: "true", the commonest
+        // way to hit it. BooleanArgumentCoercion now binds that (see
+        // String_encoded_booleans_are_coerced_at_the_json_boundary), so the
+        // limitation is pinned with a value that is still a genuine client
+        // mistake and is deliberately NOT coerced.
         await using var client = await ConnectAsync();
 
         var result = await client.CallToolAsync("search_emails", new Dictionary<string, object?>
         {
             ["mode"] = "keyword",
-            ["hasAttachments"] = "true", // string, not bool
+            ["hasAttachments"] = "yes", // not a boolean in any encoding
         });
 
         result.IsError.ShouldBe(true);
