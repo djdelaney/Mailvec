@@ -250,6 +250,22 @@ Optional and off by default. `MBSYNC_IDLE_FOLDERS` (comma-separated) makes the m
 - **Why goimapnotify rather than a script of our own.** An earlier commit on the same branch used a stdlib Python watcher (~300 lines of hand-written IMAP, plus `python3` in the image). goimapnotify is the standard mbsync companion, a ~13 MB binary, and leaves no protocol code to maintain. It was verified against a fake TLS IMAP server: the generated config connects, EXAMINEs, runs `passwordCMD`, and wakes the real loop.
 - **Tests run in CI for the first time for this sidecar**: `ops/tests/test_mbsync_idle.py` runs the Dockerfile's loop heredoc under `/bin/sh` with stand-in `mbsync`/`goimapnotify` binaries, covering the wake path, the start-up events, the mid-sync wake, config generation and quoting (XOAUTH2, the `+` prefix), refusal of non-IMAPS and of too many folders, and the backoff. Timing assertions are bounded at half the 60 s interval rather than a few seconds, so a loaded runner doesn't fail them. The image was first built on 2026-10-03 on a Mac with Docker Desktop, not in the authoring session (which had no daemon): the suite passed inside it under busybox, and the real goimapnotify was then run live against Fastmail from that image (authentication, the absorbed start-up event, one wake per arrival — the record is the test file's docstring).
 
+## ✅ Read state in search (schema v14, 2026-10-24)
+
+Agents could not tell read mail from unread. Design: [docs/proposals/read-state.md](docs/proposals/read-state.md), part 1.
+
+- **`sync_state.seen` (v14)** records the Maildir `S` flag per copy. It is derived from the path in `SyncStateRepository.Upsert`, not passed in; a flag change is always a rename, so an unchanged scan still writes nothing. The migration backfills it in SQL from the stored path, and a test pins that expression to `MaildirFlags.IsSeen`. Measured on a clone of the frozen corpus: v13→v14 in ~2.4 s over 80,559 rows, matching an independent recomputation exactly.
+- **`search_emails` takes `unread`**, applied through `SearchFilterSql`, so keyword, vector and browse agree. Search hits, `get_email` and each `get_thread` entry carry `isRead`. A message is unread while any copy is unseen. With no tracked copy, `isRead` is omitted and the message matches neither filter value; unknown is never reported as read. Additive MCP surface change plus a migration: a **minor** bump when released.
+
+## ✅ Optional `mark_read` (no schema change, 2026-10-24)
+
+The first tool that changes anything, and it changes only the seen flag. Off unless `compose.mark-read.yml` is added; without it the tool list, annotations and server instructions are unchanged. Design: [docs/proposals/read-state.md](docs/proposals/read-state.md), part 2. Setup: [deploy-docker.md](docs/deploy-docker.md#optional-mark-read). Risk: [security.md](docs/security.md#optional-mark-read).
+
+- **mcp queues; the mbsync sidecar applies.** mcp writes request files into `./mark-read` and nothing else: its Maildir mount stays `:ro` and it holds no credential. The new `mbsync-mark-read` script applies requests from the sync loop before each `mbsync -a`. It re-validates every line against its own `MBSYNC_MARK_READ_FOLDERS`, changes only `S`, and expires requests after 15 minutes. `Sync Pull PushFlags` carries the change upstream, and a queued request wakes the loop.
+- **The allowlist covers every copy**, since read state is per email on Fastmail-like providers. mcp queues nothing while the sidecar's `.applier` marker is missing or stale. The sidecar refuses to start the component without a `Sync` line that pushes flags.
+- **Evaluated in the built image** (Alpine BusyBox, isync 1.5.1). The ops tests pass there. A round trip against Dovecot 2.4.5 pushes and clears `\Seen`, survives later pulls, and lands through the real loop in 4 s. That run found isync delivering unseen mail as `new/<base>:2,`, which the first version of the sidecar reported as `not_found`; fixed and pinned by a test. Not yet run against Fastmail.
+- Tool-surface change: a **minor** bump when released. It is also the trigger for the deferred [prompt-injection testing](docs/future-ideas.md#adversarial-testing-of-the-prompt-injection-framing).
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

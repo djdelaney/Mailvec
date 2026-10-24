@@ -58,6 +58,12 @@ Un-defer when either a mutating tool lands (raising what a successful injection
 gets you from "read your own mail" to "act on your behalf"), or Mailvec is
 routinely used alongside connectors that can send or post.
 
+**The first trigger fired on 2026-10-24**, when the optional `mark_read` tool
+landed (see [security.md](security.md#optional-mark-read)). A successful
+injection can now hide mail in the allowed folders by marking it read. This item
+is no longer deferred by its own rule; it is waiting to be scheduled. A fixture
+set should include a message that asks the agent to mark *other* mail read.
+
 ## A GUI, if one is ever wanted again
 
 A SwiftUI menu-bar tray app and the plain-REST `/tray/*` surface it polled were

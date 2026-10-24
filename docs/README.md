@@ -16,7 +16,7 @@ Start with one installation path. The pages below are grouped by the task you ar
 
 - [Reading and searching attachments](attachments.md) and [Fastmail deep links](fastmail-deep-links.md).
 - [macOS operations](install-macos.md): launchd mechanics, backups, migration, and uninstall.
-- [Docker deployment](deploy-docker.md): compose layout, image releases, migration, backup, and rollout checks.
+- [Docker deployment](deploy-docker.md): compose layout, image releases, migration, backup, and rollout checks. Optional extras: [new-mail push](deploy-docker.md#new-mail-push-imap-idle) and [mark-read](deploy-docker.md#optional-mark-read), which lets agents mark mail read.
 - [Logs](logs.md), [Uptime Kuma monitoring](monitoring-uptime-kuma.md), and the [security model](security.md).
 
 ## Develop
@@ -32,4 +32,4 @@ Start with one installation path. The pages below are grouped by the task you ar
 
 ## Further reading
 
-[Future ideas](future-ideas.md) tracks deferred work; [CHANGELOG](../CHANGELOG.md) records shipped changes.
+[Future ideas](future-ideas.md) tracks deferred work; [CHANGELOG](../CHANGELOG.md) records shipped changes. Design proposals live in [proposals/](proposals/): [read state and `mark_read`](proposals/read-state.md).
