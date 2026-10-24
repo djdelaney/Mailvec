@@ -319,13 +319,16 @@ public class EmbeddingSpaceIdentityTests
     /// Rewind a fresh (latest-version) database to the v10 shape: no space
     /// id, no config hash, schema_version stamped 10, and the stored
     /// model/dimensions set as given. The v11 migration is pure metadata, so
-    /// this reproduces its input state exactly.
+    /// this reproduces its input state exactly. Later migrations replay on top:
+    /// v12/v13 are IF NOT EXISTS indexes, but v14 ALTERs sync_state, so its
+    /// column is dropped here to give that replay the shape it expects.
     /// </summary>
     private static void SimulateV10(TempDatabase db, string storedModel, string storedDims)
     {
         using var conn = db.Connections.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
+            ALTER TABLE sync_state DROP COLUMN seen;
             DELETE FROM metadata WHERE key IN ('embedding_space_id', 'embedding_config_hash');
             UPDATE metadata SET value = '10' WHERE key = 'schema_version';
             UPDATE metadata SET value = $m WHERE key = 'embedding_model';

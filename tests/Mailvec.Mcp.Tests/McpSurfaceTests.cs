@@ -47,7 +47,7 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     /// </summary>
     public static TheoryData<string, string[], string[]> LockedInputSchemas() => new()
     {
-        { "search_emails", ["query", "mode", "limit", "folder", "dateFrom", "dateTo", "fromContains", "fromExact", "hasAttachments", "attachmentType"], [] },
+        { "search_emails", ["query", "mode", "limit", "folder", "dateFrom", "dateTo", "fromContains", "fromExact", "hasAttachments", "attachmentType", "unread"], [] },
         { "get_email", ["id", "messageId", "includeHtml"], [] },
         { "get_thread", ["id", "messageId", "includeBodies"], [] },
         { "list_folders", [], [] },
@@ -228,6 +228,53 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
 
         var hit = body.GetProperty("results").EnumerateArray().First();
         ShouldHaveKeys(hit, "id", "messageId", "folder", "subject", "fromAddress", "fromName", "dateSent", "snippet");
+    }
+
+    [Fact]
+    public async Task Read_state_reaches_clients_and_is_absent_when_unknown()
+    {
+        // isRead is the field a triage agent acts on, and `unread` the filter
+        // that selects for it — both wire contracts. Unknown read state (no
+        // tracked copy) must be absent, never a guessed value.
+        await using var client = await ConnectAsync();
+        Seed("read-state-unread@x", body: "katsu curry");
+        Seed("read-state-unknown@x", body: "katsu sando");
+        var syncState = new SyncStateRepository(new ConnectionFactory(
+            Options.Create(new ArchiveOptions { DatabasePath = _factory.DatabasePath })));
+        using (var conn = new ConnectionFactory(
+            Options.Create(new ArchiveOptions { DatabasePath = _factory.DatabasePath })).Open())
+        using (var tx = conn.BeginTransaction())
+        {
+            syncState.Upsert(conn, tx, "/mail/INBOX/new/rs.host,U=1", "read-state-unread@x",
+                DateTimeOffset.UtcNow, "h", "INBOX", null, null);
+            tx.Commit();
+        }
+
+        var body = await CallJsonAsync(client, "search_emails", new()
+        {
+            ["query"] = "katsu",
+            ["mode"] = "keyword",
+        });
+        var hits = body.GetProperty("results").EnumerateArray()
+            .ToDictionary(h => h.GetProperty("messageId").GetString()!);
+        hits["read-state-unread@x"].GetProperty("isRead").GetBoolean().ShouldBeFalse();
+        hits["read-state-unknown@x"].TryGetProperty("isRead", out _).ShouldBeFalse();
+
+        var filtered = await CallJsonAsync(client, "search_emails", new()
+        {
+            ["query"] = "katsu",
+            ["mode"] = "keyword",
+            ["unread"] = true,
+        });
+        filtered.GetProperty("appliedFilters").GetProperty("unread").GetBoolean().ShouldBeTrue();
+        filtered.GetProperty("results").EnumerateArray()
+            .Select(h => h.GetProperty("messageId").GetString())
+            .ShouldBe(["read-state-unread@x"]);
+
+        var email = await CallJsonAsync(client, "get_email", new() { ["messageId"] = "read-state-unread@x" });
+        email.GetProperty("isRead").GetBoolean().ShouldBeFalse();
+        var thread = await CallJsonAsync(client, "get_thread", new() { ["messageId"] = "read-state-unread@x" });
+        thread.GetProperty("messages")[0].GetProperty("isRead").GetBoolean().ShouldBeFalse();
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 # Proposal: read state and an optional `mark_read` component
 
-**Status:** Proposed (2026-10-24). Supersedes the earlier draft that offered
+**Status:** Part 1 implemented (2026-10-24); part 2 proposed. Supersedes the earlier draft that offered
 "local Maildir rename from mcp" (A) or "direct JMAP write" (B).
 **Release impact:** MCP tool-surface change + schema migration → **minor** bump.
 
@@ -81,10 +81,14 @@ below keeps it that way.
 Fastmail's seen state belongs to the email, not to a folder copy, so copies
 converge after a sync. Between syncs they can briefly disagree. Define:
 
-- **`isRead`** = every live copy is seen.
+- **`isRead`** = every live copy is seen. **Omitted** (not `false`, not
+  `true`) when the message has no tracked copy: unknown read state is never
+  reported as read. (Implemented as `bool?`; null members are omitted on the
+  wire.)
 - **`unread: true`** = at least one live copy is unseen
   (`EXISTS` over `sync_state`, same pattern as the folder filter).
-- **`unread: false`** = no live copy is unseen.
+- **`unread: false`** = at least one live copy, and none unseen. A message
+  with no tracked copy matches neither value.
 
 ### MCP surface
 

@@ -97,7 +97,8 @@ public sealed class GetEmailTool(
             WebmailLink: WebmailLinkBuilder.MarkdownLink(webmailUrl, msg.Subject),
             BodyTruncated: (msg.BodyText?.Length ?? 0) > _maxBodyChars
                 || (includeHtml && (msg.BodyHtml?.Length ?? 0) > _maxBodyChars),
-            BodyTextChars: msg.BodyText?.Length ?? 0);
+            BodyTextChars: msg.BodyText?.Length ?? 0,
+            IsRead: messages.GetReadStates([msg.MessageId]).TryGetValue(msg.MessageId, out var isRead) ? isRead : null);
 
         callLog.LogResult(ToolName, new
         {
@@ -136,7 +137,13 @@ public sealed record GetEmailResponse(
     /// <summary>True when bodyText (or, with includeHtml, bodyHtml) was cut at the size bound.</summary>
     bool BodyTruncated = false,
     /// <summary>Full length of the stored body text, whether or not it was cut.</summary>
-    int BodyTextChars = 0);
+    int BodyTextChars = 0,
+    /// <summary>
+    /// True when every live copy carries the Maildir seen flag, false when any
+    /// copy is unseen, null when no copy is tracked (unknown — not read).
+    /// See <see cref="Mailvec.Core.Data.MessageRepository.GetReadStates"/>.
+    /// </summary>
+    bool? IsRead = null);
 
 public sealed record AttachmentInfo(
     int PartIndex,

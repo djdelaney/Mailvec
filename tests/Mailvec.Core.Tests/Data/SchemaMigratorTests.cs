@@ -565,6 +565,7 @@ public class SchemaMigratorTests
             // while new installs don't — a divergence nothing else surfaces.
             IndexExists(connections, "idx_messages_date_sort").ShouldBeTrue();          // v12
             IndexExists(connections, "idx_messages_archive_dates").ShouldBeTrue();      // v13
+            TableHasColumn(connections, "sync_state", "seen").ShouldBeTrue();           // v14
 
             // The pre-existing row survives and is still searchable via FTS,
             // i.e. the rebuild repopulated the index from messages.

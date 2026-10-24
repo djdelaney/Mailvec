@@ -95,6 +95,33 @@ internal static class SearchFilterSql
                     """);
             }
         }
+        if (filters.Unread is { } unread)
+        {
+            // Read state lives on sync_state, per copy (v14), so the probe is
+            // the same shape as the folder-membership one and is served by
+            // idx_sync_state_message_folder's leading message_id column. A
+            // message is unread when ANY live copy is unseen: providers that
+            // keep seen per email converge the copies on the next sync, and
+            // until then "unread somewhere" is the reading that never hides
+            // mail from the user. "Read" therefore needs a copy to exist — a
+            // message with no tracked copy is unknown, and matches neither.
+            sql.Append(unread
+                ? """
+
+                      AND EXISTS (
+                            SELECT 1 FROM sync_state ss_unread
+                            WHERE ss_unread.message_id = m.message_id AND ss_unread.seen = 0)
+                    """
+                : """
+
+                      AND EXISTS (
+                            SELECT 1 FROM sync_state ss_read
+                            WHERE ss_read.message_id = m.message_id)
+                      AND NOT EXISTS (
+                            SELECT 1 FROM sync_state ss_unread
+                            WHERE ss_unread.message_id = m.message_id AND ss_unread.seen = 0)
+                    """);
+        }
         // FromExact takes precedence over FromContains — exact match is strictly
         // narrower, and Claude can hit either depending on what it knows about
         // the sender. Don't AND both clauses; that's confusing semantics.
