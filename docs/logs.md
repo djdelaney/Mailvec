@@ -69,6 +69,14 @@ an incident rather than as the record. Verify what a deployment actually
 applies with `docker compose --profile tunnel config`, not by reading this
 line.
 
+## `mark_read` audit trail (optional component)
+
+Where the [mark-read component](deploy-docker.md#optional-mark-read) is enabled, every call leaves three records. They join on the request file name.
+
+- **mcp, always on:** one line per call, `mark_read read=… queued=… file=<request>.req results=<id>:<status>,…`. It carries internal ids and statuses only. Message-IDs and folders appear only in the `Mcp:LogToolCalls` call and result lines, like every other tool's arguments.
+- **mbsync, in `docker compose logs mbsync`:** `mark-read: applied <request>.req: <count> <outcome> …` per applied file. A missed setup step shows as `mark-read: OFF: <reason>` at startup and `mark-read is OFF` each cycle. That container has no Serilog file, so `docker logs` is its record, bounded by the compose logging block.
+- **`./mark-read/done/<request>.req`:** each request line prefixed with its outcome (`ok`, `unchanged`, `not_found`, `forbidden_folder`, `rejected` or `expired`). Kept 30 days.
+
 ## Claude Desktop MCPB bundle
 
 The bundled MCP binary runs in **stdio** mode, and in stdio mode it does **not** write the rolling `~/Library/Logs/Mailvec/mailvec-mcp-*.log` file — the file sink is disabled (`SerilogSetup.Configure(..., stdioMode: true)`) so multiple Claude Desktop-spawned children don't race on it. All of its output goes to **stderr**, which Claude Desktop captures at:
