@@ -545,6 +545,51 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return results;
     }
 
+    /// <summary>
+    /// Read state for a batch of messages, keyed by RFC Message-ID: true when
+    /// every live copy is seen, false when any copy is unseen, and ABSENT from
+    /// the result when no copy is tracked — unknown, which callers must not
+    /// report as read. Same "unseen anywhere is unread" rule as the
+    /// <see cref="SearchFilters.Unread"/> filter, so a hit's <c>isRead</c>
+    /// always agrees with the filter that selected it.
+    /// </summary>
+    /// <remarks>
+    /// One query per response rather than a column threaded through every
+    /// search leg's SELECT: the hit sets are at most <c>SearchMaxLimit</c>
+    /// long, and keeping read state out of the ranking SQL leaves the BM25 and
+    /// KNN queries — and their measured plans — untouched.
+    /// </remarks>
+    public IReadOnlyDictionary<string, bool> GetReadStates(IReadOnlyCollection<string> messageIds)
+    {
+        ArgumentNullException.ThrowIfNull(messageIds);
+        var result = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (messageIds.Count == 0) return result;
+
+        using var conn = connections.Open();
+        // Chunked so a long thread can't exceed SQLite's bound-parameter limit.
+        foreach (var chunk in messageIds.Distinct(StringComparer.Ordinal).Chunk(500))
+        {
+            using var cmd = conn.CreateCommand();
+            var placeholders = new StringBuilder();
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                if (i > 0) placeholders.Append(", ");
+                var name = "$mid" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                placeholders.Append(name);
+                cmd.Parameters.AddWithValue(name, chunk[i]);
+            }
+            cmd.CommandText = $"""
+                SELECT message_id, MIN(seen)
+                FROM sync_state
+                WHERE message_id IN ({placeholders})
+                GROUP BY message_id
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) result[reader.GetString(0)] = reader.GetInt64(1) == 1;
+        }
+        return result;
+    }
+
     /// <summary>How far past its arrival a message's claimed date may run before it is clamped.</summary>
     internal static readonly TimeSpan MaxFutureDateSkew = TimeSpan.FromDays(1);
 

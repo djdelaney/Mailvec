@@ -79,6 +79,11 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     // back on the legacy comparison and reopens the preserved-mtime skip that
     // migration 009 exists to close — a caller that can't supply it should say
     // so by passing null explicitly.
+    //
+    // `seen` (v14) is deliberately NOT a parameter: it is a pure function of
+    // the path (MaildirFlags.IsSeen), so deriving it here means no caller can
+    // forget it or pass a stale value. A flag change is always a rename, so it
+    // always reaches this method as a new path.
     public void Upsert(
         SqliteConnection conn,
         SqliteTransaction tx,
@@ -93,15 +98,16 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO sync_state (maildir_full_path, message_id, last_seen_at, content_hash, folder, file_mtime_utc, file_size)
-            VALUES ($path, $mid, $seen, $hash, $folder, $mtime, $size)
+            INSERT INTO sync_state (maildir_full_path, message_id, last_seen_at, content_hash, folder, file_mtime_utc, file_size, seen)
+            VALUES ($path, $mid, $seen, $hash, $folder, $mtime, $size, $flag_seen)
             ON CONFLICT(maildir_full_path) DO UPDATE SET
                 message_id     = excluded.message_id,
                 last_seen_at   = excluded.last_seen_at,
                 content_hash   = excluded.content_hash,
                 folder         = excluded.folder,
                 file_mtime_utc = excluded.file_mtime_utc,
-                file_size      = excluded.file_size;
+                file_size      = excluded.file_size,
+                seen           = excluded.seen;
             """;
         cmd.Parameters.AddWithValue("$path", maildirFullPath);
         cmd.Parameters.AddWithValue("$mid", (object?)messageId ?? DBNull.Value);
@@ -110,6 +116,7 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
         cmd.Parameters.AddWithValue("$folder", (object?)folder ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mtime", (object?)fileMtimeUtc?.ToString("O") ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$size", (object?)fileSize ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$flag_seen", MaildirFlags.IsSeen(maildirFullPath) ? 1 : 0);
         cmd.ExecuteNonQuery();
     }
 

@@ -31,6 +31,13 @@ namespace Mailvec.Core.Search;
 /// application/octet-stream) and name files freely.
 /// Implies messages with attachments, independent of <see cref="HasAttachments"/>.
 /// </param>
+/// <param name="Unread">
+/// Read state, from the per-copy Maildir <c>S</c> flag (<c>sync_state.seen</c>).
+/// True restricts to messages with at least one live copy that is unseen;
+/// false to messages that have a live copy and none unseen. A message with no
+/// tracked copy matches neither — its read state is unknown, not read. Null
+/// (default) doesn't filter.
+/// </param>
 public sealed record SearchFilters(
     string? Folder = null,
     DateTimeOffset? DateFrom = null,
@@ -38,12 +45,14 @@ public sealed record SearchFilters(
     string? FromContains = null,
     string? FromExact = null,
     bool? HasAttachments = null,
-    string? AttachmentType = null)
+    string? AttachmentType = null,
+    bool? Unread = null)
 {
     public static readonly SearchFilters None = new();
 
     public bool IsEmpty =>
         Folder is null && DateFrom is null && DateTo is null
         && string.IsNullOrEmpty(FromContains) && string.IsNullOrEmpty(FromExact)
-        && HasAttachments is null && string.IsNullOrEmpty(AttachmentType);
+        && HasAttachments is null && string.IsNullOrEmpty(AttachmentType)
+        && Unread is null;
 }

@@ -209,7 +209,12 @@ CREATE TABLE sync_state (
     -- tar -x all preserve mtime) keep new bytes behind an old timestamp and be
     -- skipped on every future scan. See migration 009.
     file_mtime_utc    TEXT,
-    file_size         INTEGER
+    file_size         INTEGER,
+    -- 1 when this copy's filename carries the Maildir `S` (seen) flag. Derived
+    -- from the path on every write (SyncStateRepository.Upsert via
+    -- MaildirFlags.IsSeen), never passed in: a flag change is a rename, so it
+    -- always arrives as a new path. Per copy; see migration 014.
+    seen              INTEGER NOT NULL DEFAULT 0
 );
 
 -- Serves both the folder-membership EXISTS probe in SearchFilterSql and the
@@ -232,7 +237,7 @@ CREATE TABLE metadata (
 -- (SchemaMigrator.StampConfigHashIfMissing): it covers config-side text
 -- transforms SQL cannot see.
 INSERT INTO metadata(key, value) VALUES
-    ('schema_version',       '13'),
+    ('schema_version',       '14'),
     ('embedding_model',      'mxbai-embed-large'),
     ('embedding_dimensions', '1024'),
     ('embedding_space_id',   'ollama:mxbai-embed-large:1024');

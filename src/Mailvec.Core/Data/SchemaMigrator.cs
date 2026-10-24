@@ -65,7 +65,10 @@ public sealed class SchemaMigrator(
     // neither idx_messages_date_sent (plain column) nor v12 (leads with
     // `date_sent IS NULL`) can serve. Its WHERE must stay implied by those
     // subqueries' WHERE or SQLite drops it from the plan. Index only.
-    public const int LatestSchemaVersion = 13;
+    // v14 adds sync_state.seen, the per-copy Maildir `S` flag, backfilled in
+    // SQL from the stored path (it is a pure function of the filename). The
+    // backfill expression must agree with MaildirFlags.IsSeen.
+    public const int LatestSchemaVersion = 14;
 
     /// <summary>
     /// Read the schema version stored in the metadata table, without applying

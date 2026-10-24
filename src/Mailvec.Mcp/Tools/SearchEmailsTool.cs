@@ -76,6 +76,9 @@ public sealed class SearchEmailsTool(
         "can't attribute a specific attachment, so its absence doesn't mean the body matched) — use those with " +
         "`get_attachment_text` to read the document (or `get_attachment_page_image` for a PDF page, `view_attachment` for an image). " +
         "Use a result's id or messageId with get_email/get_thread for follow-up. " +
+        "Each result also carries `isRead` (true = read, false = unread, null = read state unknown), and `unread` " +
+        "filters on it — e.g. `unread=true` with no query lists unread mail newest first. A message counts as unread " +
+        "while any of its copies in any folder is unread. " +
         "Each result also includes `webmailUrl` (the raw deep-link) and `webmailLink` (a ready-made, correctly-escaped " +
         "Markdown link), both populated when the user has configured their webmail account id. " +
         "When you cite or quote a specific result to the user, render its `webmailLink` **verbatim** so they can one-click " +
@@ -128,12 +131,15 @@ public sealed class SearchEmailsTool(
                      "category words like 'spreadsheet' or 'document' match nothing (use 'xlsx', 'pdf', etc.). " +
                      "Implies hasAttachments=true.")]
         string? attachmentType = null,
+        [Description("true = only unread messages (any copy unread); false = only read messages. " +
+                     "Omit to ignore read state. Messages whose read state is unknown match neither.")]
+        bool? unread = null,
         CancellationToken ct = default)
     {
-        var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType });
+        var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType, unread });
 
         var resolvedLimit = ClampLimit(limit);
-        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType);
+        var filters = BuildFilters(folder, dateFrom, dateTo, fromContains, fromExact, hasAttachments, attachmentType, unread);
         var archiveStats = messages.GetArchiveStats();
         var mailSync = ReadMailSync();
         var appliedFilters = AppliedFilters.From(filters);
@@ -148,7 +154,7 @@ public sealed class SearchEmailsTool(
         if (string.IsNullOrWhiteSpace(query))
         {
             var rows = messages.BrowseByFilters(filters, resolvedLimit);
-            var browseHits = rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList();
+            var browseHits = WithReadState(rows.Select(EmailHit.FromMessage).Select(WithWebmailUrl).ToList());
             var browseResp = new SearchEmailsResponse(Query: null, Mode: "browse", browseHits.Count, browseHits, archiveStats, appliedFilters, setupHint, mailSync);
             callLog.LogResult(ToolName, BuildResultSummary(browseResp), startTs,
                 count: browseResp.Count, mode: browseResp.Mode);
@@ -232,6 +238,7 @@ public sealed class SearchEmailsTool(
                 "including the configured endpoint.");
         }
 
+        hits = WithReadState(hits);
         var response = new SearchEmailsResponse(query, resolvedMode, hits.Count, hits, archiveStats, appliedFilters, setupHint, mailSync);
         callLog.LogResult(ToolName, BuildResultSummary(response), startTs,
             count: response.Count, mode: response.Mode);
@@ -271,6 +278,17 @@ public sealed class SearchEmailsTool(
         return h with { WebmailUrl = url, WebmailLink = WebmailLinkBuilder.MarkdownLink(url, h.Subject) };
     }
 
+    /// <summary>
+    /// Decorates hits with read state in one lookup for the whole page, after
+    /// ranking — read state never enters the ranking SQL (see
+    /// <see cref="MessageRepository.GetReadStates"/>).
+    /// </summary>
+    private List<EmailHit> WithReadState(IReadOnlyList<EmailHit> hits)
+    {
+        var states = messages.GetReadStates(hits.Select(h => h.MessageId).ToList());
+        return hits.Select(h => h with { IsRead = states.TryGetValue(h.MessageId, out var r) ? r : null }).ToList();
+    }
+
     private int ClampLimit(int? requested)
     {
         var l = requested ?? _mcp.SearchDefaultLimit;
@@ -282,7 +300,7 @@ public sealed class SearchEmailsTool(
     private static string NormaliseMode(string mode) =>
         mode?.Trim().ToLowerInvariant() ?? "hybrid";
 
-    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains, string? fromExact, bool? hasAttachments, string? attachmentType)
+    private static SearchFilters BuildFilters(string? folder, string? dateFrom, string? dateTo, string? fromContains, string? fromExact, bool? hasAttachments, string? attachmentType, bool? unread)
     {
         return new SearchFilters(
             Folder: string.IsNullOrWhiteSpace(folder) ? null : folder.Trim(),
@@ -291,7 +309,8 @@ public sealed class SearchEmailsTool(
             FromContains: string.IsNullOrWhiteSpace(fromContains) ? null : fromContains.Trim(),
             FromExact: string.IsNullOrWhiteSpace(fromExact) ? null : fromExact.Trim(),
             HasAttachments: hasAttachments,
-            AttachmentType: string.IsNullOrWhiteSpace(attachmentType) ? null : attachmentType.Trim());
+            AttachmentType: string.IsNullOrWhiteSpace(attachmentType) ? null : attachmentType.Trim(),
+            Unread: unread);
     }
 
     // Delegates to the shared Core parser so the "date-only dateTo means end
@@ -371,7 +390,8 @@ public sealed record AppliedFilters(
     string? FromContains,
     string? FromExact,
     bool? HasAttachments = null,
-    string? AttachmentType = null)
+    string? AttachmentType = null,
+    bool? Unread = null)
 {
     public static AppliedFilters From(Mailvec.Core.Search.SearchFilters f) => new(
         Folder: f.Folder,
@@ -380,7 +400,8 @@ public sealed record AppliedFilters(
         FromContains: f.FromContains,
         FromExact: f.FromExact,
         HasAttachments: f.HasAttachments,
-        AttachmentType: f.AttachmentType);
+        AttachmentType: f.AttachmentType,
+        Unread: f.Unread);
 }
 
 /// <summary>
@@ -412,7 +433,10 @@ public sealed record EmailHit(
     string? WebmailUrl = null,
     // A ready-to-render, subject-escaped Markdown link — clients should render
     // this verbatim rather than assembling one from the untrusted Subject.
-    string? WebmailLink = null)
+    string? WebmailLink = null,
+    // Decorated post-ranking by SearchEmailsTool.WithReadState. Null when no
+    // copy is tracked — unknown, never "read".
+    bool? IsRead = null)
 {
     public static EmailHit FromKeyword(Mailvec.Core.Models.SearchHit h) => new(
         Id: h.MessageId,

@@ -86,6 +86,7 @@ public sealed class GetThreadTool(
         // Spent oldest-first, mirroring the response order, so what survives is
         // a chronological prefix rather than an arbitrary subset.
         var bodyBudget = Math.Max(0, _mcp.ThreadMaxBodyChars);
+        var readStates = messages.GetReadStates(kept.Select(m => m.MessageId).ToList());
         var entries = kept.Select(m =>
         {
             var webmailUrl = WebmailLinkBuilder.Build(m.MessageId, _fastmail);
@@ -130,7 +131,8 @@ public sealed class GetThreadTool(
                 BodyTruncated: bodyTruncated,
                 Attachments: m.Attachments.Select(AttachmentInfo.From).ToList(),
                 WebmailUrl: webmailUrl,
-                WebmailLink: WebmailLinkBuilder.MarkdownLink(webmailUrl, m.Subject));
+                WebmailLink: WebmailLinkBuilder.MarkdownLink(webmailUrl, m.Subject),
+                IsRead: readStates.TryGetValue(m.MessageId, out var isRead) ? isRead : null);
         }).ToList();
 
         // Count stays "entries in Messages" — it always equalled the array
@@ -191,4 +193,6 @@ public sealed record ThreadEntry(
     // round trip per message. Empty for attachment-less messages.
     IReadOnlyList<AttachmentInfo> Attachments,
     string? WebmailUrl,
-    string? WebmailLink);
+    string? WebmailLink,
+    // Same meaning as get_email's isRead: null when no copy is tracked.
+    bool? IsRead = null);
