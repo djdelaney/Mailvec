@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "provider": "gmail",
+  "source": "hand-written",
+  "description": "One message through its whole Gmail life: arrives, read elsewhere, labelled, archived, unlabelled, trashed, deleted forever. Hand-written from Gmail's documented IMAP behaviour, not recorded: replace with a recording from the test account (docs/contributing/provider-traces.md).",
+  "steps": [
+    {
+      "id": "arrives-unread",
+      "serverAction": "m1 arrives in the inbox, unread. m2 was archived long ago.",
+      "maildir": {
+        "INBOX/new/1767603600.1001_1.mvtrace,U=11:2,": "m1.eml",
+        "[Gmail]/All Mail/new/1767603600.1001_2.mvtrace,U=501:2,": "m1.eml",
+        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "INBOX",
+            "[Gmail]/All Mail"
+          ],
+          "seen": false
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "read-in-webmail",
+      "serverAction": "m1 is opened in Gmail's web UI. \\Seen is per message, so mbsync pulls it onto both copies in one run.",
+      "maildir": {
+        "INBOX/cur/1767603600.1001_1.mvtrace,U=11:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "INBOX",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "labelled",
+      "serverAction": "The label Receipts is added to m1: a third copy, with its own UID in the Receipts folder.",
+      "maildir": {
+        "INBOX/cur/1767603600.1001_1.mvtrace,U=11:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
+        "Receipts/cur/1767607200.1002_1.mvtrace,U=7:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "INBOX",
+            "[Gmail]/All Mail",
+            "Receipts"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "archived",
+      "serverAction": "m1 is archived: the Inbox label goes, so the INBOX copy is expunged. It is not a deletion; the message stays in All Mail and Receipts.",
+      "maildir": {
+        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
+        "Receipts/cur/1767607200.1002_1.mvtrace,U=7:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail",
+            "Receipts"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "unlabelled",
+      "serverAction": "The Receipts label is removed: only the All Mail copy is left.",
+      "maildir": {
+        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "trashed",
+      "serverAction": "m1 is moved to the bin: it leaves All Mail and appears in [Gmail]/Trash, the one system folder outside All Mail besides Spam.",
+      "maildir": {
+        "[Gmail]/Trash/cur/1767610800.1003_1.mvtrace,U=90:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "[Gmail]/Trash"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "deleted-forever",
+      "serverAction": "The bin is emptied: m1 is gone from the server, so it must go from the index.",
+      "maildir": {
+        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+      },
+      "server": {
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    }
+  ]
+}

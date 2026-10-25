@@ -8,10 +8,10 @@ of the shipped product: nothing in `src/` references it.
 
 **The guide is [`docs/contributing/dev-corpus.md`](../../docs/contributing/dev-corpus.md)**
 — usage, layout, where it refuses to write, what each scenario exercises,
-`--hazards`, and `--embedding fireworks`.
+`--hazards`, `--layout gmail`, and `--embedding fireworks`.
 
 ```sh
-dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev   # [--filler N] [--hazards] [--embedding fireworks]
+dotnet run --project tools/Mailvec.DevCorpus -- /tmp/mvdev   # [--filler N] [--hazards] [--layout gmail] [--embedding fireworks]
 . /tmp/mvdev/env.sh
 dotnet run --project src/Mailvec.Indexer                      # Ctrl-C once the scan logs
 ```
@@ -35,6 +35,7 @@ dotnet run --project src/Mailvec.Indexer                      # Ctrl-C once the 
 | `Catalog.cs` | The hand-authored scenarios, each with its `Expect` |
 | `Filler.cs` | Seeded background mail |
 | `Extras.cs` | The eval query set and the `--hazards` cases |
+| `Layouts.cs` | `--layout gmail`: one file per label, as mbsync leaves a Gmail account |
 | `Mime.cs`, `Documents.cs`, `BitmapFont.cs` | Raw MIME, PDF/Office/PNG/TIFF/ICS/vCard, and the font scanned pages are drawn in |
 | `HostedEmbedding.cs` | The `--embedding` profiles written into `env.sh` |
 | `Guards.cs` | Where it refuses to write |
