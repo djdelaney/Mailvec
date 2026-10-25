@@ -85,66 +85,144 @@ optional.
 with the server, with the reason. The replay requires the disagreement to
 still be there, so when a fix lands the note fails instead of going stale.
 
-Verified by mutation (2026-10-24): disabling the survivor test in
-reconciliation fails `label-lifecycle` and `all-mail-excluded` (an archived
-message is soft-deleted). Disabling rename repair fails `label-lifecycle` and
-`read-propagation` (rows point at files that are gone).
+Verified by mutation:
+
+- **Survivor test.** Disabling reconciliation's survivor test fails
+  `label-lifecycle` and `read-propagation`: an archived or flag-renamed
+  message is soft-deleted. Re-checked against the recorded `label-lifecycle`
+  on 2026-10-25.
+- **Rename repair.** Disabling rename repair fails `label-lifecycle` and
+  `read-propagation`: rows point at files that are gone. Checked 2026-10-24,
+  against the hand-written version.
+- **Single-copy traces don't help here.** `all-mail-excluded` catches
+  neither mutation, because without All Mail it never has two copies of one
+  message.
 
 ## The traces
 
-All four are **hand-written**: `source: "hand-written"`, built from Gmail's
-documented IMAP behaviour and never observed. They encode beliefs, and the
-replay can only show that Mailvec handles those beliefs correctly.
+| Trace | Source | What it shows |
+|---|---|---|
+| `gmail/label-lifecycle` | **recorded** 2026-10-25, isync 1.5.1 | One message through arrive → read in webmail → labelled → archived → unlabelled → trashed → deleted forever. Archive and unlabel are not deletions; trash leaves All Mail. |
+| `gmail/all-mail-excluded` | hand-written | `Patterns * ![Gmail]/All Mail` (the config that halves the download). Archiving is then a deletion; a label move is a deletion followed by a resurrection, with an unsettled step between the two folders' syncs. |
+| `gmail/read-propagation` | hand-written | `mark_read` on a label-mode account (open item 2 in [read-state.md](../proposals/read-state.md)): the INBOX copy is seen, the All Mail copy isn't until the next pull, and the message reads unread in between. |
+| `gmail/label-rename` | hand-written | A server-side label rename. With mbsync's default `Remove None` the old local folder is believed to stay, so the index keeps a ghost label. Pinned as a `divergence`. |
 
-| Trace | Belief it encodes |
-|---|---|
-| `gmail/label-lifecycle` | One message through arrive → read in webmail → labelled → archived → unlabelled → trashed → deleted forever. Archive and unlabel are not deletions; trash leaves All Mail. |
-| `gmail/all-mail-excluded` | `Patterns * ![Gmail]/All Mail` (the config that halves the download). Archiving is then a deletion; a label move is a deletion followed by a resurrection, with an unsettled step between the two folders' syncs. |
-| `gmail/read-propagation` | `mark_read` on a label-mode account (open item 2 in [read-state.md](../proposals/read-state.md)): the INBOX copy is seen, the All Mail copy isn't until the next pull, and the message reads unread in between. |
-| `gmail/label-rename` | A server-side label rename. With mbsync's default `Remove None` the old local folder is believed to stay, so the index keeps a ghost label. Pinned as a `divergence`. |
+A hand-written trace encodes a belief, built from Gmail's documented IMAP
+behaviour. The replay can only show that Mailvec handles that belief
+correctly. A recorded trace is what Gmail and isync actually did.
 
-Filenames follow isync 1.5's shape, `<time>.<pid>_<n>.<host>,U=<uid>:2,<flags>`.
-Unseen mail sits in `new/` with an empty info suffix, as observed against
-Dovecot (see the mark-read applier in the `Dockerfile`).
+Filenames follow isync 1.5's shape, `<time>.<pid>_<n>.<host>,U=<uid>:2,<flags>`; recorded ones carry the literal hostname `host`.
+Unseen mail sits in `new/` with an empty info suffix.
 
-### What the replay has already shown
+### What the recordings have shown
+
+Observed 2026-10-25, recording `label-lifecycle` (isync 1.5.1, account
+defaults):
+
+- **The hand-written belief held at every step.** The recording matched it
+  in every folder set, flag and server state. Only filenames differ, plus
+  isync's `X-TUID` header.
+- **A server-side `\Seen` moves the file out of `new/`.** mbsync renamed both
+  copies into `cur/` with `:2,S` in one run.
+- **Gmail added no `[Gmail]/Important` copy** to `APPEND`ed messages, and
+  added no headers to them.
+- **Every step settled on the first mbsync run.** No intermediate state was
+  observed.
+
+From the replay itself (observed 2026-10-24 on macOS / APFS, against the
+hand-written traces):
 
 - **The attributed folder is whichever copy the walk reaches first, and for
-  Gmail that is often `[Gmail]/All Mail`.** Observed 2026-10-24 on macOS
-  (APFS): in `label-lifecycle` and `read-propagation`, inbox mail was
-  attributed to All Mail. That is first-seen-wins working as designed. But
-  `get_email` and search hits then report "[Gmail]/All Mail" for inbox mail,
-  which says nothing. The walk order is the filesystem's, so Linux may
-  differ. Folder *filters* are unaffected, because they read membership.
+  Gmail that is often `[Gmail]/All Mail`.** Inbox mail was attributed to All
+  Mail. That is first-seen-wins working as designed. But `get_email` and
+  search hits then report "[Gmail]/All Mail" for inbox mail, which says
+  nothing. The walk order is the filesystem's, so Linux may differ. Folder
+  *filters* are unaffected, because they read membership.
 
-## Recording a trace (not built yet)
+## Recording a trace
 
-This is the plan for replacing beliefs with observations. It needs a
-throwaway Gmail account that holds only invented mail; an agent can't create
-the account.
+`ops/record-provider-trace.py` records from a Gmail account that holds only
+test mail.
 
-1. **Seed it** over IMAP `APPEND` with messages from the dev corpus, so every
-   byte is already invented and public-safe.
-2. **Drive it** with a script that performs one operation per step over IMAP:
-   `COPY` into a label folder to add a label, `STORE \Deleted` + `EXPUNGE`
-   there to remove it, `STORE \Seen`, a move to `[Gmail]/Trash`.
-3. **After each operation,** run real mbsync with a Gmail `mbsyncrc`. Record
-   the Maildir tree (cur/new files only; content-addressed blobs) and, from
-   the same IMAP session, each message's mailboxes and `\Seen`. That gives
-   `maildir` and `server`.
-4. **Write it out** with `source: "recorded"` and
-   `recorded: { "at", "mbsync", "notes" }` (the loader requires the block
-   exactly when the source is `recorded`). Before committing, check the
-   blobs' headers for the account address. `APPEND`ed messages carry no
-   `Received` chain, but verify that rather than assume it.
-5. **Re-record on a schedule**, like the weekly
-   [cloud smoke test](cloud-smoke-tests.md), and diff the *shape* against the
-   committed trace. That catches Gmail or isync changing behaviour, and it
-   exercises authentication (app password or XOAUTH2), which no fixture can.
+**You don't need this to contribute.** The replay tests run from the
+committed traces with no account and no credentials. Recording is for adding
+or refreshing a trace, and the maintainer's test account is not shared. To
+record, make your own throwaway Gmail account: turn on 2-Step Verification,
+then create an app password at myaccount.google.com/apppasswords. The seeded
+messages are fixed, so two accounts record the same trace apart from file
+names.
 
-Credentials go through 1Password, never into the repository or the
-transcript. Every trace's blobs must be invented: **this repository is
-public.**
+The script reads exactly two environment variables, `GMAIL_TRACE_USER` and
+`GMAIL_TRACE_PASSWORD` (the app password; spaces are ignored). How you set
+them is up to you. It never prints the password or writes it to disk. With a
+password manager's CLI (1Password shown):
+
+```bash
+GMAIL_TRACE_USER=<test address> \
+GMAIL_TRACE_PASSWORD="op://<vault>/<item uuid>/<field>" \
+op run -- python3 -I ops/record-provider-trace.py label-lifecycle --work <new dir> --out <new dir>
+```
+
+Without one, `read -rs` keeps the password off the screen and out of shell
+history:
+
+```bash
+read -rs GMAIL_TRACE_PASSWORD && export GMAIL_TRACE_PASSWORD
+GMAIL_TRACE_USER=<test address> python3 -I ops/record-provider-trace.py label-lifecycle --work <new dir> --out <new dir>
+unset GMAIL_TRACE_PASSWORD
+```
+
+Keep the account's address out of this repository: it never needs to be in
+a trace, a doc or a commit.
+
+What a run does:
+
+1. **Refuses** a non-test account: one with more than 5 messages it did not
+   seed.
+2. **Purges** every message on the seed domain (`@trace.example`) and the
+   trace's own labels, so a re-record starts clean.
+3. **For each step,** performs one IMAP operation. Then it runs real mbsync
+   (`-c` with a generated config: `Patterns *`, `Subfolders Verbatim`, the
+   shipped container settings) into `--work` until two consecutive Maildir
+   snapshots agree and the server hasn't moved. A first run that differs from
+   the settled state becomes a `settled: false` step of its own.
+4. **Records** the seeded messages' cur/new files (content-addressed blobs)
+   and, per mailbox, each message's membership and `\Seen`. Mail it didn't
+   seed, such as Google's welcome email, is never recorded.
+5. **Refuses to write** a blob that isn't the seeded bytes, apart from
+   isync's own `X-TUID` tracking header: anything else could carry the
+   account's identity. It also refuses if `[Gmail]/Sent Mail` changed during
+   the run. The recorder never sends, and an app password can, so that check
+   is the canary for misuse.
+6. **Replaces the hostname** in every recorded file name with `host`. isync
+   names files `<time>.<pid>_<n>.<hostname>,U=<uid>:2,<flags>`, and a
+   recording machine's name is often its owner's ("Janes-MacBook-Pro"). A
+   name it can't parse is refused, never kept.
+
+It writes only into `--out`, never into the repository. Check the output
+(for instance `grep -ri <address> <out>` should find nothing), then copy
+`trace.json` and `blobs/` over the trace's directory and run the replay.
+Both directories must be new or empty, and the recorder refuses anywhere a
+real pipeline would ingest them, by the same rules as the dev corpus.
+`ops/tests/test_record_provider_trace.py` covers everything but the live
+session.
+
+A trace is recordable once its steps are written in the script's `TRACES`
+table. `label-lifecycle` is the only one so far.
+
+### Not built yet: re-recording in CI
+
+Run the recorder on a schedule, like the weekly
+[cloud smoke test](cloud-smoke-tests.md), and compare the result's *shape*
+with the committed trace. That catches Gmail or isync changing behaviour,
+and it exercises authentication, which no fixture can. The guardrails:
+
+- **Triggers:** `schedule` and `workflow_dispatch` only.
+- **Credential:** a GitHub Environment holding it, restricted to `main`.
+- **Output:** the job uploads an artifact and fails on a difference. It never
+  commits.
+
+Every trace's blobs must be invented: **this repository is public.**
 
 ## Adding a hand-written trace
 

@@ -1,16 +1,21 @@
 {
   "version": 1,
   "provider": "gmail",
-  "source": "hand-written",
-  "description": "One message through its whole Gmail life: arrives, read elsewhere, labelled, archived, unlabelled, trashed, deleted forever. Hand-written from Gmail's documented IMAP behaviour, not recorded: replace with a recording from the test account (docs/contributing/provider-traces.md).",
+  "source": "recorded",
+  "description": "One message through its whole Gmail life: arrives, read elsewhere, labelled, archived, unlabelled, trashed, deleted forever. Recorded from a Gmail test account by ops/record-provider-trace.py.",
+  "recorded": {
+    "at": "2026-10-25",
+    "mbsync": "1.5.1",
+    "notes": "Gmail IMAP settings left at the account defaults. mbsync: Patterns *, Subfolders Verbatim, Sync Pull, Expunge Near, Create Near, no Remove line."
+  },
   "steps": [
     {
       "id": "arrives-unread",
-      "serverAction": "m1 arrives in the inbox, unread. m2 was archived long ago.",
+      "serverAction": "m1 is appended to INBOX, unread. m2 is appended straight to All Mail (archived), seen.",
       "maildir": {
-        "INBOX/new/1767603600.1001_1.mvtrace,U=11:2,": "m1.eml",
-        "[Gmail]/All Mail/new/1767603600.1001_2.mvtrace,U=501:2,": "m1.eml",
-        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+        "INBOX/new/1792964873.77058_1.host,U=1:2,": "756ac5bdcf8f91f5.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_2.host,U=1:2,S": "4d06bb0b30235bfd.eml",
+        "[Gmail]/All Mail/new/1792964874.77058_3.host,U=2:2,": "e4eff9428bb5f921.eml"
       },
       "server": {
         "m1-receipt@trace.example": {
@@ -30,11 +35,11 @@
     },
     {
       "id": "read-in-webmail",
-      "serverAction": "m1 is opened in Gmail's web UI. \\Seen is per message, so mbsync pulls it onto both copies in one run.",
+      "serverAction": "m1 gets \\Seen on the server (as if opened in the web UI), set through its INBOX copy.",
       "maildir": {
-        "INBOX/cur/1767603600.1001_1.mvtrace,U=11:2,S": "m1.eml",
-        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
-        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+        "INBOX/cur/1792964873.77058_1.host,U=1:2,S": "756ac5bdcf8f91f5.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_2.host,U=1:2,S": "4d06bb0b30235bfd.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_3.host,U=2:2,S": "e4eff9428bb5f921.eml"
       },
       "server": {
         "m1-receipt@trace.example": {
@@ -54,19 +59,19 @@
     },
     {
       "id": "labelled",
-      "serverAction": "The label Receipts is added to m1: a third copy, with its own UID in the Receipts folder.",
+      "serverAction": "The label Receipts is created and applied to m1 (IMAP COPY from INBOX).",
       "maildir": {
-        "INBOX/cur/1767603600.1001_1.mvtrace,U=11:2,S": "m1.eml",
-        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
-        "Receipts/cur/1767607200.1002_1.mvtrace,U=7:2,S": "m1.eml",
-        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+        "INBOX/cur/1792964873.77058_1.host,U=1:2,S": "756ac5bdcf8f91f5.eml",
+        "Receipts/cur/1792964920.77229_1.host,U=1:2,S": "2bcc9b880c72836a.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_2.host,U=1:2,S": "4d06bb0b30235bfd.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_3.host,U=2:2,S": "e4eff9428bb5f921.eml"
       },
       "server": {
         "m1-receipt@trace.example": {
           "mailboxes": [
             "INBOX",
-            "[Gmail]/All Mail",
-            "Receipts"
+            "Receipts",
+            "[Gmail]/All Mail"
           ],
           "seen": true
         },
@@ -80,17 +85,17 @@
     },
     {
       "id": "archived",
-      "serverAction": "m1 is archived: the Inbox label goes, so the INBOX copy is expunged. It is not a deletion; the message stays in All Mail and Receipts.",
+      "serverAction": "m1 is archived: \\Deleted + EXPUNGE in INBOX, which removes the Inbox label.",
       "maildir": {
-        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
-        "Receipts/cur/1767607200.1002_1.mvtrace,U=7:2,S": "m1.eml",
-        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+        "Receipts/cur/1792964920.77229_1.host,U=1:2,S": "2bcc9b880c72836a.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_2.host,U=1:2,S": "4d06bb0b30235bfd.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_3.host,U=2:2,S": "e4eff9428bb5f921.eml"
       },
       "server": {
         "m1-receipt@trace.example": {
           "mailboxes": [
-            "[Gmail]/All Mail",
-            "Receipts"
+            "Receipts",
+            "[Gmail]/All Mail"
           ],
           "seen": true
         },
@@ -104,10 +109,10 @@
     },
     {
       "id": "unlabelled",
-      "serverAction": "The Receipts label is removed: only the All Mail copy is left.",
+      "serverAction": "The Receipts label is removed from m1: \\Deleted + EXPUNGE in Receipts.",
       "maildir": {
-        "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
-        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+        "[Gmail]/All Mail/cur/1792964874.77058_2.host,U=1:2,S": "4d06bb0b30235bfd.eml",
+        "[Gmail]/All Mail/cur/1792964874.77058_3.host,U=2:2,S": "e4eff9428bb5f921.eml"
       },
       "server": {
         "m1-receipt@trace.example": {
@@ -126,10 +131,10 @@
     },
     {
       "id": "trashed",
-      "serverAction": "m1 is moved to the bin: it leaves All Mail and appears in [Gmail]/Trash, the one system folder outside All Mail besides Spam.",
+      "serverAction": "m1 is moved to the bin: UID MOVE from All Mail to [Gmail]/Trash.",
       "maildir": {
-        "[Gmail]/Trash/cur/1767610800.1003_1.mvtrace,U=90:2,S": "m1.eml",
-        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+        "[Gmail]/All Mail/cur/1792964874.77058_2.host,U=1:2,S": "4d06bb0b30235bfd.eml",
+        "[Gmail]/Trash/cur/1792964983.77418_1.host,U=9:2,S": "a5b8fbb5773242c7.eml"
       },
       "server": {
         "m1-receipt@trace.example": {
@@ -148,9 +153,9 @@
     },
     {
       "id": "deleted-forever",
-      "serverAction": "The bin is emptied: m1 is gone from the server, so it must go from the index.",
+      "serverAction": "The bin is emptied of m1: \\Deleted + EXPUNGE in [Gmail]/Trash.",
       "maildir": {
-        "[Gmail]/All Mail/cur/1767100000.900_1.mvtrace,U=500:2,S": "m2.eml"
+        "[Gmail]/All Mail/cur/1792964874.77058_2.host,U=1:2,S": "4d06bb0b30235bfd.eml"
       },
       "server": {
         "m2-newsletter@trace.example": {

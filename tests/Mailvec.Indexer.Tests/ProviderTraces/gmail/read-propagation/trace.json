@@ -40,7 +40,7 @@
     },
     {
       "id": "flag-pulled",
-      "serverAction": "mbsync pulls \\Seen onto the All Mail copy (believed: into cur/). Every copy is seen; m1 reads as read.",
+      "serverAction": "mbsync pulls \\Seen onto the All Mail copy, moving it into cur/ (observed in the recorded label-lifecycle). Every copy is seen; m1 reads as read.",
       "maildir": {
         "INBOX/cur/1767603600.1001_1.mvtrace,U=11:2,S": "m1.eml",
         "[Gmail]/All Mail/cur/1767603600.1001_2.mvtrace,U=501:2,S": "m1.eml",
