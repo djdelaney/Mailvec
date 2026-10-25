@@ -31,11 +31,14 @@ public static class CorpusWriter
         if (options.Filler < 0) throw new ArgumentOutOfRangeException(nameof(options), "Filler count cannot be negative.");
         if (options.Embedding is { } e && !HostedEmbedding.Names.Contains(e))
             throw new ArgumentException($"Unknown embedding profile '{e}'. Known: {string.Join(", ", HostedEmbedding.Names)}.", nameof(options));
+        if (!Layouts.Names.Contains(options.Layout))
+            throw new ArgumentException($"Unknown layout '{options.Layout}'. Known: {string.Join(", ", Layouts.Names)}.", nameof(options));
         var catalog = new Catalog();
         var scenarios = catalog.Build();
         var filler = Filler.Build(catalog, options.Filler);
         var hazards = options.Hazards ? Extras.Hazards(catalog) : [];
-        return new Corpus(scenarios, filler, Extras.Eval(), hazards);
+        var corpus = new Corpus(scenarios, filler, Extras.Eval(), hazards);
+        return options.Layout == Layouts.Gmail ? Layouts.ToGmail(corpus) : corpus;
     }
 
     /// <summary>Guards the target, then writes the corpus. Returns the resolved corpus directory.</summary>
@@ -102,6 +105,7 @@ public static class CorpusWriter
             filler = options.Filler,
             hazards = options.Hazards,
             embedding = options.Embedding,
+            layout = options.Layout,
             scenarios = corpus.Scenarios.Select(s => new
             {
                 s.Id,

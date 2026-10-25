@@ -4,9 +4,11 @@ namespace Mailvec.DevCorpus.Tests;
 /// Every scenario's expectation, checked against what the real indexer made
 /// of it. A failure here means either the pipeline changed behaviour for
 /// that shape of mail, or the scenario no longer builds what its description
-/// says — both worth knowing before anyone relies on the corpus.
+/// says — both worth knowing before anyone relies on the corpus. Runs once
+/// per layout: the scenarios are the same messages either way, and only the
+/// folder expectations are remapped.
 /// </summary>
-public class ScenarioTests(IndexedCorpus fixture) : IClassFixture<IndexedCorpus>
+public abstract class ScenarioChecks(IndexedCorpus fixture)
 {
     public static TheoryData<string> ScenarioIds()
     {
@@ -49,7 +51,7 @@ public class ScenarioTests(IndexedCorpus fixture) : IClassFixture<IndexedCorpus>
     }
 
     [Theory]
-    [MemberData(nameof(ScenarioIds))]
+    [MemberData(nameof(ScenarioIds), MemberType = typeof(ScenarioChecks))]
     public void Scenario_is_indexed_as_described(string id)
     {
         var s = fixture.Corpus.Scenarios.Single(x => x.Id == id);
@@ -145,3 +147,7 @@ public class ScenarioTests(IndexedCorpus fixture) : IClassFixture<IndexedCorpus>
         }
     }
 }
+
+public class ScenarioTests(IndexedCorpus fixture) : ScenarioChecks(fixture), IClassFixture<IndexedCorpus>;
+
+public class GmailScenarioTests(GmailCorpus fixture) : ScenarioChecks(fixture), IClassFixture<GmailCorpus>;

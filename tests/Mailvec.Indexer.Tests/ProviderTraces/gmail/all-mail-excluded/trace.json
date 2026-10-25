@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "provider": "gmail",
+  "source": "hand-written",
+  "description": "Gmail synced without All Mail. Archiving is then a deletion, and a label move is a deletion followed by a resurrection. Hand-written from Gmail's documented IMAP behaviour, not recorded: replace with a recording from the test account (docs/contributing/provider-traces.md).",
+  "unsynced": [
+    "[Gmail]/All Mail"
+  ],
+  "steps": [
+    {
+      "id": "initial-sync",
+      "serverAction": "First sync with Patterns * ![Gmail]/All Mail, the config that halves Gmail's download.",
+      "maildir": {
+        "INBOX/cur/1767603600.1001_1.mvtrace,U=11:2,S": "m1.eml",
+        "Receipts/cur/1767500000.950_2.mvtrace,U=3:2,S": "m2.eml",
+        "Receipts/cur/1767500000.950_3.mvtrace,U=4:2,S": "m3.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "INBOX",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m3-booking@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "archived",
+      "serverAction": "m1 is archived. With All Mail unsynced, nothing local still holds it, so it leaves the index — correct for this config, and the reason to sync All Mail.",
+      "maildir": {
+        "Receipts/cur/1767500000.950_2.mvtrace,U=3:2,S": "m2.eml",
+        "Receipts/cur/1767500000.950_3.mvtrace,U=4:2,S": "m3.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m3-booking@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "labelled-from-all-mail",
+      "serverAction": "m1 is found in All Mail and labelled Travel: it comes back (a soft-deleted row resurrects).",
+      "maildir": {
+        "Travel/cur/1767700000.1100_1.mvtrace,U=1:2,S": "m1.eml",
+        "Receipts/cur/1767500000.950_2.mvtrace,U=3:2,S": "m2.eml",
+        "Receipts/cur/1767500000.950_3.mvtrace,U=4:2,S": "m3.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "Travel",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m3-booking@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "moved-mid-sync",
+      "settled": false,
+      "serverAction": "m2 is moved from Receipts to Travel. mbsync syncs Receipts before Travel, so a scan in between sees m2 nowhere and soft-deletes it.",
+      "maildir": {
+        "Travel/cur/1767700000.1100_1.mvtrace,U=1:2,S": "m1.eml",
+        "Receipts/cur/1767500000.950_3.mvtrace,U=4:2,S": "m3.eml"
+      }
+    },
+    {
+      "id": "sync-completes",
+      "serverAction": "The same mbsync run reaches Travel: m2 resurrects with Travel as its folder.",
+      "maildir": {
+        "Travel/cur/1767700000.1100_1.mvtrace,U=1:2,S": "m1.eml",
+        "Travel/cur/1767700000.1100_2.mvtrace,U=2:2,S": "m2.eml",
+        "Receipts/cur/1767500000.950_3.mvtrace,U=4:2,S": "m3.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "Travel",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "Travel",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m3-booking@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    }
+  ]
+}

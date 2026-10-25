@@ -21,6 +21,8 @@ public class IndexedCorpus : IDisposable
     public Corpus Corpus { get; }
     public MaildirScanner.ScanResult Scan { get; }
     public ConnectionFactory Connections { get; }
+    /// <summary>The scanner that produced <see cref="Scan"/>, for a rescan.</summary>
+    public MaildirScanner Scanner { get; }
 
     public IndexedCorpus() : this(new CorpusOptions(Hazards: false, Filler: Filler)) { }
 
@@ -36,7 +38,7 @@ public class IndexedCorpus : IDisposable
         }));
         new SchemaMigrator(Connections, NullLogger<SchemaMigrator>.Instance).EnsureUpToDate();
 
-        var scanner = new MaildirScanner(
+        Scanner = new MaildirScanner(
             Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = Path.Combine(Root, "Mail") }),
             new InProcessParser(new AttachmentTextExtractor(new IndexerOptions().AttachmentMaxBytes, NullLogger<AttachmentTextExtractor>.Instance)),
             new MessageRepository(Connections),
@@ -44,7 +46,7 @@ public class IndexedCorpus : IDisposable
             new SyncStateRepository(Connections),
             Connections,
             NullLogger<MaildirScanner>.Instance);
-        Scan = scanner.ScanAll();
+        Scan = Scanner.ScanAll();
     }
 
     public T Query<T>(string sql, Func<SqliteDataReader, T> read, params (string Name, object? Value)[] args)
@@ -63,6 +65,9 @@ public class IndexedCorpus : IDisposable
         TempDir.Delete(Path.GetDirectoryName(Root)!);
     }
 }
+
+/// <summary>The same corpus in the Gmail layout: one file per label.</summary>
+public sealed class GmailCorpus() : IndexedCorpus(new CorpusOptions(Filler: Filler, Layout: Layouts.Gmail));
 
 internal static class TempDir
 {

@@ -283,6 +283,15 @@ The first tool that changes anything, and it changes only the seen flag. Off unl
 - **Not a JSON converter.** A lenient `bool` converter passed to `WithTools` was tried first and made the schema exporter drop `"type": "boolean"` from every boolean parameter. Advertising "anything" would have been worse than the bug. With the filter, every advertised schema is byte-identical to v0.10.0's (diffed), pinned by `McpSurfaceTests.Boolean_parameters_still_advertise_type_boolean`.
 - Mutation-checked both ways: without the filter registration the wire tests fail, and with the converter instead the schema guard fails. The existing pinned-limitation test for an unbindable argument now uses `"yes"`, since `"true"` binds.
 
+## ✅ Gmail-shaped testing (no schema change, 2026-10-24)
+
+The author's deployment is Fastmail in folder mode, so nothing in daily use exercises multi-label mail. Two test tools now do. Neither changes shipped code. Guide: [docs/contributing/provider-traces.md](docs/contributing/provider-traces.md).
+
+- **`--layout gmail` for the dev corpus** writes every message once per label (`[Gmail]/All Mail`, `Sent Mail`, `Important`, `Starred`, `Trash`, nested user labels). Every scenario's expectations are remapped and re-checked, and `GmailLayoutTests` adds the multi-copy checks.
+- **Provider traces** (`tests/Mailvec.Indexer.Tests/ProviderTraces`) replay sequences of Maildir states through the real scanner. Each step is checked against what the files imply and, when settled, against what the server holds. Four hand-written Gmail traces cover the label lifecycle, an All Mail–excluded config, `mark_read` propagation, and a label rename (a pinned known divergence: the old folder lingers). Mutation-checked against reconciliation's survivor test and rename repair.
+- Observed: inbox mail on the Gmail layout is attributed to `[Gmail]/All Mail` when that copy is walked first (first-seen-wins), so its displayed folder says nothing. Not changed here.
+- Recording real traces from a throwaway Gmail account is designed but not built.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

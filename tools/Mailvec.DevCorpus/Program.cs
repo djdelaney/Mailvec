@@ -1,7 +1,7 @@
 // Synthetic Maildir for running Mailvec by hand where there is no real mail.
 // Usage and layout: docs/contributing/dev-corpus.md.
 //
-//   dotnet run --project tools/Mailvec.DevCorpus -- <dir> [--hazards] [--filler N] [--embedding NAME]
+//   dotnet run --project tools/Mailvec.DevCorpus -- <dir> [--hazards] [--filler N] [--embedding NAME] [--layout NAME]
 
 using Mailvec.DevCorpus;
 
@@ -9,6 +9,7 @@ string? target = null;
 var hazards = false;
 var filler = Corpus.DefaultFiller;
 string? embedding = null;
+var layout = Layouts.Default;
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -23,6 +24,9 @@ for (var i = 0; i < args.Length; i++)
             break;
         case "--embedding" when i + 1 < args.Length && HostedEmbedding.Names.Contains(args[i + 1]):
             embedding = args[++i];
+            break;
+        case "--layout" when i + 1 < args.Length && Layouts.Names.Contains(args[i + 1]):
+            layout = args[++i];
             break;
         case "-h" or "--help":
             return Usage(0);
@@ -39,8 +43,8 @@ if (target is null) return Usage(2);
 
 try
 {
-    var root = CorpusWriter.Write(target, new CorpusOptions(hazards, filler, embedding));
-    var corpus = CorpusWriter.Build(new CorpusOptions(hazards, filler, embedding));
+    var root = CorpusWriter.Write(target, new CorpusOptions(hazards, filler, embedding, layout));
+    var corpus = CorpusWriter.Build(new CorpusOptions(hazards, filler, embedding, layout));
     Console.WriteLine($"Wrote a synthetic corpus to {root}");
     Console.WriteLine($"  {corpus.Scenarios.Count} scenarios, {corpus.Filler.Count} filler messages, "
                       + $"{corpus.Hazards.Count} hazards, {corpus.Eval.Count} eval queries");
@@ -56,7 +60,7 @@ catch (RefusedException ex)
 static int Usage(int code)
 {
     (code == 0 ? Console.Out : Console.Error).WriteLine(
-        "usage: Mailvec.DevCorpus <dir> [--hazards] [--filler N] [--embedding NAME]\n"
+        "usage: Mailvec.DevCorpus <dir> [--hazards] [--filler N] [--embedding NAME] [--layout NAME]\n"
         + "  <dir>       must not exist, or be empty; never inside a real Maildir\n"
         + $"  --filler N  background messages (default {Corpus.DefaultFiller})\n"
         + "  --hazards   add the cases Mailvec refuses or degrades on by design\n"

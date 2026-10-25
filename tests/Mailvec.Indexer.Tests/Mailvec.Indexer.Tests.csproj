@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Provider traces are data the replay test reads from the output directory. -->
+    <None Include="ProviderTraces\**\*.json;ProviderTraces\**\*.eml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Mailvec.Indexer\Mailvec.Indexer.csproj" />
   </ItemGroup>
 

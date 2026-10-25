@@ -41,9 +41,9 @@ The README screenshot is captured against this corpus plus a few hand-written
 messages, through Claude Desktop over stdio. The procedure is in
 [`assets/screenshots/README.md`](../../assets/screenshots/README.md).
 
-Options: `--filler N` (background messages, default 250), `--hazards` and
-`--embedding fireworks` (both below). Output is deterministic: the same options
-produce the same bytes.
+Options: `--filler N` (background messages, default 250), `--hazards`,
+`--layout gmail` and `--embedding fireworks` (all below). Output is
+deterministic: the same options produce the same bytes.
 
 Layout:
 
@@ -121,6 +121,36 @@ default so a plain corpus indexes clean. Each outcome is pinned by
 
 Adversarial PDFs that crash or hang PDFium live in `tools/Mailvec.ParserBench`,
 not here: they are measurement fixtures, not something to index casually.
+
+## `--layout gmail`
+
+Writes the same messages in the shape mbsync leaves for a Gmail account
+(`Patterns *`, `Subfolders Verbatim`). Every label is a folder, and a message
+is a separate file, with its own UID, in each folder whose label it carries.
+The mapping lives in `Layouts.cs`:
+
+| Default folder | Gmail mailboxes |
+|---|---|
+| `INBOX` | `INBOX`, `[Gmail]/All Mail` (+ `[Gmail]/Important` for scenario mail) |
+| `Sent` | `[Gmail]/Sent Mail`, `[Gmail]/All Mail` |
+| `Drafts` | `[Gmail]/Drafts`, `[Gmail]/All Mail` |
+| `Trash` | `[Gmail]/Trash` only |
+| `Archive` | `[Gmail]/All Mail` only (archiving removes the Inbox label) |
+| any other (`Receipts`, `Lists/rust-users`, `Archive/2025`, …) | itself, as a user label, plus `[Gmail]/All Mail` |
+
+`s01` is also starred: `F` on every copy, plus a copy in `[Gmail]/Starred`.
+`[Gmail]` itself is a bare parent directory with no `cur/new`, as for a
+`\Noselect` mailbox. Hazards stay where they are.
+
+Every scenario expectation is remapped the same way and checked by
+`GmailScenarioTests`. `GmailLayoutTests` covers what the layout adds: one row
+per message however many copies, bracketed and spaced names as filters and in
+`list_folders`, read state across copies, and an unchanged rescan over every
+copy doing nothing.
+
+**The mapping is a belief about Gmail, not a recording.** For how the Maildir
+*changes* (archive, relabel, trash, read elsewhere), see
+[provider traces](provider-traces.md).
 
 ## Embeddings
 

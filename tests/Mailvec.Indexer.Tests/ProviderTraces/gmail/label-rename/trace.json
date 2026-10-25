@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "provider": "gmail",
+  "source": "hand-written",
+  "description": "A label renamed on the server. The Maildir keeps the old folder, so the index keeps a ghost label: a known divergence, pinned so it is noticed when it changes. Hand-written from Gmail's documented IMAP behaviour, not recorded: replace with a recording from the test account (docs/contributing/provider-traces.md).",
+  "steps": [
+    {
+      "id": "labelled",
+      "serverAction": "m1 and m2 carry the label Receipts.",
+      "maildir": {
+        "Receipts/cur/1767500000.950_2.mvtrace,U=3:2,S": "m2.eml",
+        "Receipts/cur/1767500000.950_1.mvtrace,U=2:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767500000.950_11.mvtrace,U=600:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767500000.950_12.mvtrace,U=601:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "Receipts",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    },
+    {
+      "id": "renamed",
+      "serverAction": "Receipts is renamed to Shopping in Gmail. Over IMAP that is a new mailbox, downloaded afresh. With mbsync's default Remove None (the shipped example has no Remove line) the local Receipts folder is believed to stay, files and all.",
+      "divergence": "the index still has both messages in Receipts, a label that no longer exists",
+      "maildir": {
+        "Receipts/cur/1767500000.950_2.mvtrace,U=3:2,S": "m2.eml",
+        "Receipts/cur/1767500000.950_1.mvtrace,U=2:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767500000.950_11.mvtrace,U=600:2,S": "m1.eml",
+        "[Gmail]/All Mail/cur/1767500000.950_12.mvtrace,U=601:2,S": "m2.eml",
+        "Shopping/cur/1767800000.1200_1.mvtrace,U=1:2,S": "m1.eml",
+        "Shopping/cur/1767800000.1200_2.mvtrace,U=2:2,S": "m2.eml"
+      },
+      "server": {
+        "m1-receipt@trace.example": {
+          "mailboxes": [
+            "Shopping",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        },
+        "m2-newsletter@trace.example": {
+          "mailboxes": [
+            "Shopping",
+            "[Gmail]/All Mail"
+          ],
+          "seen": true
+        }
+      }
+    }
+  ]
+}

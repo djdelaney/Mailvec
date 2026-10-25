@@ -46,7 +46,8 @@ public sealed record AttachmentExpect(string FileName, string Status, string? Te
 public sealed record EvalQuery(string Id, string Query, IReadOnlyList<string> Relevant, string? Folder = null, string? Notes = null);
 
 /// <param name="Embedding">Null, or a hosted profile env.sh should configure (<see cref="HostedEmbedding.Names"/>).</param>
-public sealed record CorpusOptions(bool Hazards = false, int Filler = Corpus.DefaultFiller, string? Embedding = null);
+/// <param name="Layout">How folders map to the disk (<see cref="Layouts.Names"/>).</param>
+public sealed record CorpusOptions(bool Hazards = false, int Filler = Corpus.DefaultFiller, string? Embedding = null, string Layout = Layouts.Default);
 
 /// <summary>Everything one run produces, before any of it touches the disk.</summary>
 public sealed record Corpus(
