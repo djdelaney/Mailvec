@@ -292,6 +292,18 @@ The author's deployment is Fastmail in folder mode, so nothing in daily use exer
 - Observed: inbox mail on the Gmail layout is attributed to `[Gmail]/All Mail` when that copy is walked first (first-seen-wins), so its displayed folder says nothing. Not changed here.
 - Recording real traces from a throwaway Gmail account is designed but not built.
 
+## ✅ Gmail trace recorder (no schema change, 2026-10-25)
+
+`ops/record-provider-trace.py` records a provider trace from a Gmail test account. Per step it performs one IMAP operation, runs real mbsync until the Maildir settles, and records the files and the server's own view. `gmail/label-lifecycle` is now a recording, not a belief. Guide: [docs/contributing/provider-traces.md](docs/contributing/provider-traces.md#recording-a-trace).
+
+- **The hand-written belief held at every step.** Newly observed: a server-side `\Seen` moves both copies from `new/` to `cur/` in one run. Gmail added no headers and no Important copy to `APPEND`ed mail.
+- **Credentials:** two environment variables, set however you like. The docs show `op run` and `read -rs`. The password reaches mbsync through its environment, never a file or an argument. The maintainer's account isn't shared: contributors need no account to run the replay, and record with their own.
+- **No hostnames:** isync puts the machine's hostname in every file name, and the recorder replaces it with `host` before writing.
+- **Safety:** it refuses an account holding real mail, and records only seeded Message-IDs. It refuses to write any blob but the seeded bytes, apart from isync's `X-TUID` header. It fails if Sent Mail changes during a run.
+- **Tests:** offline in `ops/tests/test_record_provider_trace.py`. Re-checked by mutation: the recorded trace catches a broken survivor test.
+- **Corrected:** yesterday's doc claimed `all-mail-excluded` catches that mutation. It can't, because without All Mail it never has two copies of a message.
+- **Not built yet:** re-recording in CI.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
