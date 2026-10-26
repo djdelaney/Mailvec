@@ -338,6 +338,17 @@ Four fixes from the 2026-10-24 review. Each new test was checked by reverting it
 - **`logs/` and `mark-read/` are kept out of the image build context.** `ops/tests/test_dockerignore.py` now derives every host path compose bind-mounts and fails on any that `.dockerignore` misses.
 - **Not done:** finding 3 (move the live deployment to file secrets) and the remaining findings, which the review rated optional.
 
+## ✅ Security review hardening batch (no schema change, 2026-10-26)
+
+Optional items from the same review. Each new test fails with its fix reverted.
+
+- **The parse service's 422 no longer carries document text.** The body is now Mailvec's own text plus the exception type. It used to be `"{Type}: {Message}"`, and the message can quote the document. `RemoteParser` turns that body into the caller's `ParseException` message, which the indexer, OCR pass and CLI backfills log by default, so the fix covers all of them. The disconnect log line dropped `ex.Message` too. Callers branch on `ParseException.Kind`, never the text, so classification is unchanged. Test: `ErrorMappingTests.A_rejection_carries_the_exception_type_never_its_document_derived_message`.
+- **The Ollama endpoint is out of the default log.** On an embedding outage, `search_emails` now logs a Warning with the failure kind and the wrapper's Mailvec-authored message, and no exception attached, since every sink renders the inner host:port. The endpoint and the full exception chain are at Debug. Test: `SearchEmailsToolTests.An_embedding_outage_keeps_the_internal_endpoint_out_of_the_default_log`. Two sibling sites the review named were left as they are:
+  - the Mistral probe, which logs a public hosted endpoint, not a LAN address;
+  - `OllamaReachabilityCheck`, which only ever logs a loopback URL.
+- **`umask 077` in `export-db.sh` and `import-db.sh`.** This closes the window where a full archive copy sat at 0644 between `cp` and `chmod 600`. Test: `ops/tests/test_snapshot_scripts.py`, which checks the scripts' text rather than running them, because they stop and start services.
+- **`tmpfs: /tmp` on the mbsync service.** `/tmp` is its HOME and holds the IMAP IDLE config, which contains the IMAP password itself when `mbsyncrc` uses a literal `Pass`. That file now stays in memory instead of on the container's writable layer. Mounted `noexec,nosuid`, since nothing runs from `/tmp`. This is not the untested `read_only` posture, which stays off. Checked with `docker compose config`, not with a live sync. Test: `ops/tests/test_compose_hardening.py`.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

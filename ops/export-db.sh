@@ -27,6 +27,11 @@
 # Env overrides:
 #   MAILVEC_DB   path to archive.sqlite (default: the standard Application Support path)
 set -euo pipefail
+# Everything this script creates is a full, unencrypted copy of the mailbox.
+# The chmod 600 after each cp still matters for files that already exist, but
+# the umask closes the window between cp creating the file at 0644 and the
+# chmod.
+umask 077
 
 DB_DEFAULT="$HOME/Library/Application Support/Mailvec/archive.sqlite"
 DB="${MAILVEC_DB:-$DB_DEFAULT}"

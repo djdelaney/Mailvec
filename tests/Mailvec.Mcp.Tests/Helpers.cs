@@ -98,6 +98,24 @@ internal static class Helpers
             NullLogger<OllamaClient>.Instance);
     }
 
+    /// <summary>
+    /// An <see cref="OllamaClient"/> whose every call fails at the connection,
+    /// with host:port in the exception message the way SocketsHttpHandler
+    /// words it — the shape that reaches a log through the inner exception.
+    /// </summary>
+    public static OllamaClient UnreachableOllama(string baseUrl)
+    {
+        var uri = new Uri(baseUrl);
+        HttpResponseMessage Respond(HttpRequestMessage _) =>
+            throw new HttpRequestException($"Connection refused ({uri.Host}:{uri.Port})");
+
+        var http = new HttpClient(new StubHandler(Respond)) { BaseAddress = uri };
+        return new OllamaClient(
+            http,
+            Options.Create(new OllamaOptions { BaseUrl = baseUrl }),
+            NullLogger<OllamaClient>.Instance);
+    }
+
     public static float[] OneHot(int hotIndex, int dim = 1024)
     {
         var v = new float[dim];

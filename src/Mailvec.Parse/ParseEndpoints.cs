@@ -148,8 +148,9 @@ internal static class ParseEndpoints
             {
                 // Nobody is waiting for the verdict, but the operator still
                 // gets the log line every other failure path writes.
-                logger.LogWarning("parse: {Path} failed after its caller disconnected: {Type}: {Message}",
-                    ctx.Request.Path, ex.GetType().Name, ex.Message);
+                // Type name only, as on the main rejection path below.
+                logger.LogWarning("parse: {Path} failed after its caller disconnected: {Type}",
+                    ctx.Request.Path, ex.GetType().Name);
             }
             return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
         }
@@ -175,10 +176,13 @@ internal static class ParseEndpoints
         {
             // The parser refused or choked on this document: corrupt, encrypted,
             // not the claimed format, a MIME structure MimeKit won't read. The
-            // type name is what the operator needs in the log; the message
-            // (which can quote document bytes) travels only to our own caller
-            // over the internal network, and the MCP tools already replace it
-            // with stable text before anything reaches a remote client.
+            // type name is what the operator needs, and it is ALL that crosses
+            // the wire: the exception's message can quote document bytes, and
+            // RemoteParser turns this body into the DocumentRejected
+            // ParseException's message, which the indexer, the OCR pass and
+            // the CLI backfills attach to their logs by default. Mailvec-
+            // authored text here keeps sender-chosen bytes out of every caller
+            // process at once. Callers branch on the kind, never the text.
             //
             // An accepted asymmetry, stated rather than hidden: EVERY parser
             // exception lands here as 422 DocumentRejected, including one that
@@ -194,7 +198,7 @@ internal static class ParseEndpoints
             budget.RequestCompleted(ctx);
             logger.LogWarning("parse: {Path} rejected the document: {Type}", ctx.Request.Path, ex.GetType().Name);
             return Error(StatusCodes.Status422UnprocessableEntity, ParseErrorTypes.DocumentRejected,
-                $"{ex.GetType().Name}: {ex.Message}");
+                $"The parser rejected the document ({ex.GetType().Name}).");
         }
     }
 

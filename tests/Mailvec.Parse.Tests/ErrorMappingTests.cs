@@ -47,6 +47,22 @@ public class ErrorMappingTests
     }
 
     [Fact]
+    public async Task A_rejection_carries_the_exception_type_never_its_document_derived_message()
+    {
+        // The 422 body becomes the caller's ParseException message, and the
+        // indexer, OCR pass and CLI backfills log that exception by default.
+        // A parser's message can quote the document, so none of it crosses.
+        const string canary = "SENDER-CHOSEN-TEXT-7f3a";
+        await using var host = await ParseHostFixture.StartAsync(new ThrowingParser(new InvalidOperationException("bad xref: " + canary)));
+
+        var ex = Should.Throw<ParseException>(() => host.Remote.DescribePart(TextEml(), 0));
+
+        ex.Kind.ShouldBe(ParseFailureKind.DocumentRejected);
+        ex.Message.ShouldNotContain(canary);
+        ex.Message.ShouldContain(nameof(InvalidOperationException));
+    }
+
+    [Fact]
     public async Task An_unreachable_service_is_Unavailable_not_a_strike()
     {
         await using var host = await ParseHostFixture.StartAsync();

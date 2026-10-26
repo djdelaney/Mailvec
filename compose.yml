@@ -478,6 +478,16 @@ services:
     # runtime threads count here too) and one connection per folder, capped at
     # 10. Still well inside this.
     pids_limit: 128
+    # /tmp is HOME here and holds the IDLE watcher's generated config, which
+    # carries the IMAP password itself when mbsyncrc uses a literal `Pass`
+    # (written 0600 under umask 077, but on the writable layer it outlived
+    # every restart and went along with any `docker commit` or `export`). A
+    # tmpfs keeps it in memory for the container's life only. Nothing runs
+    # from /tmp, so noexec costs nothing; it holds only the wake file, its
+    # start tokens and that yaml. This is NOT the read_only posture above,
+    # which stays untested here.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
     environment:
       MBSYNC_INTERVAL_SECONDS: ${MBSYNC_INTERVAL_SECONDS:-60}
       # Optional push: comma-separated folders to watch with IMAP IDLE (empty
