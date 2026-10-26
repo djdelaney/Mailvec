@@ -1,3 +1,4 @@
+using Mailvec.Core;
 using Mailvec.Core.Data;
 using Mailvec.Core.Options;
 using Mailvec.Mcp.Tools;
@@ -61,6 +62,21 @@ public sealed class MarkReadToolTests : IDisposable
     }
 
     private string[] RequestFiles() => Directory.GetFiles(_queue, "*" + MarkReadQueue.RequestExtension);
+
+    [Fact]
+    public void A_request_file_is_owner_only_whatever_the_umask()
+    {
+        // A request names a folder and a Maildir filename per message and sits
+        // on a host bind mount; at Docker's default umask it was 0644. The mode
+        // is set at create, so no umask can widen it.
+        if (OperatingSystem.IsWindows()) return;
+        Applier(DateTimeOffset.UtcNow, 60, "Alerts");
+        var id = Seed("unseen@x", ("Alerts", "1.host,U=1:2,"));
+
+        Build().MarkRead(ids: [id]).QueuedCount.ShouldBe(1);
+
+        File.GetUnixFileMode(RequestFiles().ShouldHaveSingleItem()).ShouldBe(OwnerOnlyFile.FileMode);
+    }
 
     [Fact]
     public void A_mixed_batch_reports_each_message_and_queues_only_the_eligible_ones()

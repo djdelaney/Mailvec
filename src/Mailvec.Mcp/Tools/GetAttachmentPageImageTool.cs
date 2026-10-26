@@ -135,10 +135,16 @@ public sealed class GetAttachmentPageImageTool(
             // stays out of the response: it tells the caller nothing actionable
             // (the next sentence already says what to do) while handing an
             // attacker who can mail a PDF a readout of how their input landed
-            // in the parser. Log it instead — the operator gets the diagnostic,
-            // the remote caller gets the stable text.
-            logger.LogWarning(ex, "PDF render failed for message {MessageId} partIndex {PartIndex} page {Page}",
-                msg.Id, partIndex, page);
+            // in the parser. It stays out of the log too: this is the mcp
+            // container, and any authorized caller can trigger this path by
+            // mailing a crafted PDF, so attaching the exception put sender-
+            // chosen text into the operator's log stream with LogToolCalls
+            // off. In the container the same text arrives wrapped — the parse
+            // service's 422 body becomes a DocumentRejected ParseException's
+            // message. Type name (and the parser's classification) only — the
+            // AttachmentTextExtractor / ParseEndpoints precedent.
+            logger.LogWarning("PDF render failed for message {MessageId} partIndex {PartIndex} page {Page}: {ExceptionType}",
+                msg.Id, partIndex, page, ex is ParseException pe ? $"{nameof(ParseException)}({pe.Kind})" : ex.GetType().Name);
             throw new McpException(
                 $"Could not render '{ToolText.Label(info.FileName, "attachment")}' page {page}. " +
                 "The PDF may be encrypted or corrupt; try get_attachment_text for any embedded text.");

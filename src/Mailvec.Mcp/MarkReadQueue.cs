@@ -110,8 +110,13 @@ public sealed class MarkReadQueue(IOptions<McpOptions> mcp, IOptions<IngestOptio
         // otherwise tie on the stamp and sort by the random suffix.
         var name = NextStamp(now).ToString("yyyyMMdd'T'HHmmssfff'Z'", CultureInfo.InvariantCulture)
             + "-" + Guid.NewGuid().ToString("N") + RequestExtension;
+        // Owner-only: a request names a folder and a Maildir filename per
+        // message, on a host bind mount, and the sidecar reading it runs as
+        // the same uid.
         var tmp = Path.Combine(_queue, "." + Guid.NewGuid().ToString("N") + ".tmp");
-        File.WriteAllText(tmp, body.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        using (var fs = OwnerOnlyFile.CreateNew(tmp))
+        using (var w = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            w.Write(body.ToString());
         File.Move(tmp, Path.Combine(_queue, name));
         return name;
     }

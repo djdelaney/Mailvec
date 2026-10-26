@@ -8,7 +8,7 @@
 #        COMPOSE_FILE=compose.yml:compose.mark-read.yml
 #        MBSYNC_MARK_READ_FOLDERS=Alerts            # comma-separated; * = every folder
 #   2. In ./mbsyncrc, change `Sync Pull` to `Sync Pull PushFlags`.
-#   3. mkdir -p ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read
+#   3. mkdir -p -m 700 ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read
 #   then `docker compose up -d`.
 #
 # Disable: remove both .env lines, put `Sync Pull` back, `docker compose up -d`.

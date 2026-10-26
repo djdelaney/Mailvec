@@ -2,12 +2,12 @@
 # - runtimes/: host-fetched macOS dylibs; the Dockerfile fetches the Linux
 #   .so for the image platform itself, and the Directory.Build.props glob
 #   would otherwise copy stale mac binaries into the Linux publish.
-# - data/, mail/, secrets/, mbsyncrc, .env: deploy-host state that lives in
-#   the compose dir (= this repo clone on the VM). The build stage does
-#   `COPY . .`, so without these exclusions every on-host build shipped the
-#   entire Maildir into the build context and copied the Fastmail password
-#   file into build-stage layers. Never let bind-mount state or secrets
-#   near the image.
+# - data/, logs/, mail/, mark-read/, secrets/, mbsyncrc, .env: deploy-host
+#   state that lives in the compose dir (= this repo clone on the VM). The
+#   build stage does `COPY . .`, so without these exclusions every on-host
+#   build shipped the entire Maildir into the build context and copied the
+#   Fastmail password file into build-stage layers. Never let bind-mount
+#   state or secrets near the image.
 .git
 .dockerignore
 Dockerfile
@@ -15,7 +15,9 @@ build/
 coverage/
 data/
 dist/
+logs/
 mail/
+mark-read/
 mbsyncrc
 runtimes/
 secrets/

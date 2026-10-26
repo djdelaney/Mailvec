@@ -320,6 +320,21 @@ Recordings are uploaded as an artifact and never committed.
   - A concurrency group, because runs share the account.
 - **Not yet run live.** Needs the Environment and its two secrets: [docs/contributing/provider-traces.md](docs/contributing/provider-traces.md#re-recording-in-ci).
 
+## ✅ Security review follow-ups (no schema change, 2026-10-25)
+
+Four fixes from the 2026-10-24 review. Each new test was checked by reverting its fix and watching it fail.
+
+- **No PDF-derived text in mcp's log.** When `get_attachment_page_image` fails to render, it now logs only the exception type, plus the parser's classification for a `ParseException`. It used to attach the whole exception. That put sender-chosen text into the log of the internet-facing container on a path any caller can trigger, even with `Mcp:LogToolCalls` off. In the container that text is the parse service's 422 body. Test: `GetAttachmentPageImageToolTests.A_render_failure_logs_the_exception_type_never_its_document_derived_text`.
+- **Owner-only modes for the remaining PII writers.** These now create their files at 0600, from the first byte (new `OwnerOnlyFile` helper):
+  - mark-read request files;
+  - the sidecar's `done/` records and `.applier` marker (`umask 077` in `mbsync-mark-read`, plus `chmod 700` to tighten an existing `done/`);
+  - attachments saved by `mailvec extract-attachments`.
+
+  A download directory Mailvec creates is 0700. An existing one keeps its mode, since it may be `~/Downloads` itself. The runbooks create `./mark-read` with `-m 700`. mcp and the sidecar run as the same uid, so the handoff is unaffected. Tests: `MarkReadToolTests.A_request_file_is_owner_only_whatever_the_umask`, two in `AttachmentExtractorTests`, `test_outcome_records_and_the_marker_are_owner_only_whatever_the_umask`.
+- **HostGuard reads resolved options.** It was the last security control built from the builder-time `McpOptions` snapshot, though it is wired after `Build()`. Test: `ProgramHttpTests.The_host_allowlist_reads_resolved_options_not_the_builder_snapshot`, which checks both directions.
+- **`logs/` and `mark-read/` are kept out of the image build context.** `ops/tests/test_dockerignore.py` now derives every host path compose bind-mounts and fails on any that `.dockerignore` misses.
+- **Not done:** finding 3 (move the live deployment to file secrets) and the remaining findings, which the review rated optional.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

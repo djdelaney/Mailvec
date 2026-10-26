@@ -227,6 +227,31 @@ public class ProgramHttpTests : IClassFixture<MailvecMcpFactory>
     }
 
     [Fact]
+    public async Task The_host_allowlist_reads_resolved_options_not_the_builder_snapshot()
+    {
+        // Same rule as the deny-list above, for HostGuard: it was the one
+        // control still built from the builder-time snapshot, though it is
+        // wired after Build(). Both directions, so a guard that allowed every
+        // host can't pass: the fronting hostname is refused without the
+        // override and served with it.
+        const string fronting = "mail.example.test";
+
+        using (var plain = new RemoteCallerFactory())
+        using (var client = plain.CreateClient())
+        {
+            client.DefaultRequestHeaders.Host = fronting;
+            (await client.GetAsync("/up")).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+        }
+
+        using (var allowed = new RemoteCallerFactory(postConfiguredAllowedHost: fronting))
+        using (var client = allowed.CreateClient())
+        {
+            client.DefaultRequestHeaders.Host = fronting;
+            (await client.GetAsync("/up")).StatusCode.ShouldBeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
+        }
+    }
+
+    [Fact]
     public async Task A_caller_outside_the_denied_networks_is_served_as_before()
     {
         // cloudflared arrives from the default network, one subnet over.
@@ -578,8 +603,15 @@ public sealed class RemoteCallerFactory : WebApplicationFactory<Program>
     /// <c>PostConfigure&lt;McpOptions&gt;</c> — invisible to the builder-time
     /// configuration snapshot, visible only to resolved options.
     /// </param>
-    public RemoteCallerFactory(bool restrictHealth = true, string remoteIp = "172.18.0.7", string? deniedNetwork = null, string? postConfiguredDeniedNetwork = null)
+    private readonly string? _postConfiguredAllowedHost;
+
+    /// <param name="postConfiguredAllowedHost">
+    /// An Mcp:AllowedHosts entry applied through <c>PostConfigure</c>, for the
+    /// same reason as <paramref name="postConfiguredDeniedNetwork"/>.
+    /// </param>
+    public RemoteCallerFactory(bool restrictHealth = true, string remoteIp = "172.18.0.7", string? deniedNetwork = null, string? postConfiguredDeniedNetwork = null, string? postConfiguredAllowedHost = null)
     {
+        _postConfiguredAllowedHost = postConfiguredAllowedHost;
         _tempDir = Path.Combine(Path.GetTempPath(), "mailvec-remote-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
         _restrictHealth = restrictHealth;
@@ -609,6 +641,8 @@ public sealed class RemoteCallerFactory : WebApplicationFactory<Program>
             services.AddSingleton<IStartupFilter>(new RemoteIpStartupFilter(IPAddress.Parse(_remoteIp)));
             if (_postConfiguredDeniedNetwork is { } cidr)
                 services.PostConfigure<Mailvec.Core.Options.McpOptions>(o => o.DeniedNetworks = [cidr]);
+            if (_postConfiguredAllowedHost is { } host)
+                services.PostConfigure<Mailvec.Core.Options.McpOptions>(o => o.AllowedHosts = [host]);
         });
     }
 
