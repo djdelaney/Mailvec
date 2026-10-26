@@ -126,6 +126,38 @@ public class AttachmentExtractorTests : IDisposable
     }
 
     [Fact]
+    public void A_saved_attachment_and_the_directory_created_for_it_are_owner_only()
+    {
+        // Whole documents (statements, scans) at /data/downloads on a host
+        // bind mount: at Docker's default umask they were 0644 under 0755.
+        if (OperatingSystem.IsWindows()) return;
+        Directory.Delete(_downloadDir);
+        var msg = StageEml("101.imapfetch:2,S", PdfMessage, messageId: 101);
+
+        var r = BuildExtractor().Extract(msg, partIndex: 0);
+
+        File.GetUnixFileMode(_downloadDir).ShouldBe(OwnerOnlyFile.DirectoryMode);
+        File.GetUnixFileMode(r.FilePath).ShouldBe(OwnerOnlyFile.FileMode);
+    }
+
+    [Fact]
+    public void An_existing_download_directory_keeps_the_mode_the_operator_gave_it()
+    {
+        // It may be ~/Downloads itself; tightening a directory we didn't
+        // create would break whatever else the operator uses it for.
+        if (OperatingSystem.IsWindows()) return;
+        const UnixFileMode shared = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+        File.SetUnixFileMode(_downloadDir, shared);
+        var msg = StageEml("102.imapfetch:2,S", PdfMessage, messageId: 102);
+
+        var r = BuildExtractor().Extract(msg, partIndex: 0);
+
+        File.GetUnixFileMode(_downloadDir).ShouldBe(shared);
+        File.GetUnixFileMode(r.FilePath).ShouldBe(OwnerOnlyFile.FileMode);
+    }
+
+    [Fact]
     public void ExtractInMemory_returns_bytes_and_metadata_without_touching_disk()
     {
         var ext = BuildExtractor();

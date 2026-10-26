@@ -158,6 +158,25 @@ class MarkReadScriptTests(unittest.TestCase):
         self.assertRegex(lines[1], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(lines[2:], ["60", "Alerts", "Cron Jobs", "*"])
 
+    def test_outcome_records_and_the_marker_are_owner_only_whatever_the_umask(self):
+        # done/ holds outcome, folder and Maildir filename per message for 30
+        # days. At Docker's default umask 022 it was 0644 under 0755 on the
+        # host. A done/ left 0755 by an earlier version is tightened too.
+        (self.queue / "done").mkdir(mode=0o755)
+        self.message("Alerts", "1.host,U=1:2,")
+        self.request("read\tAlerts\t1.host,U=1")
+        old = os.umask(0o022)
+        try:
+            self.assertEqual(self.run_script("apply").returncode, 0)
+            self.assertEqual(self.run_script("marker", "60").returncode, 0)
+        finally:
+            os.umask(old)
+
+        mode = lambda p: p.stat().st_mode & 0o777
+        self.assertEqual(mode(self.queue / "done"), 0o700)
+        self.assertEqual(mode(self.queue / "done" / "20261024T070000000Z-a.req"), 0o600)
+        self.assertEqual(mode(self.queue / ".applier"), 0o600)
+
     # ---------- apply ----------
 
     def test_read_adds_only_S_keeps_other_flags_and_sorts_them(self):

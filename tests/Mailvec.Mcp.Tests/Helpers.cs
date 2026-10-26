@@ -111,3 +111,25 @@ internal static class Helpers
             Task.FromResult(respond(request));
     }
 }
+
+/// <summary>
+/// Records each log call's formatted message and attached exception, so a test
+/// can assert what a log line would carry — including the exception text every
+/// sink renders after the message.
+/// </summary>
+internal sealed class CapturingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+{
+    public sealed record Entry(Microsoft.Extensions.Logging.LogLevel Level, string Message, Exception? Exception);
+
+    public List<Entry> Entries { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+    public void Log<TState>(
+        Microsoft.Extensions.Logging.LogLevel logLevel,
+        Microsoft.Extensions.Logging.EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter) =>
+        Entries.Add(new Entry(logLevel, formatter(state, exception), exception));
+}

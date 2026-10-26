@@ -140,7 +140,7 @@ static async Task RunHttp(string[] args)
     // The DI-resolved options — the authoritative McpOptions, reflecting env
     // vars and every other source that lands after the builder-time snapshot.
     // Everything security-relevant below reads from here; `mcpOpts` above is
-    // only for the Kestrel/middleware wiring that has to happen pre-Build.
+    // only for the Kestrel wiring that has to happen pre-Build.
     var resolvedMcpOpts = app.Services.GetRequiredService<IOptions<McpOptions>>().Value;
 
     // Refuse to start on incoherent Access settings rather than booting a
@@ -175,7 +175,9 @@ static async Task RunHttp(string[] args)
     // /up) so a browser rebound to 127.0.0.1 can't reach the MCP endpoint and
     // read mail out of a tools/call response. Loopback Host names are always
     // allowed; add a fronting hostname via Mcp:AllowedHosts. See HostGuard.
-    var allowedHosts = HostGuard.BuildAllowedHosts(mcpOpts.AllowedHosts);
+    // Resolved options, like every control here: the middleware is wired
+    // after Build(), so nothing forces the builder-time snapshot.
+    var allowedHosts = HostGuard.BuildAllowedHosts(resolvedMcpOpts.AllowedHosts);
     app.Use(async (context, next) =>
     {
         if (!HostGuard.IsAllowed(context.Request.Host.Host, context.Request.Headers["Origin"].ToString(), allowedHosts))

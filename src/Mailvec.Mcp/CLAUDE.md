@@ -58,9 +58,11 @@ see any of this; `AccessSigningKeyTests` is the file that covers retrieval.
 Reverting the URL fails four of its tests — that's the alarm.
 
 `mcpOpts` exists only for wiring that genuinely cannot wait for `Build()` —
-Kestrel's listen address, and the `HostGuard` allowlist baked into a middleware
-closure. `RestrictHealthToLoopback` and everything under `Mcp:Access` read
-`resolvedMcpOpts`. `AccessAuth` goes further and reads
+Kestrel's listen address. `NetworkGuard`, the `HostGuard` allowlist,
+`RestrictHealthToLoopback` and everything under `Mcp:Access` read
+`resolvedMcpOpts` (HostGuard was the last holdout — its middleware is wired
+after `Build()`, so nothing forced the snapshot; pinned by
+`ProgramHttpTests.The_host_allowlist_reads_resolved_options_not_the_builder_snapshot`). `AccessAuth` goes further and reads
 `IOptions<McpOptions>` at *request* time, so even its registration carries no
 snapshot.
 

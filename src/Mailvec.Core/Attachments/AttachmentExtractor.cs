@@ -130,7 +130,10 @@ public sealed class AttachmentExtractor(
         if (!wasReused)
         {
             var dir = Path.GetDirectoryName(targetPath)!;
-            Directory.CreateDirectory(dir);
+            // Owner-only when we create it (normally ResolveSafeOutputPath
+            // already has); an existing directory is the operator's choice
+            // and is left alone.
+            OwnerOnlyFile.CreateDirectory(dir);
 
             // Write to a sibling temp file then rename, so a concurrent reader
             // never sees a partial file at targetPath.
@@ -143,11 +146,13 @@ public sealed class AttachmentExtractor(
             // to any path that user could write. FileMode.CreateNew maps to
             // open(O_CREAT|O_EXCL), which fails outright on an existing path
             // (including a dangling symlink) rather than following it, so even
-            // a guessed name is refused rather than followed.
+            // a guessed name is refused rather than followed. Created 0600:
+            // these are whole documents (statements, scans), and the rename
+            // below keeps the mode.
             var tempPath = Path.Combine(dir, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.part");
             try
             {
-                using (var fs = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (var fs = OwnerOnlyFile.CreateNew(tempPath))
                 {
                     fs.Write(att.Bytes);
                 }
@@ -191,7 +196,7 @@ public sealed class AttachmentExtractor(
         if (outputName.Contains('/') || outputName.Contains('\\') || outputName == ".." || outputName.StartsWith(".."))
             throw new ArgumentException($"Output name '{outputName}' looks like a path component, not a filename.", nameof(outputName));
 
-        Directory.CreateDirectory(downloadDir);
+        OwnerOnlyFile.CreateDirectory(downloadDir);
         var canonicalDir = Path.GetFullPath(downloadDir);
         var target = Path.GetFullPath(Path.Combine(canonicalDir, outputName));
 

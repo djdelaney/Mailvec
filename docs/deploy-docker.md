@@ -118,7 +118,7 @@ To enable it:
    ```
 
 2. In `./mbsyncrc`, change `Sync Pull` to `Sync Pull PushFlags`, so flags set locally reach the server. New mail and deletions still flow down only.
-3. Create the queue directory, owned by the service uid: `mkdir -p ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read`.
+3. Create the queue directory, owned by the service uid and closed to other local accounts (the request and `done/` records name folders and messages): `mkdir -p -m 700 ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read`.
 4. `docker compose up -d`.
 
 Verify it:

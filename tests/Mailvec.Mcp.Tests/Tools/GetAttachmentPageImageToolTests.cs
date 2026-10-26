@@ -52,7 +52,10 @@ public class GetAttachmentPageImageToolTests : IDisposable
         catch (IOException) { /* best effort */ }
     }
 
-    private GetAttachmentPageImageTool Build(TempDatabase db, Mailvec.Parsing.Contracts.IMailParser? parser = null)
+    private GetAttachmentPageImageTool Build(
+        TempDatabase db,
+        Mailvec.Parsing.Contracts.IMailParser? parser = null,
+        Microsoft.Extensions.Logging.ILogger<GetAttachmentPageImageTool>? logger = null)
     {
         var ingest = Options.Create(new IngestOptions { MaildirRoot = _maildirRoot });
         var mcp = Options.Create(new McpOptions { AttachmentDownloadDir = _downloadDir });
@@ -60,8 +63,44 @@ public class GetAttachmentPageImageToolTests : IDisposable
             new MessageRepository(db.Connections),
             new AttachmentExtractor(ingest, mcp, parser ?? new InProcessParser(extractor: null)),
             mcp,
-            NullLogger<GetAttachmentPageImageTool>.Instance,
+            logger ?? NullLogger<GetAttachmentPageImageTool>.Instance,
             Helpers.NoopLogger());
+    }
+
+    [Fact]
+    public void A_render_failure_logs_the_exception_type_never_its_document_derived_text()
+    {
+        // The render-failure message is derived from the attacker's PDF bytes
+        // (PDFium in-process; the parse service's 422 body in the container).
+        // It was kept out of the response but attached to the log, and this is
+        // the mcp container on a path any caller can trigger. Two shapes, both
+        // carrying a canary: a native-style exception and the remote parser's
+        // DocumentRejected wrapper.
+        const string canary = "SENDER-CHOSEN-TEXT-7f3a";
+        Exception[] failures =
+        [
+            new InvalidOperationException("pdfium: " + canary),
+            new Mailvec.Parsing.Contracts.ParseException(
+                Mailvec.Parsing.Contracts.ParseFailureKind.DocumentRejected, "InvalidOperationException: " + canary),
+        ];
+
+        foreach (var failure in failures)
+        {
+            using var db = new TempDatabase();
+            var repo = new MessageRepository(db.Connections);
+            long id = StagePdf(repo, MinimalPdf(pages: 1));
+            var parser = new FaultingParser { Fault = op => op == nameof(FaultingParser.RenderPdfPages) ? failure : null };
+            var logger = new CapturingLogger<GetAttachmentPageImageTool>();
+
+            Should.Throw<McpException>(() => Build(db, parser, logger).GetAttachmentPageImage(partIndex: 0, id: id));
+
+            var entry = logger.Entries.ShouldHaveSingleItem();
+            entry.Exception.ShouldBeNull("an attached exception is rendered with its message by every sink");
+            entry.Message.ShouldNotContain(canary);
+            entry.Message.ShouldContain(failure is Mailvec.Parsing.Contracts.ParseException
+                ? "ParseException(DocumentRejected)"
+                : nameof(InvalidOperationException));
+        }
     }
 
     [Fact]

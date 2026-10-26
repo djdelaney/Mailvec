@@ -586,6 +586,12 @@ RUN cat <<'EOF' > /usr/local/bin/mbsync-mark-read
 # `mbsync -a` (two writers on .mbsyncstate and the Maildir is the hazard the
 # loop's single-runner rule exists for).
 set -u
+# The done/ records name a folder and a Maildir filename per line and are kept
+# for MBSYNC_MARK_READ_KEEP_DAYS: read-state PII, on a host-visible bind
+# mount. Owner-only, like every other PII-bearing file the stack writes
+# (the archive, the logs, export snapshots). mcp runs as the same uid, so it
+# still reads the marker; renames keep each message file's own mode.
+umask 077
 Q="${MBSYNC_MARK_READ_QUEUE:?MBSYNC_MARK_READ_QUEUE is not set}"
 : "${MBSYNC_MAILDIR:=/mail/Fastmail}"
 : "${MBSYNC_CONFIG:=/etc/mbsyncrc}"
@@ -721,7 +727,9 @@ well_formed() {
 }
 
 apply_all() {
-    mkdir -p "${Q}/done" || { say "could not create ${Q}/done"; return 1; }
+    # chmod as well as the umask: a done/ created before the umask landed is
+    # 0755, and its records stay readable until they expire.
+    { mkdir -p "${Q}/done" && chmod 700 "${Q}/done"; } || { say "could not create ${Q}/done"; return 1; }
     for req in "${Q}"/*.req; do
         [ -e "$req" ] || continue
         name="$(basename "$req")"
@@ -747,7 +755,7 @@ case "${1:-}" in
     preflight)
         fail=
         if [ ! -d "$Q" ] || [ ! -w "$Q" ]; then
-            fail="${Q} is missing or not writable by uid $(id -u). On the host: mkdir -p ./mark-read && sudo chown $(id -u):$(id -g) ./mark-read"
+            fail="${Q} is missing or not writable by uid $(id -u). On the host: mkdir -p -m 700 ./mark-read && sudo chown $(id -u):$(id -g) ./mark-read"
         elif [ -z "$(folders)" ]; then
             fail="MBSYNC_MARK_READ_FOLDERS is empty. Name the folders mark_read may change (comma-separated), or * for every folder."
         elif ! pushes_flags; then
