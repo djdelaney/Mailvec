@@ -1,0 +1,131 @@
+# Re-records the Gmail provider traces from the live test account and checks
+# them two ways — see docs/contributing/provider-traces.md.
+#
+#   1. Shape: does Gmail + isync still produce what the committed trace says?
+#      A difference means the provider (or isync) changed behaviour; review
+#      the uploaded recording and commit it if it is right.
+#   2. Replay: does Mailvec index the FRESH recording correctly? This is the
+#      one that matters for users, and it is checked even when the shape moved.
+#
+# Guardrails, because the credential can read and SEND mail for the account:
+#   - schedule + workflow_dispatch only. Never pull_request or
+#     pull_request_target: no PR's code ever runs with the credential.
+#   - the secrets live in the `gmail-recorder` Environment, whose deployment
+#     branches are restricted to main, so a dispatch from any other branch
+#     cannot read them.
+#   - the job never commits. It uploads the recording and fails on a
+#     difference; a person reviews and commits.
+#   - the recorder itself refuses a non-test account, records only the
+#     messages it seeded, refuses any blob carrying more than the seeded bytes,
+#     and fails if Sent Mail changes during the run (docs: "Recording a trace").
+#
+# The recorder runs inside the same pinned Alpine image the mbsync sidecar is
+# built from (Dockerfile, `AS mbsync`), so it records with the isync version
+# the deployment ships, not whatever the runner's package manager has. Keep
+# the digest in step with the Dockerfile's.
+
+name: Gmail traces
+
+on:
+  schedule:
+    - cron: "0 15 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One account, and every run starts by purging what the last one seeded: two
+# runs at once would delete each other's messages mid-recording. A local
+# recording against the same account collides the same way; avoid running
+# one on Monday afternoons (UTC).
+concurrency:
+  group: gmail-recorder
+  cancel-in-progress: false
+
+env:
+  # The traces ops/record-provider-trace.py knows how to record. Add one here
+  # once its steps are in the script's TRACES table.
+  TRACES: label-lifecycle
+  MBSYNC_IMAGE: alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+
+jobs:
+  record:
+    name: Record + replay Gmail traces
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gmail-recorder
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The credential is passed by NAME (-e VAR), so its value is in no
+      # command line. The repository is mounted read-only: the recorder writes
+      # only to $RUNNER_TEMP/traces.
+      - name: Record against the live account
+        id: record
+        env:
+          GMAIL_TRACE_USER: ${{ secrets.GMAIL_TRACE_USER }}
+          GMAIL_TRACE_PASSWORD: ${{ secrets.GMAIL_TRACE_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/traces"
+          status=0
+          for t in $TRACES; do
+            set +e
+            docker run --rm \
+              -e GMAIL_TRACE_USER -e GMAIL_TRACE_PASSWORD \
+              -v "$GITHUB_WORKSPACE:/repo:ro" -v "$RUNNER_TEMP/traces:/traces" \
+              "$MBSYNC_IMAGE" sh -euc '
+                apk add --no-cache isync ca-certificates python3 >/dev/null
+                python3 -I /repo/ops/record-provider-trace.py "$0" \
+                  --work "/traces/$0-work" --out "/traces/$0" \
+                  --compare "/repo/tests/Mailvec.Indexer.Tests/ProviderTraces/gmail/$0"' "$t"
+            rc=$?
+            set -e
+            echo "$t: recorder exited $rc"
+            # 3 = recorded fine, shape differs: still replay it. Anything else
+            # non-zero means there is no usable recording.
+            case $rc in
+              0) ;;
+              3) status=3 ;;
+              *) exit "$rc" ;;
+            esac
+            # The work directory holds the generated mbsyncrc, which names the
+            # account. It is never uploaded; remove it now.
+            sudo rm -rf "$RUNNER_TEMP/traces/$t-work"
+          done
+          echo "shape=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Fetch sqlite-vec extension
+        run: ./ops/fetch-sqlite-vec.sh
+
+      # Replace each committed trace with its fresh recording, in this
+      # throwaway checkout only, and replay them all through the real scanner.
+      - name: Replay the fresh recordings
+        run: |
+          for t in $TRACES; do
+            dest=tests/Mailvec.Indexer.Tests/ProviderTraces/gmail/$t
+            rm -rf "$dest"
+            cp -R "$RUNNER_TEMP/traces/$t" "$dest"
+          done
+          dotnet test tests/Mailvec.Indexer.Tests --filter "FullyQualifiedName~TraceReplay" --logger "console;verbosity=normal"
+
+      - name: Upload the recordings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gmail-traces
+          path: ${{ runner.temp }}/traces/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Fail on a changed shape
+        if: steps.record.outputs.shape != '0'
+        run: |
+          echo "::error::A recording differs from its committed trace: Gmail or isync behaves differently now. The replay step says whether Mailvec still copes. Download the gmail-traces artifact, review it, and commit it if it is right."
+          exit 1

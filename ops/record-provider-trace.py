@@ -10,6 +10,10 @@ tests/Mailvec.Indexer.Tests/ProviderTraces/TraceReplayTests reads.
     GMAIL_TRACE_PASSWORD="op://<vault>/<item uuid>/<field>" \\
     op run -- python3 ops/record-provider-trace.py label-lifecycle --work <dir> --out <dir>
 
+Add --compare <committed trace dir> to exit 3 when the recording's shape
+(steps, copies, flags, server state; not file names) differs from it. That is
+what .github/workflows/gmail-traces.yml runs weekly.
+
 or, without 1Password (`read -rs` keeps the password off the screen and out
 of shell history):
 
@@ -579,11 +583,49 @@ def record(name, user, password, work, out):
     return trace
 
 
+# ── Comparing a recording with the committed trace ──────────────────────────
+
+def shape(trace_dir):
+    """
+    What a trace says, minus what legitimately differs between recordings:
+    file names (times, pids, UIDs) and blob names (isync's X-TUID is random).
+    Per step: its id, whether it settled, each copy as (message id, folder,
+    cur|new, flags), and the server's state.
+    """
+    trace_dir = pathlib.Path(trace_dir)
+    trace = json.loads((trace_dir / "trace.json").read_text())
+    steps = []
+    for step in trace["steps"]:
+        copies = []
+        for path, blob in step["maildir"].items():
+            folder, sub, name = path.rsplit("/", 2)
+            flags = name.partition(":2,")[2]
+            copies.append((message_id_of((trace_dir / "blobs" / blob).read_bytes()), folder, sub, flags))
+        steps.append({"id": step["id"], "settled": step.get("settled", True), "copies": sorted(copies),
+                      "server": step.get("server")})
+    return steps
+
+
+def shape_differences(recorded_dir, committed_dir):
+    """Human-readable differences between two traces' shapes; empty when they agree."""
+    a, b = shape(recorded_dir), shape(committed_dir)
+    diffs = []
+    if [s["id"] for s in a] != [s["id"] for s in b]:
+        diffs.append(f"steps: recorded {[s['id'] for s in a]}, committed {[s['id'] for s in b]}")
+    for ra, rb in zip(a, b):
+        for key in ("settled", "copies", "server"):
+            if ra["id"] == rb["id"] and ra[key] != rb[key]:
+                diffs.append(f"{ra['id']}: {key} differs\n    recorded:  {ra[key]}\n    committed: {rb[key]}")
+    return diffs
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Record a provider trace from a Gmail test account.")
     p.add_argument("trace", choices=sorted(TRACES))
     p.add_argument("--work", required=True, help="scratch directory for the Maildir and mbsyncrc (new or empty)")
     p.add_argument("--out", required=True, help="where trace.json and blobs/ go (new or empty)")
+    p.add_argument("--compare", metavar="DIR",
+                   help="a committed trace directory: exit 3 if the recording's shape differs from it")
     args = p.parse_args(argv)
 
     user = os.environ.get("GMAIL_TRACE_USER", "")
@@ -614,6 +656,14 @@ def main(argv=None):
         password = None
     print(f"Wrote {len(trace['steps'])} steps to {out / 'trace.json'}. Review it, then copy it into "
           f"tests/Mailvec.Indexer.Tests/ProviderTraces/gmail/{args.trace}/.")
+    if args.compare:
+        diffs = shape_differences(out, args.compare)
+        if diffs:
+            print(f"The recording differs from {args.compare}: Gmail or isync behaves differently now.", file=sys.stderr)
+            for d in diffs:
+                print("  " + d, file=sys.stderr)
+            return 3
+        print(f"Same shape as {args.compare}.")
     return 0
 
 
