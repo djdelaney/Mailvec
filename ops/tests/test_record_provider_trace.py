@@ -8,6 +8,7 @@ Run with: python3 -m unittest discover -s ops/tests -v
 import importlib.util
 import json
 import pathlib
+import shutil
 import tempfile
 import unittest
 
@@ -163,6 +164,42 @@ class Converge(unittest.TestCase):
     def test_a_server_that_keeps_moving_never_settles(self):
         with self.assertRaises(RuntimeError):
             self.run_converge([{"a": b"1"}] * 5, ["s1", "s2", "s3", "s4", "s5"])
+
+
+class ShapeComparison(unittest.TestCase):
+    COMMITTED = REPO / "tests" / "Mailvec.Indexer.Tests" / "ProviderTraces" / "gmail" / "label-lifecycle"
+
+    def copy_of_committed(self):
+        d = pathlib.Path(tempfile.mkdtemp()) / "t"
+        shutil.copytree(self.COMMITTED, d)
+        return d
+
+    def test_a_trace_has_the_same_shape_as_itself(self):
+        self.assertEqual(rpt.shape_differences(self.COMMITTED, self.COMMITTED), [])
+
+    def test_file_and_blob_names_are_not_part_of_the_shape(self):
+        d = self.copy_of_committed()
+        trace = json.loads((d / "trace.json").read_text())
+        for step in trace["steps"]:
+            renamed = {}
+            for path, blob in step["maildir"].items():
+                folder, _, name = path.rpartition("/")
+                shutil.copyfile(d / "blobs" / blob, d / "blobs" / ("renamed-" + blob))
+                renamed[f"{folder}/9999999999.1_1.host{name[name.index(','):]}"] = "renamed-" + blob
+            step["maildir"] = renamed
+        (d / "trace.json").write_text(json.dumps(trace))
+        self.assertEqual(rpt.shape_differences(d, self.COMMITTED), [])
+
+    def test_a_flag_or_server_change_is_a_difference(self):
+        d = self.copy_of_committed()
+        trace = json.loads((d / "trace.json").read_text())
+        step = trace["steps"][0]
+        mid = next(iter(step["server"]))
+        step["server"][mid]["mailboxes"].append("[Gmail]/Important")
+        (d / "trace.json").write_text(json.dumps(trace))
+        diffs = rpt.shape_differences(d, self.COMMITTED)
+        self.assertEqual(len(diffs), 1)
+        self.assertIn("server differs", diffs[0])
 
 
 class TraceShape(unittest.TestCase):

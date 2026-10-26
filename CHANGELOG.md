@@ -304,6 +304,22 @@ The author's deployment is Fastmail in folder mode, so nothing in daily use exer
 - **Corrected:** yesterday's doc claimed `all-mail-excluded` catches that mutation. It can't, because without All Mail it never has two copies of a message.
 - **Not built yet:** re-recording in CI.
 
+## ✅ Weekly Gmail re-recording in CI (no schema change, 2026-10-25)
+
+`.github/workflows/gmail-traces.yml` re-records the recordable traces from the live test account, every Monday and on demand. Two checks per trace:
+
+- **Shape.** The recorder's new `--compare` flag compares the recording with the committed trace, ignoring file and blob names. A difference fails the job; it means Gmail or isync changed behaviour.
+- **Replay.** The fresh recording is replayed through `TraceReplayTests`, so the job says whether Mailvec still handles what Gmail does now.
+
+Recordings are uploaded as an artifact and never committed.
+
+- **Same isync as the deployment.** Runs in the mbsync sidecar's pinned Alpine image (isync 1.5.1, checked locally with the same command).
+- **Guardrails:**
+  - `schedule` and `workflow_dispatch` only.
+  - Secrets in a `gmail-recorder` Environment restricted to `main`, passed to the container by name only.
+  - A concurrency group, because runs share the account.
+- **Not yet run live.** Needs the Environment and its two secrets: [docs/contributing/provider-traces.md](docs/contributing/provider-traces.md#re-recording-in-ci).
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

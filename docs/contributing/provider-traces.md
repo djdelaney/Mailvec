@@ -210,17 +210,52 @@ session.
 A trace is recordable once its steps are written in the script's `TRACES`
 table. `label-lifecycle` is the only one so far.
 
-### Not built yet: re-recording in CI
+### Re-recording in CI
 
-Run the recorder on a schedule, like the weekly
-[cloud smoke test](cloud-smoke-tests.md), and compare the result's *shape*
-with the committed trace. That catches Gmail or isync changing behaviour,
-and it exercises authentication, which no fixture can. The guardrails:
+`.github/workflows/gmail-traces.yml` re-records every trace in its `TRACES`
+list from the live account, weekly (Monday 15:00 UTC) and on demand. For
+each trace it checks two things:
 
-- **Triggers:** `schedule` and `workflow_dispatch` only.
-- **Credential:** a GitHub Environment holding it, restricted to `main`.
-- **Output:** the job uploads an artifact and fails on a difference. It never
+1. **Shape.** `--compare` against the committed trace: same steps, copies,
+   flags and server state, ignoring file and blob names. A difference means
+   Gmail or isync changed behaviour. The job fails, and the recording is
+   uploaded as the `gmail-traces` artifact for review.
+2. **Replay.** The fresh recording replaces the committed one in the job's
+   checkout, and `TraceReplayTests` runs over it. This is the check that
+   matters for users: it says whether Mailvec still handles what Gmail does
+   *now*, and it runs even when the shape moved.
+
+The recorder runs inside the same pinned Alpine image as the mbsync sidecar
+(`Dockerfile`, `AS mbsync`), so it records with the isync version the
+deployment ships. Keep the two digests in step.
+
+The guardrails, because the credential can read and send mail for the
+account:
+
+- **Triggers:** `schedule` and `workflow_dispatch` only, never anything a
+  pull request can trigger.
+- **Credential:** in the `gmail-recorder` GitHub Environment, whose
+  deployment branches are restricted to `main`. A dispatch from another
+  branch can't read it.
+- **Output:** the job never commits. A person reviews the artifact and
   commits.
+- **One run at a time.** The concurrency group is `gmail-recorder`, because
+  each run starts by purging what the last one seeded. A local recording
+  against the same account collides the same way, so don't run one while the
+  workflow does.
+
+**One-time setup** (repository settings, done by the maintainer):
+
+1. **Settings → Environments → New environment** `gmail-recorder`.
+   Deployment branches: *Selected branches*, `main` only.
+2. Add two environment secrets:
+   - `GMAIL_TRACE_USER`: the test address.
+   - `GMAIL_TRACE_PASSWORD`: its app password.
+3. Run the workflow once by hand (**Actions → Gmail traces → Run workflow**)
+   and check that it's green.
+
+When rotating the app password, update the environment secret as well as
+the password manager.
 
 Every trace's blobs must be invented: **this repository is public.**
 
