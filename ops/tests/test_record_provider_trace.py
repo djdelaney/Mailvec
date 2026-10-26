@@ -8,6 +8,7 @@ Run with: python3 -m unittest discover -s ops/tests -v
 import importlib.util
 import json
 import pathlib
+import re
 import shutil
 import tempfile
 import unittest
@@ -202,6 +203,71 @@ class ShapeComparison(unittest.TestCase):
         self.assertIn("server differs", diffs[0])
 
 
+class MbsyncRetries(unittest.TestCase):
+    class Result:
+        def __init__(self, rc, err=""):
+            self.returncode, self.stderr = rc, err
+
+    def attempt(self, results, attempts=3):
+        results, calls, waits = iter(results), [], []
+        def run(*a, **kw):
+            calls.append(kw["env"])
+            return next(results)
+        rpt.run_mbsync("cfg", "pw", attempts=attempts, wait=7, run=run, sleep=waits.append)
+        return calls, waits
+
+    def test_a_socket_timeout_is_retried_and_then_succeeds(self):
+        calls, waits = self.attempt([
+            self.Result(1, "Socket error on imap.gmail.com (192.0.2.1:993): timeout."),
+            self.Result(0)])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(waits, [7])
+
+    def test_a_refused_login_is_never_retried(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self.attempt([self.Result(1, "IMAP command 'LOGIN <user> <pass>' returned an error: NO [AUTHENTICATIONFAILED] Invalid credentials")])
+        self.assertIn("not retried", str(ctx.exception))
+
+    def test_a_network_failure_that_persists_gives_up(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self.attempt([self.Result(1, "Socket error: Connection reset by peer")] * 3)
+        self.assertIn("out of retries", str(ctx.exception))
+
+    def test_the_password_reaches_mbsync_only_under_its_own_name(self):
+        import os
+        os.environ["GMAIL_TRACE_PASSWORD"] = "outer"
+        try:
+            calls, _ = self.attempt([self.Result(0)])
+        finally:
+            del os.environ["GMAIL_TRACE_PASSWORD"]
+        self.assertEqual(calls[0][rpt.PASS_ENV], "pw")
+        self.assertNotIn("GMAIL_TRACE_PASSWORD", calls[0])
+
+
+class Workflow(unittest.TestCase):
+    """The CI workflow must never publish the work directory: it holds the
+    generated mbsyncrc (which names the account) and the synced Maildir. On
+    2026-10-26 a failed run tried to, and only a permission error stopped it."""
+    TEXT = (REPO / ".github" / "workflows" / "gmail-traces.yml").read_text()
+
+    def test_only_the_output_directory_is_uploaded(self):
+        paths = re.findall(r"^\s*path: (.+)$", self.TEXT, re.M)
+        self.assertEqual(paths, ["${{ runner.temp }}/trace-out/"])
+
+    def test_the_work_directory_is_outside_what_is_uploaded(self):
+        self.assertIn('"$RUNNER_TEMP/trace-work', self.TEXT)
+        self.assertNotIn("trace-out/trace-work", self.TEXT)
+
+    def test_the_work_directory_is_removed_however_the_recording_ends(self):
+        self.assertRegex(self.TEXT, r"trap '[^']*rm -rf \"\$RUNNER_TEMP/trace-work\"[^']*' EXIT")
+        self.assertRegex(self.TEXT, r"if: always\(\)\n\s*run: sudo rm -rf \"\$RUNNER_TEMP/trace-work\"")
+
+    def test_no_trigger_a_pull_request_can_reach(self):
+        triggers = self.TEXT.split("\non:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertNotIn("pull_request", triggers)
+        self.assertNotIn("workflow_run", triggers)
+
+
 class TraceShape(unittest.TestCase):
     def test_the_written_trace_has_what_the_replay_loader_requires(self):
         trace = rpt.build_trace("label-lifecycle", rpt.TRACES["label-lifecycle"],
@@ -215,6 +281,7 @@ class TraceShape(unittest.TestCase):
     def test_the_mbsyncrc_never_holds_the_password(self):
         cfg = rpt.mbsyncrc("user@gmail.com", pathlib.Path("/tmp/mail dir"))
         self.assertIn(f'PassCmd "printenv {rpt.PASS_ENV}"', cfg)
+        self.assertIn(f"Timeout {rpt.NETWORK_TIMEOUT_SECONDS}", cfg)
         self.assertIn('Path "/tmp/mail dir/"', cfg)
         self.assertNotIn("Pass ", cfg)
 

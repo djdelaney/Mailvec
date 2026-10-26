@@ -318,7 +318,10 @@ Recordings are uploaded as an artifact and never committed.
   - `schedule` and `workflow_dispatch` only.
   - Secrets in a `gmail-recorder` Environment restricted to `main`, passed to the container by name only.
   - A concurrency group, because runs share the account.
-- **Not yet run live.** Needs the Environment and its two secrets: [docs/contributing/provider-traces.md](docs/contributing/provider-traces.md#re-recording-in-ci).
+- **First live run 2026-10-25: green.** The recording had the same shape as the committed trace, and the replay passed 5/5.
+- **Fixed after the 2026-10-26 failure.**
+  - *What failed:* mbsync timed out connecting to Gmail. The failure path then tried to upload the scratch directory, which holds the generated mbsyncrc (it names the account) and the synced Maildir. Only a permission error stopped it, and nothing was uploaded.
+  - *Fix:* recordings and scratch now live in separate directories, scratch is deleted on every exit path, and only recordings are uploaded (pinned by tests). mbsync and IMAP time out at 60 s, and network failures are retried 3 times. A refused login never is.
 
 ## ✅ Security review follow-ups (no schema change, 2026-10-25)
 

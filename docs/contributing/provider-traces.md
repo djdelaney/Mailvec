@@ -175,6 +175,11 @@ unset GMAIL_TRACE_PASSWORD
 Keep the account's address out of this repository: it never needs to be in
 a trace, a doc or a commit.
 
+Network failures are retried and nothing else is. Both the recorder's IMAP
+session and mbsync time out after 60 s, raised from isync's 20 s default. A
+sync that fails on a socket error or timeout is retried up to 3 times, 30 s
+apart. A refused login is not retried: retrying only repeats the refusal.
+
 What a run does:
 
 1. **Refuses** a non-test account: one with more than 5 messages it did not
@@ -239,6 +244,13 @@ account:
   branch can't read it.
 - **Output:** the job never commits. A person reviews the artifact and
   commits.
+- **Only recordings are uploaded.** Scratch files live in their own
+  directory, `trace-work`, never under the uploaded `trace-out`, and are
+  deleted on every exit path. They include the generated mbsyncrc, which
+  names the account, and the synced Maildir, which holds the account's own
+  mail. On 2026-10-26 a failed run had them inside the uploaded directory,
+  and only a permission error kept them out of the artifact.
+  `ops/tests/test_record_provider_trace.py` (`Workflow`) pins the split.
 - **One run at a time.** The concurrency group is `gmail-recorder`, because
   each run starts by purging what the last one seeded. A local recording
   against the same account collides the same way, so don't run one while the
