@@ -60,25 +60,33 @@ jobs:
           persist-credentials: false
 
       # The credential is passed by NAME (-e VAR), so its value is in no
-      # command line. The repository is mounted read-only: the recorder writes
-      # only to $RUNNER_TEMP/traces.
+      # command line. The repository is mounted read-only.
+      #
+      # Two directories, never nested: trace-out holds only what the recorder
+      # writes after its privacy checks, and is the ONLY thing uploaded.
+      # trace-work holds the generated mbsyncrc (it names the account) and the
+      # synced Maildir (the account's own mail included), and is removed on
+      # every exit path. On 2026-10-26 a failed run left it inside the uploaded
+      # directory and only a permission error kept it out of the artifact.
       - name: Record against the live account
         id: record
         env:
           GMAIL_TRACE_USER: ${{ secrets.GMAIL_TRACE_USER }}
           GMAIL_TRACE_PASSWORD: ${{ secrets.GMAIL_TRACE_PASSWORD }}
         run: |
-          mkdir -p "$RUNNER_TEMP/traces"
+          trap 'sudo rm -rf "$RUNNER_TEMP/trace-work"' EXIT
+          mkdir -p "$RUNNER_TEMP/trace-out" "$RUNNER_TEMP/trace-work"
           status=0
           for t in $TRACES; do
             set +e
             docker run --rm \
               -e GMAIL_TRACE_USER -e GMAIL_TRACE_PASSWORD \
-              -v "$GITHUB_WORKSPACE:/repo:ro" -v "$RUNNER_TEMP/traces:/traces" \
+              -v "$GITHUB_WORKSPACE:/repo:ro" \
+              -v "$RUNNER_TEMP/trace-out:/out" -v "$RUNNER_TEMP/trace-work:/work" \
               "$MBSYNC_IMAGE" sh -euc '
                 apk add --no-cache isync ca-certificates python3 >/dev/null
                 python3 -I /repo/ops/record-provider-trace.py "$0" \
-                  --work "/traces/$0-work" --out "/traces/$0" \
+                  --work "/work/$0" --out "/out/$0" \
                   --compare "/repo/tests/Mailvec.Indexer.Tests/ProviderTraces/gmail/$0"' "$t"
             rc=$?
             set -e
@@ -90,11 +98,14 @@ jobs:
               3) status=3 ;;
               *) exit "$rc" ;;
             esac
-            # The work directory holds the generated mbsyncrc, which names the
-            # account. It is never uploaded; remove it now.
-            sudo rm -rf "$RUNNER_TEMP/traces/$t-work"
           done
           echo "shape=$status" >> "$GITHUB_OUTPUT"
+
+      # Belt and braces: the trap above covers the step's own exits, this
+      # covers a step killed from outside (a cancelled run, a timeout).
+      - name: Remove the work directory
+        if: always()
+        run: sudo rm -rf "$RUNNER_TEMP/trace-work"
 
       - name: Set up .NET 10 SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -111,7 +122,7 @@ jobs:
           for t in $TRACES; do
             dest=tests/Mailvec.Indexer.Tests/ProviderTraces/gmail/$t
             rm -rf "$dest"
-            cp -R "$RUNNER_TEMP/traces/$t" "$dest"
+            cp -R "$RUNNER_TEMP/trace-out/$t" "$dest"
           done
           dotnet test tests/Mailvec.Indexer.Tests --filter "FullyQualifiedName~TraceReplay" --logger "console;verbosity=normal"
 
@@ -120,7 +131,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gmail-traces
-          path: ${{ runner.temp }}/traces/
+          path: ${{ runner.temp }}/trace-out/
           if-no-files-found: ignore
           retention-days: 30
 

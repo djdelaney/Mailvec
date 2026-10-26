@@ -67,6 +67,19 @@ MAX_FOREIGN_MESSAGES = 5
 MAX_SYNC_RUNS = 4
 SETTLE_SECONDS = 3
 
+# Network patience. isync's default connect Timeout is 20 s, and one slow
+# connect from a CI runner (observed 2026-10-26: "Socket error on
+# imap.gmail.com (…:993): timeout.") used to fail the whole run. A sync that
+# fails on the network is retried; any other failure (a refused login, a bad
+# config) is not, because retrying it only repeats the refusal.
+NETWORK_TIMEOUT_SECONDS = 60
+MBSYNC_ATTEMPTS = 3
+MBSYNC_RETRY_WAIT_SECONDS = 30
+TRANSIENT_MBSYNC = re.compile(
+    r"Socket error|timed? ?out|Connection (?:reset|refused|closed)|unexpected EOF|"
+    r"Temporary failure in name resolution|Name or service not known|Network is unreachable",
+    re.I)
+
 MARKERS = (".mbsyncstate", ".mailvec-mbsync-heartbeat", ".mailvec-mbsync-sync", "archive.sqlite", ".frozen-corpus")
 SHARED_CONFIG = pathlib.Path.home() / "Library" / "Application Support" / "Mailvec" / "appsettings.Local.json"
 
@@ -174,7 +187,7 @@ class Account:
     """One IMAP session against the test account."""
 
     def __init__(self, user, password):
-        self.imap = imaplib.IMAP4_SSL(HOST, 993)
+        self.imap = imaplib.IMAP4_SSL(HOST, 993, timeout=NETWORK_TIMEOUT_SECONDS)
         self.imap.login(user, password)
 
     def close(self):
@@ -389,6 +402,7 @@ def mbsyncrc(user, mail):
         f'PassCmd "printenv {PASS_ENV}"',
         "TLSType IMAPS",
         "AuthMechs LOGIN",
+        f"Timeout {NETWORK_TIMEOUT_SECONDS}",
         "",
         "IMAPStore trace-remote",
         "Account trace",
@@ -410,14 +424,22 @@ def mbsyncrc(user, mail):
     ])
 
 
-def run_mbsync(config, password):
+def run_mbsync(config, password, attempts=MBSYNC_ATTEMPTS, wait=MBSYNC_RETRY_WAIT_SECONDS,
+               run=subprocess.run, sleep=time.sleep):
+    """One mbsync -a, retried on network failures only. Pull-only, so a retry is idempotent."""
     env = dict(os.environ)
     env[PASS_ENV] = password
-    for name in ("GMAIL_TRACE_PASSWORD",):
-        env.pop(name, None)
-    r = subprocess.run(["mbsync", "-c", str(config), "-a"], env=env, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"mbsync exited {r.returncode}:\n{r.stderr.strip()}")
+    env.pop("GMAIL_TRACE_PASSWORD", None)
+    for attempt in range(1, attempts + 1):
+        r = run(["mbsync", "-c", str(config), "-a"], env=env, capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+        transient = TRANSIENT_MBSYNC.search(r.stderr or "")
+        if not transient or attempt == attempts:
+            kind = "network failure, out of retries" if transient else "not a network failure, not retried"
+            raise RuntimeError(f"mbsync exited {r.returncode} on attempt {attempt}/{attempts} ({kind}):\n{r.stderr.strip()}")
+        print(f"    mbsync network failure on attempt {attempt}/{attempts}; retrying in {wait} s", flush=True)
+        sleep(wait)
 
 
 # isync names a file <time>.<pid>_<n>.<hostname>[,U=<uid>][:2,<flags>]. The
