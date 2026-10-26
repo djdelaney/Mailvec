@@ -198,9 +198,17 @@ public sealed class SearchEmailsTool(
             // its message — the classified wrapper's own message is
             // Mailvec-authored (status codes only), but only the model name
             // goes to the client: it's public, and it's the actionable half.
-            logger.LogWarning(ex,
-                "search_emails: semantic leg failed ({Kind}); returning a sanitized error to the client. Endpoint {BaseUrl}.",
-                ex.Kind, _ollama.BaseUrl);
+            //
+            // The endpoint stays out of the default log too: that is the datum
+            // the /up–/health split keeps off-box, and this line fires on every
+            // embedding outage. Warning gets the classification and the
+            // wrapper's own message (no exception attached: every sink renders
+            // the inner, host:port included); the endpoint and the full chain
+            // are at Debug for whoever turns it on.
+            logger.LogWarning(
+                "search_emails: semantic leg failed ({Kind}: {Reason}); returning a sanitized error to the client.",
+                ex.Kind, ex.Message);
+            logger.LogDebug(ex, "search_emails: semantic leg failure detail. Endpoint {BaseUrl}.", _ollama.BaseUrl);
             if (ex.Kind == Mailvec.Core.Embedding.EmbeddingFailureKind.SpaceMismatch)
             {
                 // Not an outage: the configuration describes a different

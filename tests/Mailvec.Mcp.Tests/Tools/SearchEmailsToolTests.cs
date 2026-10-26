@@ -22,7 +22,8 @@ public class SearchEmailsToolTests
         OllamaOptions? ollamaOpts = null,
         Mailvec.Core.Embedding.ResolvedEmbeddingProfile? profile = null,
         Mailvec.Core.Health.MbsyncSyncFile? syncFile = null,
-        ToolCallLogger? callLog = null)
+        ToolCallLogger? callLog = null,
+        Microsoft.Extensions.Logging.ILogger<SearchEmailsTool>? logger = null)
     {
         profile ??= LegacyProfile;
         var messages = new MessageRepository(db.Connections);
@@ -37,7 +38,7 @@ public class SearchEmailsToolTests
             Helpers.Fastmail(fastmailOpts),
             Helpers.Ollama(ollamaOpts),
             callLog ?? Helpers.NoopLogger(),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance,
+            logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchEmailsTool>.Instance,
             profile,
             syncFile);
     }
@@ -459,6 +460,35 @@ public class SearchEmailsToolTests
         ex.Message.ShouldNotContain("MARKER-SECRET-SUBJECT");
         // Still actionable: the recovery path and the public model name remain.
         ex.Message.ShouldContain("mode=keyword");
+    }
+
+    [Fact]
+    public async Task An_embedding_outage_keeps_the_internal_endpoint_out_of_the_default_log()
+    {
+        // The test above keeps the endpoint out of the response; this keeps it
+        // out of docker logs too, which the /up-/health split exists for. Both
+        // carriers: the configured BaseUrl, and the inner exception's
+        // host:port, which every sink renders when the exception is attached.
+        using var db = new TempDatabase();
+        const string lanUrl = "http://192.168.7.42:11434";
+        var logger = new CapturingLogger<SearchEmailsTool>();
+        var tool = Build(
+            db,
+            ollama: Helpers.UnreachableOllama(lanUrl),
+            ollamaOpts: new OllamaOptions { BaseUrl = lanUrl },
+            logger: logger);
+
+        await Should.ThrowAsync<McpException>(async () => await tool.SearchEmails(query: "anything", mode: "semantic"));
+
+        var defaults = logger.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Information).ToList();
+        var warning = defaults.ShouldHaveSingleItem();
+        warning.Exception.ShouldBeNull();
+        warning.Message.ShouldContain("Transient");
+        foreach (var e in defaults)
+            e.Message.ShouldNotContain("192.168.7.42");
+        // Still there for an operator who turns Debug on.
+        logger.Entries.ShouldContain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Debug
+            && e.Message.Contains("192.168.7.42") && e.Exception != null);
     }
 
     [Fact]

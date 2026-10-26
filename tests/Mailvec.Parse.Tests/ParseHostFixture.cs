@@ -156,3 +156,16 @@ public sealed class SlowParser(TimeSpan delay) : IMailParser
     public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes) => throw new NotSupportedException();
     public string? BodyTextFromHtml(string html, string? subject) => throw new NotSupportedException();
 }
+
+/// <summary>An IMailParser whose DescribePart throws the exception you give it — for what a rejection carries.</summary>
+public sealed class ThrowingParser(Exception failure) : IMailParser
+{
+    public string Mode => "throwing";
+    public PartInfo DescribePart(byte[] eml, int partIndex) => throw failure;
+    public ParsedMessage ParseMessage(byte[] eml, bool extractAttachmentText) => throw new NotSupportedException();
+    public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex) => throw new NotSupportedException();
+    public DecodedPart DecodePart(byte[] eml, int partIndex, long? maxBytes) => throw new NotSupportedException();
+    public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes) => throw new NotSupportedException();
+    public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes) => throw new NotSupportedException();
+    public string? BodyTextFromHtml(string html, string? subject) => throw new NotSupportedException();
+}
