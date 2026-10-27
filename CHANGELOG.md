@@ -283,7 +283,7 @@ The first tool that changes anything, and it changes only the seen flag. Off unl
 - **Not a JSON converter.** A lenient `bool` converter passed to `WithTools` was tried first and made the schema exporter drop `"type": "boolean"` from every boolean parameter. Advertising "anything" would have been worse than the bug. With the filter, every advertised schema is byte-identical to v0.10.0's (diffed), pinned by `McpSurfaceTests.Boolean_parameters_still_advertise_type_boolean`.
 - Mutation-checked both ways: without the filter registration the wire tests fail, and with the converter instead the schema guard fails. The existing pinned-limitation test for an unbindable argument now uses `"yes"`, since `"true"` binds.
 
-## ✅ Gmail-shaped testing (no schema change, 2026-10-24)
+## ✅ Gmail-shaped testing (no schema change, released in v0.11.1, 2026-10-24)
 
 The author's deployment is Fastmail in folder mode, so nothing in daily use exercises multi-label mail. Two test tools now do. Neither changes shipped code. Guide: [docs/contributing/provider-traces.md](docs/contributing/provider-traces.md).
 
@@ -292,7 +292,7 @@ The author's deployment is Fastmail in folder mode, so nothing in daily use exer
 - Observed: inbox mail on the Gmail layout is attributed to `[Gmail]/All Mail` when that copy is walked first (first-seen-wins), so its displayed folder says nothing. Not changed here.
 - Recording real traces from a throwaway Gmail account is designed but not built.
 
-## ✅ Gmail trace recorder (no schema change, 2026-10-25)
+## ✅ Gmail trace recorder (no schema change, released in v0.11.1, 2026-10-25)
 
 `ops/record-provider-trace.py` records a provider trace from a Gmail test account. Per step it performs one IMAP operation, runs real mbsync until the Maildir settles, and records the files and the server's own view. `gmail/label-lifecycle` is now a recording, not a belief. Guide: [docs/contributing/provider-traces.md](docs/contributing/provider-traces.md#recording-a-trace).
 
@@ -304,7 +304,7 @@ The author's deployment is Fastmail in folder mode, so nothing in daily use exer
 - **Corrected:** yesterday's doc claimed `all-mail-excluded` catches that mutation. It can't, because without All Mail it never has two copies of a message.
 - **Not built yet:** re-recording in CI.
 
-## ✅ Weekly Gmail re-recording in CI (no schema change, 2026-10-25)
+## ✅ Weekly Gmail re-recording in CI (no schema change, released in v0.11.1, 2026-10-25)
 
 `.github/workflows/gmail-traces.yml` re-records the recordable traces from the live test account, every Monday and on demand. Two checks per trace:
 
@@ -323,7 +323,7 @@ Recordings are uploaded as an artifact and never committed.
   - *What failed:* mbsync timed out connecting to Gmail. The failure path then tried to upload the scratch directory, which holds the generated mbsyncrc (it names the account) and the synced Maildir. Only a permission error stopped it, and nothing was uploaded.
   - *Fix:* recordings and scratch now live in separate directories, scratch is deleted on every exit path, and only recordings are uploaded (pinned by tests). mbsync and IMAP time out at 60 s, and network failures are retried 3 times. A refused login never is.
 
-## ✅ Security review follow-ups (no schema change, 2026-10-25)
+## ✅ Security review follow-ups (no schema change, released in v0.11.1, 2026-10-25)
 
 Four fixes from the 2026-10-24 review. Each new test was checked by reverting its fix and watching it fail.
 
@@ -338,7 +338,7 @@ Four fixes from the 2026-10-24 review. Each new test was checked by reverting it
 - **`logs/` and `mark-read/` are kept out of the image build context.** `ops/tests/test_dockerignore.py` now derives every host path compose bind-mounts and fails on any that `.dockerignore` misses.
 - **Not done:** finding 3 (move the live deployment to file secrets) and the remaining findings, which the review rated optional.
 
-## ✅ Security review hardening batch (no schema change, 2026-10-26)
+## ✅ Security review hardening batch (no schema change, released in v0.11.1, 2026-10-26)
 
 Optional items from the same review. Each new test fails with its fix reverted.
 
