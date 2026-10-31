@@ -349,6 +349,16 @@ Optional items from the same review. Each new test fails with its fix reverted.
 - **`umask 077` in `export-db.sh` and `import-db.sh`.** This closes the window where a full archive copy sat at 0644 between `cp` and `chmod 600`. Test: `ops/tests/test_snapshot_scripts.py`, which checks the scripts' text rather than running them, because they stop and start services.
 - **`tmpfs: /tmp` on the mbsync service.** `/tmp` is its HOME and holds the IMAP IDLE config, which contains the IMAP password itself when `mbsyncrc` uses a literal `Pass`. That file now stays in memory instead of on the container's writable layer. Mounted `noexec,nosuid`, since nothing runs from `/tmp`. This is not the untested `read_only` posture, which stays off. Checked with `docker compose config`, not with a live sync. Test: `ops/tests/test_compose_hardening.py`.
 
+## ✅ Dependency security refresh (no schema change, released in v0.11.2, 2026-10-31)
+
+No code change. Cut for the mbsync sidecar: v0.11.1's image was built on Alpine 3.24.2, and reading its `/lib/apk/db/installed` from GHCR showed it predates 3.24.3's fixes.
+
+- **`ca-certificates` 20260909 → 20261020** distrusts the compromised eMudhra intermediate. Without it, a network attacker holding a certificate from that intermediate could impersonate the IMAP server to mbsync and read the app password and mail. The `mailvec` image (Ubuntu 24.04) already had Ubuntu's fix, `20260816ubuntu0.24.04.1`, which distrusts "emSign ECC Root CA - G3".
+- **OpenSSL 3.5.8 → 3.5.9, musl r2 → r3, zlib r0 → r1.** The OpenSSL advisory's High finding is DTLS-only and its Moderate one needs concurrent use, so neither reaches isync's single-threaded TLS-over-TCP.
+- **Also carried:** .NET 10.0.14 runtime and packages, AngleSharp 1.9.0, cloudflared 2026.10.5 (in `compose.yml`, so it deploys on a compose pull, not with the image).
+  - .NET 10.0.14 fixes a Brotli decoder flaw (CVE-2026-111497). Nothing in Mailvec decompresses Brotli: no `AutomaticDecompression`, no request decompression, no `BrotliStream`.
+  - AngleSharp 1.9.0 fixes quadratic parse time on hostile markup. `rebuild-bodies` (dry run) over the 76,297-message frozen corpus changes the same 1 body with and without it, so no re-embed.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
