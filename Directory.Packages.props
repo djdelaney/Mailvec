@@ -8,14 +8,14 @@
     <!-- SQLite. The sqlite-vec extension is loaded at runtime from
          runtimes/osx-arm64/native/vec0.dylib; fetch it via
          ops/fetch-sqlite-vec.sh. -->
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core"        Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core"        Version="10.0.14" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3"     Version="3.0.5" />
 
     <!-- MIME parsing -->
     <PackageVersion Include="MimeKit"                           Version="4.18.2" />
 
     <!-- HTML parsing for HTML-to-text conversion -->
-    <PackageVersion Include="AngleSharp"                        Version="1.8.5" />
+    <PackageVersion Include="AngleSharp"                        Version="1.9.0" />
 
     <!-- Attachment text extraction (PDF + DOCX). Pure-managed; no native deps. -->
     <PackageVersion Include="PdfPig"                            Version="0.1.16" />
@@ -41,16 +41,16 @@
     <PackageVersion Include="BitMiracle.LibTiff.NET"           Version="2.4.660" />
 
     <!-- Generic Host / configuration / logging -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting"                  Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder"     Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting"                  Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder"     Version="10.0.14" />
     <!-- Explicit refs needed by Mailvec.Core/SharedConfig — Json + EnvironmentVariables -->
     <!-- aren't pulled in transitively by Configuration.Binder. -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json"                 Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Options"                  Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions"     Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console"          Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Http"                     Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json"                 Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Options"                  Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions"     Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console"          Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Http"                     Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="10.11.0" />
 
     <!-- Serilog: rolling-file logging in-process, replaces a custom rotator. -->
@@ -67,13 +67,13 @@
          Rides the same 10.0.x servicing band as the Microsoft.Extensions.*
          cluster — it pulls Microsoft.IdentityModel.* transitively, and that's
          where the JWKS caching/refresh actually lives. -->
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.14" />
 
     <!-- CLI -->
-    <PackageVersion Include="System.CommandLine"                Version="2.0.13" />
+    <PackageVersion Include="System.CommandLine"                Version="2.0.14" />
 
     <!-- Testing -->
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing"  Version="10.0.13" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing"  Version="10.0.14" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk"            Version="18.11.0" />
     <PackageVersion Include="xunit"                             Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio"         Version="4.0.1" />
