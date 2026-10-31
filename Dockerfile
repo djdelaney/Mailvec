@@ -23,7 +23,7 @@
 # enabled and bumps these weekly. If Dependabot is ever turned off, go back to
 # tags rather than sitting on a frozen base.
 #   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:747cbade5bfd918a175ac32f8f1d931edec2c7d0d5397a3de72eaef1ac1f66d2 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
@@ -81,7 +81,7 @@ RUN set -eux; \
 # Pull-only IMAP sync sidecar. Config comes from a bind-mounted /etc/mbsyncrc
 # (see ops/mbsyncrc.container.example); the Fastmail app password from a
 # compose file-secret the config's PassCmd cats.
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS mbsync
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS mbsync
 # goimapnotify is the optional IMAP IDLE watcher (MBSYNC_IDLE_FOLDERS; see the
 # loop below). Installed unconditionally so turning IDLE on is an env change,
 # not an image rebuild. A single Go binary (~13 MB), packaged by Alpine.
@@ -793,7 +793,7 @@ USER 10001:10001
 CMD ["mbsync-loop"]
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:8af87eba5e7cdafb1514d7388be287365da97c132509e84dfe252ffd552398ca AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:de0ee358cdd672f7017a003bed21e9ac9ed48a27c922a59b18175b6e82fa7fee AS runtime
 # curl is for the compose healthcheck against /health.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
