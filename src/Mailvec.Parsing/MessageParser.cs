@@ -75,7 +75,11 @@ public sealed class MessageParser
             DateSent: mime.Date == default ? null : mime.Date,
             BodyText: bodyText,
             BodyHtml: bodyHtml,
-            RawHeaders: mime.Headers.ToString() ?? string.Empty,
+            // Deliberately empty: headers aren't stored. This used to be
+            // mime.Headers.ToString(), which HeaderList doesn't override, so
+            // every row held "MimeKit.HeaderList". get_email_headers reads the
+            // block from the .eml when asked (MaildirAttachmentReader.ReadHeaderBlock).
+            RawHeaders: string.Empty,
             SizeBytes: sizeBytes,
             ContentHash: MessageBodyHasher.Hash(mime),
             Attachments: attachments);

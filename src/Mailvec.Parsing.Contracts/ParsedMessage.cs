@@ -19,6 +19,9 @@ public sealed record ParsedMessage(
     DateTimeOffset? DateSent,
     string? BodyText,
     string? BodyHtml,
+    // Always empty from MessageParser: headers are read from the .eml on
+    // demand (get_email_headers), never stored. Kept so the parse wire and
+    // existing callers don't change shape.
     string RawHeaders,
     long SizeBytes,
     string ContentHash,

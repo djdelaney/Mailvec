@@ -392,6 +392,9 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
     services.AddMailvecParser(config,
         (sp, settings) => new InProcessParser(settings, sp.GetRequiredService<ILoggerFactory>()));
     services.AddSingleton<AttachmentExtractor>();
+    // get_email_headers reads the .eml's header block directly — a byte scan,
+    // no parser — through the reader's containment guard.
+    services.AddSingleton<MaildirAttachmentReader>();
     // Reads mbsync's liveness beat off the Maildir mount — the sidecar can't
     // write the metadata table the other workers beat into. See
     // ServiceHeartbeat for why the three services report differently.
@@ -432,7 +435,7 @@ static void AddMailvecServices(IServiceCollection services, IConfiguration confi
 // tool call returns something unexpected ("did the user upgrade? am I on the
 // build that has the new field?"). Without this, the server name defaults to
 // the assembly filename, which is uninformative.
-// The tool classes to register for this deployment: the locked seven-tool
+// The tool classes to register for this deployment: the locked eight-tool
 // surface minus Mcp:DisabledTools. Reads config directly (registration runs
 // at builder time, before the options pipeline exists). Throws on unknown
 // names — see ToolSurface.Resolve.

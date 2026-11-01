@@ -34,6 +34,33 @@ public sealed class MaildirAttachmentReader(IOptions<IngestOptions> ingest)
     }
 
     /// <summary>
+    /// The header block of <paramref name="message"/>'s <c>.eml</c>, exactly as
+    /// stored — every byte before the first empty line — read through the same
+    /// guarded resolve as <see cref="ReadEml"/> and throwing what it throws.
+    /// Reads at most <paramref name="maxBytes"/>; a block that doesn't end
+    /// inside them comes back cut at the last whole line with
+    /// <see cref="RawHeaderBlock.Truncated"/> set.
+    /// </summary>
+    /// <remarks>
+    /// A byte scan for the terminating blank line, not a MIME parse: nothing is
+    /// decoded, unfolded or reordered (header order is the delivery path, the
+    /// point of reading them), so this stays on the reader's side of the
+    /// <c>IMailParser</c> boundary. Bounded rather than <see cref="ReadEml"/>
+    /// plus a split because the header block is a few KB and the message can be
+    /// 25 MB of attachments — and the block's length is sender-chosen.
+    /// </remarks>
+    public RawHeaderBlock ReadHeaderBlock(Message message, int maxBytes)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+
+        using var stream = File.OpenRead(ResolveExistingSource(message));
+        var buffer = new byte[(int)Math.Min(maxBytes, stream.Length)];
+        var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+        return RawHeaderBlock.FromBytes(buffer.AsSpan(0, read), reachedEnd: read == stream.Length);
+    }
+
+    /// <summary>
     /// Resolve the source and confirm it is still there, throwing exactly what
     /// <see cref="ReadEml"/> would — without parsing or decoding anything.
     /// </summary>

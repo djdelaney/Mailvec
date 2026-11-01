@@ -14,9 +14,9 @@ public class ToolSurfaceTests
     [Fact]
     public void Default_registers_the_full_locked_surface()
     {
-        ToolSurface.Resolve(null).Count.ShouldBe(7);
-        ToolSurface.Resolve([]).Count.ShouldBe(7);
-        ToolSurface.Resolve(["", "  "]).Count.ShouldBe(7); // blanks ignored, not errors
+        ToolSurface.Resolve(null).Count.ShouldBe(8);
+        ToolSurface.Resolve([]).Count.ShouldBe(8);
+        ToolSurface.Resolve(["", "  "]).Count.ShouldBe(8); // blanks ignored, not errors
     }
 
     [Fact]
@@ -25,12 +25,12 @@ public class ToolSurfaceTests
         ToolSurface.Resolve(null).ShouldNotContain(ToolSurface.All[ToolSurface.MarkRead]);
 
         var enabled = ToolSurface.Resolve(null, markReadEnabled: true);
-        enabled.Count.ShouldBe(8);
+        enabled.Count.ShouldBe(9);
         enabled.ShouldContain(ToolSurface.All[ToolSurface.MarkRead]);
 
         // DisabledTools still wins, and naming it is valid even when it's off.
-        ToolSurface.Resolve([ToolSurface.MarkRead], markReadEnabled: true).Count.ShouldBe(7);
-        ToolSurface.Resolve([ToolSurface.MarkRead]).Count.ShouldBe(7);
+        ToolSurface.Resolve([ToolSurface.MarkRead], markReadEnabled: true).Count.ShouldBe(8);
+        ToolSurface.Resolve([ToolSurface.MarkRead]).Count.ShouldBe(8);
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public class ToolSurfaceTests
     {
         var enabled = ToolSurface.Resolve(["view_attachment", "get_attachment_page_image"]);
 
-        enabled.Count.ShouldBe(5);
+        enabled.Count.ShouldBe(6);
         enabled.ShouldNotContain(ToolSurface.All["view_attachment"]);
         enabled.ShouldNotContain(ToolSurface.All["get_attachment_page_image"]);
         enabled.ShouldContain(ToolSurface.All["search_emails"]);
@@ -50,7 +50,7 @@ public class ToolSurfaceTests
     {
         var enabled = ToolSurface.Resolve([" View_Attachment "]);
 
-        enabled.Count.ShouldBe(6);
+        enabled.Count.ShouldBe(7);
         enabled.ShouldNotContain(ToolSurface.All["view_attachment"]);
     }
 
