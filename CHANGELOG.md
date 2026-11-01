@@ -359,14 +359,14 @@ No code change. Cut for the mbsync sidecar: v0.11.1's image was built on Alpine 
   - .NET 10.0.14 fixes a Brotli decoder flaw (CVE-2026-111497). Nothing in Mailvec decompresses Brotli: no `AutomaticDecompression`, no request decompression, no `BrotliStream`.
   - AngleSharp 1.9.0 fixes quadratic parse time on hostile markup. `rebuild-bodies` (dry run) over the 76,297-message frozen corpus changes the same 1 body with and without it, so no re-embed.
 
-## ✅ `get_email_headers` (no schema change, unreleased, 2026-11-01)
+## ✅ `get_email_headers` (no schema change, released in v0.12.0, 2026-11-01)
 
 A new read-only tool returning a message's raw header block, for DMARC/SPF/DKIM and spam debugging without copying "show original" out of webmail.
 
 - **Read from the `.eml`, not the database.** `MaildirAttachmentReader.ReadHeaderBlock` scans the file up to the first blank line, through the same containment guard as the attachment reads, at most 256 KB. There's no MIME parse, so order, folding and line endings come back exactly as delivered. Optional `names` filter (case-insensitive, `ARC-*` prefix match). Response: `rawHeaders`, `fieldCount`, `totalFieldCount`, `truncated`.
 - **`messages.raw_headers` never held headers.** The parser stored `mime.Headers.ToString()`, which MimeKit's `HeaderList` doesn't override, so every row read `MimeKit.HeaderList`: all 81,078 in the frozen corpus. Nothing read the column. The indexer now writes NULL. Existing rows keep the old string until re-parsed, and no migration rewrites them.
 - The description says which headers to trust: only the topmost `Received` and `Authentication-Results` lines that the receiving provider added. Anything a sender or intermediary wrote below them can claim a pass.
-- Tool-surface change: the next release is a minor bump.
+- Tool-surface change: minor bump (0.11.2 → 0.12.0).
 
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
