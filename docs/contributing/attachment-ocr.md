@@ -205,6 +205,12 @@ One run through it is recorded in
 transferable finding: mistral scored the same whether it rasterised the PDF
 itself or consumed `PdfRenderer`'s JPEGs, so the per-page pipeline shape is not
 what limits quality, and swapping engines stays an `IVisionClient` change.
+A follow-up on the same sample,
+[`ocr-bakeoff-2026-10-31.md`](ocr-bakeoff-2026-10-31.md), tried newer local
+models (`glm-ocr`, `qwen3-vl:30b`) on a Mac Studio: none beat `qwen2.5vl:7b`,
+which ran about twice as fast there at unchanged accuracy. It also found that a
+reasoning-capable vision model returns empty pages under `num_predict`, because
+the client sends no `think` parameter.
 
 **After a switch, `ocr_model` is what makes the old engine's work selectable.**
 Rows written before v10 carry NULL ("provenance unknown"); rows written since
