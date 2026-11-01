@@ -236,7 +236,10 @@ public sealed class MessageRepository(ConnectionFactory connections)
             cmd.Parameters.AddWithValue("$attachments_reset", (isNewInsert || contentChanged) ? 1 : 0);
             cmd.Parameters.AddWithValue("$body_text", (object?)parsed.BodyText ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$body_html", (object?)parsed.BodyHtml ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$raw_headers", parsed.RawHeaders);
+            // Empty from the parser (headers are read from the .eml on demand),
+            // stored as NULL rather than "". Rows indexed before that keep the
+            // old "MimeKit.HeaderList" until re-parsed — nothing reads them.
+            cmd.Parameters.AddWithValue("$raw_headers", string.IsNullOrEmpty(parsed.RawHeaders) ? DBNull.Value : parsed.RawHeaders);
             cmd.Parameters.AddWithValue("$indexed_at", indexedAt.ToString("O"));
             cmd.Parameters.AddWithValue("$content_hash", parsed.ContentHash);
 

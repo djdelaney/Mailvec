@@ -49,6 +49,7 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     {
         { "search_emails", ["query", "mode", "limit", "folder", "dateFrom", "dateTo", "fromContains", "fromExact", "toContains", "hasAttachments", "attachmentType", "unread"], [] },
         { "get_email", ["id", "messageId", "includeHtml"], [] },
+        { "get_email_headers", ["id", "messageId", "names"], [] },
         { "get_thread", ["id", "messageId", "includeBodies"], [] },
         { "list_folders", [], [] },
         { "view_attachment", ["id", "messageId", "partIndex"], ["partIndex"] },
@@ -150,6 +151,7 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
     [Theory]
     [InlineData("search_emails")]
     [InlineData("get_email")]
+    [InlineData("get_email_headers")]
     [InlineData("get_thread")]
     [InlineData("view_attachment")]
     [InlineData("get_attachment_text")]
@@ -306,6 +308,30 @@ public class McpSurfaceTests : IClassFixture<MailvecMcpFactory>
 
         var hit = body.GetProperty("results").EnumerateArray().First();
         ShouldHaveKeys(hit, "id", "messageId", "folder", "subject", "fromAddress", "fromName", "dateSent", "snippet");
+    }
+
+    [Fact]
+    public async Task Get_email_headers_binds_a_names_array_and_keeps_its_response_field_names()
+    {
+        // The one array parameter on a read tool: proves `names` binds from a
+        // JSON array, and pins the response names clients narrate.
+        await using var client = await ConnectAsync();
+        Seed("headers-wire@x", body: "miso");
+        var dir = Path.Combine(_factory.MaildirRoot, "INBOX", "cur", "headers-wire@x");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "headers-wire@x"),
+            "Authentication-Results: mx.example; dmarc=pass\r\nSubject: miso\r\nMessage-ID: <headers-wire@x>\r\n\r\nmiso\r\n");
+
+        var body = await CallJsonAsync(client, "get_email_headers", new()
+        {
+            ["messageId"] = "headers-wire@x",
+            ["names"] = new[] { "authentication-results" },
+        });
+
+        ShouldHaveKeys(body, "id", "messageId", "folder", "rawHeaders", "fieldCount", "totalFieldCount", "truncated");
+        body.GetProperty("rawHeaders").GetString().ShouldBe("Authentication-Results: mx.example; dmarc=pass\r\n");
+        body.GetProperty("fieldCount").GetInt32().ShouldBe(1);
+        body.GetProperty("totalFieldCount").GetInt32().ShouldBe(3);
     }
 
     [Fact]

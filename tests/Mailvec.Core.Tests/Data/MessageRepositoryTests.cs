@@ -389,6 +389,21 @@ public class MessageRepositoryTests
         EmbeddedAt(db, id).ShouldNotBeNull();
     }
 
+    [Fact]
+    public void Empty_raw_headers_are_stored_as_null()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+
+        var id = repo.Upsert(Sample() with { RawHeaders = "" }, "INBOX", "INBOX/cur", "f1", DateTimeOffset.UtcNow).Id;
+
+        using var conn = db.Connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT raw_headers IS NULL FROM messages WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture).ShouldBe(1);
+    }
+
     private static string? EmbeddedAt(TempDatabase db, long messageId)
     {
         using var conn = db.Connections.Open();

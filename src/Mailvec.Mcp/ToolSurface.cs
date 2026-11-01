@@ -31,6 +31,7 @@ internal static class ToolSurface
         {
             ["search_emails"] = typeof(SearchEmailsTool),
             ["get_email"] = typeof(GetEmailTool),
+            ["get_email_headers"] = typeof(GetEmailHeadersTool),
             ["get_thread"] = typeof(GetThreadTool),
             ["list_folders"] = typeof(ListFoldersTool),
             ["view_attachment"] = typeof(ViewAttachmentTool),

@@ -25,6 +25,17 @@ public class MessageParserTests
     }
 
     [Fact]
+    public void Headers_are_not_carried_on_the_parse_result()
+    {
+        // This used to be mime.Headers.ToString(), which HeaderList doesn't
+        // override: every stored row read "MimeKit.HeaderList". Headers are
+        // read from the .eml on demand (get_email_headers) instead.
+        var parsed = _parser.ParseFile(Fixture("plain-text.eml"));
+
+        parsed.RawHeaders.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void Resolves_thread_id_from_References_header()
     {
         var parsed = _parser.ParseFile(Fixture("multipart.eml"));
