@@ -63,8 +63,8 @@ every step after the baseline. The candidates in
 | `qwen3-embedding-0.6b.env` | qwen3 0.6b @1024 + query instruction | measured 2026-06-11 (tie with mxbai) |
 | `qwen3-embedding-0.6b-chunk512.env` | the same with 512-token chunks | never run; compare against the 0.6b run |
 | `qwen3-embedding-4b-1024.env` | qwen3 4b truncated 2560 → 1024 | never run; needs Matryoshka support (below) |
-| `embeddinggemma-2-768.env` | embeddinggemma-2 @768, task prefixes | never run; prefixes confirmed from the model card, text-only tag not — read the file |
-| `embeddinggemma-2-512.env` | the same truncated 768 → 512 | never run; half mxbai's scan width |
+| `embeddinggemma-2-768.env` | embeddinggemma-2 @768 bf16, task prefixes | measured 2026-10-09 as NVFP4 (fails the gate); bf16 never run — see 2026-11-03 |
+| `embeddinggemma-2-512.env` | the same truncated 768 → 512 | measured 2026-10-09 as NVFP4 (fails the gate); bf16 never run |
 
 The keys a profile sets:
 
@@ -367,3 +367,30 @@ fails the other two.
 
 **Verdict**: mxbai-embed-large stays live. No candidate so far beats it on
 hybrid on the full archive.
+
+### 2026-11-03 — embeddinggemma-2 tags: size is moot, quantization isn't
+
+A check of the open question in the profile (does `:270m` equal
+`:latest`?), on the Mac Studio with Ollama 0.40.14. No eval was run.
+
+- **Size tags are the same text model.** All 421 weight tensors in `:270m`
+  are byte-identical to tensors in `:740m` (= `:latest`), which adds 966
+  vision/audio encoder tensors. Four test strings came back with
+  bit-identical vectors from both tags.
+- **The bare tag hides a platform-dependent quantization.** `:270m` is a
+  manifest list: on Apple Silicon Ollama resolves it to the MLX NVFP4 build
+  (378 MB, id `3963be2b1673`), elsewhere to the q8_0 GGUF (303 MB, id
+  `c21dd30c1e38`, the same as `:270m-q8_0-text`). Cosine against
+  `:270m-bf16-text` on five query/document strings: NVFP4 0.984–0.991,
+  q8_0 0.9997–0.9999. mxbai-embed-large runs at F16.
+- **So the 2026-10-09 gemma rows measured a 4-bit model.** That doesn't
+  overturn them — query–document similarities moved by about 0.01 on the
+  test strings, small next to the gaps between them — but at a −0.011
+  hybrid margin with per-query churn it can't be ruled out as a
+  contributor. Both profiles now pin `270m-bf16-text`. A bf16 re-run is
+  about an hour of re-embedding on this machine, and the experiment worth
+  doing if embeddinggemma-2 gets another look; judge it on the same gate.
+- **General rule for profiles**: pin an explicit quantization tag. A bare
+  tag can mean different weights on different hosts. The digest leg would
+  refuse to embed if a database moved between them, but two experiment
+  runs on different hosts would quietly compare different models.
