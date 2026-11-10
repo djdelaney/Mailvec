@@ -36,8 +36,11 @@ ScaffoldingReadMe.txt
 # NuGet Symbol Packages
 *.snupkg
 
-# dotenv environment variables file
+# dotenv environment variables file, and its variants (.env.local,
+# .env.prod, an editor's .env.bak). The example is the one tracked file.
 .env
+.env.*
+!.env.example
 
 # Others
 ~$*
@@ -77,7 +80,15 @@ runtimes/*/native/
 /mail/
 /secrets/
 /mbsyncrc
+# Copies and backups of the live config (mbsyncrc.bak, mbsyncrc.old): they
+# name the account and the synced folders. The examples live under ops/.
+/mbsyncrc.*
 /mark-read/
+# A local compose override holds a deployment's real settings.
+/compose.override.yml
+/compose.override.yaml
+/docker-compose.override.yml
+/docker-compose.override.yaml
 
 # Claude Code local state
 .claude/worktrees/

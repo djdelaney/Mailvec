@@ -2,8 +2,8 @@
 # - runtimes/: host-fetched macOS dylibs; the Dockerfile fetches the Linux
 #   .so for the image platform itself, and the Directory.Build.props glob
 #   would otherwise copy stale mac binaries into the Linux publish.
-# - data/, logs/, mail/, mark-read/, secrets/, mbsyncrc, .env: deploy-host
-#   state that lives in the compose dir (= this repo clone on the VM). The
+# - data/, logs/, mail/, mark-read/, secrets/, mbsyncrc*, .env*, compose
+#   overrides: deploy-host state that lives in the compose dir (= this repo clone on the VM). The
 #   build stage does `COPY . .`, so without these exclusions every on-host
 #   build shipped the entire Maildir into the build context and copied the
 #   Fastmail password file into build-stage layers. Never let bind-mount
@@ -19,6 +19,13 @@ logs/
 mail/
 mark-read/
 mbsyncrc
+mbsyncrc.*
+compose.override.yml
+compose.override.yaml
+docker-compose.override.yml
+docker-compose.override.yaml
+# Review write-ups of a live install (gitignored, kept on disk at the root).
+*REVIEW*.md
 runtimes/
 secrets/
 # The static product site (published by .github/workflows/pages.yml) is
@@ -26,6 +33,7 @@ secrets/
 # invalidating the `COPY . .` layer and rebuilding every .NET project.
 site/
 .env
+.env.*
 **/bin/
 **/obj/
 **/appsettings.Local.json
