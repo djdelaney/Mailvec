@@ -78,7 +78,12 @@ public sealed class GetAttachmentTextTool(
 
         var window = Math.Min(maxChars ?? DefaultMaxChars, MaxMaxChars);
 
-        var msg = id is not null ? messages.GetById(id.Value) : messages.GetByMessageId(messageId!);
+        // Summaries only: the message load used to pull every attachment's
+        // extracted text (up to millions of chars each) on every paged call,
+        // to return a window of one. The one text is fetched below.
+        var msg = id is not null
+            ? messages.GetById(id.Value, includeAttachmentText: false)
+            : messages.GetByMessageId(messageId!, includeAttachmentText: false);
         if (msg is null)
             throw new McpException(id is not null
                 ? $"No message with id {id}."
@@ -104,10 +109,11 @@ public sealed class GetAttachmentTextTool(
         // embedder recovered via vision-model OCR. Refusing it here would
         // contradict search (which matches on that text) and get_email
         // (which reports it IndexedForSearch).
-        if (attachment.ExtractionStatus is ExtractionStatus.Done or ExtractionStatus.Ocr
-            && !string.IsNullOrEmpty(attachment.ExtractedText))
+        var text = attachment.ExtractionStatus is ExtractionStatus.Done or ExtractionStatus.Ocr
+            ? messages.GetAttachmentText(msg.Id, partIndex)
+            : null;
+        if (!string.IsNullOrEmpty(text))
         {
-            var text = attachment.ExtractedText;
             var how = attachment.ExtractionStatus == ExtractionStatus.Ocr ? "OCR text" : "Extracted text";
 
             if (offset >= text.Length)

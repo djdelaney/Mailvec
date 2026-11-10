@@ -26,6 +26,31 @@ public class GetAttachmentTextToolTests
     }
 
     [Fact]
+    public void A_paged_call_does_not_load_the_other_attachments_text()
+    {
+        // The message load used to bring every attachment's text with it. The
+        // sibling here is 8M chars (16 MB as a .NET string, more while it is
+        // read); the requested one is tiny. The result is identical either
+        // way, so the assertion is on what the call allocates.
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var parsed = Helpers.Sample("two@x", attachments: [
+            new ParsedAttachment(0, "small.pdf", "application/pdf", 10L, ExtractedText: "the small one", ExtractionStatus: "done"),
+            new ParsedAttachment(1, "huge.pdf", "application/pdf", 10L, ExtractedText: new string('x', 8_000_000), ExtractionStatus: "done"),
+        ]);
+        long id = repo.Upsert(parsed, "INBOX", "INBOX/cur", "two.eml", DateTimeOffset.UtcNow);
+        var tool = Build(db);
+        tool.GetAttachmentText(partIndex: 0, id: id);   // warm up: JIT, connection, statement cache
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = tool.GetAttachmentText(partIndex: 0, id: id);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        result.Content.OfType<TextContentBlock>().Last().Text.ShouldBe("the small one");
+        allocated.ShouldBeLessThan(4_000_000);
+    }
+
+    [Fact]
     public void Throws_when_neither_id_nor_messageId_provided()
     {
         using var db = new TempDatabase();

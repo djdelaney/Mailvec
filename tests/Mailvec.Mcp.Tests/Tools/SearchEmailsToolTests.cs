@@ -260,6 +260,21 @@ public class SearchEmailsToolTests
     }
 
     [Fact]
+    public async Task An_oversized_query_is_refused_before_any_search_runs()
+    {
+        using var db = new TempDatabase();
+        var tool = Build(db);
+
+        var ex = await Should.ThrowAsync<McpException>(
+            async () => await tool.SearchEmails(query: new string('a', SearchEmailsTool.MaxQueryChars + 1), mode: "keyword"));
+        ex.Message.ShouldContain("maximum");
+
+        // At the limit it is an ordinary search.
+        await Should.NotThrowAsync(
+            async () => await tool.SearchEmails(query: new string('a', SearchEmailsTool.MaxQueryChars), mode: "keyword"));
+    }
+
+    [Fact]
     public async Task Unknown_mode_throws_McpException()
     {
         using var db = new TempDatabase();

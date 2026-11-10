@@ -45,6 +45,9 @@ public sealed class SearchEmailsTool(
     private readonly OllamaOptions _ollama = ollamaOptions.Value;
     private const string ToolName = "search_emails";
 
+    /// <summary>Longest <c>query</c> search_emails accepts.</summary>
+    internal const int MaxQueryChars = 2_000;
+
     [McpServerTool(Name = "search_emails", ReadOnly = true, OpenWorld = false)]
     [Description(
         "Search or browse the user's mail — a complete, continuously-synced local mirror of their entire " +
@@ -140,6 +143,16 @@ public sealed class SearchEmailsTool(
         bool? unread = null,
         CancellationToken ct = default)
     {
+        // Refused before anything is logged, tokenised or embedded. A query is
+        // a question, not a document: nothing past a few hundred characters
+        // changes the ranking (the embedding model's context is ~512 tokens),
+        // while an unbounded one is copied into the FTS tokeniser, the
+        // embedding request and — with Mcp:LogToolCalls on — the log.
+        if (query is { Length: > MaxQueryChars })
+            throw new McpException(
+                $"query is {query.Length:N0} characters; the maximum is {MaxQueryChars:N0}. " +
+                "Use a shorter query of the key terms, and narrow with the filters instead.");
+
         var startTs = callLog.LogCall(ToolName, new { query, mode, limit, folder, dateFrom, dateTo, fromContains, fromExact, toContains, hasAttachments, attachmentType, unread });
 
         var resolvedLimit = ClampLimit(limit);

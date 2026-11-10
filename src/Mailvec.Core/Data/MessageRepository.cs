@@ -429,6 +429,20 @@ public sealed class MessageRepository(ConnectionFactory connections)
         return list;
     }
 
+    /// <summary>
+    /// The extracted text of ONE attachment, addressed the way the tools
+    /// address it. Null when there is no such row or it has no text.
+    /// </summary>
+    public string? GetAttachmentText(long messageId, int partIndex)
+    {
+        using var conn = connections.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT extracted_text FROM attachments WHERE message_id = $mid AND part_index = $part";
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        cmd.Parameters.AddWithValue("$part", partIndex);
+        return cmd.ExecuteScalar() as string;
+    }
+
     public Message? GetById(long id) => GetById(id, includeAttachmentText: true);
 
     /// <summary>
