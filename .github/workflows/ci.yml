@@ -100,7 +100,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import pathlib, sys
-          BLOCKS = ["frozen-corpus", "release-approval"]
+          BLOCKS = ["frozen-corpus", "public-repo", "release-approval"]
           FILES = ["AGENTS.md", "CLAUDE.md"]
           text = {f: pathlib.Path(f).read_text() for f in FILES}
           failed = False

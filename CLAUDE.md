@@ -21,6 +21,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 <sub>The block above is duplicated verbatim in [`AGENTS.md`](AGENTS.md) so agents that don't read this file still get it; CI fails if they drift.</sub>
 
+<!-- BEGIN public-repo -->
+> 🔒 **This repository is public. Nothing about a real deployment or a real mailbox gets committed.**
+>
+> That covers every tracked file, and commit messages and PR text too. Keep out:
+>
+> - **Real mail**: subjects, senders, recipients, addresses, Message-IDs, folder names, attachment names, quoted bodies, eval queries.
+> - **Live configuration**: a real `.env`, `mbsyncrc` or compose override, or values quoted from one, such as which folders are synced or which hosted provider is switched on.
+> - **Network and account identifiers**: LAN addresses, hostnames, tunnel and Access hostnames, cloud resource and deployment names.
+> - **Credentials** of any kind, and the paths of files that hold them on a real machine.
+>
+> **A review of a live install is not a repo document.** Security reviews, audits, incident notes and "current state of the homelab" write-ups go in the conversation or in a root-level file matching `*REVIEW*.md`, which `.gitignore` keeps out of git. Never `git add -f` one, and never move its findings into a tracked doc with the live values attached. Commit only the code or doc change that fixes a finding, described without those values.
+>
+> Examples use placeholders: `192.168.1.50`, `you@fastmail.com`, reserved example domains, and the synthetic demo mailbox (`tools/Mailvec.DevCorpus`, `assets/screenshots/demo-mail.py`). Observed live state that a runbook genuinely needs follows the existing rule: write the command that verifies it, not the value. If you can't tell whether a detail is private, leave it out and ask.
+<!-- END public-repo -->
+<sub>Also duplicated verbatim in [`AGENTS.md`](AGENTS.md); CI fails if the copies drift.</sub>
+
 ## Source of truth
 
 The schema is `schema/001_initial.sql` + migrations under `schema/migrations/` — silent-corruption-prone invariants are captured in this file under "Schema & data invariants". `CHANGELOG.md` is the phase-by-phase build history. Design rationale that didn't make it into code lives in `docs/security.md` (threat model) and `docs/future-ideas.md` (deferred work + still-open questions).
