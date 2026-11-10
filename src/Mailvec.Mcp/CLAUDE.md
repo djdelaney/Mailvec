@@ -58,6 +58,8 @@ the last good keys instead of silently degrading to authenticating nobody.
 see any of this; `AccessSigningKeyTests` is the file that covers retrieval.
 Reverting the URL fails four of its tests — that's the alarm.
 
+**Access on a loopback-only listener is refused at startup** (`AccessLoopbackCheck`): with `AllowLoopback` on, every request such a server can receive is exempt, so validation would be "enabled" and check nobody. The exemption is for the container, which listens on its network address. Tests that switch Access on must therefore set `Mcp:BindAddress` off loopback.
+
 `mcpOpts` exists only for wiring that genuinely cannot wait for `Build()` —
 Kestrel's listen address. `NetworkGuard`, the `HostGuard` allowlist,
 `RestrictHealthToLoopback` and everything under `Mcp:Access` read

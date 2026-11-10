@@ -1131,21 +1131,11 @@ internal static class DoctorCommand
         || File.Exists("/.dockerenv")
         || File.Exists("/run/.containerenv");
 
-    private static string? ResolveExtensionPath(string configured)
-    {
-        if (Path.IsPathRooted(configured) && File.Exists(configured)) return configured;
-        if (File.Exists(configured)) return Path.GetFullPath(configured);
-
-        var beside = Path.Combine(AppContext.BaseDirectory, configured);
-        if (File.Exists(beside)) return Path.GetFullPath(beside);
-
-        // The repo root resolution mirrors how Directory.Build.props copies
-        // the dylib into each project's bin output, so a from-source
-        // `dotnet run` against the working tree resolves correctly even
-        // when the configured path is a relative ./runtimes/... string.
-        var fromRepo = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", configured);
-        return File.Exists(fromRepo) ? Path.GetFullPath(fromRepo) : null;
-    }
+    // The factory's own resolution, not a second copy of it: doctor used to
+    // search the working directory and a fixed five levels up, so it could
+    // report a library the services would never load, or miss the one they do.
+    private static string? ResolveExtensionPath(string configured) =>
+        Mailvec.Core.Data.ConnectionFactory.ResolveVecExtension(configured);
 
     private static string? ResolveOnPath(string command)
     {

@@ -14,10 +14,10 @@
 #             v* tag to it. A release image is therefore byte-for-byte a build
 #             made from main, and a v* tag can only exist for a commit that
 #             was on main — because nothing else ever produced a sha- image.
-#             "Passed CI" holds for the workflow_run path only: a manual run
-#             builds main's head without waiting for CI, so a sha- image made
-#             that way has not been tested by this workflow. Don't dispatch
-#             manually for a commit you mean to release. It refuses if the v*
+#             A manual run is held to the same rule by its first step, which
+#             refuses unless CI already succeeded for the commit being built;
+#             without it a dispatch built main's head untested and the
+#             "passed CI" half of this sentence was false. It refuses if the v*
 #             tag is already in GHCR, so a
 #             re-run (or a re-pushed git tag) cannot re-point a release the
 #             homelab has pinned.
@@ -46,6 +46,7 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: read # the manual-run gate reads CI's result for the commit
 
 jobs:
   build:
@@ -84,6 +85,24 @@ jobs:
           # trigger time, which may have advanced past the commit CI actually
           # tested — build exactly what passed.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+
+      # workflow_run only fires on a green CI. A manual run has no such
+      # trigger, so it checks for itself: no successful CI push run for this
+      # exact commit, no build. Before the login, so a refused run never
+      # holds registry credentials.
+      - name: Require green CI for a manual run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          green=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&event=push&status=success&per_page=1" --jq '.total_count')
+          if [ "$green" -lt 1 ]; then
+            echo "::error::CI has not succeeded for $sha. Wait for the CI run on main to go green, then dispatch again." >&2
+            exit 1
+          fi
+          echo "CI succeeded for $sha"
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:

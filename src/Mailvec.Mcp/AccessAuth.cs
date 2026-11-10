@@ -233,6 +233,36 @@ internal sealed class AccessAudienceRequirement(AccessScope scope) : IAuthorizat
     public AccessScope Scope { get; } = scope;
 }
 
+/// <summary>
+/// The one configuration in which Access validation is switched on and
+/// validates nobody.
+/// </summary>
+internal static class AccessLoopbackCheck
+{
+    /// <summary>
+    /// An error message when every request this server can receive is exempt
+    /// from Access validation, else null. That is the case when it listens on
+    /// loopback only while <see cref="AccessOptions.AllowLoopback"/> is on:
+    /// the only way to reach it is from the same machine, a local tunnel or
+    /// reverse proxy included, so every request arrives from 127.0.0.1 and is
+    /// accepted before any assertion is looked at — /health with it. The boot
+    /// log would still say validation is ENABLED. The exemption exists for the
+    /// container, which listens on its network address and is probed over
+    /// loopback by its own healthcheck; there the two are different callers.
+    /// </summary>
+    public static string? Problem(McpOptions options)
+    {
+        var access = options.Access;
+        if (!access.Enabled || !access.AllowLoopback || !HostGuard.IsLoopbackBind(options.BindAddress)) return null;
+
+        return $"Mcp:Access:Enabled is true, but the server listens on loopback only (Mcp:BindAddress = {options.BindAddress}) "
+             + "with Mcp:Access:AllowLoopback on. Every request it can receive then comes from this machine, including "
+             + "everything a local tunnel or reverse proxy forwards, and loopback callers are exempt: no assertion would "
+             + "ever be checked. Set Mcp:Access:AllowLoopback=false so proxied requests are validated (a local "
+             + "`mailvec doctor` /health probe will then get 401, which is expected), or turn Mcp:Access off.";
+    }
+}
+
 internal sealed class AccessAudienceHandler(
     IHttpContextAccessor http,
     IOptions<McpOptions> mcp,

@@ -73,4 +73,47 @@ public class HostGuardTests
         HostGuard.IsAllowed("mail.example.com", "https://mail.example.com", set).ShouldBeTrue();
         HostGuard.IsAllowed("evil.com", origin: null, set).ShouldBeFalse();
     }
+
+    // ---- Mcp:Access on a loopback-only listener ----
+
+    private static Mailvec.Core.Options.McpOptions Access(string bind, bool enabled = true, bool allowLoopback = true) => new()
+    {
+        BindAddress = bind,
+        Access = new Mailvec.Core.Options.AccessOptions
+        {
+            Enabled = enabled, AllowLoopback = allowLoopback,
+            TeamDomain = "https://team.cloudflareaccess.com", Audience = "aud",
+        },
+    };
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("::1")]
+    public void Access_on_a_loopback_only_listener_with_the_loopback_exemption_is_refused(string bind)
+    {
+        // Fronted by a local tunnel or proxy, every request arrives from
+        // 127.0.0.1 and the exemption admits it before any assertion is read:
+        // validation "enabled" that checks nobody.
+        AccessLoopbackCheck.Problem(Access(bind)).ShouldNotBeNull().ShouldContain("AllowLoopback=false");
+    }
+
+    [Fact]
+    public void The_container_shape_is_not_refused()
+    {
+        // Listening on the network address, probed over loopback by its own
+        // healthcheck: the exemption and the tunnel are different callers.
+        AccessLoopbackCheck.Problem(Access("0.0.0.0")).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_loopback_listener_that_validates_loopback_callers_is_not_refused()
+    {
+        AccessLoopbackCheck.Problem(Access("127.0.0.1", allowLoopback: false)).ShouldBeNull();
+    }
+
+    [Fact]
+    public void With_access_off_there_is_nothing_to_refuse()
+    {
+        AccessLoopbackCheck.Problem(Access("127.0.0.1", enabled: false)).ShouldBeNull();
+    }
 }

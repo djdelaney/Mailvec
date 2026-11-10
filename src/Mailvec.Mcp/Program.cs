@@ -162,6 +162,12 @@ static async Task RunHttp(string[] args)
     if (resolvedMcpOpts.Access.Validate() is { } accessConfigError)
         throw new InvalidOperationException(accessConfigError);
 
+    // Coherent settings can still add up to validation that checks nobody.
+    // Refused rather than warned about: a server that says ENABLED and admits
+    // everything is worse than one that will not start.
+    if (AccessLoopbackCheck.Problem(resolvedMcpOpts) is { } loopbackOnlyError)
+        throw new InvalidOperationException(loopbackOnlyError);
+
     // Network deny-list — the compose parse network in the container. Runs
     // FIRST, before HostGuard, because it is the cheapest check and the one
     // the caller cannot influence: HostGuard reads a header the parse service

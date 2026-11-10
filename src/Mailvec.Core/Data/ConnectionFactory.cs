@@ -62,7 +62,12 @@ public sealed class ConnectionFactory
 
         if (_vecExtensionPath is not null)
         {
-            conn.EnableExtensions(true);
+            // LoadExtension alone, never EnableExtensions(true). The provider
+            // lifts SQLite's extension-loading switch for the duration of this
+            // one call and drops it again. EnableExtensions(true) left it up
+            // for the life of the connection, which also turns on the SQL
+            // function load_extension(): any statement that could be steered
+            // would then have been able to load a native library by path.
             conn.LoadExtension(_vecExtensionPath);
         }
         else if (!string.IsNullOrWhiteSpace(_configuredVecPath))
@@ -189,7 +194,7 @@ public sealed class ConnectionFactory
     /// and Directory.Build.props copies, nothing else. It cannot silently pick
     /// up an unrelated library.</para>
     /// </remarks>
-    private static string? ResolveVecExtension(string configured)
+    public static string? ResolveVecExtension(string configured)
     {
         if (string.IsNullOrWhiteSpace(configured)) return null;
 
@@ -217,25 +222,38 @@ public sealed class ConnectionFactory
     }
 
     /// <summary>
-    /// Try a relative path against the binary directory, then each ancestor —
-    /// so it works from a published exe, `dotnet run`, or a test runner whose
-    /// bin directory sits several levels under the repo root.
+    /// Try a relative path against the binary directory, then — only inside a
+    /// source checkout — each ancestor up to the repo root, so it works from a
+    /// published exe, `dotnet run`, or a test runner whose bin directory sits
+    /// several levels under the repo root.
     /// </summary>
-    private static string? ResolveRelative(string relative)
+    /// <remarks>
+    /// The walk used to continue to the filesystem root. Every supported
+    /// layout puts the library beside the binary (the build copies it into
+    /// each bin directory, publish and the MCPB bundle carry it, the image
+    /// flattens it next to each service), so the ancestors beyond a checkout
+    /// were never where it was found — only places where a
+    /// <c>runtimes/…/vec0</c> left by someone else would have been loaded as
+    /// native code. An installed binary has no <c>Mailvec.slnx</c> above it
+    /// and now looks beside itself and nowhere else.
+    /// </remarks>
+    internal static string? ResolveRelative(string relative) =>
+        ResolveRelative(relative, AppContext.BaseDirectory);
+
+    internal static string? ResolveRelative(string relative, string baseDirectory)
     {
-        var candidates = new List<string>
-        {
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, relative)),
-        };
+        var beside = Path.GetFullPath(Path.Combine(baseDirectory, relative));
+        if (File.Exists(beside)) return beside;
 
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
+        var trimmed = relative.TrimStart('.', Path.DirectorySeparatorChar, '/');
+        var ancestors = new List<string>();
+        for (var dir = new DirectoryInfo(baseDirectory); dir is not null; dir = dir.Parent)
         {
-            candidates.Add(Path.Combine(dir.FullName, relative.TrimStart('.', Path.DirectorySeparatorChar, '/')));
-            dir = dir.Parent;
+            ancestors.Add(dir.FullName);
+            if (File.Exists(Path.Combine(dir.FullName, "Mailvec.slnx")))
+                return ancestors.Select(a => Path.Combine(a, trimmed)).FirstOrDefault(File.Exists);
         }
-
-        return candidates.FirstOrDefault(File.Exists);
+        return null; // no checkout above us: nothing but the binary's own directory counts
     }
 
     /// <summary>

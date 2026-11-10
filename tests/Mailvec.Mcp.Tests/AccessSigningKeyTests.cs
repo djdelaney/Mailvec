@@ -227,6 +227,10 @@ public class AccessSigningKeyTests
                     ["Ollama:BaseUrl"] = "http://127.0.0.1:1",
                     ["Ollama:RequestTimeoutSeconds"] = "5",
                     ["Fastmail:AccountId"] = "",
+                    // The shape Access is for: listening off loopback. On a
+                    // loopback bind with the loopback exemption on, the server
+                    // refuses to start (AccessLoopbackCheck).
+                    ["Mcp:BindAddress"] = "0.0.0.0",
                     ["Mcp:Access:Enabled"] = "true",
                     ["Mcp:Access:TeamDomain"] = TeamDomainValue,
                     ["Mcp:Access:Audience"] = OwnerAud,

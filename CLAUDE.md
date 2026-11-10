@@ -102,7 +102,7 @@ Both indexer and CLI read environment variables with no prefix, so `Ingest__Mail
 
 ## sqlite-vec
 
-Fetched as a prebuilt loadable (`vec0.dylib` / `vec0.so`) by `ops/fetch-sqlite-vec.sh` and loaded at runtime via `Microsoft.Data.Sqlite`'s extension-loading API. Path comes from `Archive:SqliteVecExtensionPath`. Fetch script supports `osx-arm64`, `linux-x64`, and `linux-arm64` (RID auto-detected, or passed as the first arg — the Dockerfile does this from `TARGETARCH`); add other RIDs there if needed. **Don't switch to the NuGet wrapper** — see `ops/UPGRADING.md`.
+Fetched as a prebuilt loadable (`vec0.dylib` / `vec0.so`) by `ops/fetch-sqlite-vec.sh` and loaded at runtime via `Microsoft.Data.Sqlite`'s extension-loading API. Path comes from `Archive:SqliteVecExtensionPath`. Fetch script supports `osx-arm64`, `linux-x64`, and `linux-arm64` (RID auto-detected, or passed as the first arg — the Dockerfile does this from `TARGETARCH`); add other RIDs there if needed. **Don't switch to the NuGet wrapper** — see `ops/UPGRADING.md`. Two rules keep "load vec0" from meaning "load a library": `ConnectionFactory.Open` calls **`LoadExtension` only, never `EnableExtensions(true)`**, which would leave SQLite's switch up for the life of the connection and turn on the SQL function `load_extension()`; and a relative path is looked for beside the binary, then up to the repo root only when a `Mailvec.slnx` sits above it — an installed binary never searches its ancestors. `mailvec doctor` reports through the same resolver (`ConnectionFactory.ResolveVecExtension`); don't give it its own. Tests: `VecExtensionLoadingTests`.
 
 ## Schema & data invariants
 
