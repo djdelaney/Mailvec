@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mailvec: give your agent your email, not your mailbox</title>
+<meta name="description" content="Mailvec keeps a synced copy of your mailbox on a machine you control and lets Claude or any MCP client search it by keyword and by meaning. Open source, self-hosted, read-only for agents.">
+<link rel="canonical" href="https://djdelaney.github.io/Mailvec/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mailvec">
+<meta property="og:title" content="Mailvec: give your agent your email, not your mailbox">
+<meta property="og:description" content="Mailvec keeps a synced copy of your mailbox on a machine you control and lets Claude or any MCP client search it by keyword and by meaning. Open source, self-hosted, read-only for agents.">
+<meta property="og:url" content="https://djdelaney.github.io/Mailvec/">
+<meta property="og:image" content="https://djdelaney.github.io/Mailvec/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Mailvec: give your agent your email. Not your mailbox.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#F6F1E6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141210" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="assets/fonts/newsreader-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<script>
+  // Set the theme before first paint: saved choice, else the OS setting.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('mailvec-theme'); } catch (e) {}
+    if (t !== 'light' && t !== 'dark') t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<link rel="stylesheet" href="styles.css">
+<script src="script.js" defer></script>
+</head>
+<body>
+<div class="mv">
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- NAV -->
+<header style="border-bottom: 1px solid var(--line)">
+<nav class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 18px 32px; display: flex; align-items: center; gap: 24px" aria-label="Main">
+<a href="#top" style="display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none">
+<svg width="30" height="30" viewBox="0 0 128 128" aria-hidden="true"><path d="M16 27h82v6H16z" style="fill: var(--signal)"></path><path d="M96 18.5l17 11.5-17 11.5z" style="fill: var(--signal)"></path><path d="M22 52v48M22 70a12 12 0 0 1 24 0v30M46 70a12 12 0 0 1 24 0v30" style="fill: none; stroke: currentColor; stroke-width: 13"></path><path d="M81 52H94L98 81L102 52H115L104 100H92Z" style="fill: currentColor"></path></svg>
+<span style="font-weight: 600; font-size: 20px; letter-spacing: -0.01em">Mailvec</span>
+</a>
+<div class="navlinks" id="navlinks" style="display: flex; gap: 22px; margin-left: auto; font-size: 15px">
+<a href="#how" style="color: var(--muted); text-decoration: none">How it works</a>
+<a href="#search" style="color: var(--muted); text-decoration: none">Search</a>
+<a href="#attachments" style="color: var(--muted); text-decoration: none">Attachments</a>
+<a href="#privacy" style="color: var(--muted); text-decoration: none">Privacy</a>
+<a href="#start" style="color: var(--muted); text-decoration: none">Get started</a>
+<a href="https://github.com/djdelaney/Mailvec" style="color: var(--muted); text-decoration: none">GitHub</a>
+</div>
+<button id="menu-toggle" class="menu-btn" type="button" aria-label="Menu" aria-expanded="false" aria-controls="navlinks"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style="fill: none; stroke: currentColor; stroke-width: 1.7"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button>
+<button id="theme-toggle" type="button" aria-label="Switch to dark theme" style="margin-left: 8px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 22px; background: transparent; color: var(--ink)">
+<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style="fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" style="fill: currentColor; stroke: none"></path></svg>
+</button>
+</nav>
+</header>
+
+<!-- HERO -->
+<main id="main">
+<section id="top" class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 88px 32px 96px">
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 64px; align-items: center">
+<div style="display: flex; flex-direction: column; gap: 28px">
+<h1 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(44px, 5.4vw, 74px); line-height: 1.02; letter-spacing: -0.02em; text-wrap: balance">Give your agent your email. <em style="font-style: italic; color: var(--signal-text)">Not your mailbox.</em></h1>
+<p style="margin: 0; font-size: 19px; line-height: 1.55; color: var(--muted); text-wrap: pretty">Mailvec keeps a synced copy of your mailbox on a machine you control, indexes every message and attachment, and lets Claude or any MCP client search it by keyword and by meaning. Agents read only what they ask for; they can't send, reply or delete. Embeddings and OCR run locally.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="#start" style="display: inline-flex; align-items: center; gap: 10px; height: 48px; padding: 0 22px; border-radius: 6px; background: var(--ink); color: var(--bg); text-decoration: none; font-weight: 500">Get started
+<svg width="18" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg></a>
+<a href="https://github.com/djdelaney/Mailvec" style="display: inline-flex; align-items: center; height: 48px; padding: 0 22px; border-radius: 6px; border: 1px solid var(--line); color: var(--ink); text-decoration: none; font-weight: 500">View on GitHub</a>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 13px; color: var(--muted)">
+<span>Open source · Self-hosted · Any IMAP server</span>
+<span><span style="color: var(--ink)">Any MCP client:</span> Claude Desktop · Claude Code · claude.ai · your own agent</span>
+</div>
+</div>
+<figure style="margin: 0; display: flex; flex-direction: column; gap: 14px">
+<div style="border-radius: 12px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow); background: #FAF9F7">
+<img src="assets/claude-desktop-answer.png" width="1968" height="1787" loading="eager" decoding="async" alt="Claude Desktop answering 'how much did the contractor quote for the bathroom work?' with an itemised table: demolition $1,200, tile and fixtures $4,300, labor $2,900, total $8,400, from Bayside Tile &amp; Bath's Estimate #2231." style="display: block; width: 100%; height: auto">
+</div>
+<figcaption style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 13px; color: var(--muted)">
+<svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true" style="flex: none"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg>
+<span>The table came from <b style="color: var(--ink); font-weight: 500">estimate-2231.pdf</b>, an attachment. Shown in Claude Desktop with a synthetic mailbox; every MCP client gets the same tools.</span>
+</figcaption>
+</figure>
+</div>
+<p style="margin: 72px 0 0; display: flex; align-items: baseline; gap: 12px; font-size: 15px; color: var(--muted)"><span style="font-family: var(--serif); font-style: italic; font-size: 22px; color: var(--ink)">m<span style="position: relative">v<svg width="14" height="7" viewBox="0 0 22 10" aria-hidden="true" style="position: absolute; left: -1px; top: -4px"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg></span></span><span>Mail, plus a vector. The arrow over the <span style="font-family: var(--mono)">mv</span> is the mathematician's notation for one.</span></p>
+</section>
+
+<!-- PROBLEM -->
+<section style="background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 96px 32px">
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: 64px; align-items: center">
+<div style="display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>01 · The problem</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">The answer is in your email somewhere.</h2>
+<p style="margin: 0; font-size: 19px; color: var(--muted); text-wrap: pretty">The quote is in a PDF attached to a reply in a thread from March. Your mail client's search wants the exact word, and you remember the meaning. And the AI tools that could find it want you to hand your whole mailbox to one more company.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 16px">
+<div style="border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 6px; font-size: 15px">
+<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" style="fill: none; stroke: var(--muted); stroke-width: 2"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5L21 21"></path></svg>
+<span>contractor quote</span></div>
+<div style="font-family: var(--mono); font-size: 13px; color: var(--muted)">Webmail search · 0 results for <i>contractor quote</i></div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding-left: 20px; font-family: var(--mono); font-size: 12px; color: var(--signal-text)">
+<svg width="10" height="28" viewBox="0 0 10 28" aria-hidden="true"><path d="M4 0h2v21H4z" style="fill: var(--signal)"></path><path d="M0 20l5 8 5-8z" style="fill: var(--signal)"></path></svg>
+<span>the one you meant, which never says "quote"</span></div>
+<div style="border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 18px 20px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--muted)"><span>Marco Bell · Bayside Tile &amp; Bath</span><span style="font-family: var(--mono); font-size: 12px">Aug 18</span></div>
+<div style="font-weight: 600">Estimate #2231</div>
+<div style="font-size: 15px; color: var(--muted)">Hi Sam, attached is the estimate for the master bath. Let me know if you have questions.</div>
+<div style="display: flex; align-items: center; gap: 8px; margin-top: 6px; align-self: flex-start; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 12px">
+<svg width="14" height="16" viewBox="0 0 14 16" aria-hidden="true" style="fill: none; stroke: var(--muted); stroke-width: 1.4"><path d="M1 1h8l4 4v10H1z"></path><path d="M9 1v4h4"></path></svg>
+<span>estimate-2231.pdf · "remodel estimate … total $8,400"</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- HOW IT WORKS / D1 -->
+<section id="how" class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px 104px; display: flex; flex-direction: column; gap: 48px">
+<div style="display: flex; flex-direction: column; gap: 20px; max-width: 760px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>02 · How it works</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Mail flows one way. Your agent reads your copy.</h2>
+<p style="margin: 0; font-size: 18px; color: var(--muted); text-wrap: pretty">Mailvec keeps a complete, continuously-synced copy of your mailbox. mbsync pulls mail from your IMAP server. The indexer reads every message and extracts text from attachments. The embedder turns it into vectors with a local model, and OCRs scanned documents. Your AI agent asks questions through the MCP server. New mail arrives on a timer (every minute on the server install, every ten on a Mac), or within seconds with IMAP push on the server.</p>
+</div>
+
+<figure style="margin: 0; display: flex; flex-direction: column; gap: 16px" role="group" aria-label="Pipeline diagram: your mail provider syncs over IMAP into mbsync, then Maildir, the indexer and the archive, all on your hardware; the embedder and a local Ollama model build vectors and OCR scans; the read-only MCP server answers your AI agent.">
+<div class="pipe" style="display: flex; align-items: flex-start; gap: 0">
+<div style="flex: 0 0 140px; margin-top: 36px; height: 112px; box-sizing: border-box; padding: 14px; border: 1.5px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">outside</span><span style="font-weight: 500; line-height: 1.3">Your mail provider <span style="color: var(--muted)">(IMAP)</span></span></div>
+<svg class="arw" width="44" height="12" viewBox="0 0 56 12" preserveAspectRatio="none" aria-hidden="true" style="flex: none; margin-top: 86px"><path d="M0 6h48" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M46 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg>
+<div style="flex: 1 1 auto; position: relative; box-sizing: border-box; padding: 34px 18px 18px; border: 1.5px solid var(--local-line); border-radius: 14px; background: var(--local-bg)">
+<span style="position: absolute; left: 16px; top: 10px; display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--local)"><svg width="13" height="12" viewBox="0 0 13 12" aria-hidden="true" style="fill: none; stroke: currentColor; stroke-width: 1.4"><path d="M1 6L6.5 1 12 6M2.5 5v6h8V5"></path></svg>your hardware</span>
+<div class="pipe-grid" style="display: grid; grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr) 32px minmax(0, 1fr) 32px minmax(0, 1.25fr) 32px minmax(0, 1fr); grid-template-rows: 112px 36px auto; align-items: center">
+<div style="grid-column: 1; grid-row: 1; height: 112px; box-sizing: border-box; padding: 12px 10px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">sync</span><span style="font-weight: 500; font-size: 16px">mbsync</span><span style="font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted)">IMAP push optional</span></div>
+<svg class="arw" width="32" height="12" viewBox="0 0 32 12" aria-hidden="true" style="grid-column: 2; grid-row: 1; justify-self: center"><path d="M0 6h24" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M22 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg>
+<div style="grid-column: 3; grid-row: 1; height: 112px; box-sizing: border-box; padding: 12px 10px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">files</span><span style="font-weight: 500; font-size: 16px">Maildir</span><span style="font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted)">one file per message</span></div>
+<svg class="arw" width="32" height="12" viewBox="0 0 32 12" aria-hidden="true" style="grid-column: 4; grid-row: 1; justify-self: center"><path d="M0 6h24" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M22 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg>
+<div style="grid-column: 5; grid-row: 1; height: 112px; box-sizing: border-box; padding: 12px 10px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">parse</span><span style="font-weight: 500; font-size: 16px">Indexer</span><span style="font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted)">bodies + attachment text</span></div>
+<svg class="arw" width="32" height="12" viewBox="0 0 32 12" aria-hidden="true" style="grid-column: 6; grid-row: 1; justify-self: center"><path d="M0 6h24" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M22 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg>
+<div style="grid-column: 7; grid-row: 1; height: 112px; box-sizing: border-box; padding: 12px 10px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">store · SQLite</span><span style="font-weight: 500; font-size: 16px">Archive</span><span style="font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted)">keyword index + vector index</span></div>
+<svg class="arw-v" width="12" height="36" viewBox="0 0 12 36" aria-hidden="true" style="grid-column: 7; grid-row: 2; justify-self: center"><path d="M6 8v20" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M1.5 9L6 0l4.5 9z" style="fill: var(--ink)"></path><path d="M1.5 27L6 36l4.5-9z" style="fill: var(--ink)"></path></svg>
+<div style="grid-column: 7; grid-row: 3; box-sizing: border-box; padding: 12px 10px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">vectors</span><span style="font-weight: 500; font-size: 16px">Embedder</span><span style="font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted)">vectors + OCR of scans</span></div>
+<svg class="arw" width="32" height="12" viewBox="0 0 32 12" aria-hidden="true" style="grid-column: 8; grid-row: 3; justify-self: center"><path d="M9 6h14" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M10 1.5L1 6l9 4.5z" style="fill: var(--ink)"></path><path d="M22 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg>
+<div style="grid-column: 9; grid-row: 3; box-sizing: border-box; padding: 12px 10px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">local model</span><span style="font-weight: 500; font-size: 16px">Ollama</span></div>
+<svg class="arw" width="32" height="12" viewBox="0 0 32 12" aria-hidden="true" style="grid-column: 8; grid-row: 1; justify-self: center"><path d="M0 6h24" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M22 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg>
+<div style="grid-column: 9; grid-row: 1; height: 112px; box-sizing: border-box; padding: 12px 10px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">read-only</span><span style="font-weight: 500; font-size: 16px; white-space: nowrap">MCP server</span><span style="font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted)">8 read tools</span></div>
+</div>
+</div>
+<svg class="arw" width="44" height="12" viewBox="0 0 56 12" preserveAspectRatio="none" aria-hidden="true" style="flex: none; margin-top: 86px"><path d="M0 6h48" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M46 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg>
+<div style="flex: 0 0 140px; margin-top: 36px; min-height: 112px; box-sizing: border-box; padding: 14px; border: 1.5px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted)">asks</span><span style="font-weight: 500; line-height: 1.3">Your AI agent</span><span style="font-size: 13px; color: var(--muted); line-height: 1.35">Claude or any MCP client</span></div>
+</div>
+<figcaption style="display: flex; flex-wrap: wrap; gap: 8px 28px; font-family: var(--mono); font-size: 12px; color: var(--muted)">
+<span style="display: flex; align-items: center; gap: 8px"><span style="width: 16px; height: 12px; border: 1.5px solid var(--signal); border-radius: 3px"></span>Mailvec</span>
+<span style="display: flex; align-items: center; gap: 8px"><span style="width: 16px; height: 12px; border: 1.5px solid var(--line); border-radius: 3px"></span>everything else</span>
+<span style="display: flex; align-items: center; gap: 8px"><span style="width: 16px; height: 12px; border: 1.5px solid var(--local-line); background: var(--local-bg); border-radius: 3px"></span>on your hardware</span>
+<span>Agents read the copy, never your provider.</span>
+</figcaption>
+</figure>
+</section>
+
+<!-- SEARCH / D2 -->
+<section id="search" style="background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px; display: flex; flex-direction: column; gap: 56px">
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 64px; align-items: end">
+<div style="display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>03 · Search</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(36px, 4.2vw, 58px); line-height: 1.04; letter-spacing: -0.02em; text-wrap: balance">Search that understands what you meant.</h2>
+</div>
+<p style="margin: 0; font-size: 18px; color: var(--muted); text-wrap: pretty">Keyword search finds the exact words: names, order numbers, domains. Semantic search finds the meaning: ask for "the contractor's quote" and get the email that says "estimate". Mailvec runs both and fuses the rankings, so you get exact matches and near-misses in one list, one result per email.</p>
+</div>
+
+<figure style="margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0" role="group" aria-label="Hybrid search diagram: a question goes to a keyword lane and a meaning lane, and the two rankings fuse into one list with Estimate #2231 first.">
+<div style="display: flex; align-items: center; gap: 12px; max-width: 100%; box-sizing: border-box; padding: 14px 22px; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: 18px">
+<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" style="fill: none; stroke: currentColor; stroke-width: 2"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5L21 21"></path></svg>
+<span>how much did the contractor quote?</span></div>
+<div class="lanes" style="width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px">
+<div style="display: flex; flex-direction: column; align-items: center">
+<svg width="12" height="44" viewBox="0 0 12 44" aria-hidden="true"><path d="M6 0v36" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M1.5 34L6 43l4.5-9z" style="fill: var(--ink)"></path></svg>
+<div style="width: 100%; box-sizing: border-box; border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface); padding: 18px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-weight: 600">Keyword lane</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">exact words · BM25</span></div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">1</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Re: did the <mark>contractor</mark> send a <mark>quote</mark>?</span><span style="font-size: 14px; color: var(--muted)">Ada · a reply in the thread</span></span></div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted)"><span style="font-family: var(--mono); font-size: 13px">2</span><span style="display: flex; flex-direction: column; gap: 2px"><span>How to read a <mark>contractor</mark>'s <mark>quote</mark></span><span style="font-size: 14px">Home Weekly newsletter · not useful</span></span></div>
+<div style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Misses the estimate: it never says "contractor" or "quote".</div>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center">
+<svg width="12" height="44" viewBox="0 0 12 44" aria-hidden="true"><path d="M6 0v36" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M1.5 34L6 43l4.5-9z" style="fill: var(--ink)"></path></svg>
+<div style="width: 100%; box-sizing: border-box; border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface); padding: 18px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-weight: 600">Meaning lane</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">semantic · vectors</span></div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">1</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Estimate #2231</span><span style="font-size: 14px; color: var(--muted)">Bayside Tile &amp; Bath · PDF says "<span style="text-decoration: underline dashed var(--signal); text-underline-offset: 4px">remodel estimate</span>"</span></span></div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">2</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Bathroom renovation proposal</span><span style="font-size: 14px; color: var(--muted)">Keel &amp; Plumb Renovations · the competing bid</span></span></div>
+<div style="font-family: var(--mono); font-size: 12px; color: var(--muted)">No shared words with the question. Same meaning.</div>
+</div>
+</div>
+</div>
+<div class="hide-sm" style="width: 50%; height: 28px; box-sizing: border-box; border: 1.5px solid var(--ink); border-top: none; border-radius: 0 0 14px 14px"></div>
+<svg width="14" height="44" viewBox="0 0 14 44" aria-hidden="true"><path d="M7 0v34" style="stroke: var(--signal); stroke-width: 2.5"></path><path d="M1 32L7 44l6-12z" style="fill: var(--signal)"></path></svg>
+<div style="width: min(720px, 100%); box-sizing: border-box; border: 2px solid var(--signal); border-radius: 12px; background: var(--surface); padding: 20px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow)">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-weight: 600">Fused · one row per email</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">reciprocal rank fusion</span></div>
+<div style="display: flex; gap: 14px; align-items: flex-start; padding: 12px; border-radius: 6px; background: rgba(232,90,60,.08)"><span style="font-family: var(--mono); font-size: 13px; color: var(--signal-text); font-weight: 700">1</span><span style="flex: 1; display: flex; flex-direction: column; gap: 6px"><span style="font-weight: 600">Estimate #2231 <span style="font-weight: 400; color: var(--muted)">· Bayside Tile &amp; Bath</span></span><span style="align-self: flex-start; font-family: var(--mono); font-size: 12px; padding: 3px 8px; border: 1px solid var(--signal); border-radius: 4px; color: var(--signal-text)">matched in: estimate-2231.pdf</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">2</span><span>Bathroom renovation proposal <span style="color: var(--muted)">· Keel &amp; Plumb</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">3</span><span>Re: did the contractor send a quote? <span style="color: var(--muted)">· Ada</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px; color: var(--muted)"><span style="font-family: var(--mono); font-size: 13px">4</span><span>How to read a contractor's quote · newsletter</span></div>
+</div>
+<figcaption style="margin-top: 20px; font-family: var(--mono); font-size: 13px; color: var(--muted); text-align: center">Measured on a real mailbox: hybrid 0.916 NDCG@10, keyword 0.859, semantic 0.814. <a href="#proof">See the numbers</a></figcaption>
+</figure>
+
+<!-- S2 annotated JSON -->
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 40px; align-items: start; margin-top: 24px">
+<div style="border-radius: 10px; background: var(--term-bg); border: 1px solid var(--term-line); overflow: hidden; box-shadow: var(--shadow)">
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--term-line); font-family: var(--mono); font-size: 12px; color: var(--term-muted)"><span>search_emails → response.json</span><span>S2 · illustrative</span></div>
+<pre style="margin: 0; padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; color: var(--term-ink)">{
+  <span style="color: var(--term-key)">"query"</span>: <span style="color: var(--term-str)">"how much did the contractor quote?"</span>,
+  <span style="color: var(--term-key)">"mode"</span>: <span style="color: var(--term-str)">"hybrid"</span>,                         <span style="color: #F0603E">← 1</span>
+  <span style="color: var(--term-key)">"count"</span>: 10,
+  <span style="color: var(--term-key)">"results"</span>: [
+    {
+      <span style="color: var(--term-key)">"subject"</span>: <span style="color: var(--term-str)">"Estimate #2231"</span>,
+      <span style="color: var(--term-key)">"fromName"</span>: <span style="color: var(--term-str)">"Marco Bell"</span>,
+      <span style="color: var(--term-key)">"dateSent"</span>: <span style="color: var(--term-str)">"2026-08-18T14:02:11Z"</span>,
+      <span style="color: var(--term-key)">"snippet"</span>: <span style="color: var(--term-str)">"…master bath remodel estimate…"</span>,
+      <span style="color: var(--term-key)">"matchedAttachment"</span>: {               <span style="color: #F0603E">← 2</span>
+        <span style="color: var(--term-key)">"partIndex"</span>: 2,
+        <span style="color: var(--term-key)">"fileName"</span>: <span style="color: var(--term-str)">"estimate-2231.pdf"</span>
+      },
+      <span style="color: var(--term-key)">"isRead"</span>: true,
+      <span style="color: var(--term-key)">"webmailLink"</span>: <span style="color: var(--term-str)">"[Estimate #2231](https://app.fastmail.com/…)"</span>  <span style="color: #F0603E">← 3</span>
+    },
+    …
+  ],
+  <span style="color: var(--term-key)">"archiveStats"</span>: { <span style="color: var(--term-key)">"totalMessages"</span>: 41870, … },
+  <span style="color: var(--term-key)">"mailSync"</span>: {                            <span style="color: #F0603E">← 4</span>
+    <span style="color: var(--term-key)">"lastSyncAt"</span>: <span style="color: var(--term-str)">"2026-11-09T15:41:07Z"</span>,
+    <span style="color: var(--term-key)">"ageSeconds"</span>: 38,
+    <span style="color: var(--term-key)">"intervalSeconds"</span>: 60,
+    <span style="color: var(--term-key)">"stale"</span>: false
+  }
+}</pre>
+</div>
+<div style="display: flex; flex-direction: column; gap: 22px">
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 28px; line-height: 1.2">What your agent gets back</h3>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 16px">
+<li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">1</span><span><b style="font-weight: 600">mode</b> says how it searched: keyword, semantic or hybrid.</span></li>
+<li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">2</span><span><b style="font-weight: 600">matchedAttachment</b> names the file the hit came from, so the agent can open the right one.</span></li>
+<li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">3</span><span><b style="font-weight: 600">webmailLink</b> is a ready-made link to the message in Fastmail, built by the server so a hostile subject can't forge it.</span></li>
+<li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">4</span><span><b style="font-weight: 600">mailSync</b> says how fresh the copy is, so the agent can tell you when it's behind. Server install only.</span></li>
+</ol>
+</div>
+</div>
+</div>
+</section>
+
+<!-- FEATURES -->
+<section class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px; display: flex; flex-direction: column; gap: 44px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>04 · What it does</span></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden">
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round"><circle cx="12" cy="12" r="7"></circle><path d="M17 17l7 7"></path><path d="M8 12h7" style="stroke: var(--signal)"></path><path d="M13 9.5l2.5 2.5-2.5 2.5" style="stroke: var(--signal)"></path></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Search by meaning</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">Keyword and semantic search fused into one ranking. Exact matches and paraphrases both land.</p>
+<a href="#search" style="font-family: var(--mono); font-size: 13px; text-decoration: none">How →</a></div>
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round"><path d="M6 3h11l5 5v17H6z"></path><path d="M17 3v5h5"></path><path d="M10 14h8M10 18h8M10 22h5" style="stroke: var(--signal)"></path></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Reads the attachments</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">PDFs, Word, Excel, PowerPoint, calendar invites and contacts are indexed, not just their filenames.</p>
+<a href="#attachments" style="font-family: var(--mono); font-size: 13px; text-decoration: none">How →</a></div>
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round"><path d="M3 9V4h5M20 4h5v5M25 19v5h-5M8 24H3v-5"></path><path d="M8 11h12M8 15h12M8 19h7" style="stroke: var(--signal)"></path></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Reads the scans too</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">Scanned PDFs and photographed documents are OCR'd by a local vision model and become searchable.</p>
+<a href="#attachments" style="font-family: var(--mono); font-size: 13px; text-decoration: none">How →</a></div>
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round"><path d="M3 13L14 4l11 9"></path><path d="M6 11v13h16V11"></path><path d="M10 18h8" style="stroke: var(--signal)"></path></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Your mail stays home</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">Your mailbox lives on your machine. Embeddings and OCR run locally by default; hosted providers are opt-in.</p>
+<a href="#privacy" style="font-family: var(--mono); font-size: 13px; text-decoration: none">How →</a></div>
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round"><path d="M2 14s4.5-8 12-8 12 8 12 8-4.5 8-12 8S2 14 2 14z"></path><circle cx="14" cy="14" r="3.5"></circle><path d="M5 25L23 3" style="stroke: var(--signal)"></path></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Look, don't touch</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">Agents can search and read. They can't send, reply, move or delete. Mark-as-read is a separate opt-in on the server install.</p></div>
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round"><rect x="3" y="5" width="15" height="11" rx="1.5"></rect><rect x="19" y="10" width="7" height="13" rx="1.5"></rect><path d="M7 21h9" style="stroke: var(--signal)"></path></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Any agent that speaks MCP</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">Claude Desktop, Claude Code, claude.ai or your own agent, over stdio or HTTP. One server you control.</p>
+<a href="#clients" style="font-family: var(--mono); font-size: 13px; text-decoration: none">Clients →</a></div>
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round"><circle cx="14" cy="14" r="10.5"></circle><path d="M14 8v6l4 3" style="stroke: var(--signal)"></path></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Always current</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">New mail syncs on a timer, or within seconds with IMAP push. Search results say how fresh the copy is.</p></div>
+<div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
+<svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round"><path d="M3 6h22M7 14h14M11 22h6"></path><circle cx="21" cy="14" r="2" style="stroke: var(--signal)"></circle></svg>
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Filters agents can use</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">Folder, date range, sender, recipient, has-attachment, attachment type, unread. Works with or without a query.</p></div>
+</div>
+</section>
+
+<!-- WHAT YOU CAN ASK -->
+<section style="background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 104px 32px; display: flex; flex-direction: column; gap: 40px">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>05 · What you can ask</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">If it's in your mail, you can ask about it.</h2>
+<p style="margin: 0; font-size: 16px; color: var(--muted)">Pick a question to see the tool call your agent makes. The same calls work from any MCP client.</p>
+</div>
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 32px; align-items: start">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 12px">
+<button class="askcard" type="button" data-ask="0" data-call="search_emails(query: &quot;contractor quote bathroom&quot;)" data-result="Estimate #2231 from Bayside Tile &amp; Bath, matched in estimate-2231.pdf. Total $8,400." data-on="true" aria-pressed="true" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">How much did the contractor quote for the bathroom?</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">hybrid search + PDF text</span>
+</button>
+<button class="askcard" type="button" data-ask="1" data-call="search_emails(query: &quot;lease pets&quot;)
+get_attachment_text(id: 51207, partIndex: 2)" data-result="Section 7 of signed-scan.pdf, OCR&#x27;d locally. $500 pet deposit." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">What does the lease say about pets?</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">scanned PDF · OCR</span>
+</button>
+<button class="askcard" type="button" data-ask="2" data-call="search_emails(fromContains: &quot;ledgerlane&quot;,
+  attachmentType: &quot;pdf&quot;,
+  dateFrom: &quot;2026-10-01&quot;, dateTo: &quot;2026-10-31&quot;)" data-result="Four messages, newest first. No search words needed." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">What PDFs did the accountant send last month?</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">filtered browse, no query</span>
+</button>
+<button class="askcard" type="button" data-ask="3" data-call="get_thread(messageId: &quot;&lt;permission-slip@…&gt;&quot;)" data-result="Seven messages in order, from the permission slip to the bus time change." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Summarise the thread about the school trip.</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">get_thread</span>
+</button>
+<button class="askcard" type="button" data-ask="4" data-call="search_emails(query: &quot;test&quot;, dateFrom: &quot;2026-11-09&quot;)" data-result="Yes. mailSync.ageSeconds: 38, stale: false." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Did the test email I just sent arrive?</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">sync freshness · server</span>
+</button>
+<button class="askcard" type="button" data-ask="5" data-call="get_email_headers(id: 48213)" data-result="Authentication-Results: dkim=pass, spf=pass, dmarc=pass." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Show me the DKIM and SPF headers on that message.</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">get_email_headers</span>
+</button>
+<button class="askcard" type="button" data-ask="6" data-call="get_attachment_page_image(id: 39114,
+  partIndex: 1, page: 3)" data-result="A PNG of the page, for when tables, forms or signatures matter." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Show me page 3 of the insurance policy.</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">rendered page image</span>
+</button>
+<button class="askcard" type="button" data-ask="7" data-call="search_emails(folder: &quot;Newsletters&quot;,
+  unread: true, dateFrom: &quot;2026-11-02&quot;)" data-result="Six unread. Nothing gets marked read unless you ask." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Which newsletters haven&#x27;t I read this week?</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">unread filter</span>
+</button>
+</div>
+<div style="position: sticky; top: 24px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); overflow: hidden">
+<div style="padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="width: 8px; height: 8px; border-radius: 4px; background: var(--line)"></span><span style="width: 8px; height: 8px; border-radius: 4px; background: var(--line)"></span><span style="width: 8px; height: 8px; border-radius: 4px; background: var(--line)"></span><span style="margin-left: 8px">chat</span></div>
+<div style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+<div id="ask-q" style="align-self: flex-end; max-width: 88%; padding: 12px 16px; border-radius: 14px 14px 4px 14px; background: var(--band); font-size: 15px">How much did the contractor quote for the bathroom?</div>
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 8px; background: var(--term-bg); color: var(--term-ink); font-family: var(--mono); font-size: 12.5px; line-height: 1.6">
+<span style="color: var(--term-muted)">tool call</span>
+<span id="ask-call" style="white-space: pre-wrap; word-break: break-word">search_emails(query: &quot;contractor quote bathroom&quot;)</span>
+</div>
+<div style="display: flex; gap: 10px; align-items: flex-start; font-size: 15px">
+<svg width="18" height="10" viewBox="0 0 22 10" aria-hidden="true" style="flex: none; margin-top: 7px"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg>
+<span id="ask-result" aria-live="polite">Estimate #2231 from Bayside Tile &amp; Bath, matched in estimate-2231.pdf. Total $8,400.</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ATTACHMENTS / D3 -->
+<section id="attachments" class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px; display: flex; flex-direction: column; gap: 56px">
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 64px; align-items: start">
+<div style="display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>06 · Attachments</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Attachments, not just emails.</h2>
+<p style="margin: 0; font-size: 18px; color: var(--muted); text-wrap: pretty">Mailvec extracts the text from PDFs, Word documents, spreadsheets, slides, calendar invites and contact cards, and indexes it with the email. When a search hit came from an attachment, the result says which one. An agent can read the extracted text, or look at a rendered page when the layout matters: tables, forms, signatures.</p>
+</div>
+<figure style="margin: 0; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); padding: 22px; display: flex; flex-direction: column; gap: 14px" role="group" aria-label="Attachment flow: a born-digital PDF is extracted directly; a scanned PDF and an inline photo are rendered and read by a local vision model; all three become searchable text. An encrypted PDF stops with a reported error.">
+<div style="display: flex; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line)"><span style="font-weight: 600">Lease renewal</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">1 email · 4 attachments</span></div>
+
+<div style="display: grid; grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) minmax(110px, 140px); gap: 12px; align-items: center">
+<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px">lease-2027.pdf</span>
+<span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><span>text layer, extracted</span><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true" style="margin-left: -8px"><path d="M0 0l8 5-8 5z" style="fill: var(--ink)"></path></svg></span>
+<span style="font-size: 14px; font-weight: 600; padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--signal); text-align: center">searchable text</span>
+
+<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px">signed-scan.pdf</span>
+<span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><span>render → <span style="color: var(--local)">qwen2.5vl:7b</span></span><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true" style="margin-left: -8px"><path d="M0 0l8 5-8 5z" style="fill: var(--ink)"></path></svg></span>
+<span style="font-size: 14px; font-weight: 600; padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--signal); text-align: center">searchable text</span>
+
+<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px">IMG_0412.jpg <span style="color: var(--muted)">inline</span></span>
+<span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><span>same OCR path</span><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true" style="margin-left: -8px"><path d="M0 0l8 5-8 5z" style="fill: var(--ink)"></path></svg></span>
+<span style="font-size: 14px; font-weight: 600; padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--signal); text-align: center">searchable text</span>
+
+<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted)">deposit-locked.pdf</span>
+<span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: repeating-linear-gradient(90deg, var(--muted) 0 5px, transparent 5px 9px)"></span><span>password-protected</span><span style="flex: 1; height: 1.5px; background: repeating-linear-gradient(90deg, var(--muted) 0 5px, transparent 5px 9px)"></span><span style="width: 2px; height: 14px; background: var(--muted)"></span></span>
+<span style="display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; padding: 8px 10px; border-radius: 6px; border: 1.5px dashed var(--muted); color: var(--muted); text-align: center"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" style="flex: none; stroke: currentColor; stroke-width: 1.6"><path d="M2 2l8 8M10 2l-8 8"></path></svg>can't read (encrypted)</span>
+</div>
+<figcaption style="font-family: var(--mono); font-size: 12px; color: var(--muted)">It reports what it couldn't read instead of skipping it quietly.</figcaption>
+</figure>
+</div>
+
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: 40px; align-items: center; padding: 40px; border-radius: 14px; border: 1.5px solid var(--local-line); background: var(--local-bg)">
+<div style="display: flex; flex-direction: column; gap: 16px">
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 32px; line-height: 1.15">Scans too.</h3>
+<p style="margin: 0; font-size: 17px; color: var(--muted); text-wrap: pretty">A scanned PDF has no text to extract. Mailvec's embedder renders each page and transcribes it with a local vision model (<code style="font-family: var(--mono); font-size: 14px; color: var(--ink)">qwen2.5vl:7b</code> through Ollama), then indexes the result like any other text. Photos of documents pasted into emails get the same treatment.</p>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">A hosted OCR provider is available if you want it faster; it's off unless you turn it on.</p>
+</div>
+<div style="border-radius: 12px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); padding: 18px; display: flex; flex-direction: column; gap: 14px">
+<div style="align-self: flex-end; max-width: 85%; padding: 10px 14px; border-radius: 14px 14px 4px 14px; background: var(--band); font-size: 15px">What's the pet deposit in the lease?</div>
+<div style="display: flex; gap: 14px; align-items: flex-start">
+<div style="flex: none; width: 128px; height: 166px; box-sizing: border-box; padding: 12px 10px; background: #FBF8F0; border: 1px solid #D6CDB9; border-radius: 3px; display: flex; flex-direction: column; gap: 5px; transform: rotate(-1.2deg)">
+<span style="height: 5px; width: 60%; background: #3a352e"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 3px; width: 80%; background: #bdb3a0"></span><span style="margin-top: 4px; height: 4px; width: 45%; background: #3a352e"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 12px; border: 1.5px solid #E85A3C; border-radius: 2px"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 3px; width: 70%; background: #bdb3a0"></span><span style="margin-top: auto; height: 8px; width: 50%; border-bottom: 1px solid #3a352e"></span></div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; font-size: 15px">
+<span style="font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere">get_attachment_page_image · page 3</span>
+<span>Section 7 sets a <b style="font-weight: 600">$500 refundable pet deposit</b>, one cat or dog under 40 lb.</span>
+<span style="font-family: var(--mono); font-size: 11.5px; color: var(--muted)">S5 · placeholder</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- PRIVACY / D4 -->
+<section id="privacy" style="background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px; display: flex; flex-direction: column; gap: 48px">
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 64px; align-items: end">
+<div style="display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>07 · Privacy</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Private by design.</h2>
+</div>
+<p style="margin: 0; font-size: 17px; color: var(--muted); text-wrap: pretty">Your mail is copied to a disk you own and indexed there. By default nothing leaves your network except the IMAP sync itself: embeddings and OCR run on your own Ollama. On a single Mac the server only listens on localhost. On a Docker host it publishes no ports at all; remote clients such as claude.ai and the Claude iPhone app reach it through a Cloudflare Tunnel behind Cloudflare Access, which can be checked again at the server. Hosted embedding and OCR providers exist for people who want them, and each one is an explicit opt-in.</p>
+</div>
+
+<figure style="margin: 0; display: flex; flex-direction: column; gap: 20px" role="group" aria-label="Where your mail goes">
+<div role="group" aria-label="Install shape" style="align-self: flex-start; display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface)">
+<button class="seg" type="button" data-d4="mac" data-on="true" aria-pressed="true" style="height: 40px; padding: 0 18px; border: none; border-radius: 5px; background: transparent; color: var(--ink); font-size: 15px">One Mac</button>
+<button class="seg" type="button" data-d4="server" data-on="false" aria-pressed="false" style="height: 40px; padding: 0 18px; border: none; border-radius: 5px; background: transparent; color: var(--ink); font-size: 15px">Server</button>
+</div>
+
+<div class="pipe" style="display: flex; align-items: center; gap: 0">
+<div style="flex: 0 0 170px; box-sizing: border-box; padding: 14px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface)"><span style="font-weight: 500">Mail provider</span><br><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Fastmail, Gmail, iCloud…</span></div>
+<div class="arw" style="flex: 0 0 96px; display: flex; flex-direction: column; align-items: center; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; color: var(--muted)">IMAP sync</span><svg width="96" height="12" viewBox="0 0 96 12" aria-hidden="true"><path d="M0 6h88" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M86 1.5l9 4.5-9 4.5z" style="fill: var(--ink)"></path></svg></div>
+<div style="flex: 1 1 auto; position: relative; box-sizing: border-box; padding: 40px 22px 22px; border: 2px solid var(--local-line); border-radius: 16px; background: var(--local-bg)">
+<span style="position: absolute; left: 18px; top: 12px; display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--local)"><svg width="13" height="12" viewBox="0 0 13 12" aria-hidden="true" style="fill: none; stroke: currentColor; stroke-width: 1.4"><path d="M1 6L6.5 1 12 6M2.5 5v6h8V5"></path></svg>your hardware · stays here</span>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); gap: 10px">
+<div style="padding: 12px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); font-weight: 500">Mail copy<br><span style="font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted)">Maildir</span></div>
+<div style="padding: 12px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface); font-weight: 500">Index<br><span style="font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted)">SQLite + vectors</span></div>
+<div style="padding: 12px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); font-weight: 500">Ollama<br><span style="font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted)">embeddings + OCR</span></div>
+<div style="padding: 12px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface); font-weight: 500">MCP server<br><span style="font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted)">read-only</span></div>
+<div data-variant="mac" style="display: contents">
+<div style="padding: 12px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); font-weight: 500">Your MCP clients<br><span style="font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted)">localhost only</span></div>
+</div>
+</div>
+</div>
+<div data-variant="server" style="display: contents" hidden>
+<div class="arw" style="flex: 0 0 120px; display: flex; flex-direction: column; align-items: center; gap: 4px"><span style="font-family: var(--mono); font-size: 11px; color: var(--muted)">Cloudflare Access</span><svg width="120" height="12" viewBox="0 0 120 12" aria-hidden="true"><path d="M12 6h108" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M10 1.5L1 6l9 4.5z" style="fill: var(--ink)"></path></svg><span style="font-family: var(--mono); font-size: 11px; color: var(--muted)">tunnel, no open ports</span></div>
+<div style="flex: 0 0 170px; box-sizing: border-box; padding: 14px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface)"><span style="font-weight: 500">Remote clients</span><br><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">claude.ai and the Claude apps, over OAuth</span></div>
+</div>
+<div data-variant="mac" style="display: contents">
+<div style="flex: 0 0 210px; margin-left: 24px; box-sizing: border-box; padding: 14px; border: 1.5px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 14px; display: flex; gap: 8px; align-items: flex-start"><svg width="14" height="14" viewBox="0 0 12 12" aria-hidden="true" style="flex: none; margin-top: 3px; stroke: currentColor; stroke-width: 1.6"><path d="M2 2l8 8M10 2l-8 8"></path></svg><span>No inbound path at all. The server listens on 127.0.0.1.</span></div>
+</div>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px; padding-left: 266px" class="optin-row">
+<div style="display: flex; align-items: center; gap: 12px"><svg width="12" height="40" viewBox="0 0 12 40" aria-hidden="true"><path d="M6 40V10" style="stroke: var(--optin-line); stroke-width: 1.5; stroke-dasharray: 5 4"></path><path d="M1.5 10L6 1l4.5 9z" style="fill: var(--optin-line)"></path></svg><span style="padding: 10px 14px; border: 1.5px dashed var(--optin-line); border-radius: 8px; font-size: 15px">Hosted embeddings <span style="font-family: var(--mono); font-size: 11px; color: var(--optin); padding: 2px 6px; border: 1px solid var(--optin-line); border-radius: 3px; margin-left: 6px">OPT-IN</span></span></div>
+<div style="display: flex; align-items: center; gap: 12px"><svg width="12" height="40" viewBox="0 0 12 40" aria-hidden="true"><path d="M6 40V10" style="stroke: var(--optin-line); stroke-width: 1.5; stroke-dasharray: 5 4"></path><path d="M1.5 10L6 1l4.5 9z" style="fill: var(--optin-line)"></path></svg><span style="padding: 10px 14px; border: 1.5px dashed var(--optin-line); border-radius: 8px; font-size: 15px">Hosted OCR <span style="font-family: var(--mono); font-size: 11px; color: var(--optin); padding: 2px 6px; border: 1px solid var(--optin-line); border-radius: 3px; margin-left: 6px">OPT-IN</span></span></div>
+</div>
+<figcaption style="display: flex; flex-wrap: wrap; gap: 8px 28px; font-family: var(--mono); font-size: 12px; color: var(--muted)">
+<span style="display: flex; align-items: center; gap: 8px"><span style="width: 24px; height: 1.5px; background: var(--ink)"></span>solid: the default path</span>
+<span style="display: flex; align-items: center; gap: 8px"><span style="width: 24px; height: 1.5px; background: repeating-linear-gradient(90deg, var(--optin-line) 0 5px, transparent 5px 9px)"></span>dashed + OPT-IN: leaves your network only if you turn it on</span>
+</figcaption>
+</figure>
+</div>
+</section>
+
+<!-- HOSTILE MAIL / D6 -->
+<section class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px; display: flex; flex-direction: column; gap: 48px">
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: 64px; align-items: start">
+<div style="display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>08 · How it's built</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Built for hostile mail.</h2>
+<p style="margin: 0; font-size: 17px; color: var(--muted); text-wrap: pretty">Anyone can send you an email, so Mailvec treats every message as hostile input. In the Docker deployment, all parsing of mail, HTML, PDFs, Office files and images happens in a separate container with no access to your archive, no credentials and no network route out. Only the sync container holds your mail password. Services run as non-root users with dropped privileges and memory limits. And every response tells the AI that mail content is data from the sender, never instructions.</p>
+<p style="margin: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 8px; font-size: 15px; background: var(--surface)"><b style="font-weight: 600">That last part is a framing, not a guarantee.</b> An agent that can read your mail can be shown a malicious email. Connect Mailvec only to clients you'd trust with your whole mailbox.</p>
+</div>
+<figure style="margin: 0; display: flex; flex-direction: column; gap: 0" role="group" aria-label="Containment diagram: mbsync, indexer, embedder and MCP server share the mailbox; the parse container sits behind a wall with no archive, no mail folder, no credentials and no internet. MCP may call parse; parse cannot call back.">
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 18px; border: 1.5px solid var(--local-line); border-radius: 12px; background: var(--local-bg)">
+<span style="grid-column: 1 / -1; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--local)">can see your mail</span>
+<div style="padding: 12px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface)"><b style="font-weight: 600">mbsync</b><br><span style="font-size: 13px; color: var(--muted)">holds the mail password; the only route to IMAP</span></div>
+<div style="padding: 12px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface)"><b style="font-weight: 600">indexer</b><br><span style="font-size: 13px; color: var(--muted)">reads the Maildir</span></div>
+<div style="padding: 12px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface)"><b style="font-weight: 600">embedder</b><br><span style="font-size: 13px; color: var(--muted)">talks to Ollama</span></div>
+<div style="padding: 12px; border: 1.5px solid var(--signal); border-radius: 8px; background: var(--surface)"><b style="font-weight: 600">MCP server</b><br><span style="font-size: 13px; color: var(--muted)">answers Claude</span></div>
+</div>
+<div style="display: flex; justify-content: center; gap: 72px; padding: 6px 0">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 2px"><svg width="12" height="56" viewBox="0 0 12 56" aria-hidden="true"><path d="M6 0v47" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M1.5 46L6 55l4.5-9z" style="fill: var(--ink)"></path></svg><span style="font-family: var(--mono); font-size: 11px; color: var(--muted)">sends .eml bytes</span></div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 2px; position: relative"><svg width="12" height="56" viewBox="0 0 12 56" aria-hidden="true"><path d="M6 56V9" style="stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4"></path><path d="M1.5 10L6 1l4.5 9z" style="fill: var(--muted)"></path></svg><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="position: absolute; top: 16px; left: 50%; margin-left: -11px; stroke: var(--signal); stroke-width: 2.5"><path d="M3 3l16 16M19 3L3 19"></path></svg><span style="font-family: var(--mono); font-size: 11px; color: var(--signal-text)">calls out: refused</span></div>
+</div>
+<div style="height: 10px; border-radius: 2px; background: repeating-linear-gradient(135deg, var(--ink) 0 6px, transparent 6px 12px); opacity: .55"></div>
+<div style="margin-top: 14px; padding: 16px; border: 1.5px solid var(--ink); border-radius: 8px; display: flex; flex-direction: column; gap: 10px">
+<b style="font-weight: 600">parse <span style="font-weight: 400; color: var(--muted)">· reads mail, HTML, PDF, Office, images</span></b>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<span style="font-family: var(--mono); font-size: 12px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px">no archive</span>
+<span style="font-family: var(--mono); font-size: 12px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px">no mail folder</span>
+<span style="font-family: var(--mono); font-size: 12px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px">no credentials</span>
+<span style="font-family: var(--mono); font-size: 12px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px">no internet</span>
+</div>
+</div>
+</figure>
+</div>
+</section>
+
+<!-- LEFT RUNNING -->
+<section style="background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 104px 32px; display: flex; flex-direction: column; gap: 40px">
+<div style="display: flex; flex-direction: column; gap: 18px; max-width: 760px">
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Built to be left running.</h2>
+<p style="margin: 0; font-size: 17px; color: var(--muted)">Mailvec runs unattended for months. The hard part of that is the failures that don't throw an error: they quietly give wrong answers. A few it now catches:</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 16px">
+<article style="padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px">−40% in one scan <svg width="16" height="8" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg> held 1 h</span>
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 22px; line-height: 1.25">A half-mounted drive looks exactly like deleting your mail.</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">If one scan would remove a large share of the archive at once, Mailvec holds the deletion for an hour in case the files come back.</p></article>
+<article style="padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px">new digest <svg width="16" height="8" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg> stop</span>
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 22px; line-height: 1.25">Same model name, different weights.</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">If the embedding model changes underneath it, even under the same tag, Mailvec stops instead of mixing two incompatible vector spaces and returning plausible-looking nonsense.</p></article>
+<article style="padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px">467 GB/day <svg width="16" height="8" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg> 0 writes</span>
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 22px; line-height: 1.25">467 GB a day to look at unchanged mail.</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">The indexer once rewrote a row per message on every one-minute scan. An unchanged mailbox now costs zero writes, and a test checks for exactly zero.</p></article>
+<article style="padding: 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px">429 <svg width="16" height="8" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg> retry, not "unreadable"</span>
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 22px; line-height: 1.25">A busy provider is not a broken document.</h3>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">A rate-limited OCR service never causes a good scan to be marked unreadable; only a real, repeatable failure does.</p></article>
+</div>
+</div>
+</section>
+
+<!-- PROOF -->
+<section id="proof" class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px; display: flex; flex-direction: column; gap: 56px">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>09 · Proof</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Measured, not claimed.</h2>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); border-top: 1.5px solid var(--ink); border-bottom: 1px solid var(--line)">
+<div style="padding: 24px 20px 24px 0; display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--serif); font-size: 44px; line-height: 1">1,400+</span><span style="font-size: 14px; color: var(--muted)">tests</span></div>
+<div style="padding: 24px 20px 24px 0; display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--serif); font-size: 44px; line-height: 1">8</span><span style="font-size: 14px; color: var(--muted)">read tools, and nothing that sends</span></div>
+<div style="padding: 24px 20px 24px 0; display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--serif); font-size: 44px; line-height: 1">~80,000</span><span style="font-size: 14px; color: var(--muted)">messages in daily use</span></div>
+<div style="padding: 24px 20px 24px 0; display: flex; flex-direction: column; gap: 4px"><span style="font-family: var(--serif); font-size: 44px; line-height: 1; color: var(--signal-text)">0.92</span><span style="font-size: 14px; color: var(--muted)">hybrid search NDCG@10</span></div>
+</div>
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: 56px; align-items: start">
+<figure style="margin: 0; display: flex; flex-direction: column; gap: 22px" role="group" aria-label="Search quality chart: hybrid beats keyword and semantic on NDCG@10 and Recall@10.">
+<h3 style="margin: 0; font-size: 18px; font-weight: 600">Hybrid beats either leg alone</h3>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">NDCG@10</span>
+<div style="display: grid; grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 8px 12px; align-items: center; font-size: 14px">
+<span style="color: var(--muted)">Keyword</span><span style="height: 18px; background: var(--line); border-radius: 0 3px 3px 0; width: 43.6%"></span><span style="font-family: var(--mono)">0.859</span>
+<span style="color: var(--muted)">Semantic</span><span style="height: 18px; background: var(--line); border-radius: 0 3px 3px 0; width: 25.6%"></span><span style="font-family: var(--mono)">0.814</span>
+<span style="font-weight: 600">Hybrid</span><span style="height: 18px; background: var(--signal); border-radius: 0 3px 3px 0; width: 66.4%"></span><span style="font-family: var(--mono); font-weight: 700">0.916</span>
+</div>
+<span style="margin-top: 14px; font-family: var(--mono); font-size: 12px; color: var(--muted)">Recall@10</span>
+<div style="display: grid; grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 8px 12px; align-items: center; font-size: 14px">
+<span style="color: var(--muted)">Keyword</span><span style="height: 18px; background: var(--line); border-radius: 0 3px 3px 0; width: 76%"></span><span style="font-family: var(--mono)">0.940</span>
+<span style="color: var(--muted)">Semantic</span><span style="height: 18px; background: var(--line); border-radius: 0 3px 3px 0; width: 65.2%"></span><span style="font-family: var(--mono)">0.913</span>
+<span style="font-weight: 600">Hybrid</span><span style="height: 18px; background: var(--signal); border-radius: 0 3px 3px 0; width: 90.8%"></span><span style="font-family: var(--mono); font-weight: 700">0.977</span>
+</div>
+<div style="display: grid; grid-template-columns: 76px minmax(0, 1fr) 48px; gap: 12px; margin-top: 4px"><span></span><span style="display: flex; justify-content: space-between; border-top: 1px solid var(--muted); padding-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--muted)"><span>0.75 (axis start)</span><span>1.00</span></span><span></span></div>
+</div>
+<figcaption style="font-size: 14px; color: var(--muted)">70 labelled queries over one person's real ~80k-message mailbox, top 10 results. Your numbers will differ. The <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">mailvec eval</code> tool lets you measure your own.</figcaption>
+<p style="margin: 0; font-size: 14px; color: var(--muted)">Gmail behaviour is tested against recordings from a real Gmail test account, re-recorded weekly in CI. OCR engines were compared head to head before choosing a default.</p>
+</figure>
+<div style="border-radius: 10px; background: var(--term-bg); border: 1px solid var(--term-line); overflow: hidden; box-shadow: var(--shadow)">
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--term-line); font-family: var(--mono); font-size: 12px; color: var(--term-muted)"><span>~ — zsh · Mac install</span><span>S3 · illustrative</span></div>
+<pre style="margin: 0; padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; color: var(--term-ink)"><span style="color: var(--term-muted)">$</span> mailvec doctor
+
+Mailvec preflight
+=================
+
+Configuration
+  <span style="color: #7FC98F">✓</span> Version                v0.12.0 (cli + mcp in lockstep)
+  <span style="color: #7FC98F">✓</span> Embedding profile      ollama-legacy (ollama, provider ollama) — mxbai-embed-large @1024d, space ollama:mxbai-embed-large:1024
+  <span style="color: #7FC98F">✓</span> Database               /Users/sam/Library/Application Support/Mailvec/archive.sqlite (3.12 GB)
+  <span style="color: #7FC98F">✓</span> Schema                 version 14 (current)
+  <span style="color: #7FC98F">✓</span> vec0.dylib             /Users/sam/.local/share/mailvec/cli/runtimes/osx-arm64/native/vec0.dylib
+  <span style="color: #7FC98F">✓</span> Maildir root           /Users/sam/Mail/Fastmail
+
+Pipeline
+  <span style="color: #7FC98F">✓</span> Embedding model        mxbai-embed-large (1024d, matches config)
+  <span style="color: #7FC98F">✓</span> Embedding cover        41,870 / 41,870 messages (100.0%, 212,406 chunks)
+  <span style="color: #7FC98F">✓</span> Last indexed           2026-11-09 10:41 (41s ago)
+  <span style="color: #7FC98F">✓</span> Ollama                 reachable at http://127.0.0.1:11434 (configured model: mxbai-embed-large)
+  <span style="color: #7FC98F">✓</span> Orphan vectors         none
+  <span style="color: #7FC98F">✓</span> Parser                 in-process — this binary carries MimeKit, PdfPig, OpenXml and PDFium itself
+  <span style="color: #7FC98F">✓</span> OCR model              ollama qwen2.5vl:7b available
+
+Services (launchd)
+  <span style="color: #7FC98F">✓</span> com.mailvec.mbsync     loaded — runs on schedule (last exit: 0)
+  <span style="color: #7FC98F">✓</span> com.mailvec.indexer    running (pid 812)
+  <span style="color: #7FC98F">✓</span> com.mailvec.embedder   running (pid 815)
+  <span style="color: #7FC98F">✓</span> com.mailvec.mcp        running (pid 819)
+  <span style="color: #7FC98F">✓</span> mbsync stderr          no recent errors
+
+External tools
+  <span style="color: #7FC98F">✓</span> mbsync                 /opt/homebrew/bin/mbsync
+
+MCP
+  <span style="color: #7FC98F">✓</span> MCP /health            200 ok (http://127.0.0.1:3333/health)
+
+<span style="color: #7FC98F">20 pass</span>, 0 warn, 0 fail
+All clear.</pre>
+</div>
+</div>
+</section>
+
+<!-- WORKS WITH -->
+<section style="border-top: 1px solid var(--line); border-bottom: 1px solid var(--line)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 40px 32px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline"><span style="flex: 0 0 80px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">Mail</span><span style="font-size: 18px">Fastmail · Gmail · iCloud · any IMAP server (via mbsync)</span><span style="font-size: 14px; color: var(--muted)">Fastmail results link straight to the message.</span></div>
+<div id="clients" style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline"><span style="flex: 0 0 80px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">Clients</span><span style="font-size: 18px">Any MCP client, local over stdio or HTTP, remote over OAuth: Claude Desktop · Claude Code · claude.ai · Claude for iPhone · your own agent</span></div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline"><span style="flex: 0 0 80px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">Guides</span><span style="font-size: 15px; color: var(--muted)">Step-by-step setup for Claude Desktop, Claude Code and claude.ai. Other local clients use the generic stdio launcher or <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">http://127.0.0.1:3333</code>. Pair it with a local model and nothing leaves the machine at all.</span></div>
+</div>
+</section>
+
+<!-- GET STARTED -->
+<section id="start" class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 112px 32px; display: flex; flex-direction: column; gap: 44px">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>10 · Get started</span></div>
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Two ways in. Pick where your mail should live.</h2>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px">
+<article style="padding: 28px; border: 1.5px solid var(--ink); border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Apple Silicon · macOS 14+</span>
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 30px">One Mac</h3>
+<p style="margin: 0; font-size: 16px; color: var(--muted)">Install mbsync and Ollama with Homebrew, sync your mail, run one installer, connect Claude Desktop, Claude Code or any local MCP client. Everything stays on the Mac.</p>
+<a href="https://github.com/djdelaney/Mailvec/blob/main/docs/getting-started-macos.md" style="margin-top: auto; font-weight: 500">Mac guide →</a></article>
+<article style="padding: 28px; border: 1.5px solid var(--ink); border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Linux · Docker Compose</span>
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 30px">Always-on server</h3>
+<p style="margin: 0; font-size: 16px; color: var(--muted)">A Linux host with Docker Compose and an Ollama machine on your network. Build locally or pin the published images. Add a Cloudflare Tunnel and Access to reach it from remote clients like claude.ai and your phone.</p>
+<a href="https://github.com/djdelaney/Mailvec/blob/main/docs/getting-started-docker.md" style="margin-top: auto; font-weight: 500">Server guide →</a></article>
+<article style="padding: 28px; border: 1.5px dashed var(--line); border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">No real mail needed</span>
+<h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 30px">Just looking?</h3>
+<p style="margin: 0; font-size: 16px; color: var(--muted)">A synthetic demo mailbox generator lets you run the whole pipeline with no real mail.</p>
+<a href="https://github.com/djdelaney/Mailvec/tree/main/tools/Mailvec.DevCorpus" style="margin-top: auto; font-weight: 500">Demo mailbox →</a></article>
+</div>
+<p style="margin: 0; font-family: var(--serif); font-style: italic; font-size: 24px">Then ask your agent about an email you know exists.</p>
+
+<div class="split" style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 40px; align-items: start">
+<div style="display: flex; flex-direction: column">
+<div role="tablist" aria-label="Install path" style="display: flex; gap: 4px">
+<button class="tab" role="tab" type="button" id="tab-mac" data-tab="mac" data-on="true" aria-selected="true" aria-controls="panel-mac" style="height: 44px; padding: 0 18px; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 13px">Mac</button>
+<button class="tab" role="tab" type="button" id="tab-docker" data-tab="docker" data-on="false" aria-selected="false" aria-controls="panel-docker" tabindex="-1" style="height: 44px; padding: 0 18px; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 13px">Docker</button>
+</div>
+<div style="position: relative; border-radius: 0 10px 10px 10px; background: var(--term-bg); border: 1px solid var(--term-line); overflow: hidden">
+<button id="copy-cmds" type="button" aria-label="Copy commands" style="position: absolute; right: 10px; top: 10px; height: 34px; padding: 0 12px; border: 1px solid var(--term-line); border-radius: 6px; background: transparent; color: var(--term-ink); font-family: var(--mono); font-size: 12px">Copy</button>
+<pre id="panel-mac" role="tabpanel" aria-labelledby="tab-mac" tabindex="0" style="margin: 0; padding: 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; color: var(--term-ink); white-space: pre">git clone https://github.com/djdelaney/Mailvec &amp;&amp; cd Mailvec
+brew install --cask dotnet-sdk
+brew install isync jq
+brew install --cask ollama-app &amp;&amp; open -a Ollama
+ollama pull mxbai-embed-large
+ollama pull qwen2.5vl:7b          # local OCR, about 6 GB
+cp ops/mbsyncrc.example ~/.mbsyncrc &amp;&amp; $EDITOR ~/.mbsyncrc
+mbsync -aV                        # first sync can take hours
+./ops/install-all.sh
+mailvec doctor</pre>
+<pre id="panel-docker" role="tabpanel" aria-labelledby="tab-docker" tabindex="0" hidden style="margin: 0; padding: 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; color: var(--term-ink); white-space: pre">git clone https://github.com/djdelaney/Mailvec &amp;&amp; cd Mailvec
+umask 077
+cp .env.example .env              # set OLLAMA_BASE_URL, and for a new
+                                  # archive MAILVEC_REQUIRE_SEEDED_DB=0
+cp ops/mbsyncrc.container.example mbsyncrc
+install -d -m 700 secrets
+printf &#x27;%s&#x27; &#x27;&lt;IMAP app password&gt;&#x27; &gt; secrets/fastmail_password
+: &gt; secrets/embedding_api_key     # empty unless hosted embeddings
+mkdir -p data logs/mcp logs/indexer logs/embedder mail
+sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
+docker compose up -d --build
+docker compose exec mcp mailvec doctor</pre>
+</div>
+<span style="margin-top: 10px; font-family: var(--mono); font-size: 12px; color: var(--muted)">S4 · from docs/getting-started-*.md, trimmed</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="padding: 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface)">
+<h3 style="margin: 0 0 12px; font-size: 16px; font-weight: 600">Requirements</h3>
+<ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; color: var(--muted)">
+<li>An IMAP account and an app password</li>
+<li>Ollama with <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">mxbai-embed-large</code>, plus <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">qwen2.5vl:7b</code> (about 6 GB) for local OCR</li>
+<li>.NET 10 SDK (Mac) or Docker Compose (server)</li>
+<li>Roughly 4–5 GB of disk per 75,000 messages, plus the mail itself</li>
+</ul>
+</div>
+<p style="margin: 0; padding: 0 4px; font-size: 15px; color: var(--muted)"><b style="font-weight: 600; color: var(--ink)">Expect a wait.</b> The first sync and embedding pass on a large mailbox can take hours or days. Keyword search works from the start.</p>
+</div>
+</div>
+</section>
+
+<!-- LIMITS -->
+<section style="background: var(--band); border-top: 1px solid var(--line)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 88px 32px; display: flex; flex-direction: column; gap: 32px">
+<h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 34px">Limits, plainly.</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 40px">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--local)">It is</span>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border-top: 1px solid var(--line)">
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">One mailbox, one owner</li>
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">Read-only for agents</li>
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">Self-hosted</li>
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">Pre-1.0 and actively developed</li>
+</ul></div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">It isn't</span>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); color: var(--muted)">
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">A mail client: no GUI, nothing to send with</li>
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">Multi-user</li>
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">Encrypted at rest by itself (use disk encryption)</li>
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">Tuned for Chinese, Japanese or Korean keyword search yet</li>
+<li style="padding: 12px 0; border-bottom: 1px solid var(--line)">A hosted service with a signup</li>
+</ul></div>
+</div>
+</div>
+</section>
+
+</main>
+
+<!-- FOOTER -->
+<footer style="background: var(--ink); color: var(--bg)">
+<div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 56px 32px; display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; justify-content: space-between">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 10px">
+<svg width="34" height="34" viewBox="0 0 128 128" aria-hidden="true"><path d="M16 27h82v6H16z" style="fill: var(--signal)"></path><path d="M96 18.5l17 11.5-17 11.5z" style="fill: var(--signal)"></path><path d="M22 52v48M22 70a12 12 0 0 1 24 0v30M46 70a12 12 0 0 1 24 0v30" style="fill: none; stroke: currentColor; stroke-width: 13"></path><path d="M81 52H94L98 81L102 52H115L104 100H92Z" style="fill: currentColor"></path></svg>
+<span style="font-weight: 600; font-size: 22px">Mailvec</span></div>
+<span style="font-family: var(--serif); font-style: italic; font-size: 18px; opacity: .8">Mail, plus a vector.</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 20px 28px; font-size: 15px">
+<a href="https://github.com/djdelaney/Mailvec" style="color: var(--bg)">GitHub</a>
+<a href="https://github.com/djdelaney/Mailvec/tree/main/docs" style="color: var(--bg)">Docs</a>
+<a href="https://github.com/djdelaney/Mailvec/blob/main/LICENSE" style="color: var(--bg)">MIT licence</a>
+</div>
+<p style="flex-basis: 100%; margin: 0; padding-top: 24px; border-top: 1px solid rgba(237,230,214,.18); font-size: 14px; opacity: .75">Also by the author: <a href="https://djdelaney.github.io/Knapper/" style="color: var(--bg)">Knapper</a>, safe agent access to an Obsidian vault.</p>
+</div>
+</footer>
+
+</div>
+</body>
+</html>

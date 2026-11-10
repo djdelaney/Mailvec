@@ -21,6 +21,10 @@ mark-read/
 mbsyncrc
 runtimes/
 secrets/
+# The static product site (published by .github/workflows/pages.yml) is
+# never part of the image; excluding it also keeps a site-only edit from
+# invalidating the `COPY . .` layer and rebuilding every .NET project.
+site/
 .env
 **/bin/
 **/obj/

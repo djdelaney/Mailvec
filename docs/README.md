@@ -29,6 +29,7 @@ Start with one installation path. The pages below are grouped by the task you ar
 - [Test database walkthrough](dev-walkthrough.md): use a separate Maildir and SQLite archive.
 - Contributor notes: [attachment indexing](contributing/attachment-indexing.md), [OCR](contributing/attachment-ocr.md), [embedding experiments](contributing/embedding-experiments.md), [MCPB](contributing/mcpb.md), [cloud smoke tests](contributing/cloud-smoke-tests.md), and [search performance](contributing/search-performance.md).
 - [Eval baselines](../baselines/README.md) and [change history](../CHANGELOG.md).
+- [Product site](site/README.md): the static landing page in `site/`, published to GitHub Pages, and its validation checklist.
 
 ## Further reading
 
