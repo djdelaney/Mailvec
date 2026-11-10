@@ -13,22 +13,29 @@ public sealed class MarkReadToolTests : IDisposable
     private readonly TempDatabase _db = new();
     private readonly string _root;
     private readonly string _queue;
+    private readonly string _inbox;
 
     public MarkReadToolTests()
     {
         _root = Path.Combine(_db.DirectoryPath, "mail", "Fastmail");
         _queue = Path.Combine(_db.DirectoryPath, "mark-read");
         Directory.CreateDirectory(_root);
-        Directory.CreateDirectory(_queue);
+        _inbox = Path.Combine(_queue, MarkReadQueue.InboxDirectoryName);
+        Directory.CreateDirectory(_inbox);
     }
 
     public void Dispose() => _db.Dispose();
 
-    private MarkReadTool Build(int maxPerCall = 100)
+    // requireReadOnlyQueue is off by default here only because the fixture
+    // itself plays the sidecar and writes the marker into the same directory.
+    private MarkReadTool Build(int maxPerCall = 100, bool requireReadOnlyQueue = false)
     {
         var mcp = Options.Create(new McpOptions
         {
-            MarkRead = new MarkReadOptions { QueueDirectory = _queue, MaxMessagesPerCall = maxPerCall },
+            MarkRead = new MarkReadOptions
+            {
+                QueueDirectory = _queue, MaxMessagesPerCall = maxPerCall, RequireReadOnlyQueue = requireReadOnlyQueue,
+            },
         });
         var ingest = Options.Create(new IngestOptions { MaildirRoot = _root });
         return new MarkReadTool(
@@ -61,7 +68,70 @@ public sealed class MarkReadToolTests : IDisposable
         return id;
     }
 
-    private string[] RequestFiles() => Directory.GetFiles(_queue, "*" + MarkReadQueue.RequestExtension);
+    private string[] RequestFiles() => Directory.GetFiles(_inbox, "*" + MarkReadQueue.RequestExtension);
+
+    [Fact]
+    public void Requests_go_into_the_inbox_and_nothing_else_is_written_to_the_queue_directory()
+    {
+        // The sidecar writes its marker and records in the queue directory and
+        // runs as the same uid. Anything mcp could create there is somewhere
+        // it could plant a link for the sidecar to write through.
+        Applier(DateTimeOffset.UtcNow, 60, "Alerts");
+        long id = Seed("a@x", ("Alerts", "1.host,U=1:2,"));
+
+        Build().MarkRead(ids: [id]).QueuedCount.ShouldBe(1);
+
+        Directory.GetFileSystemEntries(_queue).Select(Path.GetFileName).Order(StringComparer.Ordinal)
+            .ShouldBe([MarkReadQueue.ApplierFileName, MarkReadQueue.InboxDirectoryName]);
+        RequestFiles().ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public void A_queue_directory_this_process_can_write_makes_mark_read_unavailable()
+    {
+        // New images with an old overlay file: everything would work, with the
+        // read-only mount that the sidecar's safety rests on silently missing.
+        Applier(DateTimeOffset.UtcNow, 60, "Alerts");
+        long id = Seed("a@x", ("Alerts", "1.host,U=1:2,"));
+
+        var result = Build(requireReadOnlyQueue: true).MarkRead(ids: [id]).Results.Single();
+
+        result.Status.ShouldBe(MarkReadStatus.Unavailable);
+        result.Reason.ShouldNotBeNull().ShouldContain("read-only");
+        RequestFiles().ShouldBeEmpty();
+        Directory.GetFiles(_queue).Select(Path.GetFileName).ShouldBe([MarkReadQueue.ApplierFileName]); // the probe is gone
+    }
+
+    [Fact]
+    public void A_read_only_queue_directory_with_a_writable_inbox_queues_normally()
+    {
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess) return; // no modes; root writes through 0500
+        Applier(DateTimeOffset.UtcNow, 60, "Alerts");
+        long id = Seed("a@x", ("Alerts", "1.host,U=1:2,"));
+        File.SetUnixFileMode(_queue, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            Build(requireReadOnlyQueue: true).MarkRead(ids: [id]).QueuedCount.ShouldBe(1);
+            RequestFiles().ShouldHaveSingleItem();
+        }
+        finally
+        {
+            File.SetUnixFileMode(_queue, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
+    public void A_marker_from_the_old_layout_is_not_accepted()
+    {
+        // A v1 sidecar reads requests from the queue directory itself, so
+        // anything queued into inbox/ for it would never be applied.
+        File.WriteAllLines(Path.Combine(_queue, MarkReadQueue.ApplierFileName),
+            ["mailvec-mark-read-applier v1", DateTimeOffset.UtcNow.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ"), "60", "Alerts"]);
+        long id = Seed("a@x", ("Alerts", "1.host,U=1:2,"));
+
+        Build().MarkRead(ids: [id]).Results.Single().Status.ShouldBe(MarkReadStatus.Unavailable);
+        RequestFiles().ShouldBeEmpty();
+    }
 
     [Fact]
     public void A_request_file_is_owner_only_whatever_the_umask()
@@ -206,11 +276,10 @@ public sealed class MarkReadToolTests : IDisposable
         var ids = Enumerable.Range(0, 20).Select(i => Seed($"m{i}@x", ("Alerts", $"{i}.host,U={i}:2,"))).ToList();
         foreach (var id in ids) tool.MarkRead(ids: [id]);
 
-        var names = Directory.GetFiles(_queue).Select(Path.GetFileName)
-            .Where(n => n != MarkReadQueue.ApplierFileName).Order(StringComparer.Ordinal).ToList();
+        var names = Directory.GetFiles(_inbox).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToList();
         names.Count.ShouldBe(20);
         names.ShouldAllBe(n => n!.EndsWith(MarkReadQueue.RequestExtension));
-        names.Select(n => File.ReadAllLines(Path.Combine(_queue, n!))[1])
+        names.Select(n => File.ReadAllLines(Path.Combine(_inbox, n!))[1])
             .ShouldBe(Enumerable.Range(0, 20).Select(i => $"read\tAlerts\t{i}.host,U={i}"));
     }
 }

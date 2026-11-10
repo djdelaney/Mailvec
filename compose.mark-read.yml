@@ -8,18 +8,29 @@
 #        COMPOSE_FILE=compose.yml:compose.mark-read.yml
 #        MBSYNC_MARK_READ_FOLDERS=Alerts            # comma-separated; * = every folder
 #   2. In ./mbsyncrc, change `Sync Pull` to `Sync Pull PushFlags`.
-#   3. mkdir -p -m 700 ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read
+#   3. mkdir -p -m 700 ./mark-read/inbox && sudo chown -R ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read
+#      (create inbox/ yourself, before `up`: Docker would create a missing
+#      mount source owned by root, and both services would then refuse it)
 #   then `docker compose up -d`.
 #
 # Disable: remove both .env lines, put `Sync Pull` back, `docker compose up -d`.
 # Requests still queued are simply never applied.
 #
 # How it works: mcp never touches the Maildir and holds no mail credential. It
-# writes requests into ./mark-read; the mbsync sidecar — already the only
+# writes requests into ./mark-read/inbox; the mbsync sidecar — already the only
 # Maildir writer and the only credential holder — re-validates each one
 # against MBSYNC_MARK_READ_FOLDERS, adds or removes the `S` in the filename
 # between syncs, and PushFlags carries it to the server. The allowlist lives
 # only here, on the sidecar; it publishes it to mcp in ./mark-read/.applier.
+#
+# The two mounts below are the security boundary, so keep them exactly this
+# shape. Both containers run as one uid, which means file modes separate
+# nothing between them. mcp gets ./mark-read READ-ONLY and only ./mark-read/inbox
+# read-write. The sidecar writes its marker and its done/ records in
+# ./mark-read itself; if mcp could write there too, a compromised mcp could
+# plant a symbolic link and have the sidecar (the one Maildir writer) write
+# through it. mcp checks this at runtime and reports mark_read unavailable
+# while it can write to ./mark-read.
 # See docs/deploy-docker.md "Optional: mark-read" and
 # docs/proposals/read-state.md.
 #
@@ -32,7 +43,9 @@ services:
     environment:
       Mcp__MarkRead__QueueDirectory: /mark-read
     volumes:
-      - ./mark-read:/mark-read
+      # Order matters: the read-only parent first, then the one writable child.
+      - ./mark-read:/mark-read:ro
+      - ./mark-read/inbox:/mark-read/inbox
 
   mbsync:
     environment:

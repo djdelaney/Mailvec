@@ -24,13 +24,55 @@ public sealed class MarkReadQueue(IOptions<McpOptions> mcp, IOptions<IngestOptio
 {
     /// <summary>Written by the sidecar on its beat timer; read here.</summary>
     public const string ApplierFileName = ".applier";
-    public const string ApplierHeader = "mailvec-mark-read-applier v1";
+    /// <summary>
+    /// v2 is the layout below (requests in <see cref="InboxDirectoryName"/>).
+    /// The version is what stops a mismatched pair of images from half
+    /// working: an mcp and a sidecar that disagree about where requests go
+    /// each read the other's marker as malformed, so mark_read is
+    /// unavailable instead of queueing requests nothing will ever apply.
+    /// </summary>
+    public const string ApplierHeader = "mailvec-mark-read-applier v2";
+    /// <summary>
+    /// The one directory mcp writes. The marker and the sidecar's records sit
+    /// beside it, in the queue directory itself, which the compose overlay
+    /// mounts read-only into mcp: both containers run as one uid, so only the
+    /// mounts keep a compromised mcp from planting a link where the sidecar
+    /// writes. Never write anywhere else under the queue directory.
+    /// </summary>
+    public const string InboxDirectoryName = "inbox";
     public const string RequestHeader = "mailvec-mark-read v1";
     public const string RequestExtension = ".req";
     /// <summary>The allowlist entry that means every folder — never implied by an empty list.</summary>
     public const string AllFolders = "*";
 
     private readonly string _queue = mcp.Value.MarkRead.QueueDirectory;
+    private readonly string _inbox = Path.Combine(mcp.Value.MarkRead.QueueDirectory, InboxDirectoryName);
+    private readonly bool _requireReadOnly = mcp.Value.MarkRead.RequireReadOnlyQueue;
+    private bool? _queueWritable;
+
+    /// <summary>
+    /// Whether this process can create a file in the queue directory itself.
+    /// Asked once: it is a property of the mount, which does not change under
+    /// a running container. A directory that does not exist is not writable.
+    /// </summary>
+    private bool QueueIsWritable()
+    {
+        if (_queueWritable is { } known) return known;
+        var probe = Path.Combine(_queue, ".mcp-write-probe-" + Guid.NewGuid().ToString("N"));
+        bool writable;
+        try
+        {
+            OwnerOnlyFile.CreateNew(probe).Dispose();
+            writable = true;
+            try { File.Delete(probe); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            writable = false;
+        }
+        _queueWritable = writable;
+        return writable;
+    }
 
     /// <summary>
     /// Whether the sidecar is applying requests right now, and which folders
@@ -42,6 +84,10 @@ public sealed class MarkReadQueue(IOptions<McpOptions> mcp, IOptions<IngestOptio
     /// </summary>
     public ApplierState ReadApplier(DateTimeOffset now)
     {
+        if (_requireReadOnly && QueueIsWritable())
+            return ApplierState.Unhealthy(
+                "the mark-read queue directory is writable by the MCP server; it must be mounted read-only with only its inbox/ writable (use the current compose.mark-read.yml)");
+
         string[] lines;
         try
         {
@@ -113,11 +159,11 @@ public sealed class MarkReadQueue(IOptions<McpOptions> mcp, IOptions<IngestOptio
         // Owner-only: a request names a folder and a Maildir filename per
         // message, on a host bind mount, and the sidecar reading it runs as
         // the same uid.
-        var tmp = Path.Combine(_queue, "." + Guid.NewGuid().ToString("N") + ".tmp");
+        var tmp = Path.Combine(_inbox, "." + Guid.NewGuid().ToString("N") + ".tmp");
         using (var fs = OwnerOnlyFile.CreateNew(tmp))
         using (var w = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
             w.Write(body.ToString());
-        File.Move(tmp, Path.Combine(_queue, name));
+        File.Move(tmp, Path.Combine(_inbox, name));
         return name;
     }
 

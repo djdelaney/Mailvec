@@ -75,7 +75,7 @@ Where the [mark-read component](deploy-docker.md#optional-mark-read) is enabled,
 
 - **mcp, always on:** one line per call, `mark_read read=… queued=… file=<request>.req results=<id>:<status>,…`. It carries internal ids and statuses only. Message-IDs and folders appear only in the `Mcp:LogToolCalls` call and result lines, like every other tool's arguments.
 - **mbsync, in `docker compose logs mbsync`:** `mark-read: applied <request>.req: <count> <outcome> …` per applied file. A missed setup step shows as `mark-read: OFF: <reason>` at startup and `mark-read is OFF` each cycle. That container has no Serilog file, so `docker logs` is its record, bounded by the compose logging block.
-- **`./mark-read/done/<request>.req`:** each request line prefixed with its outcome (`ok`, `unchanged`, `not_found`, `forbidden_folder`, `rejected` or `expired`). Kept 30 days.
+- **`./mark-read/done/<request>.req`** (written by the sidecar; mcp can read it and not change it): each request line prefixed with its outcome (`ok`, `unchanged`, `not_found`, `forbidden_folder`, `rejected` or `expired`). Kept 30 days.
 
 ## Claude Desktop MCPB bundle
 

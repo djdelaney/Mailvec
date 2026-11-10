@@ -564,7 +564,7 @@ RUN cat <<'EOF' > /usr/local/bin/mbsync-mark-read
 #!/bin/sh
 # The sidecar half of the OPTIONAL mark-read component
 # (docs/proposals/read-state.md). mcp writes requests into
-# MBSYNC_MARK_READ_QUEUE; this applies them to the Maildir, and mbsync's
+# MBSYNC_MARK_READ_QUEUE/inbox; this applies them to the Maildir, and mbsync's
 # PushFlags carries the change upstream on the sync that follows.
 #
 # Called only by mbsync-loop, and only when MBSYNC_MARK_READ_QUEUE is set: a
@@ -578,9 +578,23 @@ RUN cat <<'EOF' > /usr/local/bin/mbsync-mark-read
 # TRUST: mcp is the internet-facing process and this one holds the credential,
 # so nothing in a request file is trusted. Every line is re-validated here,
 # against THIS process's own MBSYNC_MARK_READ_FOLDERS (never the marker, which
-# mcp can write), and the only change ever made is adding or removing the `S`
+# is something this script publishes and never reads), and the only change ever made is adding or removing the `S`
 # in a Maildir filename. Never touch another flag: with PushFlags a stray `T`
 # becomes \Deleted on the server.
+#
+# The DIRECTORY is not trusted either. mcp runs as the same uid, so file modes
+# separate nothing; the mounts do. mcp can write only inbox/. The marker,
+# work/ and done/ sit beside it, where mcp's mount is read-only. Two rules
+# follow, and both were once broken (the marker's temp file and done/ lived in
+# the one shared directory, so a symlink planted there made this script
+# overwrite a message file or write a new one into a Maildir folder):
+#   * never write, create or chmod anything under inbox/. The only things done
+#     there are a rename out of it and a remove.
+#   * never READ a request where mcp can still reach it. Each one is first
+#     renamed into work/ (a rename moves the name itself and follows no link),
+#     and only then checked and read. Checking it in place and reading it
+#     afterwards leaves a gap in which it can be swapped for a link to a file
+#     only this container can read, such as mbsyncrc.
 #
 # Runs between syncs, from the loop itself, so a rename can never race an
 # `mbsync -a` (two writers on .mbsyncstate and the Maildir is the hazard the
@@ -602,6 +616,9 @@ Q="${MBSYNC_MARK_READ_QUEUE:?MBSYNC_MARK_READ_QUEUE is not set}"
 : "${MBSYNC_MARK_READ_KEEP_DAYS:=30}"
 ROOT="${MBSYNC_MAILDIR}"
 MARKER="${Q}/.applier"
+INBOX="${Q}/inbox"
+WORK="${Q}/work"
+DONE="${Q}/done"
 NL='
 '
 say() { echo "mbsync: mark-read: $*" >&2; }
@@ -729,25 +746,36 @@ well_formed() {
 apply_all() {
     # chmod as well as the umask: a done/ created before the umask landed is
     # 0755, and its records stay readable until they expire.
-    { mkdir -p "${Q}/done" && chmod 700 "${Q}/done"; } || { say "could not create ${Q}/done"; return 1; }
-    for req in "${Q}"/*.req; do
-        [ -e "$req" ] || continue
-        name="$(basename "$req")"
-        if [ -L "$req" ] || [ ! -f "$req" ]; then rm -f "$req"; say "removed ${name}: not a regular file"; continue; fi
-        out="${Q}/done/${name}"
-        if [ -n "$(find "$req" -mmin +"${MBSYNC_MARK_READ_EXPIRE_MINUTES}" 2>/dev/null)" ]; then
-            tail -n +2 "$req" | while IFS= read -r line; do printf 'expired\t%s\n' "$line"; done > "${out}.tmp"
-        elif ! well_formed "$req"; then
+    { mkdir -p "${DONE}" && chmod 700 "${DONE}"; } || { say "could not create ${DONE}"; return 1; }
+    # work/ is this script's alone, so whatever is in it was left by a run
+    # that was interrupted. Start empty: a leftover with a request's name
+    # would otherwise be what the rename below lands on.
+    { rm -rf "${WORK}" && mkdir -m 700 "${WORK}"; } || { say "could not prepare ${WORK}"; return 1; }
+    for req in "${INBOX}"/*.req; do
+        # -L as well: a dangling link fails -e and would sit in the inbox forever.
+        { [ -e "$req" ] || [ -L "$req" ]; } || continue
+        name="${req##*/}"
+        # The name becomes a path under work/ and done/ and goes into the log.
+        case "$name" in *[!A-Za-z0-9._-]*) rm -rf "$req"; say "removed a request with an unexpected file name"; continue ;; esac
+        staged="${WORK}/${name}"
+        # Out of mcp's reach first; see TRUST above. Nothing reads $req.
+        mv "$req" "$staged" 2>/dev/null || { say "could not take ${name} from the inbox"; continue; }
+        if [ -L "$staged" ] || [ ! -f "$staged" ]; then rm -rf "$staged"; say "removed ${name}: not a regular file"; continue; fi
+        out="${DONE}/${name}"
+        rm -f "${out}.tmp"
+        if [ -n "$(find "$staged" -mmin +"${MBSYNC_MARK_READ_EXPIRE_MINUTES}" 2>/dev/null)" ]; then
+            tail -n +2 "$staged" | while IFS= read -r line; do printf 'expired\t%s\n' "$line"; done > "${out}.tmp"
+        elif ! well_formed "$staged"; then
             printf 'rejected\t(malformed request file; nothing applied)\n' > "${out}.tmp"
         else
-            tail -n +2 "$req" | while IFS='	' read -r action folder base; do
+            tail -n +2 "$staged" | while IFS='	' read -r action folder base; do
                 printf '%s\t%s\t%s\t%s\n' "$(apply_one "$action" "$folder" "$base")" "$action" "$folder" "$base"
             done > "${out}.tmp"
         fi
-        mv -f "${out}.tmp" "$out" && rm -f "$req"
+        mv -f "${out}.tmp" "$out" && rm -f "$staged"
         say "applied ${name}: $(cut -f 1 "$out" | LC_ALL=C sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
     done
-    find "${Q}/done" -type f -mtime +"${MBSYNC_MARK_READ_KEEP_DAYS}" -exec rm -f {} \; 2>/dev/null
+    find "${DONE}" -type f -mtime +"${MBSYNC_MARK_READ_KEEP_DAYS}" -exec rm -f {} \; 2>/dev/null
     return 0
 }
 
@@ -755,7 +783,13 @@ case "${1:-}" in
     preflight)
         fail=
         if [ ! -d "$Q" ] || [ ! -w "$Q" ]; then
-            fail="${Q} is missing or not writable by uid $(id -u). On the host: mkdir -p -m 700 ./mark-read && sudo chown $(id -u):$(id -g) ./mark-read"
+            fail="${Q} is missing or not writable by uid $(id -u). On the host: mkdir -p -m 700 ./mark-read/inbox && sudo chown -R $(id -u):$(id -g) ./mark-read"
+        elif [ -L "$INBOX" ] || [ ! -d "$INBOX" ] || [ ! -w "$INBOX" ]; then
+            # Not created here: mcp's own mount of it must exist before either
+            # container starts, or Docker creates it owned by root.
+            fail="${INBOX} is missing or not writable by uid $(id -u). mcp writes requests there and nowhere else. On the host: mkdir -p -m 700 ./mark-read/inbox && sudo chown -R $(id -u):$(id -g) ./mark-read, and use the current compose.mark-read.yml"
+        elif [ -L "$DONE" ] || [ -L "$WORK" ]; then
+            fail="${DONE} or ${WORK} is a symbolic link; remove it. This script writes there and follows no link to do it."
         elif [ -z "$(folders)" ]; then
             fail="MBSYNC_MARK_READ_FOLDERS is empty. Name the folders mark_read may change (comma-separated), or * for every folder."
         elif ! pushes_flags; then
@@ -770,7 +804,10 @@ case "${1:-}" in
         say "on for folders: $(folders | tr '\n' ' ')"
         ;;
     marker)
-        if ! { { printf '%s\n%s\n%s\n' "mailvec-mark-read-applier v1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${2:?cadence}"; folders; } \
+        # Removed first so the redirect below creates the file. Only this
+        # container can write here, and this keeps it true if that ever slips.
+        rm -f "${MARKER}.tmp"
+        if ! { { printf '%s\n%s\n%s\n' "mailvec-mark-read-applier v2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${2:?cadence}"; folders; } \
                > "${MARKER}.tmp" && mv -f "${MARKER}.tmp" "$MARKER"; }; then
             say "could not write ${MARKER} (mcp will report mark_read unavailable)"
             rm -f "${MARKER}.tmp" 2>/dev/null
@@ -778,7 +815,7 @@ case "${1:-}" in
         ;;
     apply) apply_all ;;
     pending)
-        for req in "${Q}"/*.req; do [ -e "$req" ] && exit 0; done
+        for req in "${INBOX}"/*.req; do { [ -e "$req" ] || [ -L "$req" ]; } && exit 0; done
         exit 1
         ;;
     *) echo "usage: mbsync-mark-read preflight|marker <seconds>|apply|pending" >&2; exit 2 ;;

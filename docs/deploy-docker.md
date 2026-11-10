@@ -118,7 +118,7 @@ To enable it:
    ```
 
 2. In `./mbsyncrc`, change `Sync Pull` to `Sync Pull PushFlags`, so flags set locally reach the server. New mail and deletions still flow down only.
-3. Create the queue directory, owned by the service uid and closed to other local accounts (the request and `done/` records name folders and messages): `mkdir -p -m 700 ./mark-read && sudo chown ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read`.
+3. Create the queue directory and its `inbox/`, owned by the service uid and closed to other local accounts (the request and `done/` records name folders and messages): `mkdir -p -m 700 ./mark-read/inbox && sudo chown -R ${MAILVEC_UID:-10001}:${MAILVEC_GID:-10001} ./mark-read`. Create `inbox/` yourself: Docker creates a missing mount source owned by root.
 4. `docker compose up -d`.
 
 Verify it:
@@ -126,6 +126,8 @@ Verify it:
 - `docker compose logs mbsync` shows `mark-read: on for folders: …`. If a step was missed it shows `mark-read: OFF:` with the reason; mail keeps syncing, and `mark_read` answers `unavailable` without queueing anything.
 - `cat ./mark-read/.applier`: its timestamp moves every minute while the sidecar runs.
 - `mark_read` appears in the client's tool list. After a call, the sidecar logs `applied <file>` and the outcome of each line is in `./mark-read/done/` (kept 30 days).
+
+**Upgrading from v0.12.1 or earlier.** The queue layout changed: requests now go into `./mark-read/inbox`, and mcp mounts `./mark-read` read-only. Before starting the new images, run the `mkdir` and `chown` from step 3 and take the current `compose.mark-read.yml`. Until both are done `mark_read` answers `unavailable` and says which part is missing (the sidecar log names a missing `inbox`; mcp names a queue directory it can still write to). Mail sync and search are unaffected. Request files left directly in `./mark-read` are ignored and can be deleted.
 
 A message is refused (`forbidden_folder`) unless **every** folder it is in is allowed, because marking one copy read marks the whole email read on the server. Requests wake the sync loop, so a change usually reaches the server within about 5 seconds.
 

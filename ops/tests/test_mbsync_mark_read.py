@@ -59,7 +59,8 @@ class MarkReadScriptTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.root = self.dir / "mail" / "Fastmail"
         self.queue = self.dir / "mark-read"
-        self.queue.mkdir()
+        self.inbox = self.queue / "inbox"   # the one directory mcp can write
+        self.inbox.mkdir(parents=True)
         self.config = self.dir / "mbsyncrc"
         self.config.write_text("Channel fastmail\nSync Pull PushFlags\n")
         self.script = self.dir / "mbsync-mark-read"
@@ -87,7 +88,7 @@ class MarkReadScriptTests(unittest.TestCase):
         return path
 
     def request(self, *lines, name="20261024T070000000Z-a.req", header=HEADER):
-        path = self.queue / name
+        path = self.inbox / name
         path.write_text("".join(f"{l}\n" for l in [header, *lines]))
         return path
 
@@ -116,7 +117,7 @@ class MarkReadScriptTests(unittest.TestCase):
         self.assertFalse((self.queue / ".applier").exists())
 
     def test_preflight_refuses_a_missing_queue_directory(self):
-        self.queue.rmdir()
+        shutil.rmtree(self.queue)
         r = self.run_script("preflight")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("not writable", r.stderr)
@@ -154,7 +155,7 @@ class MarkReadScriptTests(unittest.TestCase):
         self.folders = "Alerts, Cron Jobs ,*"
         self.assertEqual(self.run_script("marker", "60").returncode, 0)
         lines = (self.queue / ".applier").read_text().splitlines()
-        self.assertEqual(lines[0], "mailvec-mark-read-applier v1")
+        self.assertEqual(lines[0], "mailvec-mark-read-applier v2")
         self.assertRegex(lines[1], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(lines[2:], ["60", "Alerts", "Cron Jobs", "*"])
 
@@ -190,7 +191,8 @@ class MarkReadScriptTests(unittest.TestCase):
         self.assertEqual(self.files("Alerts"),
                          ["cur/1.host,U=1:2,RST", "cur/2.host,U=2:2,FS", "cur/3.host,U=3:2,S"])
         self.assertEqual(self.outcomes(), ["ok", "ok", "ok"])
-        self.assertFalse((self.queue / "20261024T070000000Z-a.req").exists())
+        self.assertFalse((self.inbox / "20261024T070000000Z-a.req").exists())
+        self.assertEqual(list((self.queue / "work").iterdir()), [])
 
     def test_isyncs_new_files_carry_an_empty_info_suffix_and_are_still_found(self):
         # isync 1.5.1 delivers unseen mail as new/<base>:2, — not the spec's
@@ -225,9 +227,9 @@ class MarkReadScriptTests(unittest.TestCase):
         self.assertEqual(self.files("Alerts"), ["cur/1.host,U=1:2,"])
 
     def test_the_sidecars_own_allowlist_decides_not_the_marker(self):
-        # mcp can write the marker directory, so a forged marker naming INBOX
-        # must change nothing here.
-        (self.queue / ".applier").write_text("mailvec-mark-read-applier v1\n2026-10-24T07:00:00Z\n60\nINBOX\n")
+        # Even a forged marker naming INBOX must change nothing here: the
+        # marker is something this script publishes, never something it reads.
+        (self.queue / ".applier").write_text("mailvec-mark-read-applier v2\n2026-10-24T07:00:00Z\n60\nINBOX\n")
         self.message("INBOX", "1.host,U=1:2,")
         self.request("read\tINBOX\t1.host,U=1")
 
@@ -316,9 +318,126 @@ class MarkReadScriptTests(unittest.TestCase):
 
         self.assertEqual(self.outcomes(), ["not_found"])
 
+    # ---------- the queue directory is not trusted ----------
+    # mcp runs as the same uid and can put anything it likes in inbox/. These
+    # are what a compromised mcp would try. Each one used to work when the
+    # marker, done/ and the requests shared one directory.
+
+    def test_preflight_requires_the_inbox(self):
+        self.inbox.rmdir()
+        r = self.run_script("preflight")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("inbox", r.stderr)
+
+    def test_preflight_refuses_an_inbox_that_is_a_link(self):
+        self.inbox.rmdir()
+        elsewhere = self.dir / "elsewhere"
+        elsewhere.mkdir()
+        self.inbox.symlink_to(elsewhere)
+        self.assertNotEqual(self.run_script("preflight").returncode, 0)
+
+    def test_preflight_refuses_a_done_or_work_directory_that_is_a_link(self):
+        for name in ("done", "work"):
+            with self.subTest(name=name):
+                link = self.queue / name
+                link.symlink_to(self.root)
+                r = self.run_script("preflight")
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("symbolic link", r.stderr)
+                link.unlink()
+
+    def test_a_link_planted_as_the_markers_temp_file_is_not_written_through(self):
+        victim = self.message("Alerts", "1.host,U=1:2,S")
+        before = victim.read_text()
+        (self.queue / ".applier.tmp").symlink_to(victim)
+
+        self.assertEqual(self.run_script("marker", "60").returncode, 0)
+
+        self.assertEqual(victim.read_text(), before)
+        self.assertFalse((self.queue / ".applier").is_symlink())
+        self.assertEqual((self.queue / ".applier").read_text().splitlines()[0], "mailvec-mark-read-applier v2")
+
+    def test_applying_writes_nothing_into_the_inbox(self):
+        self.message("Alerts", "1.host,U=1:2,")
+        self.request("read\tAlerts\t1.host,U=1")
+        old = time.time() - 3600
+        expired = self.request("read\tAlerts\t1.host,U=1", name="20261024T060000000Z-b.req")
+        os.utime(expired, (old, old))
+        self.request("garbage", name="20261024T080000000Z-c.req", header="not a request")
+
+        self.assertEqual(self.run_script("apply").returncode, 0)
+
+        self.assertEqual(list(self.inbox.iterdir()), [])
+        self.assertEqual(sorted(p.name for p in (self.queue / "done").iterdir()),
+                         ["20261024T060000000Z-b.req", "20261024T070000000Z-a.req", "20261024T080000000Z-c.req"])
+
+    def test_a_request_that_is_a_link_is_removed_and_its_target_is_never_read(self):
+        # Pointed at a file only the sidecar can read. Old enough to take the
+        # "expired" path, which copies a request's lines into done/.
+        secret = self.dir / "mbsyncrc-secret"
+        secret.write_text("IMAPAccount a\nUser someone@example.com\nPass not-for-mcp\n")
+        link = self.inbox / "20261024T070000000Z-a.req"
+        link.symlink_to(secret)
+        old = time.time() - 3600
+        os.utime(link, (old, old), follow_symlinks=False)
+
+        r = self.run_script("apply")
+
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("not a regular file", r.stderr)
+        self.assertFalse(link.is_symlink())
+        self.assertTrue(secret.exists())
+        leaked = "".join(p.read_text() for p in (self.queue / "done").rglob("*") if p.is_file())
+        self.assertNotIn("not-for-mcp", leaked)
+
+    def test_a_dangling_link_a_directory_and_a_fifo_are_all_cleared_out(self):
+        (self.inbox / "a.req").symlink_to(self.dir / "nowhere")
+        (self.inbox / "b.req").mkdir()
+        ((self.inbox / "b.req") / "inner").write_text("x")
+        os.mkfifo(self.inbox / "c.req")
+
+        r = self.run_script("apply")
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(list(self.inbox.iterdir()), [])
+        self.assertEqual(list((self.queue / "done").iterdir()), [])
+        self.assertEqual(list((self.queue / "work").iterdir()), [])
+
+    def test_a_request_name_with_unexpected_characters_is_dropped_unread(self):
+        self.message("Alerts", "1.host,U=1:2,")
+        self.request("read\tAlerts\t1.host,U=1", name="a b\n$(x).req")
+
+        r = self.run_script("apply")
+
+        self.assertIn("unexpected file name", r.stderr)
+        self.assertEqual(list(self.inbox.iterdir()), [])
+        self.assertEqual(self.files("Alerts"), ["cur/1.host,U=1:2,"])
+
+    def test_a_leftover_in_work_does_not_capture_the_next_request(self):
+        # An interrupted run left a directory with the next request's name.
+        # A plain `mv` onto it would move the request INSIDE it.
+        (self.queue / "work" / "20261024T070000000Z-a.req").mkdir(parents=True)
+        self.message("Alerts", "1.host,U=1:2,")
+        self.request("read\tAlerts\t1.host,U=1")
+
+        self.assertEqual(self.run_script("apply").returncode, 0)
+
+        self.assertEqual(self.outcomes(), ["ok"])
+        self.assertEqual(list((self.queue / "work").iterdir()), [])
+
+    def test_requests_left_in_the_old_location_are_ignored(self):
+        # Before the split, requests sat in the queue directory itself.
+        self.message("Alerts", "1.host,U=1:2,")
+        (self.queue / "20261024T070000000Z-a.req").write_text(HEADER + "\nread\tAlerts\t1.host,U=1\n")
+
+        self.assertNotEqual(self.run_script("pending").returncode, 0)
+        self.assertEqual(self.run_script("apply").returncode, 0)
+
+        self.assertEqual(self.files("Alerts"), ["cur/1.host,U=1:2,"])
+
     def test_pending_reports_queued_requests_only(self):
         self.assertNotEqual(self.run_script("pending").returncode, 0)
-        (self.queue / ".x.tmp").write_text(HEADER + "\n")  # mcp's in-progress write
+        (self.inbox / ".x.tmp").write_text(HEADER + "\n")  # mcp's in-progress write
         self.assertNotEqual(self.run_script("pending").returncode, 0)
         self.request("read\tAlerts\t1.host,U=1")
         self.assertEqual(self.run_script("pending").returncode, 0)
@@ -336,7 +455,8 @@ class LoopWiringTests(unittest.TestCase):
         self.root = self.dir / "mail" / "Fastmail"
         self.root.mkdir(parents=True)
         self.queue = self.dir / "mark-read"
-        self.queue.mkdir()
+        self.inbox = self.queue / "inbox"   # the one directory mcp can write
+        self.inbox.mkdir(parents=True)
         self.config = self.dir / "mbsyncrc"
         shutil.copy(REPO / "ops" / "mbsyncrc.container.example", self.config)
         self.starts = self.dir / "starts"
@@ -397,7 +517,7 @@ class LoopWiringTests(unittest.TestCase):
         write_exe(self.bin / "mbsync",
                   f'#!/bin/sh\nls "{self.root}/Alerts/cur" >> "{self.starts}"\n'
                   f'[ -e "{self.dir}/queued" ] || {{ : > "{self.dir}/queued"; '
-                  f'printf "{HEADER}\\nread\\tAlerts\\t1.host,U=1\\n" > "{self.queue}/20261024T070000000Z-a.req"; }}\n'
+                  f'printf "{HEADER}\\nread\\tAlerts\\t1.host,U=1\\n" > "{self.inbox}/20261024T070000000Z-a.req"; }}\n'
                   'exit 0\n')
 
         starts, log = self.run_loop(12, MBSYNC_MARK_READ_QUEUE=str(self.queue),

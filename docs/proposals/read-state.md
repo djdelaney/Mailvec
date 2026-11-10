@@ -122,6 +122,15 @@ its own loop**, so a rename can never race an `mbsync -a`. mbsync's
                                        indexer ◀── rename seen ───┘ (watcher pulse)
 ```
 
+> **Layout changed after this was written (2026-11-10).** Requests now go
+> into `./mark-read/inbox`, the only directory mcp can write; `./mark-read`
+> itself (marker, `done/`, the sidecar's `work/`) is mounted read-only into
+> mcp, and the marker header is `v2`. The single shared read-write directory
+> described below let a compromised mcp plant a symbolic link for the sidecar
+> to write through. The current shape is in `compose.mark-read.yml` and
+> [security.md](../security.md#optional-mark-read); the rest of this section
+> is the design as first built.
+
 ### What the component consists of
 
 Everything the component adds lives in one overlay file and one mbsyncrc line.
