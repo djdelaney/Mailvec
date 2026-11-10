@@ -30,6 +30,10 @@ on:
         description: "Print the image prune plan and delete no images"
         type: boolean
         default: false
+      delete_dead_releases:
+        description: "Also delete v* images that are already unpullable (every manifest gone)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read # checkout, for ops/ghcr-prune.py
@@ -89,6 +93,8 @@ jobs:
       - name: Prune GHCR per-commit builds (keeps every release image whole)
         env:
           DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+          # Manual only: the schedule has no inputs, so this is never set there.
+          DELETE_DEAD: ${{ inputs.delete_dead_releases && '--delete-dead-releases' || '' }}
         run: |
           set -euo pipefail
-          python3 -I ops/ghcr-prune.py --owner "${REPO%%/*}" --keep "$KEEP" $DRY_RUN mailvec mailvec-mbsync
+          python3 -I ops/ghcr-prune.py --owner "${REPO%%/*}" --keep "$KEEP" $DRY_RUN $DELETE_DEAD mailvec mailvec-mbsync

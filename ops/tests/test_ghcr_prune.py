@@ -189,5 +189,46 @@ class BreakageTests(unittest.TestCase):
         self.assertIn("sha256:gone", gp.missing_children([{"digest": "sha256:gone"}], registry))
 
 
+class DeadReleaseTests(unittest.TestCase):
+    """--delete-dead-releases is the one path that deletes a v* image, so what counts as dead is narrow."""
+
+    KIDS = ["sha256:a", "sha256:b"]
+
+    def test_a_release_with_every_child_gone_is_dead(self):
+        self.assertTrue(gp.is_dead_release(["v0.9.0", "sha-abc"], self.KIDS, self.KIDS))
+
+    def test_a_release_with_one_child_left_is_not(self):
+        # Damaged some other way. That wants a look, not a delete.
+        self.assertFalse(gp.is_dead_release(["v0.9.0"], self.KIDS, ["sha256:a"]))
+
+    def test_an_intact_release_is_not(self):
+        self.assertFalse(gp.is_dead_release(["v0.12.1"], self.KIDS, []))
+
+    def test_latest_is_never_dead_whatever_else_it_carries(self):
+        self.assertFalse(gp.is_dead_release(["latest"], self.KIDS, self.KIDS))
+        self.assertFalse(gp.is_dead_release(["v1.0.0", "latest"], self.KIDS, self.KIDS))
+
+    def test_a_per_commit_build_is_not_a_release(self):
+        self.assertFalse(gp.is_dead_release(["sha-abc"], self.KIDS, self.KIDS))
+
+    def test_an_image_with_no_children_listed_is_not_dead(self):
+        # A plain image, or an index we read as empty: nothing proves it broken.
+        self.assertFalse(gp.is_dead_release(["v0.1.0"], [], []))
+
+    def test_an_index_that_cannot_be_read_is_skipped_not_deleted(self):
+        registry = BreakageTests.FakeRegistry({}, present=set())
+        roots = [{"digest": "sha256:unreadable", "tags": ["v0.5.0"]}]
+
+        self.assertEqual(gp.dead_releases(roots, registry), [])
+
+    def test_only_the_fully_dead_releases_are_selected(self):
+        registry = BreakageTests.FakeRegistry(
+            {"sha256:dead": ["sha256:x", "sha256:y"], "sha256:live": ["sha256:p", "sha256:q"]},
+            present={"sha256:p", "sha256:q"})
+        roots = [{"digest": "sha256:dead", "tags": ["v0.9.0"]}, {"digest": "sha256:live", "tags": ["v0.12.1"]}]
+
+        self.assertEqual([r["digest"] for r in gp.dead_releases(roots, registry)], ["sha256:dead"])
+
+
 if __name__ == "__main__":
     unittest.main()

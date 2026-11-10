@@ -3,6 +3,8 @@
 
     GH_TOKEN=... python3 -I ops/ghcr-prune.py --owner OWNER --keep 2 mailvec mailvec-mbsync
     ... --dry-run     print the plan, delete nothing
+    ... --delete-dead-releases
+                      also delete release images that are already unpullable
 
 Run by .github/workflows/cleanup.yml. Standard library only.
 
@@ -33,6 +35,13 @@ Three rules keep it from repeating the original mistake:
     run and does not after it fails the run. Roots that were already broken
     are reported as warnings, not failures, so a past loss cannot keep the
     job red.
+
+--delete-dead-releases removes what the old prune left behind: a version
+tagged v* whose index still resolves but none of whose children do. Such a tag
+can never be pulled again, and the bytes cannot be restored. It is opt-in and
+manual. It never touches `latest`, never touches an image with even one child
+left (that one is damaged in some other way and wants a look, not a delete),
+and never touches an index it could not read.
 """
 import argparse
 import base64
@@ -169,6 +178,27 @@ class Registry:
             raise
 
 
+def is_dead_release(tags, children, gone):
+    """A v* image whose every child is gone: unpullable, unrestorable, safe to remove."""
+    return (any(t.startswith("v") for t in tags)
+            and "latest" not in tags
+            and len(children) > 0
+            and set(gone) == set(children))
+
+
+def dead_releases(roots, registry):
+    dead = []
+    for root in roots:
+        try:
+            children = registry.children_of(root["digest"])
+        except Unreadable:
+            continue
+        gone = [d for d in children if not registry.exists(d)]
+        if is_dead_release(root["tags"], children, gone):
+            dead.append(root)
+    return dead
+
+
 def missing_children(roots, registry):
     """{root digest: [child digests that do not resolve]} for roots with any."""
     broken = {}
@@ -186,7 +216,7 @@ def label(v):
     return ",".join(v["tags"]) or "untagged"
 
 
-def prune(owner, package, token, keep, grace, dry_run, now):
+def prune(owner, package, token, keep, grace, dry_run, now, delete_dead=False):
     """Returns True if the package is no worse off than before the run."""
     versions = list_versions(owner, package, token)
     if versions is None:
@@ -200,8 +230,20 @@ def prune(owner, package, token, keep, grace, dry_run, now):
         print(f"::error::{package}: could not read a kept image's index ({e}); deleting nothing")
         return False
 
-    before = missing_children(roots, registry)
     by_digest = {v["digest"]: v for v in versions}
+    if delete_dead:
+        dead = dead_releases(roots, registry)
+        print(f"{package}: {len(dead)} dead release image(s)")
+        for v in dead:
+            print(f"  {'would delete' if dry_run else 'deleting'} dead release {v['id']} "
+                  f"{v['digest'][7:19]} {v['created']:%Y-%m-%d} {label(v)}")
+            if not dry_run:
+                delete_version(owner, package, v["id"], token)
+        if not dry_run:
+            gone = {v["digest"] for v in dead}
+            roots = [r for r in roots if r["digest"] not in gone]
+
+    before = missing_children(roots, registry)
     for digest, gone in before.items():
         print(f"::warning::{package}: {label(by_digest[digest])} was already missing "
               f"{len(gone)} manifest(s) before this run and cannot be pulled")
@@ -230,6 +272,8 @@ def main():
     ap.add_argument("--grace-hours", type=float, default=24,
                     help="leave untagged versions younger than this alone (default 24)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--delete-dead-releases", action="store_true",
+                    help="also delete v* images none of whose manifests resolve any more")
     args = ap.parse_args()
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
@@ -239,7 +283,8 @@ def main():
 
     now = datetime.datetime.now(datetime.timezone.utc)
     grace = datetime.timedelta(hours=args.grace_hours)
-    results = [prune(args.owner, p, token, args.keep, grace, args.dry_run, now) for p in args.packages]
+    results = [prune(args.owner, p, token, args.keep, grace, args.dry_run, now, args.delete_dead_releases)
+               for p in args.packages]
     return 0 if all(results) else 1
 
 
