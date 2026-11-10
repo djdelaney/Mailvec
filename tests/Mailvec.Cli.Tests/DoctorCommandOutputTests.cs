@@ -67,4 +67,22 @@ public sealed class DoctorCommandOutputTests
         DoctorCommand.ServicesHeading(isMacOs: true, inContainer: true).ShouldBe("Services (compose)");
         DoctorCommand.ServicesHeading(isMacOs: false, inContainer: false).ShouldBe("Services");
     }
+
+    [Fact]
+    public void No_reused_message_ids_is_ok()
+    {
+        DoctorCommand.DivergentCopiesCheck(0, []).Status.ShouldBe("ok");
+    }
+
+    [Fact]
+    public void Reused_message_ids_warn_and_name_where_to_look()
+    {
+        var check = DoctorCommand.DivergentCopiesCheck(7, ["a@example.com", "b@example.com"]);
+
+        check.Status.ShouldBe("warn");   // usually a list copy: never a failure
+        check.Detail.ShouldContain("7 Message-ID(s)");
+        check.Detail.ShouldContain("<a@example.com>");
+        check.Detail.ShouldContain("5 more");
+        check.Detail.ShouldContain("not indexed");
+    }
 }

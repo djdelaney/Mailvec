@@ -65,6 +65,7 @@ internal static class CliServices
         services.AddSingleton<MessageRepository>();
         services.AddSingleton<MetadataRepository>();
         services.AddSingleton<ChunkRepository>();
+        services.AddSingleton<SyncStateRepository>();
         services.AddSingleton<KeywordSearchService>();
         services.AddSingleton<VectorSearchService>();
         services.AddSingleton<HybridSearchService>();

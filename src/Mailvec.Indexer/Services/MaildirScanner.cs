@@ -103,7 +103,14 @@ public sealed class MaildirScanner(
     /// <paramref name="Seen"/> is a prefix of the corpus and nothing was
     /// reconciled. The next scan retries; see <see cref="IngestOutcome.ParserUnavailable"/>.
     /// </param>
-    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted, bool Incomplete = false, int DeletionsHeld = 0, int SymlinksSkipped = 0);
+    public sealed record ScanResult(int Seen, int Upserted, int Unchanged, int FailedToParse, int SoftDeleted, bool Incomplete = false, int DeletionsHeld = 0, int SymlinksSkipped = 0)
+    {
+        /// <summary>
+        /// Files parsed this scan that share a Message-ID with an indexed
+        /// message but not its content (see <see cref="UpsertOutcome.DivergentCopy"/>).
+        /// </summary>
+        public int DivergentCopies { get; init; }
+    }
 
     private bool IsMassDeletion(int gone, int tracked) =>
         gone >= Math.Max(1, _indexer.MassDeletionMinimum)
@@ -299,7 +306,7 @@ public sealed class MaildirScanner(
                 "MaildirScanner: the parse service is unavailable; scan abandoned after {Seen} file(s) " +
                 "(upserted={Upserted} unchanged={Unchanged}). Nothing reconciled; the next scan retries.",
                 seen, upserted, unchanged);
-            return new ScanResult(seen, upserted, unchanged, failed, 0, Incomplete: true, SymlinksSkipped: symlinksSkipped);
+            return new ScanResult(seen, upserted, unchanged, failed, 0, Incomplete: true, SymlinksSkipped: symlinksSkipped) { DivergentCopies = ctx.DivergentCopies };
         }
 
         if (unrefreshed > 0 || enumerationFailures > 0)
@@ -324,7 +331,7 @@ public sealed class MaildirScanner(
                 "skipping deletion reconciliation this scan to avoid soft-deleting live messages. " +
                 "seen={Seen} upserted={Upserted} unchanged={Unchanged} parseFailed={Failed}",
                 unrefreshed, enumerationFailures, seen, upserted, unchanged, failed);
-            return new ScanResult(seen, upserted, unchanged, failed, 0, SymlinksSkipped: symlinksSkipped);
+            return new ScanResult(seen, upserted, unchanged, failed, 0, SymlinksSkipped: symlinksSkipped) { DivergentCopies = ctx.DivergentCopies };
         }
 
         // Tracked paths this walk never enumerated. Under the old scheme this
@@ -347,7 +354,7 @@ public sealed class MaildirScanner(
                 "skipping deletion reconciliation (empty/vanished Maildir root?). " +
                 "If the mailbox was genuinely emptied, reconciliation resumes when any file appears.",
                 _maildirRoot, stale.Count);
-            return new ScanResult(0, upserted, unchanged, failed, 0, SymlinksSkipped: symlinksSkipped);
+            return new ScanResult(0, upserted, unchanged, failed, 0, SymlinksSkipped: symlinksSkipped) { DivergentCopies = ctx.DivergentCopies };
         }
 
         // Sort each vanished path into "the message is gone" and "the message
@@ -400,7 +407,7 @@ public sealed class MaildirScanner(
                     "this. If the mail is back on the next scan nothing happens; do NOT run purge-deleted until this " +
                     "is explained.",
                     goneMessageIds.Count, trackedAtStart, _massDeletionHeldSince.Value, hold.TotalMinutes);
-                return new ScanResult(seen, upserted, unchanged, failed, 0, DeletionsHeld: goneMessageIds.Count, SymlinksSkipped: symlinksSkipped);
+                return new ScanResult(seen, upserted, unchanged, failed, 0, DeletionsHeld: goneMessageIds.Count, SymlinksSkipped: symlinksSkipped) { DivergentCopies = ctx.DivergentCopies };
             }
             logger.LogWarning(
                 "MaildirScanner: the mass deletion of {Gone} message(s) has persisted for {Held:F0} min; applying it " +
@@ -497,7 +504,7 @@ public sealed class MaildirScanner(
             "MaildirScanner: seen={Seen} upserted={Upserted} unchanged={Unchanged} parseFailed={Failed} softDeleted={SoftDeleted}",
             seen, upserted, unchanged, failed, softDeleted);
 
-        return new ScanResult(seen, upserted, unchanged, failed, softDeleted, SymlinksSkipped: symlinksSkipped);
+        return new ScanResult(seen, upserted, unchanged, failed, softDeleted, SymlinksSkipped: symlinksSkipped) { DivergentCopies = ctx.DivergentCopies };
     }
 
     /// <summary>
@@ -730,6 +737,19 @@ public sealed class MaildirScanner(
                 logger.LogInformation(
                     "Content changed for message_id={MessageId} (id={Id}); cleared embeddings.",
                     parsed.MessageId, outcome.Id);
+            }
+            if (outcome.DivergentCopy)
+            {
+                // Delivered, on disk, and not what search holds for this
+                // Message-ID. Logged once per ingest of the file: afterwards
+                // it takes the fast path like any other, so this costs the
+                // unchanged scan nothing. `mailvec doctor` counts them.
+                logger.LogWarning(
+                    "{Path} carries message_id={MessageId}, which is already indexed from another file with different " +
+                    "content. Only that other copy is searchable. This is normal for a mailing-list copy of your own " +
+                    "message; it is also what a different message reusing the same Message-ID looks like.",
+                    filePath, parsed.MessageId);
+                ctx.DivergentCopies++;
             }
             // Record the identity observed BEFORE the parse, not a fresh stat
             // here. If the file changed while we were reading it, the stale
@@ -1061,6 +1081,8 @@ internal sealed class ScanContext : IDisposable
     private SqliteTransaction? _tx;
     private int _writesInTx;
 
+    /// <summary>Files this scan parsed that were divergent copies; a tally, not state.</summary>
+    public int DivergentCopies { get; set; }
 
     public ScanContext(SqliteConnection connection, int batchSize)
     {

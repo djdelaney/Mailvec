@@ -768,6 +768,62 @@ public class MessageRepositoryTests
         repo.FolderStats().Single(s => s.Folder == "INBOX").MessageCount.ShouldBe(1);
     }
 
+    // ---- Message-ID reuse is visible ----------------------------------------
+    //
+    // A non-attributed copy is a deliberate no-op. That is right for a genuine
+    // copy and silent for a different message reusing the id, so the outcome
+    // says when the two contents differ.
+
+    [Fact]
+    public void A_copy_whose_content_differs_is_reported_as_divergent()
+    {
+        using var db = new TempDatabase();
+        var repo = new MessageRepository(db.Connections);
+        var now = DateTimeOffset.UtcNow;
+        repo.Upsert(Sample(subject: "Original", contentHash: "hash-a"), "INBOX", "INBOX/cur", "a.host:2,S", now);
+
+        repo.Upsert(Sample(subject: "Impostor", contentHash: "hash-b"), "INBOX", "INBOX/cur", "b.host:2,S", now)
+            .DivergentCopy.ShouldBeTrue();
+        repo.Upsert(Sample(subject: "Original", contentHash: "hash-a"), "Sent", "Sent/cur", "c.host:2,S", now)
+            .DivergentCopy.ShouldBeFalse("an identical copy in another folder is the ordinary case");
+        repo.Upsert(Sample(subject: "Edited", contentHash: "hash-c"), "INBOX", "INBOX/cur", "a.host:2,S", now)
+            .DivergentCopy.ShouldBeFalse("the attributed copy changing is a content change, not a collision");
+    }
+
+    [Fact]
+    public void Message_ids_with_divergent_copies_are_counted_from_sync_state()
+    {
+        using var db = new TempDatabase();
+        var syncState = new SyncStateRepository(db.Connections);
+        SeedSyncState(db, "/mail/INBOX/cur/a", "same@x", "hash-a");
+        SeedSyncState(db, "/mail/Sent/cur/a", "same@x", "hash-a");       // identical copy
+        SeedSyncState(db, "/mail/INBOX/cur/b", "reused@x", "hash-b");
+        SeedSyncState(db, "/mail/INBOX/cur/c", "reused@x", "hash-c");    // same id, other content
+        SeedSyncState(db, "/mail/INBOX/cur/d", "single@x", "hash-d");
+
+        var (count, sample) = syncState.MessageIdsWithDivergentCopies();
+
+        count.ShouldBe(1);
+        sample.ShouldBe(["reused@x"]);
+    }
+
+    [Fact]
+    public void A_copy_awaiting_a_retry_is_not_counted_as_divergent()
+    {
+        // A NULL hash is the scanner's "last ingest failed" marker, not content.
+        using var db = new TempDatabase();
+        var syncState = new SyncStateRepository(db.Connections);
+        SeedSyncState(db, "/mail/INBOX/cur/a", "retry@x", "hash-a");
+        using (var conn = db.Connections.Open())
+        using (var tx = conn.BeginTransaction())
+        {
+            syncState.Upsert(conn, tx, "/mail/Lists/cur/a", "retry@x", DateTimeOffset.UtcNow, null, "Lists", fileMtimeUtc: null, fileSize: null);
+            tx.Commit();
+        }
+
+        syncState.MessageIdsWithDivergentCopies().Count.ShouldBe(0);
+    }
+
     private static void SeedSyncState(TempDatabase db, string maildirFullPath, string messageId, string contentHash)
     {
         var repo = new SyncStateRepository(db.Connections);

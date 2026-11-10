@@ -239,6 +239,19 @@ internal static class DoctorCommand
             {
                 checks.Add(DoctorCheck.Fail("Orphan vectors", $"could not query: {ex.GetType().Name}: {ex.Message}", "pipeline"));
             }
+
+            // Message-IDs whose copies differ in content. Only one copy of a
+            // Message-ID is indexed, so each is a file on disk that search
+            // does not hold — invisible everywhere else.
+            try
+            {
+                var (count, sample) = sp.GetRequiredService<SyncStateRepository>().MessageIdsWithDivergentCopies();
+                checks.Add(DivergentCopiesCheck(count, sample));
+            }
+            catch (Exception ex)
+            {
+                checks.Add(DoctorCheck.Fail("Message-ID reuse", $"could not query: {ex.GetType().Name}: {ex.Message}", "pipeline"));
+            }
         }
 
         // ---------------------------------------------------------------
@@ -751,6 +764,24 @@ internal static class DoctorCommand
     /// <c>~/Library/Logs/Mailvec/mailvec-mbsync.err.log</c>, if any fall
     /// inside the freshness window.
     /// </summary>
+    /// <summary>
+    /// Warn, never fail: a mailing-list copy of your own message is the usual
+    /// cause and nothing is broken. It is a warning because the same shape is
+    /// a different message that reused a live Message-ID and was not indexed.
+    /// </summary>
+    internal static DoctorCheck DivergentCopiesCheck(int count, IReadOnlyList<string> sample)
+    {
+        if (count == 0) return DoctorCheck.Ok("Message-ID reuse", "none", "pipeline");
+
+        var ids = string.Join(", ", sample.Select(id => $"<{id}>"));
+        var more = count > sample.Count ? $", and {count - sample.Count:N0} more" : "";
+        return DoctorCheck.Warn("Message-ID reuse",
+            $"{count:N0} Message-ID(s) have copies with different content, and only one copy of each is searchable. " +
+            "Usually a mailing-list copy of a message you sent; it is also what a different message reusing the same " +
+            $"Message-ID looks like, and that message is not indexed. Look at: {ids}{more}.",
+            "pipeline");
+    }
+
     private static DoctorCheck InspectMbsyncStderr(bool inContainer)
     {
         // In a container this log cannot exist: the sidecar is Alpine + a sh

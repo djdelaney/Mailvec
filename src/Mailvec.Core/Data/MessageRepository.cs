@@ -19,6 +19,16 @@ public readonly record struct UpsertOutcome(long Id, bool ContentChanged, bool I
     public static implicit operator long(UpsertOutcome o) => o.Id;
 
     /// <summary>
+    /// True when this upsert was a no-op because the file is not the row's
+    /// attributed copy AND its content differs from what the row holds. That
+    /// is either a genuine copy that diverged (a mailing-list footer) or a
+    /// different message reusing a live Message-ID, which is delivered and
+    /// never indexed. The two cannot be told apart here, so the caller makes
+    /// it visible rather than deciding.
+    /// </summary>
+    public bool DivergentCopy { get; init; }
+
+    /// <summary>
     /// True iff <see cref="MessageRepository.Upsert"/> reset the attachments
     /// table for this message (either it was a new insert, or the body's
     /// content_hash changed). The indexer uses this to know whether
@@ -117,7 +127,12 @@ public sealed class MessageRepository(ConnectionFactory connections)
         if (!isAttributedCopy)
         {
             tx.Commit();
-            return new UpsertOutcome(priorId, ContentChanged: false, IsNewInsert: false);
+            return new UpsertOutcome(priorId, ContentChanged: false, IsNewInsert: false)
+            {
+                // A NULL prior hash is a legacy row: unknown, never divergent.
+                DivergentCopy = priorHash is not null
+                    && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal),
+            };
         }
 
         var contentChanged = rowExists && priorHash is not null && !string.Equals(priorHash, parsed.ContentHash, StringComparison.Ordinal);

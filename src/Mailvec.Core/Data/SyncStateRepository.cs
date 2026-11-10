@@ -258,6 +258,42 @@ public sealed class SyncStateRepository(ConnectionFactory connections)
     }
 
     /// <summary>
+    /// Message-IDs whose tracked copies do not all hold the same content: the
+    /// count, and up to <paramref name="sampleSize"/> of the ids.
+    /// </summary>
+    /// <remarks>
+    /// Only one copy's content is indexed (content follows attribution), so
+    /// each of these has at least one file on disk that search cannot see.
+    /// Usually that is a mailing-list copy with a footer; it is also what a
+    /// different message reusing a live Message-ID looks like. A full pass
+    /// over sync_state: for `mailvec doctor`, never the scan path.
+    /// </remarks>
+    public (int Count, IReadOnlyList<string> Sample) MessageIdsWithDivergentCopies(int sampleSize = 5)
+    {
+        const string Divergent = """
+            SELECT message_id FROM sync_state
+            WHERE message_id IS NOT NULL AND content_hash IS NOT NULL
+            GROUP BY message_id
+            HAVING COUNT(DISTINCT content_hash) > 1
+            """;
+        using var conn = connections.Open();
+        using var count = conn.CreateCommand();
+        count.CommandText = $"SELECT COUNT(*) FROM ({Divergent})";
+        var total = Convert.ToInt32(count.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+
+        var sample = new List<string>();
+        if (total > 0 && sampleSize > 0)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"{Divergent} ORDER BY message_id LIMIT $n";
+            cmd.Parameters.AddWithValue("$n", sampleSize);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) sample.Add(reader.GetString(0));
+        }
+        return (total, sample);
+    }
+
+    /// <summary>
     /// Drop the recorded content_hash for one path, forcing the next scan to
     /// re-parse it instead of taking the mtime fast path (which requires a
     /// non-null hash — the same "retry me" marker a failed ingest writes).

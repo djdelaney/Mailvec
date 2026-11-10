@@ -1372,6 +1372,40 @@ public class MaildirScannerTests : IDisposable
     }
 
     [Fact]
+    public void A_file_reusing_an_indexed_message_id_is_reported_once_and_then_costs_nothing()
+    {
+        WriteEml("INBOX", "cur", "orig.host:2,S", "the original message", "reuse@x");
+        _scanner.ScanAll().DivergentCopies.ShouldBe(0);
+
+        // A different message arrives wearing the same Message-ID. It is not
+        // indexed (content follows attribution); the scan must say so.
+        WriteEml("INBOX", "cur", "other.host:2,S", "an unrelated message", "reuse@x");
+        var second = _scanner.ScanAll();
+
+        second.DivergentCopies.ShouldBe(1);
+        _messages.GetByMessageId("reuse@x")!.BodyText.ShouldNotBeNull().ShouldContain("the original message");
+        _syncState.MessageIdsWithDivergentCopies().Count.ShouldBe(1);
+
+        // Reported at ingest, not on every scan: the file takes the fast path
+        // from here on and the unchanged scan still writes nothing.
+        CheckpointWal();
+        var third = _scanner.ScanAll();
+        third.DivergentCopies.ShouldBe(0);
+        new FileInfo(_dbPath + "-wal").Length.ShouldBe(0);
+        _scanner.LastScanTransactionsBegun.ShouldBe(0);
+    }
+
+    [Fact]
+    public void An_identical_copy_in_another_folder_is_not_reported()
+    {
+        WriteEml("INBOX", "cur", "one.host:2,S", "the same message", "same@x");
+        WriteEml("Sent", "cur", "two.host:2,S", "the same message", "same@x");
+
+        _scanner.ScanAll().DivergentCopies.ShouldBe(0);
+        _syncState.MessageIdsWithDivergentCopies().Count.ShouldBe(0);
+    }
+
+    [Fact]
     public void Divergent_duplicate_copies_do_not_re_queue_the_message_on_every_rescan()
     {
         WriteDivergentPair("churn@x", "INBOXCOPY", "LISTSCOPY");
