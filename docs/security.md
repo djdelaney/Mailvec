@@ -8,7 +8,7 @@ Mailvec is a single-account mail archive. Every client allowed to use its MCP to
 
 | Surface | Data and boundary |
 | --- | --- |
-| MCP tools | Search, message and attachment reads. The tools do not mutate the archive or write attachment files. The CLI's explicit `extract-attachments` command does write files. The one exception is the optional `mark_read` tool, registered only with `compose.mark-read.yml`; see [Optional mark-read](#optional-mark-read). |
+| MCP tools | Search, message and attachment reads. The tools do not mutate the archive or write attachment files, and no CLI command saves an attachment to disk either. The one exception is the optional `mark_read` tool, registered only with `compose.mark-read.yml`; see [Optional mark-read](#optional-mark-read). |
 | `/up` | Minimal external status and liveness flags. It omits archive paths, counts, model identity, and internal URLs. Use it for monitoring. |
 | `/health` | Detailed state, including paths and model information. Loopback-only by default (`Mcp:RestrictHealthToLoopback`). |
 | Docker volumes | `./data` holds SQLite; `./mail` holds source mail. The parser has neither mount. |
@@ -48,11 +48,11 @@ A hosted embedding profile sends indexed body and attachment text chunks to the 
 
 ## The other shape: a loopback-only local install
 
-The macOS install binds HTTP to `127.0.0.1:3333` and can serve stdio clients. A process under another account on the same machine can still reach loopback, so protect the Maildir and archive with OS permissions. Parsers run in-process on macOS; the separate Docker parser boundary does not apply. Do not expose the loopback service through a port forward without adding authentication.
+The macOS install binds HTTP to `127.0.0.1:3333` and can serve stdio clients. A process under another account on the same machine can still reach loopback, so protect the Maildir and archive with OS permissions. Parsers run in-process on macOS; the separate Docker parser boundary does not apply. That means the MIME, PDF, Office and image decoders, native ones included, run on attacker-chosen bytes inside the processes that hold the archive and any hosted API key, with no memory limit around them. What stands in for the boundary is weaker: text extraction has a time budget, each parser call has a wall-clock ceiling (`Parser:InProcessTimeoutSeconds`, 120 s) after which the document is given up on instead of holding the indexer or embedder, and a PDF whose render overruns pauses further PDF rendering in that process until it finishes or the service restarts. A single page or part that expands enormously still runs to completion. Use the Docker deployment if you want the parsers isolated. Do not expose the loopback service through a port forward without adding authentication.
 
 ## Tools and data flow
 
-The eight core MCP tools (`search_emails`, `get_email`, `get_email_headers`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) read the archive. A ninth, `mark_read`, exists only where the optional component is configured. Attachment viewing decodes source files in memory. `get_email_headers` reads a message's header block straight from its `.eml` (through the same containment guard, at most 256 KB, no MIME parse). `get_attachment_text` reads extracted text from SQLite. The explicit CLI `extract-attachments` path writes files under its configured download directory and checks path containment and symlinks. The indexer follows no symbolic link below the Maildir root (a file, a folder, or `cur`/`new`), so nothing outside the root, or a second path to a message, reaches the archive; the root itself may be a link. See [attachment behavior](attachments.md).
+The eight core MCP tools (`search_emails`, `get_email`, `get_email_headers`, `get_thread`, `list_folders`, `view_attachment`, `get_attachment_text`, `get_attachment_page_image`) read the archive. A ninth, `mark_read`, exists only where the optional component is configured. Attachment viewing decodes source files in memory. `get_email_headers` reads a message's header block straight from its `.eml` (through the same containment guard, at most 256 KB, no MIME parse). `get_attachment_text` reads extracted text from SQLite. Nothing saves an attachment to disk: `mailvec extract-attachments` is a backfill that re-runs text extraction into the database, not a download command. The indexer follows no symbolic link below the Maildir root (a file, a folder, or `cur`/`new`), so nothing outside the root, or a second path to a message, reaches the archive; the root itself may be a link. See [attachment behavior](attachments.md).
 
 ## Host / origin validation (DNS-rebinding guard)
 
@@ -64,7 +64,7 @@ When enabled, MCP validates Cloudflare's `Cf-Access-Jwt-Assertion` at the origin
 
 ## Hostile mail content (indirect prompt injection)
 
-Mail bodies, attachments, sender fields, headers, and filenames are attacker-controlled. MCP responses frame that content as untrusted, and labels in server-written text are sanitized. Those measures do not prove an AI client will ignore instructions inside a message. Treat any agent allowed to call Mailvec as able to read the whole archive and evaluate its other connected tools accordingly. See [future work](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing) for model-level testing.
+Mail bodies, attachments, sender fields, headers, and filenames are attacker-controlled. The server's instructions and every tool description frame that content as untrusted; individual tool results carry no framing of their own. Labels in server-written text are sanitized. Those measures do not prove an AI client will ignore instructions inside a message. Treat any agent allowed to call Mailvec as able to read the whole archive and evaluate its other connected tools accordingly. See [future work](future-ideas.md#adversarial-testing-of-the-prompt-injection-framing) for model-level testing.
 
 ## Optional mark-read
 

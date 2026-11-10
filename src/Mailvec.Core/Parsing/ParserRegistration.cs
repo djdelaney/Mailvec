@@ -54,7 +54,12 @@ public static class ParserRegistration
                     // here rather than making every host bind IndexerOptions.
                     var indexer = new IndexerOptions();
                     config.GetSection(IndexerOptions.SectionName).Bind(indexer);
-                    return inProcessFactory(sp, new InProcessParserSettings(indexer.AttachmentMaxBytes));
+                    var parser = inProcessFactory(sp, new InProcessParserSettings(indexer.AttachmentMaxBytes));
+                    // In-process there is no parse service to time a call out
+                    // and exit, so the ceiling is applied here instead.
+                    return options.InProcessTimeoutSeconds > 0
+                        ? new TimeBoundedParser(parser, TimeSpan.FromSeconds(options.InProcessTimeoutSeconds))
+                        : parser;
                 }
                 case RemoteMode:
                 {

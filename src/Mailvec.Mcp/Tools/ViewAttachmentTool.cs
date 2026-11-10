@@ -34,7 +34,7 @@ namespace Mailvec.Mcp.Tools;
 /// non-image MIMEs as "unsupported image format" — and we no longer persist the
 /// file to a download directory (that made every read leak mail content to disk
 /// and is meaningless in a containerised deployment).
-/// `mailvec extract-attachments` is the explicit save-to-disk path.
+/// Nothing saves an attachment to disk; the user's mail client is the way to the file.
 /// </summary>
 [McpServerToolType]
 public sealed class ViewAttachmentTool(
@@ -172,9 +172,9 @@ public sealed class ViewAttachmentTool(
             // the attachment. Say so and route to the tools that read a large
             // document without materializing it.
             throw new McpException(
-                $"{ex.Message} For a PDF, call get_attachment_page_image to view a page as an image; " +
+                $"{TooLarge(partIndex, ex)} For a PDF, call get_attachment_page_image to view a page as an image; " +
                 "for any document, call get_attachment_text to read its extracted text. " +
-                "The user can save the file itself with `mailvec extract-attachments`.");
+                "The user can open the original message in their mail client to get the file itself.");
         }
 
         var isImage = IsImageContentType(att.ContentType);
@@ -314,7 +314,7 @@ public sealed class ViewAttachmentTool(
         if (isImage)
             return
                 $"{header}. This image format can't be decoded for inline display (e.g. HEIC or SVG). " +
-                "The user can save the file with `mailvec extract-attachments` and open it themselves.";
+                "The user can open the original message in their mail client to get the file.";
         if (textInlined)
             return inlineTruncated
                 ? $"{header} — first {GetAttachmentTextTool.DefaultMaxChars:N0} of {inlineTotalChars:N0} decoded chars included below; " +
@@ -325,6 +325,15 @@ public sealed class ViewAttachmentTool(
             "For a PDF, call get_attachment_page_image to view a page as an image; " +
             "for any document, call get_attachment_text to read its extracted text.";
     }
+
+    /// <summary>
+    /// The too-large sentence, written here rather than taken from
+    /// <c>ex.Message</c>: the exception text quotes the attachment's raw
+    /// filename, which the sender chose, and this string is one the server
+    /// authors. The part index says which attachment without quoting anything.
+    /// </summary>
+    internal static string TooLarge(int partIndex, Mailvec.Core.Attachments.AttachmentTooLargeException ex) =>
+        $"The attachment at partIndex {partIndex} exceeds the {ex.LimitBytes / (1024 * 1024)} MB limit for this operation and was not decoded.";
 
     private static string FormatSize(long bytes)
     {

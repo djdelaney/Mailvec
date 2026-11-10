@@ -20,7 +20,7 @@ All three take the email (`id` or `messageId`) plus `partIndex` from the `get_em
 
 The tool returns summaries for other binary types; it does not write viewed attachments to disk.
 
-**Need the actual file on disk?** Use `mailvec extract-attachments` — the explicit, user-initiated download path. `Mcp:AttachmentDownloadDir` (default `~/Downloads/mailvec/`) configures where it writes.
+**Need the actual file on disk?** Mailvec has no command that saves one. Open the message in your mail client (the `webmailLink` on each result goes straight to it). `mailvec extract-attachments`, despite the name, re-runs text extraction into the database; it writes no files.
 
 ## `get_attachment_text` — the document's text
 

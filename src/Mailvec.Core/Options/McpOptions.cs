@@ -156,9 +156,9 @@ public sealed class McpOptions
     public bool LogToolCalls { get; set; }
 
     /// <summary>
-    /// Where the explicit save-to-disk path (`mailvec extract-attachments`)
-    /// writes attachment files — the MCP tools
-    /// never write here. The default is inside ~/Downloads so the user can find
+    /// Where <c>AttachmentExtractor.Extract</c> would save an attachment file.
+    /// Nothing calls it today: no MCP tool and no CLI command writes
+    /// attachments to disk, so this setting is currently unused. The default is inside ~/Downloads so the user can find
     /// files in Finder / their browser's Downloads list. Avoid ~/Library/Caches
     /// (hidden from users) and ~/Documents (TCC-blocked from Claude Desktop's
     /// spawned processes).

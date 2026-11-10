@@ -112,8 +112,8 @@ public sealed class GetAttachmentPageImageTool(
             // No page-level escape hatch to offer: rendering any page needs the
             // whole PDF in hand. Extracted text is the remaining route.
             throw new McpException(
-                $"{ex.Message} Call get_attachment_text to read its extracted text instead. " +
-                "The user can save the file itself with `mailvec extract-attachments`.");
+                $"{ViewAttachmentTool.TooLarge(partIndex, ex)} Call get_attachment_text to read its extracted text instead. " +
+                "The user can open the original message in their mail client to get the file itself.");
         }
         catch (FileNotFoundException ex)
         {

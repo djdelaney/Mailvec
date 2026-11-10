@@ -39,12 +39,32 @@ public class ParserRegistrationTests
         return sp;
     }
 
+    /// <summary>The in-process parser as the host's factory built it, from under the time bound.</summary>
+    private static FakeParser InProcess(IServiceProvider sp) =>
+        sp.GetRequiredService<IMailParser>().ShouldBeOfType<TimeBoundedParser>().Inner.ShouldBeOfType<FakeParser>();
+
+    [Fact]
+    public void The_in_process_parser_is_time_bounded_and_still_reports_its_own_mode()
+    {
+        var sp = Build(new(), out _);
+
+        sp.GetRequiredService<IMailParser>().ShouldBeOfType<TimeBoundedParser>().Mode.ShouldBe("fake");
+    }
+
+    [Fact]
+    public void A_zero_timeout_leaves_the_in_process_parser_unbounded()
+    {
+        var sp = Build(new() { ["Parser:InProcessTimeoutSeconds"] = "0" }, out _);
+
+        sp.GetRequiredService<IMailParser>().ShouldBeOfType<FakeParser>();
+    }
+
     [Fact]
     public void Default_mode_is_in_process_and_carries_the_indexer_size_gate()
     {
         var sp = Build(new() { ["Indexer:AttachmentMaxBytes"] = "12345" }, out _);
 
-        var parser = sp.GetRequiredService<IMailParser>().ShouldBeOfType<FakeParser>();
+        var parser = InProcess(sp);
         parser.AttachmentMaxBytes.ShouldBe(12345);
     }
 
@@ -53,7 +73,7 @@ public class ParserRegistrationTests
     {
         var sp = Build(new(), out _);
 
-        sp.GetRequiredService<IMailParser>().ShouldBeOfType<FakeParser>()
+        InProcess(sp)
             .AttachmentMaxBytes.ShouldBe(new Core.Options.IndexerOptions().AttachmentMaxBytes);
     }
 
@@ -64,7 +84,7 @@ public class ParserRegistrationTests
     public void Explicit_in_process_mode_is_case_and_whitespace_insensitive(string mode)
     {
         var sp = Build(new() { ["Parser:Mode"] = mode }, out _);
-        sp.GetRequiredService<IMailParser>().ShouldBeOfType<FakeParser>();
+        InProcess(sp);
     }
 
     [Fact]

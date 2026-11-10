@@ -87,4 +87,15 @@ public sealed class ParserOptions
     /// is indexed either way, only the poison document's text is given up.
     /// </summary>
     public int MaxCrashesPerFile { get; set; } = 3;
+
+    /// <summary>
+    /// Wall-clock ceiling, in seconds, on any one call into the in-process
+    /// parser (<c>Parser:Mode=inprocess</c>, the macOS install). A call that
+    /// overruns is abandoned and reported the way a parse-service timeout is —
+    /// see <c>TimeBoundedParser</c>. Ignored in remote mode, where the parse
+    /// service enforces its own timeout. 0 disables the ceiling, which restores
+    /// the old behaviour: one document that never finishes parsing or rendering
+    /// stops the indexer or the embedder for good.
+    /// </summary>
+    public int InProcessTimeoutSeconds { get; set; } = 120;
 }

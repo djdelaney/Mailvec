@@ -17,8 +17,9 @@ namespace Mailvec.Core.Attachments;
 /// small text file. Nothing is persisted.</item>
 /// <item><see cref="Extract"/> additionally writes the bytes to a user-visible
 /// download directory (~/Downloads/mailvec/ by default) and returns the path.
-/// Reserved for the explicit, user-initiated download path —
-/// <c>mailvec extract-attachments</c> — not
+/// Reserved for an explicit, user-initiated download path. No command calls
+/// it today (<c>mailvec extract-attachments</c> is the text-extraction
+/// backfill and writes no files). It must never be reached from
 /// the automatic agent read path, so ordinary searches never litter mail content
 /// on disk.</item>
 /// </list>
@@ -113,8 +114,8 @@ public sealed class AttachmentExtractor(
     /// </summary>
     public ExtractResult Extract(Message message, int partIndex)
     {
-        // No ceiling: this path only runs because a user explicitly asked for
-        // the file (`mailvec extract-attachments`), and
+        // No ceiling: this path is for a user who explicitly asked for
+        // the file (it has no caller today), and
         // refusing to save an attachment because it is large would be refusing
         // the thing they asked for. The inline/agent paths are where a ceiling
         // belongs, because there the size is nobody's decision.

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text;
+using System.Xml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using A = DocumentFormat.OpenXml.Drawing;
@@ -65,6 +67,30 @@ public class AttachmentTextExtractor(
     private const int MaxExtractedTextChars = 2_000_000;
 
     /// <summary>
+    /// Wall-clock ceiling on one attachment's text extraction, checked between
+    /// PDF pages and while streaming PPTX slides.
+    /// </summary>
+    /// <remarks>
+    /// The size gates bound bytes in, not work done. Measured before this
+    /// existed: a 25 KB PDF whose 40 pages share one content stream took 22 s
+    /// (cost is linear in page objects at ~130 bytes each, so 25 MB buys
+    /// hours), and a 166 KB PPTX of empty shapes took 7 s. Extraction runs
+    /// inside the scan, so on the in-process (macOS) install that time is time
+    /// nothing else is indexed. Over budget we keep whatever text was already
+    /// collected and stop; with none, the attachment is <c>failed</c> rather
+    /// than <c>no_text</c>, so a PDF that ran out the clock is not then handed
+    /// to the OCR pass as if it were a scan. It cannot interrupt a single page
+    /// or part: one page whose stream inflates to hundreds of MB still runs to
+    /// completion. Internal and per-instance so a test can exhaust it.
+    /// </remarks>
+    internal TimeSpan ExtractionBudget { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>XML nodes between budget checks while streaming a slide: often enough to be prompt, rare enough to be free.</summary>
+    private const int NodesPerBudgetCheck = 4096;
+
+    private const string DrawingMlNamespace = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+    /// <summary>
     /// Ceiling on the characters in any single Open XML part we load. Applied to
     /// DOCX, XLSX and PPTX through <see cref="OfficeOpenSettings"/>.
     /// </summary>
@@ -103,6 +129,21 @@ public class AttachmentTextExtractor(
     /// can pin it non-zero.
     /// </summary>
     internal static readonly OpenSettings OfficeOpenSettings = new() { MaxCharactersInPart = MaxCharactersInOfficePart };
+
+    /// <summary>
+    /// For the PPTX slide read, which streams each slide part itself and so is
+    /// not covered by <see cref="OfficeOpenSettings"/>. Same per-part ceiling,
+    /// no DTDs, no external resolution.
+    /// </summary>
+    private static readonly XmlReaderSettings SlideReaderSettings = new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit,
+        XmlResolver = null,
+        MaxCharactersInDocument = MaxCharactersInOfficePart,
+        IgnoreComments = true,
+        IgnoreProcessingInstructions = true,
+        IgnoreWhitespace = true,
+    };
 
     // .NET ships only UTF-*, ASCII, and Latin1 wired up by default — legacy
     // codepages like windows-1252 need CodePagesEncodingProvider registered
@@ -187,6 +228,20 @@ public class AttachmentTextExtractor(
         return string.IsNullOrEmpty(ext) ? "(no extension)" : ext.ToLowerInvariant();
     }
 
+    /// <summary>
+    /// The verdict for an extraction that ran out <see cref="ExtractionBudget"/>:
+    /// the text gathered so far if there is any (truncated, like a document over
+    /// <see cref="MaxExtractedTextChars"/>), otherwise <c>failed</c>.
+    /// </summary>
+    private ExtractionResult OverBudget(StringBuilder collected, string? fileName)
+    {
+        logger.LogWarning(
+            "Text extraction for {Ext} attachment stopped after the {Seconds:0}s budget with {Chars} chars collected",
+            FileKind(fileName), ExtractionBudget.TotalSeconds, collected.Length);
+        var partial = BuildResult(collected.ToString());
+        return partial.Status == StatusDone ? partial : new ExtractionResult(null, StatusFailed);
+    }
+
     private ExtractionResult ExtractPdf(byte[] bytes, string? fileName)
     {
         // Lenient parsing tolerates PDFs whose `startxref` is past the
@@ -204,9 +259,11 @@ public class AttachmentTextExtractor(
             }
 
             var sb = new StringBuilder(Math.Min(bytes.Length, 65_536));
+            var clock = Stopwatch.StartNew();
             foreach (Page page in doc.GetPages())
             {
                 if (sb.Length >= MaxExtractedTextChars) break;
+                if (clock.Elapsed > ExtractionBudget) return OverBudget(sb, fileName);
                 // ContentOrderTextExtractor produces output in PDF content-stream
                 // order, which preserves multi-column reading order better than
                 // the default top-down pass for PDFs that lay out side-by-side
@@ -352,18 +409,57 @@ public class AttachmentTextExtractor(
             if (slideIdList is null) return new ExtractionResult(null, StatusNoText);
 
             var sb = new StringBuilder(Math.Min(bytes.Length, 65_536));
+            var clock = Stopwatch.StartNew();
             foreach (var slideId in slideIdList.Elements<P.SlideId>())
             {
                 if (sb.Length >= MaxExtractedTextChars) break;
+                if (clock.Elapsed > ExtractionBudget) return OverBudget(sb, fileName);
                 if (slideId.RelationshipId?.Value is not { } relId) continue;
-                if (presentationPart!.GetPartById(relId) is not SlidePart { Slide: { } slide }) continue;
+                if (presentationPart!.GetPartById(relId) is not SlidePart slidePart) continue;
 
+                // Streamed with a plain XmlReader, never slidePart.Slide.
+                // Loading the DOM keeps every slide's tree rooted until the
+                // package is disposed, and MaxCharactersInPart is a PER-PART
+                // limit, so a deck of N slides each just under it allocated N
+                // times the ceiling: measured, a 166 KB deck of four slides
+                // holding only empty shapes reached a 1.5 GB heap, and
+                // MaxExtractedTextChars never fired because there was no text
+                // to count. The reader holds one node at a time and allocates
+                // nothing per element. It is opened on the part's stream, which
+                // bypasses OfficeOpenSettings, so the same per-part ceiling is
+                // restated in SlideReaderSettings.
                 bool wroteAny = false;
-                foreach (var text in slide.Descendants<A.Text>())
+                bool inTextRun = false;
+                int sinceCheck = 0;
+                using var stream = slidePart.GetStream(FileMode.Open, FileAccess.Read);
+                using var reader = XmlReader.Create(stream, SlideReaderSettings);
+                while (reader.Read())
                 {
-                    if (string.IsNullOrWhiteSpace(text.Text)) continue;
-                    sb.Append(text.Text).Append(' ');
-                    wroteAny = true;
+                    if (++sinceCheck >= NodesPerBudgetCheck)
+                    {
+                        sinceCheck = 0;
+                        if (clock.Elapsed > ExtractionBudget) return OverBudget(sb, fileName);
+                    }
+
+                    switch (reader.NodeType)
+                    {
+                        case XmlNodeType.Element:
+                            // a:t, the DrawingML text run every visible string lives in.
+                            inTextRun = !reader.IsEmptyElement
+                                && reader.LocalName == "t"
+                                && reader.NamespaceURI == DrawingMlNamespace;
+                            break;
+                        case XmlNodeType.EndElement:
+                            inTextRun = false;
+                            break;
+                        case XmlNodeType.Text or XmlNodeType.CDATA when inTextRun:
+                            var text = reader.Value;
+                            if (string.IsNullOrWhiteSpace(text)) break;
+                            sb.Append(text).Append(' ');
+                            wroteAny = true;
+                            break;
+                    }
+                    if (sb.Length >= MaxExtractedTextChars) break;
                 }
                 if (wroteAny) sb.AppendLine();
             }
@@ -634,45 +730,69 @@ public class AttachmentTextExtractor(
         var normalised = text.Replace("\r\n", "\n").Replace('\r', '\n');
         var result = new List<string>();
         var current = new StringBuilder();
+        var head = new QpHead();
         bool awaitingQpContinuation = false;
 
         foreach (var line in normalised.Split('\n'))
         {
+            ReadOnlySpan<char> piece;
             if (awaitingQpContinuation)
             {
-                current.Append(line);                       // QP soft break: append verbatim
+                piece = line;                               // QP soft break: append verbatim
             }
             else if (line.Length > 0 && (line[0] == ' ' || line[0] == '\t'))
             {
-                current.Append(line, 1, line.Length - 1);   // RFC 6350 whitespace fold
+                piece = line.AsSpan(1);                     // RFC 6350 whitespace fold
             }
             else
             {
                 if (current.Length > 0) result.Add(current.ToString());
                 current.Clear();
-                current.Append(line);
+                head = new QpHead();
+                piece = line;
             }
+            current.Append(piece);
+            head.Append(piece);
 
             awaitingQpContinuation = current.Length > 0
                 && current[current.Length - 1] == '='
-                && LineIsQuotedPrintable(current);
+                && head.IsQuotedPrintable;
             if (awaitingQpContinuation) current.Length -= 1;  // drop the soft-break '='
         }
         if (current.Length > 0) result.Add(current.ToString());
         return result;
     }
 
-    /// <summary>True if the property head (everything before the first ':') declares
-    /// a QUOTED-PRINTABLE encoding, so a trailing '=' is a soft break not a literal.</summary>
-    private static bool LineIsQuotedPrintable(StringBuilder line)
+    /// <summary>
+    /// Whether a logical line's property head (everything before the first ':')
+    /// declares QUOTED-PRINTABLE, so a trailing '=' is a soft break not a
+    /// literal. Fed each physical piece as it is appended and looks only at
+    /// that piece plus a short carry-over, because re-reading the whole logical
+    /// line on every physical line made unfolding quadratic: a 240 KB card of
+    /// folded lines that never reach a ':' took 9.4 s, four times that per
+    /// doubling.
+    /// </summary>
+    private struct QpHead
     {
-        int colon = -1;
-        for (int i = 0; i < line.Length; i++)
+        private const string Marker = "QUOTED-PRINTABLE";
+        private string _carry;
+        private bool _closed;
+
+        public bool IsQuotedPrintable { get; private set; }
+
+        public void Append(ReadOnlySpan<char> piece)
         {
-            if (line[i] == ':') { colon = i; break; }
+            if (_closed || IsQuotedPrintable) return;
+
+            int colon = piece.IndexOf(':');
+            var inHead = colon < 0 ? piece : piece[..colon];
+            // The marker can straddle two pieces, so search the tail of what
+            // came before joined to this piece's share of the head.
+            var window = string.Concat(_carry ?? "", inHead);
+            if (window.Contains(Marker, StringComparison.OrdinalIgnoreCase)) IsQuotedPrintable = true;
+            _carry = window.Length < Marker.Length ? window : window[^(Marker.Length - 1)..];
+            if (colon >= 0) _closed = true;
         }
-        var head = colon < 0 ? line.ToString() : line.ToString(0, colon);
-        return head.Contains("QUOTED-PRINTABLE", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

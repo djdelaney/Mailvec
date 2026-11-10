@@ -403,6 +403,66 @@ public class AttachmentTextExtractorTests
     }
 
     [Fact]
+    public void VCard_unfolding_is_linear_in_the_number_of_folded_lines()
+    {
+        // One logical line made of folded physical lines that never reach a
+        // ':' and each end in '='. Deciding "is this property quoted-printable?"
+        // used to re-read the whole logical line per physical line: 240 KB took
+        // 9.4 s and quadrupled per doubling, so this 2 MB card would have run
+        // for about ten minutes. Linear, it is well under a second; the bound
+        // is loose so a slow CI host cannot fail it.
+        var vcf = "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Fold Test\r\nNOTE\r\n"
+            + string.Concat(Enumerable.Repeat(" =\r\n", 500_000))
+            + "END:VCARD\r\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(vcf);
+        var part = BuildMimePart(bytes, "text/vcard", "fold.vcf");
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var result = BuildExtractor().Extract(part, "fold.vcf", "text/vcard", bytes.Length);
+
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(20));
+        result.Text.ShouldNotBeNull().ShouldContain("Fold Test");
+    }
+
+    [Fact]
+    public void VCard_quoted_printable_marker_split_across_a_fold_is_still_recognised()
+    {
+        // The head is read piece by piece now, so the marker must be found
+        // even when a whitespace fold lands in the middle of it.
+        var vcf =
+            "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Split Marker\r\n" +
+            "NOTE;ENCODING=QUOTED-PRIN\r\n" +
+            " TABLE:first=0D=0Asec=\r\n" +
+            "ond\r\n" +
+            "END:VCARD\r\n";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(vcf);
+        var part = BuildMimePart(bytes, "text/vcard", "split.vcf");
+
+        var result = BuildExtractor().Extract(part, "split.vcf", "text/vcard", bytes.Length);
+
+        result.Text.ShouldNotBeNull().ShouldContain("second");
+    }
+
+    [Fact]
+    public void A_pdf_that_runs_out_the_clock_is_failed_not_handed_to_ocr_as_textless()
+    {
+        // no_text is the OCR pass's candidate status. A PDF we stopped reading
+        // because it was taking too long is not a scan, and sending it on to
+        // be rendered is how one slow document becomes two stalls.
+        var pdfBytes = BuildSimplePdf("Page one text");
+        var part = BuildMimePart(pdfBytes, "application/pdf", "slow.pdf");
+        var extractor = new AttachmentTextExtractor(25 * 1024 * 1024, NullLogger<AttachmentTextExtractor>.Instance)
+        {
+            ExtractionBudget = TimeSpan.FromTicks(-1),
+        };
+
+        var result = extractor.Extract(part, "slow.pdf", "application/pdf", pdfBytes.Length);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+        result.Text.ShouldBeNull();
+    }
+
+    [Fact]
     public void VCard_decodes_quoted_printable_and_joins_soft_breaks()
     {
         // vCard 2.1 QUOTED-PRINTABLE NOTE: =0D=0A are CR/LF, and the trailing '='

@@ -103,12 +103,78 @@ public class OfficePartLimitTests
     }
 
     [Fact]
-    public void A_pptx_whose_xml_expands_past_the_part_limit_fails_instead_of_expanding()
+    public void A_pptx_slide_that_expands_past_the_part_limit_is_cut_off_instead_of_expanding()
     {
+        // Slides are streamed, so unlike DOCX and XLSX the read stops as soon
+        // as it has the most text we keep, long before the part limit: the
+        // bomb yields truncated text rather than 'failed', having allocated
+        // little more than that text.
         var package = Pptx(BombRepeats);
         package.Length.ShouldBeLessThan(25 * 1024 * 1024);
 
+        long before = GC.GetAllocatedBytesForCurrentThread();
         var result = Extract(package, "bomb.pptx", PptxType);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull().Length.ShouldBeLessThanOrEqualTo(2_100_000);
+        allocated.ShouldBeLessThan(AllocationCeilingBytes);
+    }
+
+    [Fact]
+    public void A_pptx_slide_of_markup_past_the_part_limit_fails()
+    {
+        // With no text to stop on, the per-part ceiling restated for the slide
+        // reader is what ends the read.
+        var package = PptxDeck(slides: 1, emptyShapesPerSlide: 5_000_000); // 35M chars > 32M
+
+        var result = Extract(package, "markup.pptx", PptxType);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+        result.Text.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_deck_of_many_slides_each_under_the_part_limit_is_read_without_holding_them_all()
+    {
+        // MaxCharactersInPart is per part. Four slides of empty shapes, each
+        // just under it, used to load four DOMs that stayed rooted until the
+        // package closed: 1.5 GB for a 166 KB attachment, with no text to trip
+        // MaxExtractedTextChars. Streamed, the same deck allocates a small
+        // fraction of that. The slides carry one run of real text each so a
+        // malformed package cannot pass as "nothing extracted".
+        var package = PptxDeck(slides: 4, emptyShapesPerSlide: 4_000_000);
+        package.Length.ShouldBeLessThan(1024 * 1024);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var result = Extract(package, "deck.pptx", PptxType);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull().ShouldContain("MAILVEC SLIDE 4");
+        allocated.ShouldBeLessThan(AllocationCeilingBytes);
+    }
+
+    // The DOM read allocated ~385 MB per slide here, 1.5 GB for the deck. The
+    // streaming read allocates per text run, not per element, so a regression
+    // to the DOM is several times over this.
+    private const long AllocationCeilingBytes = 500L * 1024 * 1024;
+
+    [Fact]
+    public void A_deck_that_runs_out_the_clock_keeps_nothing_and_is_not_called_textless()
+    {
+        var part = new MimePart(PptxType)
+        {
+            Content = new MimeContent(new MemoryStream(PptxDeck(slides: 2, emptyShapesPerSlide: 10))),
+            FileName = "deck.pptx",
+        };
+        var extractor = new AttachmentTextExtractor(
+            new IndexerOptions().AttachmentMaxBytes, NullLogger<AttachmentTextExtractor>.Instance)
+        {
+            ExtractionBudget = TimeSpan.FromTicks(-1), // spent before the first slide
+        };
+
+        var result = extractor.Extract(part, "deck.pptx", PptxType, null);
 
         result.Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
         result.Text.ShouldBeNull();
@@ -180,4 +246,31 @@ public class OfficePartLimitTests
          """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody>"""
          + Repeat("<a:p><a:r><a:t>MAILVEC SLIDE RUN TEXT CONTENT PADDING</a:t></a:r></a:p>", repeats)
          + "</p:txBody></p:sp></p:spTree></p:cSld></p:sld>"));
+
+    private static byte[] PptxDeck(int slides, int emptyShapesPerSlide)
+    {
+        const string slideNs = """xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" """;
+        var filler = Repeat("<p:sp/>", emptyShapesPerSlide);
+        var overrides = new StringBuilder();
+        var rels = new StringBuilder();
+        var ids = new StringBuilder();
+        var entries = new List<(string, string)>();
+        for (int i = 1; i <= slides; i++)
+        {
+            overrides.Append($"""<Override PartName="/ppt/slides/slide{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>""");
+            rels.Append($"""<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{i}.xml"/>""");
+            ids.Append($"""<p:sldId id="{255 + i}" r:id="rId{i}"/>""");
+            entries.Add(($"ppt/slides/slide{i}.xml",
+                $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld {slideNs}><p:cSld><p:spTree>{filler}<p:sp><p:txBody><a:p><a:r><a:t>MAILVEC SLIDE {i}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"""));
+        }
+        entries.Insert(0, ("[Content_Types].xml",
+            $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="{CtNs}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/ppt/presentation.xml" ContentType="{PptxType}.main+xml"/>{overrides}</Types>"""));
+        entries.Insert(1, ("_rels/.rels",
+            $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{RelsNs}"><Relationship Id="rId1" Type="{OfficeDocRel}" Target="ppt/presentation.xml"/></Relationships>"""));
+        entries.Insert(2, ("ppt/_rels/presentation.xml.rels",
+            $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{RelsNs}">{rels}</Relationships>"""));
+        entries.Insert(3, ("ppt/presentation.xml",
+            $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation {slideNs}><p:sldIdLst>{ids}</p:sldIdLst></p:presentation>"""));
+        return Zip(entries.ToArray());
+    }
 }
