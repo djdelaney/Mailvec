@@ -368,6 +368,21 @@ A new read-only tool returning a message's raw header block, for DMARC/SPF/DKIM 
 - The description says which headers to trust: only the topmost `Received` and `Authentication-Results` lines that the receiving provider added. Anything a sender or intermediary wrote below them can claim a pass.
 - Tool-surface change: minor bump (0.11.2 → 0.12.0).
 
+## ✅ Security clean-up (no schema change, released in v0.13.0, 2026-11-10)
+
+The smaller findings of a security review, each closed with a test that fails without the fix.
+
+- **A reused Message-ID is reported.** Only one copy of a Message-ID is indexed, so a different message reusing a live one was delivered and never searchable, silently. The indexer now warns when it parses such a file, and `mailvec doctor` has a "Message-ID reuse" check. It is a warning, since a mailing-list copy of a sent message looks the same. What is indexed is unchanged.
+- **`search_emails` refuses a `query` over 2,000 characters**, and `get_attachment_text` loads only the attachment it was asked for instead of every attachment's text on each paged call.
+- **The scanner fails closed.** An I/O error reading an entry's link state no longer means "not a link". Empty or non-regular files (a FIFO blocked the scan for good) and files over `Indexer:MaxMessageBytes` (128 MB) are skipped with a warning and no database write.
+- **`Vision:Mistral:Route` must stay on the endpoint's host.** An absolute or `//host` route sent the API key and page images elsewhere.
+- **`webmailLink` text escapes `<`, `>` and backticks**, so a subject can't render a second live link. `ToolText.Label` folds every quote look-alike and drops combining marks that would attach to the server's own quotes.
+- **Upstream error bodies no longer ride on exceptions** in the Ollama and Mistral clients.
+- **Access assertions are accepted in RS256 only**, and the signing keys are fetched with no redirects, no proxy and a response ceiling. Access on a loopback-only listener is refused at startup.
+- **`Logging:LogLevel` now takes effect**, and HTTP request logging is quiet by default. Settings are read from the binary's directory, never the working directory, and sqlite-vec loads without enabling SQL-level extension loading.
+- Ignore files cover `.env.*`, compose overrides and `mbsyncrc` copies. The docs state a Docker Engine floor of 25.0.5 for the internal networks (CVE-2024-29018).
+- Tool-surface change (the new `search_emails` error): minor bump (0.12.2 → 0.13.0).
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
