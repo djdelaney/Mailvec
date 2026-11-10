@@ -149,6 +149,67 @@ public class VisionRegistrationTests
         }, requiresCredentials: true).ShouldBeOfType<MistralOcrClient>();
     }
 
+    // ---- Route stays on the endpoint's host ---------------------------------
+    //
+    // HttpClient resolves the route against BaseAddress as a URI reference, so
+    // an absolute or network-path route replaces the host — taking the API key
+    // and the page with it, past every check made on Endpoint.
+
+    [Theory]
+    [InlineData("https://other.example.net/v1/ocr")]
+    [InlineData("http://other.example.net/v1/ocr")]
+    [InlineData("//other.example.net/v1/ocr")]
+    [InlineData("/\\other.example.net/v1/ocr")]
+    [InlineData("\\\\other.example.net\\v1\\ocr")]
+    [InlineData("HTTPS://other.example.net/")]
+    [InlineData("v1/ocr\nX-Injected: 1")]
+    [InlineData("")]
+    public void A_route_that_is_not_a_path_on_the_endpoint_is_refused(string route)
+    {
+        var ex = Should.Throw<InvalidOperationException>(() => Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = "https://mistral.example.com",
+            ["Vision:Mistral:Route"] = route,
+            ["Vision:Mistral:Model"] = "d",
+            ["Vision:Mistral:ApiKey"] = "k",
+        }, requiresCredentials: true));
+
+        ex.Message.ShouldContain("Vision:Mistral:Route");
+    }
+
+    [Theory]
+    [InlineData("v1/ocr")]
+    [InlineData("/v1/ocr")]
+    [InlineData("providers/mistral/azure/ocr")]
+    [InlineData("v1/ocr?api-version=2026-01-01")]
+    public void A_relative_route_is_accepted(string route)
+    {
+        Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = "https://mistral.example.com/base",
+            ["Vision:Mistral:Route"] = route,
+            ["Vision:Mistral:Model"] = "d",
+            ["Vision:Mistral:ApiKey"] = "k",
+        }, requiresCredentials: true).ShouldBeOfType<MistralOcrClient>();
+    }
+
+    [Fact]
+    public void A_probe_only_process_with_a_foreign_route_degrades_and_never_calls_it()
+    {
+        var client = Resolve(new()
+        {
+            ["Vision:Provider"] = "mistral",
+            ["Vision:Mistral:Endpoint"] = "https://mistral.example.com",
+            ["Vision:Mistral:Route"] = "//other.example.net/ocr",
+            ["Vision:Mistral:Model"] = "d",
+            ["Vision:Mistral:ApiKey"] = "k",
+        }, requiresCredentials: false);
+
+        client.ShouldNotBeOfType<MistralOcrClient>();
+    }
+
     // ---- Probe-only processes that DO hold credentials ----------------------
 
     [Fact]

@@ -152,6 +152,46 @@ public sealed class MistralVisionOptions
         && (!string.IsNullOrWhiteSpace(ApiKey)
             || (!string.IsNullOrWhiteSpace(ApiKeyFile) && File.Exists(PathExpansion.Expand(ApiKeyFile))));
 
+    /// <summary>
+    /// The route must be a path on <see cref="Endpoint"/>'s own host.
+    /// </summary>
+    /// <remarks>
+    /// HttpClient resolves the route against BaseAddress as a URI reference,
+    /// so an absolute URL (<c>https://other/ocr</c>) or a network-path
+    /// reference (<c>//other/ocr</c>) REPLACES the host — and the request that
+    /// goes there carries the API key header and a rendered page of mail.
+    /// Every check on Endpoint (https, loopback-only cleartext) was bypassed
+    /// by the one setting beside it. The lexical refusals name the shape; the
+    /// resolved-origin comparison is the actual guarantee.
+    /// </remarks>
+    private void ValidateRoute(Uri endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(Route))
+            throw new InvalidOperationException("Vision:Mistral:Route is required when Vision:Provider=mistral.");
+
+        var problem =
+            Route.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) ? "contains whitespace or control characters"
+            : Route.Contains('\\') ? "contains a backslash"
+            : Route.StartsWith("//", StringComparison.Ordinal) ? "starts with '//', which names another host"
+            : null;
+
+        if (problem is null)
+        {
+            var baseAddress = new Uri(endpoint.GetLeftPart(UriPartial.Path).TrimEnd('/') + "/");
+            if (!Uri.TryCreate(baseAddress, Route, out var resolved)
+                || Uri.Compare(resolved, baseAddress, UriComponents.SchemeAndServer | UriComponents.UserInfo,
+                    UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) != 0)
+            {
+                problem = "does not resolve to a path on the endpoint's host";
+            }
+        }
+
+        if (problem is not null)
+            throw new InvalidOperationException(
+                $"Vision:Mistral:Route must be a relative path under Vision:Mistral:Endpoint (e.g. v1/ocr); the configured value {problem}. " +
+                "The API key and rendered pages of mail are sent to wherever it resolves.");
+    }
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Endpoint))
@@ -186,6 +226,7 @@ public sealed class MistralVisionOptions
             throw new InvalidOperationException(
                 $"Vision:Mistral:Endpoint must use https (got '{uri.Scheme}'). The API key and rendered pages of " +
                 "mail travel over this connection, unattended. Only loopback may use http, for local testing.");
+        ValidateRoute(uri);
         if (string.IsNullOrWhiteSpace(Model))
             throw new InvalidOperationException("Vision:Mistral:Model (the deployment name) is required when Vision:Provider=mistral.");
         if (string.IsNullOrWhiteSpace(ResolveApiKey()))
