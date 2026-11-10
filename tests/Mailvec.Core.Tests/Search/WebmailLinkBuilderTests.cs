@@ -128,4 +128,41 @@ public class WebmailLinkBuilderTests
         WebmailLinkBuilder.MarkdownLink("https://mail/x", "line one\r\nline two")
             .ShouldBe("[line one  line two](https://mail/x)");
     }
+
+    [Theory]
+    // An angle-bracket autolink binds tighter than link brackets: unescaped,
+    // the renderer shows the sender's URL as the live link and ours as text.
+    [InlineData("Invoice <https://evil.example/pay>", "[Invoice \\<https://evil.example/pay\\>](https://mail/x)")]
+    [InlineData("<a href=\"https://evil.example\">Open</a>", "[\\<a href=\"https://evil.example\"\\>Open\\</a\\>](https://mail/x)")]
+    [InlineData("<pay@evil.example>", "[\\<pay@evil.example\\>](https://mail/x)")]
+    // So does a code span, which would swallow our closing bracket.
+    [InlineData("a `b", "[a \\`b](https://mail/x)")]
+    public void MarkdownLink_escapes_constructs_that_bind_tighter_than_the_link(string subject, string expected)
+    {
+        WebmailLinkBuilder.MarkdownLink("https://mail/x", subject).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void MarkdownLink_leaves_no_unescaped_structural_character_in_the_text()
+    {
+        var link = WebmailLinkBuilder.MarkdownLink("https://mail/x", "\\<[`]>\\\\ <<x>> ``y``")!;
+        var text = link[1..^"](https://mail/x)".Length];
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\\') { i++; continue; }   // an escape consumes the next character
+            text[i].ShouldNotBeOneOf('[', ']', '<', '>', '`');
+        }
+    }
+
+    [Theory]
+    [InlineData("a\u2028b")]
+    [InlineData("a\u2029b")]
+    [InlineData("a\u0085b")]
+    [InlineData("a\tb")]
+    [InlineData("a\u000Bb")]
+    public void MarkdownLink_turns_every_line_break_and_control_character_into_a_space(string subject)
+    {
+        WebmailLinkBuilder.MarkdownLink("https://mail/x", subject).ShouldBe("[a b](https://mail/x)");
+    }
 }

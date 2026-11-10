@@ -44,14 +44,25 @@ public static class WebmailLinkBuilder
         return $"[{text}]({webmailUrl})";
     }
 
-    // Escape the characters that would let text break out of the [...] link
-    // span. Backslash first so we don't double-escape our own escapes; then the
-    // brackets that open/close the span; finally collapse CR/LF to a space so an
-    // embedded newline can't split the link across lines.
-    private static string EscapeLinkText(string text) => text
-        .Replace("\\", "\\\\")
-        .Replace("[", "\\[")
-        .Replace("]", "\\]")
-        .Replace("\r", " ")
-        .Replace("\n", " ");
+    // Escape what would let the text break out of the [...] span or start a
+    // construct that binds TIGHTER than it. Brackets close or reopen the span.
+    // An angle-bracket autolink (<https://…>), raw inline HTML (<a href=…>) and
+    // a backtick code span all take precedence over link brackets in
+    // CommonMark, so unescaped they turn our link into literal text and render
+    // the sender's URL as the live one. Backslash goes first so our own
+    // escapes aren't doubled. A bare https://… needs no escape: renderers do
+    // not nest a link inside link text, and no escape would stop one that did.
+    // Every control character and line/paragraph separator becomes a space, so
+    // nothing can split the link across lines.
+    private static string EscapeLinkText(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length + 8);
+        foreach (var c in text)
+        {
+            if (char.IsControl(c) || c is '\u2028' or '\u2029' or '\u0085') { sb.Append(' '); continue; }
+            if (c is '\\' or '[' or ']' or '<' or '>' or '`') sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 }
