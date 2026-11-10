@@ -86,6 +86,87 @@ public class AccessSigningKeyTests
             .MetadataAddress.ShouldBe($"{TeamDomain}/cdn-cgi/access/certs");
     }
 
+    // ---------- the client the keys are fetched with ----------
+    //
+    // Whatever answers the fetch chooses the keys that sign an accepted
+    // assertion. The default document-retriever client follows redirects and
+    // honours HTTPS_PROXY.
+
+    [Fact]
+    public async Task The_key_fetch_does_not_follow_a_redirect()
+    {
+        using var listener = new System.Net.HttpListener();
+        var port = FreePort();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var served = Task.Run(async () =>
+        {
+            var hits = 0;
+            while (hits < 2)
+            {
+                var ctx = await listener.GetContextAsync();
+                hits++;
+                if (ctx.Request.Url!.AbsolutePath == "/certs")
+                {
+                    ctx.Response.StatusCode = 302;
+                    ctx.Response.RedirectLocation = $"http://127.0.0.1:{port}/elsewhere";
+                    ctx.Response.Close();
+                    // Give a following client the chance to arrive.
+                    var next = listener.GetContextAsync();
+                    if (await Task.WhenAny(next, Task.Delay(500)) != next) return hits;
+                    (await next).Response.Close();
+                    return hits + 1;
+                }
+                ctx.Response.Close();
+            }
+            return hits;
+        });
+
+        using var client = AccessAuth.CreateCertsHttpClient();
+        using var response = await client.GetAsync($"http://127.0.0.1:{port}/certs");
+
+        response.StatusCode.ShouldBe(System.Net.HttpStatusCode.Redirect);
+        (await served).ShouldBe(1, "the redirect target must never be requested");
+    }
+
+    [Fact]
+    public async Task The_key_fetch_refuses_a_document_over_the_ceiling()
+    {
+        using var listener = new System.Net.HttpListener();
+        var port = FreePort();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var served = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            var body = new byte[AccessAuth.MaxCertsResponseBytes + 1];
+            ctx.Response.ContentLength64 = body.Length;
+            try { await ctx.Response.OutputStream.WriteAsync(body); ctx.Response.Close(); }
+            catch (Exception) { /* the client hung up, as it should */ }
+        });
+
+        using var client = AccessAuth.CreateCertsHttpClient();
+
+        await Should.ThrowAsync<HttpRequestException>(() => client.GetAsync($"http://127.0.0.1:{port}/certs"));
+        await served;
+    }
+
+    [Fact]
+    public void The_key_fetch_client_is_bounded_in_time()
+    {
+        using var client = AccessAuth.CreateCertsHttpClient();
+        client.Timeout.ShouldBeLessThanOrEqualTo(TimeSpan.FromSeconds(30));
+    }
+
+    private static int FreePort()
+    {
+        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        return port;
+    }
+
     // ---------- the document, through the real retriever ----------
 
     [Fact]

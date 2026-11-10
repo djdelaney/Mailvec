@@ -54,6 +54,8 @@ make it lazy or best-effort. And `AccessCertsRetriever` **throws** on an empty
 key set rather than returning a keyless configuration, so a bad refresh keeps
 the last good keys instead of silently degrading to authenticating nobody.
 
+**Assertions are accepted in RS256 only** (`ValidAlgorithms`), the one algorithm Access signs with, and **the keys are fetched through `AccessAuth.CreateCertsHttpClient`** (the `HostedHttp` handler: no redirects, no proxy, a 1 MB ceiling). Whatever answers that fetch chooses the keys, and `HttpDocumentRetriever`'s default client follows redirects and honours `HTTPS_PROXY`. Tests: `AccessAuthTests.An_assertion_in_an_algorithm_Access_does_not_use_is_refused_even_with_the_real_key`, `AccessSigningKeyTests.The_key_fetch_does_not_follow_a_redirect`.
+
 `AccessAuthTests` injects keys via `StaticConfigurationManager` and so cannot
 see any of this; `AccessSigningKeyTests` is the file that covers retrieval.
 Reverting the URL fails four of its tests — that's the alarm.

@@ -1,4 +1,5 @@
 using System.Net;
+using Mailvec.Core.Embedding;
 using Mailvec.Core.Options;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -47,6 +48,29 @@ internal static class AccessAuth
     /// <summary><c>/up</c> only — additionally admits the path-scoped monitoring app's audience.</summary>
     internal const string MonitoringPolicy = "mailvec-access-monitoring";
 
+    /// <summary>Ceiling on the signing-key document. A real one is a few KB.</summary>
+    internal const long MaxCertsResponseBytes = 1024 * 1024;
+
+    /// <summary>
+    /// The client the signing keys are fetched with: no redirects, no proxy, a
+    /// response ceiling and a timeout — the <see cref="HostedHttp"/> rules.
+    /// </summary>
+    /// <remarks>
+    /// <c>HttpDocumentRetriever</c>'s default client follows redirects and
+    /// honours <c>HTTPS_PROXY</c>. Whatever answers this fetch decides which
+    /// keys sign an accepted assertion, so a redirect or an environment proxy
+    /// was a way to choose them. One shared client for the process: the fetch
+    /// runs at boot and on ConfigurationManager's refresh schedule.
+    /// </remarks>
+    internal static HttpClient CreateCertsHttpClient() =>
+        new(HostedHttp.CreateHandler(), disposeHandler: true)
+        {
+            MaxResponseContentBufferSize = MaxCertsResponseBytes,
+            Timeout = TimeSpan.FromSeconds(15),
+        };
+
+    private static readonly Lazy<HttpClient> CertsHttpClient = new(CreateCertsHttpClient);
+
     internal static void AddAccessAuthentication(IServiceCollection services)
     {
         // The loopback bypass needs the connection, which isn't reachable from
@@ -83,7 +107,7 @@ internal static class AccessAuth
                     // scheme is also enforced ahead of here by
                     // AccessOptions.Validate(); this is the belt to that braces,
                     // and the one that binds the actual fetch.
-                    new HttpDocumentRetriever { RequireHttps = true });
+                    new HttpDocumentRetriever(CertsHttpClient.Value) { RequireHttps = true });
                 options.RequireHttpsMetadata = true;
                 // Keep claim names as they arrive ("aud", "email", "sub")
                 // instead of the legacy SOAP-ish URIs the inbound mapper
@@ -102,6 +126,13 @@ internal static class AccessAuth
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
                     RequireSignedTokens = true,
+                    // Cloudflare Access signs with RS256 and nothing else.
+                    // Unset, the handler accepts any algorithm the key type
+                    // supports (RS384/512, PS256…): none of those is a known
+                    // forgery today, but an assertion in any of them did not
+                    // come from Access, and the list is what keeps a future
+                    // key of another type from widening what is accepted.
+                    ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
                     RequireExpirationTime = true,
                     // Tighter than the 5-minute default. Access assertions are
                     // minted seconds before use by an edge whose clock is not

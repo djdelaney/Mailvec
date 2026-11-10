@@ -143,6 +143,20 @@ public class AccessAuthTests
         (await factory.GetWithAssertion("/health", token)).StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
     }
 
+    [Theory]
+    [InlineData(SecurityAlgorithms.RsaSha384)]
+    [InlineData(SecurityAlgorithms.RsaSha512)]
+    [InlineData(SecurityAlgorithms.RsaSsaPssSha256)]
+    public async Task An_assertion_in_an_algorithm_Access_does_not_use_is_refused_even_with_the_real_key(string algorithm)
+    {
+        // Correctly signed, by the genuine key — only the algorithm differs.
+        // Access issues RS256; anything else did not come from it.
+        using var factory = new AccessFactory();
+        var token = factory.Token(OwnerAud, algorithm: algorithm);
+
+        (await factory.GetWithAssertion("/health", token)).StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
+    }
+
     [Fact]
     public async Task Unsigned_alg_none_assertion_is_refused()
     {
@@ -562,7 +576,8 @@ public class AccessAuthTests
             DateTime? expires = null,
             DateTime? notBefore = null,
             SecurityKey? signingKey = null,
-            IDictionary<string, object>? identity = null)
+            IDictionary<string, object>? identity = null,
+            string algorithm = SecurityAlgorithms.RsaSha256)
         {
             var descriptor = new SecurityTokenDescriptor
             {
@@ -571,7 +586,7 @@ public class AccessAuthTests
                 NotBefore = notBefore ?? DateTime.UtcNow.AddMinutes(-1),
                 Expires = expires ?? DateTime.UtcNow.AddHours(1),
                 SigningCredentials = new SigningCredentials(
-                    signingKey ?? _key, SecurityAlgorithms.RsaSha256),
+                    signingKey ?? _key, algorithm),
                 Claims = identity is not null
                     ? new Dictionary<string, object>(identity)
                     : new Dictionary<string, object>
