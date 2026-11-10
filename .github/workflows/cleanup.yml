@@ -8,9 +8,14 @@
 # keep-newest-2 would thrash one set or the other every Monday. Buildx
 # entries are left to GitHub's own 7-day-unused / 10GB LRU eviction.
 #
-# Scope guard: this deletes completed workflow runs, nuget caches, and
-# sha-tagged/untagged GHCR versions only — it never touches releases, git
-# tags, v*-tagged or :latest images, or git history. If a workflow ever
+# Scope guard: this deletes completed workflow runs, nuget caches, and old
+# per-commit GHCR builds only — it never touches releases, git tags, or git
+# history. The image prune is ops/ghcr-prune.py, which keeps every v* and
+# :latest image TOGETHER WITH the untagged manifests its index references.
+# That distinction is the point: the first version here filtered on tags
+# alone, and since an image's platform manifest and attestation carry no tag,
+# it deleted them out from under every release older than a week. Don't
+# replace the script with a tag filter. If a workflow ever
 # starts uploading artifacts, prefer `retention-days` on the upload step
 # over extending this job.
 
@@ -20,8 +25,14 @@ on:
   schedule:
     - cron: "17 5 * * 1" # Mondays 05:17 UTC
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the image prune plan and delete no images"
+        type: boolean
+        default: false
 
 permissions:
+  contents: read # checkout, for ops/ghcr-prune.py
   actions: write
   packages: write
 
@@ -69,33 +80,15 @@ jobs:
             gh cache delete "$id" --repo "$REPO"
           done
 
-      - name: Prune GHCR image versions (keep newest sha builds; never v* or latest)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Fails the run if an image that was pullable before it is not pullable
+      # after it. Images already broken by the old prune are warnings.
+      - name: Prune GHCR per-commit builds (keeps every release image whole)
+        env:
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
         run: |
           set -euo pipefail
-          OWNER="${REPO%%/*}"
-          for pkg in mailvec mailvec-mbsync; do
-            # 404 = package not published yet — nothing to prune.
-            if ! versions=$(gh api --paginate "/users/$OWNER/packages/container/$pkg/versions" 2>/dev/null); then
-              echo "$pkg: no package versions found (not published yet?); skipping"
-              continue
-            fi
-            # Protect any version carrying a v* or latest tag (releases and
-            # the rolling pointer); of the rest (sha-only or untagged), keep
-            # the newest $KEEP and delete the remainder. --paginate emits
-            # concatenated arrays, so merge with `jq -s add` first. If the
-            # DELETEs start returning 403, GITHUB_TOKEN can't delete this
-            # package — fall back to a classic PAT with delete:packages in a
-            # secret.
-            echo "$versions" |
-            jq -s 'add // []' |
-            jq -r --argjson keep "$KEEP" '
-              [ .[] | select(
-                  ((.metadata.container.tags // []) | any(. == "latest" or startswith("v"))) | not
-                ) ]
-              | sort_by(.created_at) | reverse | .[$keep:] | .[].id' |
-            while read -r vid; do
-              [ -z "$vid" ] && continue
-              echo "Deleting $pkg version $vid"
-              gh api -X DELETE "/users/$OWNER/packages/container/$pkg/versions/$vid"
-            done
-          done
+          python3 -I ops/ghcr-prune.py --owner "${REPO%%/*}" --keep "$KEEP" $DRY_RUN mailvec mailvec-mbsync
