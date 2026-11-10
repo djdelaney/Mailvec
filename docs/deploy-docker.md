@@ -2,6 +2,8 @@
 
 Mailvec runs as a Compose stack with `mbsync`, indexer, embedder, parser, and MCP services. Ollama runs at a reachable URL outside the stack. Follow [Get started with Docker](getting-started-docker.md) for a new install; this page covers migration and operations. The MCP service publishes no host port. Remote access, if needed, uses [Cloudflare Tunnel and Access](remote-access-cloudflare.md).
 
+Use Docker Engine 25.0.5 or later. The `indexer` and `parse` services sit on `internal` networks so that they have no route out, and before that release the engine's embedded DNS server still forwarded their lookups to external nameservers when the host's resolver was on a loopback address (systemd-resolved's `127.0.0.53`), which is a data path out of a container that is meant to have none (CVE-2024-29018; also fixed in 23.0.11 and in every release from 26.0.0). Check with `docker version --format '{{.Server.Version}}'`.
+
 Store `./data` and `./mail` on host-local disk. SQLite WAL needs local filesystem locking; do not put the archive on NFS or SMB. On Docker Desktop, query a running archive from inside a container rather than opening its bind-mounted SQLite file on the host, which can corrupt its WAL state.
 
 ## Images and updates
