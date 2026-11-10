@@ -200,10 +200,15 @@ public sealed class MaildirScanner(
                     if (parserUnavailable) break;
                     var sub = Path.Combine(folderDir, subdir);
                     if (!Directory.Exists(sub)) continue;
-                    if (IsSymlink(new DirectoryInfo(sub)))
+                    switch (CheckLink(new DirectoryInfo(sub)))
                     {
-                        SkipSymlink(sub, ref symlinksSkipped);
-                        continue;
+                        case LinkCheck.Link:
+                            SkipSymlink(sub, ref symlinksSkipped);
+                            continue;
+                        case LinkCheck.Unknown:
+                            SkipUnverifiable(sub);
+                            enumerationFailures++;
+                            continue;
                     }
 
                     // Eager GetFiles (not the lazy Enumerate) so a permission
@@ -226,9 +231,19 @@ public sealed class MaildirScanner(
                         cancellationToken.ThrowIfCancellationRequested();
                         // Not observed, so a message previously indexed from
                         // this path reconciles as gone — deliberately.
-                        if (IsSymlink(new FileInfo(file)))
+                        var link = CheckLink(new FileInfo(file));
+                        if (link == LinkCheck.Link)
                         {
                             SkipSymlink(file, ref symlinksSkipped);
+                            continue;
+                        }
+                        if (link == LinkCheck.Unknown)
+                        {
+                            // Neither read nor treated as gone: counted with
+                            // the directories that could not be listed, which
+                            // holds this scan's deletion reconciliation.
+                            SkipUnverifiable(file);
+                            enumerationFailures++;
                             continue;
                         }
                         seen++;
@@ -645,6 +660,17 @@ public sealed class MaildirScanner(
                 return IngestOutcome.Unchanged;
             }
 
+            // Not read, not parsed, and no retry marker written: the marker
+            // is one row per scan, and the next scan re-stats the file anyway
+            // (it has no row to take the fast path with). Flushed first for
+            // the same reason as the unchanged branch above.
+            if (UnreadableReason(info, sizeBytes) is { } unreadable)
+            {
+                ctx.Flush();
+                WarnUnreadable(filePath, unreadable);
+                return IngestOutcome.Failed;
+            }
+
             // Parse path: messages.Upsert opens its own connection. Release
             // our held write lock first by committing any batched fast-path
             // writes — otherwise its tx will block on busy_timeout against
@@ -670,7 +696,13 @@ public sealed class MaildirScanner(
                 return IngestOutcome.Failed;
             }
             var degraded = _parserCrashes.TryGetValue(identity, out var crashes) && crashes >= _maxCrashesPerFile;
-            var parsed = parser.ParseMessage(File.ReadAllBytes(filePath), extractAttachmentText: !degraded);
+            var bytes = ReadBounded(filePath, _indexer.MaxMessageBytes);
+            if (bytes is null)
+            {
+                WarnUnreadable(filePath, $"grew past Indexer:MaxMessageBytes ({_indexer.MaxMessageBytes:N0}) while being read");
+                return IngestOutcome.Failed;
+            }
+            var parsed = parser.ParseMessage(bytes, extractAttachmentText: !degraded);
             if (degraded)
             {
                 logger.LogWarning(
@@ -789,17 +821,88 @@ public sealed class MaildirScanner(
     /// <remarks>
     /// A path that vanished between enumeration and this check (an mbsync
     /// rename mid-walk) is reported as not-a-link, so it takes exactly the
-    /// path it took before this rule existed.
+    /// path it took before this rule existed. Any OTHER failure to read the
+    /// link state is <see cref="LinkCheck.Unknown"/>, and the caller neither
+    /// follows the entry nor treats it as gone: answering "not a link" there
+    /// (as this used to) turned an I/O error into permission to follow.
     /// </remarks>
-    internal static bool IsSymlink(FileSystemInfo info)
+    internal LinkCheck CheckLink(FileSystemInfo info)
     {
         try
         {
-            return info.LinkTarget is not null;
+            return LinkTargetReader(info) is null ? LinkCheck.NotLink : LinkCheck.Link;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return LinkCheck.NotLink;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return false;
+            return LinkCheck.Unknown;
+        }
+    }
+
+    internal enum LinkCheck { NotLink, Link, Unknown }
+
+    /// <summary>Test seam: how the link target of an entry is read.</summary>
+    internal Func<FileSystemInfo, string?> LinkTargetReader { get; set; } = static info => info.LinkTarget;
+
+    /// <summary>Warns once per process about an entry whose link state could not be read.</summary>
+    private void SkipUnverifiable(string path)
+    {
+        if (_skipsWarned.Add(path))
+        {
+            logger.LogWarning(
+                "MaildirScanner: could not determine whether {Path} is a symbolic link; it is not read, and this " +
+                "scan reconciles no deletions.", path);
+        }
+    }
+
+    /// <summary>
+    /// Refuses a file the scanner should not read whole: one that is empty or
+    /// not a regular file, or one over <see cref="IndexerOptions.MaxMessageBytes"/>.
+    /// Returns the reason, or null when the file is readable.
+    /// </summary>
+    /// <remarks>
+    /// Uses the stat the caller already took, so it costs the walk nothing,
+    /// and it runs only on the parse path. A FIFO, socket or device node
+    /// reports length 0 (.NET exposes no file-type bits), and opening a FIFO
+    /// blocks until something writes to it — one planted in a folder would
+    /// stop every scan at that entry. An empty regular file holds no message
+    /// either, so the one test covers both.
+    /// </remarks>
+    private string? UnreadableReason(FileInfo info, long sizeBytes) =>
+        info.Attributes.HasFlag(FileAttributes.Directory) || sizeBytes <= 0
+            ? "is empty or not a regular file"
+        : sizeBytes > _indexer.MaxMessageBytes
+            ? $"is {sizeBytes:N0} bytes, over Indexer:MaxMessageBytes ({_indexer.MaxMessageBytes:N0})"
+        : null;
+
+    /// <summary>
+    /// Reads a message file, refusing to read past <paramref name="maxBytes"/>.
+    /// The size check before this is a stat, and a stat is a claim: the file
+    /// can grow, or be swapped, before the read.
+    /// </summary>
+    private static byte[]? ReadBounded(string path, long maxBytes)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 0);
+        var buffer = new MemoryStream(capacity: (int)Math.Min(Math.Max(stream.Length, 0), maxBytes));
+        var chunk = new byte[81920];
+        int read;
+        while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
+        {
+            if (buffer.Length + read > maxBytes) return null;
+            buffer.Write(chunk, 0, read);
+        }
+        return buffer.Length == buffer.Capacity ? buffer.GetBuffer() : buffer.ToArray();
+    }
+
+    /// <summary>Warns once per process about a file the scanner will not read.</summary>
+    private void WarnUnreadable(string path, string reason)
+    {
+        if (_skipsWarned.Add(path))
+        {
+            logger.LogWarning("MaildirScanner: {Path} {Reason}; it is not read and not indexed.", path, reason);
         }
     }
 
@@ -817,6 +920,7 @@ public sealed class MaildirScanner(
     }
 
     private readonly HashSet<string> _symlinksWarned = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _skipsWarned = new(StringComparer.Ordinal);
 
     private IEnumerable<string> EnumerateMaildirFolders(string root, Action<string, Exception> onEnumerationError, Action<string> onSymlink)
     {
@@ -867,13 +971,20 @@ public sealed class MaildirScanner(
                     }
                     continue;
                 }
-                // Never descend through a link: see IsSymlink. Checked after the
+                // Never descend through a link: see CheckLink. Checked after the
                 // cur/new/tmp skip, which the file loop's own check covers, so
                 // one link is counted once. The root itself was pushed without
                 // this check, so a symlinked root works.
-                if (IsSymlink(new DirectoryInfo(sub)))
+                var link = CheckLink(new DirectoryInfo(sub));
+                if (link == LinkCheck.Link)
                 {
                     onSymlink(sub);
+                    continue;
+                }
+                if (link == LinkCheck.Unknown)
+                {
+                    SkipUnverifiable(sub);
+                    onEnumerationError(sub, new IOException("Could not determine whether the directory is a symbolic link."));
                     continue;
                 }
                 stack.Push(sub);
@@ -949,6 +1060,7 @@ internal sealed class ScanContext : IDisposable
     private readonly int _batchSize;
     private SqliteTransaction? _tx;
     private int _writesInTx;
+
 
     public ScanContext(SqliteConnection connection, int batchSize)
     {

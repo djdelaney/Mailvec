@@ -19,6 +19,13 @@ public sealed class IndexerOptions
     // in genuinely huge files (image-heavy PDFs, raw datasets).
     public long AttachmentMaxBytes { get; set; } = 25 * 1024 * 1024;
 
+    // Largest message file the scanner will read. A file in the Maildir is
+    // read whole before it is parsed, so without a ceiling one multi-gigabyte
+    // (or sparse) file is an out-of-memory kill on every scan. No mail
+    // provider delivers a message near this size; a file over it is skipped
+    // with a warning and not indexed.
+    public long MaxMessageBytes { get; set; } = 128L * 1024 * 1024;
+
     // Mass-deletion hold (MaildirScanner). A single scan that would
     // soft-delete more than MassDeletionFraction of the tracked paths AND at
     // least MassDeletionMinimum messages is held rather than applied, and

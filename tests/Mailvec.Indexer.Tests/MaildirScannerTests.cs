@@ -439,7 +439,7 @@ public class MaildirScannerTests : IDisposable
 
     // ── Symbolic links ──────────────────────────────────────────────────
     // The scanner never follows a link below the Maildir root (see
-    // MaildirScanner.IsSymlink). Windows symlinks need a privilege the test
+    // MaildirScanner.CheckLink). Windows symlinks need a privilege the test
     // runner may not have, and the rule is about the POSIX targets anyway.
 
     /// <summary>A directory beside the Maildir root, never scanned.</summary>
@@ -463,6 +463,131 @@ public class MaildirScannerTests : IDisposable
             Bytes that live somewhere a link points.
 
             """);
+
+    // ── Entries the scanner cannot vouch for ────────────────────────────
+    // An I/O error reading an entry's link state used to mean "not a link",
+    // i.e. permission to follow. And every file was read whole, whatever it
+    // was and however large.
+
+    private MaildirScanner ScannerWithMaxMessageBytes(long max) => new(
+        Microsoft.Extensions.Options.Options.Create(new IngestOptions { MaildirRoot = _root }),
+        new InProcessParser(extractor: null), _messages, _chunks, _syncState, _connections,
+        NullLogger<MaildirScanner>.Instance,
+        indexerOptions: Microsoft.Extensions.Options.Options.Create(new IndexerOptions { MaxMessageBytes = max }));
+
+    [Fact]
+    public void A_file_whose_link_state_cannot_be_read_is_neither_read_nor_treated_as_gone()
+    {
+        var doubtful = WriteEml("INBOX", "cur", "doubt.host:2,S", "original body", "doubt@x");
+        var removed = WriteEml("INBOX", "cur", "gone.host:2,S", "soon deleted", "gone@x");
+        _scanner.ScanAll().Upserted.ShouldBe(2);
+
+        // The file changes on disk, another is deleted, and the link check
+        // starts failing for the first.
+        File.WriteAllText(doubtful, File.ReadAllText(doubtful).Replace("original body", "replaced body"));
+        File.SetLastWriteTimeUtc(doubtful, DateTime.UtcNow.AddMinutes(5));
+        File.Delete(removed);
+        _scanner.LinkTargetReader = info => info.FullName == doubtful
+            ? throw new IOException("Input/output error")
+            : info.LinkTarget;
+
+        var result = _scanner.ScanAll();
+
+        result.Upserted.ShouldBe(0, "the unverifiable file must not be read");
+        _messages.GetByMessageId("doubt@x")!.BodyText.ShouldNotBeNull().ShouldContain("original body");
+        _messages.GetByMessageId("doubt@x")!.DeletedAt.ShouldBeNull("an unreadable link state is not a deletion");
+        result.SoftDeleted.ShouldBe(0, "a scan with an unverifiable entry reconciles nothing");
+        _messages.GetByMessageId("gone@x")!.DeletedAt.ShouldBeNull();
+
+        // Once the check works again, both changes land.
+        _scanner.LinkTargetReader = static info => info.LinkTarget;
+        var healed = _scanner.ScanAll();
+        healed.Upserted.ShouldBe(1);
+        healed.SoftDeleted.ShouldBe(1);
+        _messages.GetByMessageId("doubt@x")!.BodyText.ShouldNotBeNull().ShouldContain("replaced body");
+    }
+
+    [Fact]
+    public void A_folder_whose_link_state_cannot_be_read_is_not_walked()
+    {
+        WriteEml("INBOX", "cur", "in.host:2,S", "inbox message", "in@x");
+        WriteEml("Doubtful", "cur", "d.host:2,S", "should not be read", "d@x");
+        var folder = Path.Combine(_root, "Doubtful");
+        _scanner.LinkTargetReader = info => info.FullName == folder
+            ? throw new UnauthorizedAccessException("Permission denied")
+            : info.LinkTarget;
+
+        var result = _scanner.ScanAll();
+
+        result.Seen.ShouldBe(1);
+        _messages.GetByMessageId("d@x").ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_path_that_vanished_before_the_link_check_is_not_an_error()
+    {
+        _scanner.CheckLink(new FileInfo(Path.Combine(_root, "INBOX", "cur", "never-existed")))
+            .ShouldBe(MaildirScanner.LinkCheck.NotLink);
+    }
+
+    [Fact]
+    public void An_oversized_file_is_skipped_and_costs_later_scans_no_write()
+    {
+        var scanner = ScannerWithMaxMessageBytes(4096);
+        WriteEml("INBOX", "cur", "ok.host:2,S", "an ordinary message", "ok@x");
+        WriteEml("INBOX", "cur", "big.host:2,S", new string('x', 20_000), "big@x");
+
+        var first = scanner.ScanAll();
+
+        first.Upserted.ShouldBe(1);
+        first.FailedToParse.ShouldBe(1);
+        _messages.GetByMessageId("big@x").ShouldBeNull();
+
+        // The skip leaves no retry marker, so a file that stays oversized is
+        // not one row written per scan.
+        CheckpointWal();
+        scanner.ScanAll().FailedToParse.ShouldBe(1);
+        new FileInfo(_dbPath + "-wal").Length.ShouldBe(0);
+        scanner.LastScanTransactionsBegun.ShouldBe(0);
+    }
+
+    [Fact]
+    public void An_empty_file_is_skipped_without_being_parsed()
+    {
+        WriteEml("INBOX", "cur", "ok.host:2,S", "an ordinary message", "ok@x");
+        File.WriteAllBytes(Path.Combine(_root, "INBOX", "cur", "empty.host:2,S"), []);
+
+        var first = _scanner.ScanAll();
+        first.Upserted.ShouldBe(1);
+        first.FailedToParse.ShouldBe(1);
+
+        CheckpointWal();
+        _scanner.ScanAll();
+        new FileInfo(_dbPath + "-wal").Length.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_fifo_in_a_mail_folder_does_not_stop_the_scan()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        WriteEml("INBOX", "cur", "ok.host:2,S", "an ordinary message", "ok@x");
+        var fifo = Path.Combine(_root, "INBOX", "cur", "pipe.host:2,S");
+        using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", [fifo]))
+        {
+            mkfifo.WaitForExit();
+            mkfifo.ExitCode.ShouldBe(0);
+        }
+
+        // Opening a FIFO for reading blocks until something writes to it, so
+        // a scan that tried would never return.
+        var scan = Task.Run(() => _scanner.ScanAll());
+        var finished = await Task.WhenAny(scan, Task.Delay(TimeSpan.FromSeconds(20)));
+        finished.ShouldBe(scan, "the scan blocked on the FIFO");
+
+        var result = await scan;
+        result.Upserted.ShouldBe(1);
+        result.FailedToParse.ShouldBe(1);
+    }
 
     [Fact]
     public void A_symlinked_message_file_is_not_indexed()
