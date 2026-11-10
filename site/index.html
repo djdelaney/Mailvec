@@ -580,24 +580,24 @@ Mailvec preflight
 =================
 
 Configuration
-  <span style="color: #7FC98F">✓</span> Version             v0.12.0 (cli + mcp in lockstep)
+  <span style="color: #7FC98F">✓</span> Version             v0.12.1 (cli + mcp in lockstep)
   <span style="color: #7FC98F">✓</span> Embedding profile   ollama-legacy (ollama, provider ollama) — mxbai-embed-large @1024d, space ollama:mxbai-embed-large:1024
   <span style="color: #7FC98F">✓</span> Database            /data/archive.sqlite (4.51 GB)
   <span style="color: #7FC98F">✓</span> Schema              version 14 (current)
-  <span style="color: #7FC98F">✓</span> vec0.dylib          /app/cli/vec0.so
+  <span style="color: #7FC98F">✓</span> sqlite-vec          /app/cli/vec0.so
   <span style="color: #7FC98F">✓</span> Maildir root        /mail/Fastmail
 
 Pipeline
   <span style="color: #7FC98F">✓</span> Embedding model     mxbai-embed-large (1024d, matches config)
-  <span style="color: #7FC98F">✓</span> Embedding cover     79,444 / 79,444 messages (100.0%, 330,061 chunks)
-  <span style="color: #7FC98F">✓</span> Last indexed        2026-11-10 13:45 (26m ago)
+  <span style="color: #7FC98F">✓</span> Embedding cover     79,446 / 79,446 messages (100.0%, 330,066 chunks)
+  <span style="color: #7FC98F">✓</span> Last indexed        2026-11-10 14:45 (4m ago)
   <span style="color: #7FC98F">✓</span> Ollama              reachable at http://‹redacted›:11434 (configured model: mxbai-embed-large)
   <span style="color: #7FC98F">✓</span> Orphan vectors      none
   <span style="color: #7FC98F">✓</span> Parser              remote parse service at http://parse:3400 answers /up
   <span style="color: #7FC98F">✓</span> OCR model           mistral-ocr mistral-ocr-4-0 @ https://‹redacted› — configured; no credentials in this process by design. Check it where OCR runs: `docker compose exec embedder mailvec doctor`.
 
-Services (launchd)
-  <span style="color: #7FC98F">✓</span> mbsync sync         last successful sync 53s ago
+Services (compose)
+  <span style="color: #7FC98F">✓</span> mbsync sync         last successful sync 14s ago
   <span style="color: #7FC98F">✓</span> Supervisor          compose (no launchd in a container)
   <span style="color: #7FC98F">✓</span> mbsync stderr       n/a in a container — the sidecar writes stderr to `docker compose logs mbsync`. Sync outcome is covered by the `mbsync sync` check.
 
