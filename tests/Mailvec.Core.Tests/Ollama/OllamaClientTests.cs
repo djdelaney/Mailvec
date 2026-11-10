@@ -123,6 +123,26 @@ public class OllamaClientTests
         calls.ShouldBe(1);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError, "SENSITIVE mail text echoed back")]
+    [InlineData(HttpStatusCode.BadRequest, "SENSITIVE mail text echoed back")]
+    public async Task An_error_body_that_echoes_the_input_does_not_ride_on_the_exception(HttpStatusCode status, string body)
+    {
+        // The request was mail text. Nothing of the upstream body may survive
+        // on the exception chain: the message is logged and can reach an MCP
+        // client, and Data is serialized by structured sinks.
+        var client = ClientWith(_ => new HttpResponseMessage(status) { Content = new StringContent(body) });
+
+        var thrown = await Should.ThrowAsync<EmbeddingException>(() => client.EmbedAsync(["x"]));
+
+        thrown.ToString().ShouldNotContain("SENSITIVE");
+        for (Exception? e = thrown; e is not null; e = e.InnerException)
+        {
+            foreach (var value in e.Data.Values)
+                (value as string ?? string.Empty).ShouldNotContain("SENSITIVE");
+        }
+    }
+
     [Fact]
     public async Task Splits_batch_on_context_length_400_and_succeeds_when_split_inputs_fit()
     {

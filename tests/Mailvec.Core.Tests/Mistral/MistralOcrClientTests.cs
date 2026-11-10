@@ -195,11 +195,11 @@ public class MistralOcrClientTests
     }
 
     [Fact]
-    public async Task The_response_body_stays_out_of_the_exception_message()
+    public async Task The_response_body_stays_off_the_exception_entirely()
     {
         // The request was a rendered page of the user's mail; a service that
-        // echoes it back must not have that land in a log line. Same rule as
-        // OllamaVisionClient — body goes on Data, not into the message.
+        // echoes it back must not have that travel with the exception — not in
+        // the message, and not on Data, which structured sinks serialize.
         var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
         {
             Content = new StringContent("SENSITIVE ACCOUNT 123456"),
@@ -207,7 +207,8 @@ public class MistralOcrClientTests
 
         var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
         ex.Message.ShouldNotContain("SENSITIVE");
-        ex.Data["body"]!.ToString()!.ShouldContain("SENSITIVE"); // still available for diagnosis
+        ex.ToString().ShouldNotContain("SENSITIVE");
+        ex.Data.Count.ShouldBe(0);
     }
 
     [Fact]

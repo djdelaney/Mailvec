@@ -101,11 +101,10 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
         using var response = sent;
         if (!response.IsSuccessStatusCode)
         {
-            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            // Body out of the message, onto Data — same reasoning as
-            // OllamaClient. This one is embedder-only so it reaches logs rather
-            // than a client, but the OCR request body is a rendered page of the
-            // user's mail, so an echoing error is exactly the case to avoid.
+            // The body is never read. The OCR request was a rendered page of
+            // the user's mail, so an echoing error is exactly what must not
+            // ride along on the exception (message or Data), and the status
+            // code alone decides the classification below.
             //
             // Classified so the OCR pass branches on cause rather than guessing.
             // A local Ollama has a narrow taxonomy: 404 means the model isn't
@@ -118,9 +117,7 @@ public sealed class OllamaVisionClient(HttpClient http, IOptions<OllamaOptions> 
                 413 => VisionFailureKind.DocumentFatal,
                 _ => VisionFailureKind.Transient,
             };
-            var ex = new VisionException(kind, $"Ollama /api/generate failed {(int)response.StatusCode}.");
-            ex.Data["body"] = body;
-            throw ex;
+            throw new VisionException(kind, $"Ollama /api/generate failed {(int)response.StatusCode}.");
         }
 
         var parsed = await response.Content.ReadFromJsonAsync<GenerateResponse>(ct).ConfigureAwait(false)

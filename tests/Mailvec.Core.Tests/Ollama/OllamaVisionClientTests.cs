@@ -52,6 +52,19 @@ public class OllamaVisionClientTests
     }
 
     [Fact]
+    public async Task An_error_body_that_echoes_the_page_does_not_ride_on_the_exception()
+    {
+        var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent("SENSITIVE ACCOUNT 123456"),
+        });
+
+        var ex = await Should.ThrowAsync<VisionException>(() => client.OcrAsync([1]));
+        ex.ToString().ShouldNotContain("SENSITIVE");
+        ex.Data.Count.ShouldBe(0);
+    }
+
+    [Fact]
     public async Task OcrAsync_classifies_a_server_error_as_transient()
     {
         var client = ClientWith(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)

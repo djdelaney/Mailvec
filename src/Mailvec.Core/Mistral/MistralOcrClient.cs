@@ -280,12 +280,11 @@ public sealed class MistralOcrClient(
             _ => VisionFailureKind.Transient,
         };
 
-        // Body onto Data rather than into the message — the request was a
-        // rendered page of the user's mail, and an echoing error would put it
-        // into the logs. Same rule as OllamaVisionClient.
-        var ex = new VisionException(kind, $"mistral-ocr {_opts.Route} failed {status}.");
-        ex.Data["body"] = body.Length <= 400 ? body : body[..400] + "…";
-        throw ex;
+        // The body was read only to classify a 400/422 above and is dropped
+        // here: neither the message nor Data carries it. The request was a
+        // rendered page of the user's mail, and an echoing error would
+        // otherwise travel with the exception into whatever serializes it.
+        throw new VisionException(kind, $"mistral-ocr {_opts.Route} failed {status}.");
     }
 
     /// <summary>Longest we will honour a provider's Retry-After.</summary>

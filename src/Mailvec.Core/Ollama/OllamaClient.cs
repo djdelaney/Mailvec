@@ -201,10 +201,16 @@ public sealed class OllamaClient(
                 $"Ollama /api/embed failed {(int)response.StatusCode}.",
                 inner: null,
                 statusCode: response.StatusCode);
-            // Tag the body onto Data so callers can sniff for context-length
-            // errors. Data is NOT rendered by ex.ToString(), so this keeps the
-            // oversize-batch fallback working without the body leaking with it.
-            ex.Data["body"] = body;
+            // The one thing callers need from the body is "was this a
+            // context-length refusal?", so decide it here and keep only the
+            // answer. The body itself is dropped: an exception outlives this
+            // call, and anything that serializes Data (a structured-logging
+            // sink, a debugger dump) would carry echoed mail text with it.
+            if (response.StatusCode == HttpStatusCode.BadRequest
+                && body.Contains("context length", StringComparison.OrdinalIgnoreCase))
+            {
+                ex.Data[ContextLengthKey] = true;
+            }
             return (null, ex);
         }
 
@@ -224,13 +230,10 @@ public sealed class OllamaClient(
         return (parsed.Embeddings, null);
     }
 
-    private static bool IsContextLengthError(HttpRequestException? ex)
-    {
-        if (ex is null) return false;
-        if (ex.StatusCode != HttpStatusCode.BadRequest) return false;
-        var body = ex.Data["body"] as string;
-        return body is not null && body.Contains("context length", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsContextLengthError(HttpRequestException? ex) =>
+        ex is not null && ex.Data[ContextLengthKey] is true;
+
+    private const string ContextLengthKey = "mailvec.contextLength";
 
     private sealed class EmbedRequest
     {
