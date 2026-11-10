@@ -18,7 +18,11 @@ public static class ParseHost
         Action<ParseHostOptions>? configure = null,
         string? url = null)
     {
-        var builder = WebApplication.CreateBuilder(args);
+        // Content root pinned to the binary's directory, like every other
+        // host here: the default is the working directory, and configuration
+        // should never come from wherever the process happened to start.
+        var builder = WebApplication.CreateBuilder(
+            new WebApplicationOptions { Args = args, ContentRootPath = AppContext.BaseDirectory });
 
         var options = new ParseHostOptions();
         builder.Configuration.GetSection(ParseHostOptions.SectionName).Bind(options);

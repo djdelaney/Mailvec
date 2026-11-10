@@ -15,7 +15,17 @@ using Microsoft.Extensions.Options;
 using Mailvec.Core.Parsing;
 using Mailvec.Parsing;
 
-var builder = Host.CreateApplicationBuilder(args);
+// Content root pinned to the binary's own directory. The default is the
+// working directory, so the process loaded whatever appsettings.json sat in
+// the directory it was STARTED from: a stdio server launched inside a
+// directory someone else supplied would take its configuration from there,
+// including Archive:SqliteVecExtensionPath, a native library this process
+// loads. It also meant the appsettings.json published beside each binary was
+// never read where the working directory is the parent (the container's /app,
+// launchd's install prefix). Its values equal the option defaults, so reading
+// it changes nothing; reading someone else's would.
+var builder = Host.CreateApplicationBuilder(
+    new HostApplicationBuilderSettings { Args = args, ContentRootPath = AppContext.BaseDirectory });
 // Single source of truth for DB / Ollama config. See SharedConfig.
 builder.Configuration.AddMailvecSharedConfig();
 SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "embedder");

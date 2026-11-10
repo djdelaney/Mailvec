@@ -309,8 +309,11 @@ services:
     # OAuth front entirely. If you do publish it (LAN-only testing), set
     # MCP_LAN_HOSTNAME in .env or HostGuard 403s it, AND uncomment the
     # Mcp__DisabledTools__* lines above. See docs/security.md.
+    # The example binds loopback, so uncommenting it exposes the port to this
+    # host only. Drop the "127.0.0.1:" to reach it from the LAN, knowing the
+    # above.
     # ports:
-    #   - "3333:3333"
+    #   - "127.0.0.1:3333:3333"
 
   indexer:
     <<: *mailvec-common

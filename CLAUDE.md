@@ -98,7 +98,7 @@ Each runnable service has its own `appsettings.json` containing only the section
 
 `ArchiveOptions` (`DatabasePath`, `SqliteVecExtensionPath`) is bound by all four executables (consumed by `ConnectionFactory`). `IngestOptions` (`MaildirRoot`) is bound by the Indexer (scans the Maildir), the CLI (prints the path in `mailvec status`), the MCP server (`view_attachment` reads attachment bytes out of Maildir source files), and — as of the scanned-PDF OCR feature — the **Embedder** (its OCR pass reads `.eml` bytes via `MaildirAttachmentReader` to render scanned PDFs). The Embedder *used* to be the only executable that never touched the filesystem; OCR changed that. The bytes-decode logic is shared: `MaildirAttachmentReader` owns the containment-guarded read, and `AttachmentExtractor` (MCP) delegates to it.
 
-Both indexer and CLI read environment variables with no prefix, so `Ingest__MaildirRoot=/path` works for either. The CLI looks for `appsettings.json` in `AppContext.BaseDirectory`, not the current working directory.
+Both indexer and CLI read environment variables with no prefix, so `Ingest__MaildirRoot=/path` works for either. Every binary looks for `appsettings.json` in `AppContext.BaseDirectory`, never the current working directory: the CLI sets the base path itself, and each host pins `ContentRootPath` (the .NET default is the working directory, which loaded whatever `appsettings.json` sat where the process was started, including one naming `Archive:SqliteVecExtensionPath`, a native library the process loads). `ContentRootTests` fails a host built without it. The per-binary files only restate the option defaults, which is why reading them, or not, changes nothing.
 
 ## sqlite-vec
 

@@ -37,7 +37,17 @@ else
 
 static async Task RunStdio(string[] args)
 {
-    var builder = Host.CreateApplicationBuilder(args);
+    // Content root pinned to the binary's own directory. The default is the
+    // working directory, so the process loaded whatever appsettings.json sat in
+    // the directory it was STARTED from: a stdio server launched inside a
+    // directory someone else supplied would take its configuration from there,
+    // including Archive:SqliteVecExtensionPath, a native library this process
+    // loads. It also meant the appsettings.json published beside each binary was
+    // never read where the working directory is the parent (the container's /app,
+    // launchd's install prefix). Its values equal the option defaults, so reading
+    // it changes nothing; reading someone else's would.
+    var builder = Host.CreateApplicationBuilder(
+        new HostApplicationBuilderSettings { Args = args, ContentRootPath = AppContext.BaseDirectory });
 
     // Single source of truth shared with the launchd-installed services and
     // the CLI. See SharedConfig. Inserted before env vars so MCPB's
@@ -70,7 +80,9 @@ static async Task RunStdio(string[] args)
 
 static async Task RunHttp(string[] args)
 {
-    var builder = WebApplication.CreateBuilder(args);
+    // Content root pinned for the reason given in RunStdio.
+    var builder = WebApplication.CreateBuilder(
+        new WebApplicationOptions { Args = args, ContentRootPath = AppContext.BaseDirectory });
     // Same shared file the stdio path and the other services read from.
     builder.Configuration.AddMailvecSharedConfig();
     SerilogSetup.Configure(builder.Services, builder.Configuration, builder.Logging, "mcp");
