@@ -149,7 +149,9 @@ internal static class DoctorCommand
             }
         }
 
-        // vec0.dylib resolution. Path in ArchiveOptions can be relative
+        // sqlite-vec loadable (vec0.dylib on macOS, vec0.so on Linux). The check is
+        // named for the extension, not a file, so the name is true on both. Path
+        // in ArchiveOptions can be relative
         // (default `./runtimes/osx-arm64/native/vec0.dylib`); look at it
         // both from CWD and from AppContext.BaseDirectory since either is a
         // valid working dir for a published binary.
@@ -166,11 +168,11 @@ internal static class DoctorCommand
         var vecResolved = ResolveExtensionPath(vecPath);
         if (vecResolved is not null)
         {
-            checks.Add(DoctorCheck.Ok("vec0.dylib", vecResolved, "config"));
+            checks.Add(DoctorCheck.Ok("sqlite-vec", vecResolved, "config"));
         }
         else
         {
-            checks.Add(DoctorCheck.Fail("vec0.dylib",
+            checks.Add(DoctorCheck.Fail("sqlite-vec",
                 $"not found at '{vecPath}' (relative to CWD or {AppContext.BaseDirectory}). Run ops/fetch-sqlite-vec.sh to download it.",
                 "config"));
         }
@@ -1185,6 +1187,14 @@ internal static class DoctorCommand
         return (ok, warn, fail);
     }
 
+    /// <summary>
+    /// Heading for the services section. It names the supervisor the checks
+    /// under it actually inspect: launchd on a Mac, compose in a container,
+    /// and nothing in particular anywhere else.
+    /// </summary>
+    internal static string ServicesHeading(bool isMacOs, bool inContainer) =>
+        inContainer ? "Services (compose)" : isMacOs ? "Services (launchd)" : "Services";
+
     private static void PrintHumanReport(List<DoctorCheck> checks)
     {
         Console.WriteLine();
@@ -1210,7 +1220,7 @@ internal static class DoctorCommand
         {
             ["config"] = "Configuration",
             ["pipeline"] = "Pipeline",
-            ["services"] = "Services (launchd)",
+            ["services"] = ServicesHeading(OperatingSystem.IsMacOS(), InContainer()),
             ["tools"] = "External tools",
             ["mcp"] = "MCP",
         };

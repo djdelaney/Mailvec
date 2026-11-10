@@ -21,7 +21,7 @@ public sealed class DoctorCommandOutputTests
             DoctorCommand.DoctorCheck.Warn("Maildir root", "missing (fresh install)", "config"));
         var broken = Checks(
             DoctorCommand.DoctorCheck.Ok("Database", "found", "config"),
-            DoctorCommand.DoctorCheck.Fail("vec0.dylib", "not found", "config"));
+            DoctorCommand.DoctorCheck.Fail("sqlite-vec", "not found", "config"));
 
         DoctorCommand.Emit(healthy, json: true, new StringWriter()).ShouldBe(0);
         DoctorCommand.Emit(broken, json: true, new StringWriter()).ShouldBe(1);
@@ -55,5 +55,16 @@ public sealed class DoctorCommandOutputTests
         rows[2].GetProperty("status").GetString().ShouldBe("fail");
         rows[2].GetProperty("detail").GetString().ShouldBe("unreachable");
         rows.Select(r => r.GetProperty("status").GetString()).ShouldBe(["ok", "warn", "fail"]);
+    }
+
+    [Fact]
+    public void The_services_heading_names_the_supervisor_actually_in_use()
+    {
+        // A container has no launchd, on any host OS; the heading used to say
+        // "Services (launchd)" above checks that reported "no launchd in a container".
+        DoctorCommand.ServicesHeading(isMacOs: true, inContainer: false).ShouldBe("Services (launchd)");
+        DoctorCommand.ServicesHeading(isMacOs: false, inContainer: true).ShouldBe("Services (compose)");
+        DoctorCommand.ServicesHeading(isMacOs: true, inContainer: true).ShouldBe("Services (compose)");
+        DoctorCommand.ServicesHeading(isMacOs: false, inContainer: false).ShouldBe("Services");
     }
 }
