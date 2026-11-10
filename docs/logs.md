@@ -15,6 +15,17 @@ export MAILVEC_LOG_DIR=/some/other/path   # change the log directory
 export MAILVEC_LAUNCHD=1                  # silence stdout, even outside launchd
 ```
 
+## Log levels
+
+Every service logs at Information, with three chatty categories held at Warning: `System.Net.Http.HttpClient` (four lines per outbound request, each naming the Ollama or hosted-provider URL), `Microsoft.AspNetCore` and `Polly`. Change any of it with the standard `Logging:LogLevel` keys, as environment variables or in a service's settings file:
+
+```sh
+Logging__LogLevel__Default=Debug                              # everything of Mailvec's, in more detail
+Logging__LogLevel__System.Net.Http.HttpClient=Information     # show each outbound request and its URL again
+```
+
+`Default` sets the floor and any other key is a category prefix. Debug output can include endpoint addresses and full exception chains, so turn it on for a diagnosis and back off afterwards.
+
 ## Permissions, and why a failure here is silent
 
 Log lines carry Maildir paths and attachment filenames, and — whenever

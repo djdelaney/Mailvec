@@ -48,7 +48,9 @@ public static class SerilogSetup
         string serviceName,
         bool stdioMode = false)
     {
-        var config = new LoggerConfiguration()
+        // Levels first, then any `Serilog` section, so an explicit Serilog
+        // setting still has the last word.
+        var config = ApplyLevels(new LoggerConfiguration(), configuration)
             .ReadFrom.Configuration(configuration)
             .Enrich.WithProperty("service", serviceName);
 
@@ -96,6 +98,67 @@ public static class SerilogSetup
         logging.ClearProviders();
         services.AddSerilog(logger, dispose: true);
     }
+
+    /// <summary>
+    /// Categories that are noise at Information in every service, quieted
+    /// whether or not any configuration says so. <c>AddHttpClient</c> logs four
+    /// lines per outbound request, each naming the full URL: the Ollama LAN
+    /// address or the hosted provider's endpoint, on every embed, search and
+    /// health probe (measured on a live MCP container: 453 lines in ten
+    /// minutes). That is the datum the /up–/health split keeps off the box,
+    /// and at that volume it also rolled real log lines out of retention.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, LogEventLevel> QuietByDefault =
+        new Dictionary<string, LogEventLevel>(StringComparer.Ordinal)
+        {
+            ["System.Net.Http.HttpClient"] = LogEventLevel.Warning,
+            ["Microsoft.AspNetCore"] = LogEventLevel.Warning,
+            ["Polly"] = LogEventLevel.Warning,
+        };
+
+    /// <summary>
+    /// Makes <c>Logging:LogLevel</c> mean something. <c>AddSerilog</c> replaces
+    /// the logger factory, and with it the filter rules that section normally
+    /// drives, so every level written in an appsettings file or set as
+    /// <c>Logging__LogLevel__…</c> was silently ignored and everything logged
+    /// at Serilog's default of Information. The appsettings files had carried
+    /// an HttpClient suppression for months that never took effect. Here the
+    /// section is read into Serilog's own minimum level and overrides:
+    /// <c>Default</c> sets the floor, any other key is a category prefix.
+    /// <see cref="QuietByDefault"/> applies first and configuration can move
+    /// those either way. A value that is not a level name is skipped, not
+    /// fatal: logging setup runs before there is anywhere to report to.
+    /// </summary>
+    internal static LoggerConfiguration ApplyLevels(LoggerConfiguration config, IConfiguration configuration)
+    {
+        var overrides = new Dictionary<string, LogEventLevel>(QuietByDefault, StringComparer.Ordinal);
+        LogEventLevel? floor = null;
+
+        foreach (var entry in configuration.GetSection("Logging:LogLevel").GetChildren())
+        {
+            if (!Enum.TryParse<LogLevel>(entry.Value, ignoreCase: true, out var level) || !Enum.IsDefined(level)) continue;
+            var mapped = level switch
+            {
+                LogLevel.Trace => LogEventLevel.Verbose,
+                LogLevel.Debug => LogEventLevel.Debug,
+                LogLevel.Information => LogEventLevel.Information,
+                LogLevel.Warning => LogEventLevel.Warning,
+                LogLevel.Error => LogEventLevel.Error,
+                LogLevel.Critical => LogEventLevel.Fatal,
+                _ => Off, // LogLevel.None
+            };
+            if (string.Equals(entry.Key, "Default", StringComparison.OrdinalIgnoreCase)) floor = mapped;
+            else overrides[entry.Key] = mapped;
+        }
+
+        if (floor is { } f) config = config.MinimumLevel.Is(f);
+        foreach (var (category, level) in overrides)
+            config = config.MinimumLevel.Override(category, level);
+        return config;
+    }
+
+    /// <summary>One above Fatal: nothing is emitted. Serilog's own spelling of "off".</summary>
+    private const LogEventLevel Off = (LogEventLevel)(1 + (int)LogEventLevel.Fatal);
 
     private static string ResolveLogDir()
     {
