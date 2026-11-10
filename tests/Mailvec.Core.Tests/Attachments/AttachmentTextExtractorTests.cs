@@ -254,7 +254,7 @@ public class AttachmentTextExtractorTests
         "BEGIN:VEVENT\r\n" +
         "UID:1000000001@scheduling\r\n" +
         "DTSTAMP:20250801T120000Z\r\n" +
-        "DTSTART;TZID=America/New_York:20251205T140000\r\n" +
+        "DTSTART;TZID=America/New_York:20251201T140000\r\n" +
         "SUMMARY:Mini Session\r\n" +
         "LOCATION:Example Studio\r\n" +
         "ORGANIZER;CN=Example Photography:mailto:studio@example.com\r\n" +

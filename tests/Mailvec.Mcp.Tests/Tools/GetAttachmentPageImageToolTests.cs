@@ -321,8 +321,8 @@ public class GetAttachmentPageImageToolTests : IDisposable
     [Fact]
     public void Renders_the_scanned_fixture_which_text_extraction_cannot_read()
     {
-        // Pending until a real scanned/image-only PDF is dropped in Fixtures/
-        // (see Fixtures/README.md). Until then this passes as a no-op.
+        // Guarded on existence so a checkout without the fixture still passes
+        // (see Fixtures/README.md for how it is generated).
         if (!FixtureExists("scanned-sample.pdf"))
         {
             _output.WriteLine("SKIPPED: Fixtures/scanned-sample.pdf not present — see Fixtures/README.md.");
@@ -352,9 +352,9 @@ public class GetAttachmentPageImageToolTests : IDisposable
     }
 
     [Fact]
-    public void Renders_a_real_digital_table_pdf_whose_text_is_also_extractable()
+    public void Renders_a_digital_table_pdf_whose_text_is_also_extractable()
     {
-        // A real digital invoice (embedded fonts, a logo, a vector table) — the
+        // A synthetic digital invoice (text, a logo block, a vector table) — the
         // "text -> image" path most mail attachments actually use, which neither
         // the bare-Helvetica fixture nor the scanned ("image -> image") fixture
         // exercises. Unlike the scan, its text IS extractable ('done'); the image
@@ -380,7 +380,7 @@ public class GetAttachmentPageImageToolTests : IDisposable
         var extraction = textExtractor.Extract(part, "digital-table-sample.pdf", "application/pdf", pdf.LongLength);
         extraction.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
         extraction.Text.ShouldNotBeNull();
-        extraction.Text!.ShouldContain("Home Assistant Cloud");
+        extraction.Text!.ShouldContain("Bayside Remodeling");
     }
 
     // ---------- image inspection ----------

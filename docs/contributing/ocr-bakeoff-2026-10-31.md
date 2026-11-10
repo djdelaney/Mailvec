@@ -88,7 +88,7 @@ token-repeat abort on one scan page went away. It did not change the conclusion.
 
 ### 3. Textless pages are still unsolved locally, in a new way for each model
 
-`a4701` (`photos.pdf`, photographs, no text) is the same page that produced
+`a4701` (photographs, no text) is the same page that produced
 August's hallucination. Correct output is nothing, which mistral got right.
 
 | engine | output on a4701 |

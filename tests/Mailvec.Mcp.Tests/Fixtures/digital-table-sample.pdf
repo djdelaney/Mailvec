@@ -1,0 +1,98 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> >>
+endobj
+4 0 obj
+<< /Length 2617 >>
+stream
+0.13 0.23 0.36 rg 0 712 612 80 re f
+1 1 1 rg 54 732 36 36 re f 0.13 0.23 0.36 rg 62 740 20 20 re f
+1 1 1 rg
+BT /F2 20 Tf 104 752 Td (Bayside Remodeling) Tj ET
+BT /F1 10 Tf 104 734 Td (14 Harbor Road, Port Example  -  billing@bayside.example) Tj ET
+0 0 0 rg
+BT /F2 16 Tf 54 672 Td (Invoice 2231) Tj ET
+BT /F1 10 Tf 54 652 Td (Issued 12 March 2026   Due 11 April 2026) Tj ET
+BT /F2 10 Tf 380 672 Td (Bill to) Tj ET
+BT /F1 10 Tf 380 658 Td (Ada Example) Tj ET
+BT /F1 10 Tf 380 644 Td (9 Sample Street, Port Example) Tj ET
+0.9 0.92 0.95 rg 54 586 504 24 re f 0 0 0 rg 0.5 w
+54 610 m 558 610 l S
+54 586 m 558 586 l S
+54 562 m 558 562 l S
+54 538 m 558 538 l S
+54 514 m 558 514 l S
+54 490 m 558 490 l S
+54 466 m 558 466 l S
+54 442 m 558 442 l S
+54 418 m 558 418 l S
+54 610 m 54 418 l S
+330 610 m 330 418 l S
+390 610 m 390 418 l S
+474 610 m 474 418 l S
+558 610 m 558 418 l S
+BT /F2 10 Tf 60 594 Td (Description) Tj ET
+BT /F2 10 Tf 336 594 Td (Qty) Tj ET
+BT /F2 10 Tf 396 594 Td (Unit price) Tj ET
+BT /F2 10 Tf 480 594 Td (Amount) Tj ET
+BT /F1 10 Tf 60 570 Td (Bathroom demolition and haul-away) Tj ET
+BT /F1 10 Tf 336 570 Td (1) Tj ET
+BT /F1 10 Tf 396 570 Td (850.00) Tj ET
+BT /F1 10 Tf 480 570 Td (850.00) Tj ET
+BT /F1 10 Tf 60 546 Td (Porcelain floor tile, supplied and laid) Tj ET
+BT /F1 10 Tf 336 546 Td (42) Tj ET
+BT /F1 10 Tf 396 546 Td (18.50) Tj ET
+BT /F1 10 Tf 480 546 Td (777.00) Tj ET
+BT /F1 10 Tf 60 522 Td (Vanity unit with basin and tap) Tj ET
+BT /F1 10 Tf 336 522 Td (1) Tj ET
+BT /F1 10 Tf 396 522 Td (1,240.00) Tj ET
+BT /F1 10 Tf 480 522 Td (1,240.00) Tj ET
+BT /F1 10 Tf 60 498 Td (Walk-in shower enclosure) Tj ET
+BT /F1 10 Tf 336 498 Td (1) Tj ET
+BT /F1 10 Tf 396 498 Td (2,150.00) Tj ET
+BT /F1 10 Tf 480 498 Td (2,150.00) Tj ET
+BT /F1 10 Tf 60 474 Td (Plumbing rough-in and connection) Tj ET
+BT /F1 10 Tf 336 474 Td (6) Tj ET
+BT /F1 10 Tf 396 474 Td (95.00) Tj ET
+BT /F1 10 Tf 480 474 Td (570.00) Tj ET
+BT /F1 10 Tf 60 450 Td (Electrical: fan, lighting, heated rail) Tj ET
+BT /F1 10 Tf 336 450 Td (4) Tj ET
+BT /F1 10 Tf 396 450 Td (110.00) Tj ET
+BT /F1 10 Tf 480 450 Td (440.00) Tj ET
+BT /F1 10 Tf 60 426 Td (Paint and finishing) Tj ET
+BT /F1 10 Tf 336 426 Td (1) Tj ET
+BT /F1 10 Tf 396 426 Td (380.00) Tj ET
+BT /F1 10 Tf 480 426 Td (380.00) Tj ET
+BT /F1 11 Tf 396 392 Td (Subtotal) Tj ET
+BT /F1 11 Tf 480 392 Td (6,407.00) Tj ET
+BT /F1 11 Tf 396 374 Td (Sales tax 6%) Tj ET
+BT /F1 11 Tf 480 374 Td (384.42) Tj ET
+BT /F2 11 Tf 396 356 Td (Total due) Tj ET
+BT /F2 11 Tf 480 356 Td (6,791.42) Tj ET
+BT /F1 9 Tf 54 96 Td (Synthetic test fixture. Every name, address and amount on this page is invented.) Tj ET
+
+endstream
+endobj
+5 0 obj
+<< /Title (Bayside Remodeling invoice 2231 \(synthetic\)) /Producer (make-fixtures.py) >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000360 00000 n 
+0000003029 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R /Info 5 0 R >>
+startxref
+3134
+%%EOF

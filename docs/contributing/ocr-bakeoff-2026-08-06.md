@@ -62,7 +62,7 @@ main architectural obstacle is empirically a non-issue.
 
 ### 2. qwen hallucinated on a textless page; mistral did not
 
-`a4701` (`photos.pdf`, a document of photographs) — agreement 0.000:
+`a4701` (a document of photographs) — agreement 0.000:
 
 - qwen: `1. Front View / 2. Side View / 3. Top View` — **invented**
 - both mistral modes: image placeholders only, i.e. correctly no text
@@ -77,8 +77,8 @@ exactly its diet.
 
 ### 3. mistral repetition-loops too
 
-`a248` (`drawing.pdf`, an architectural drawing), document
-mode: 3562 chars, largely `EXAMPLE ARCHITECTS SHEET 1 • … SHEET 2 • …`
+`a248` (an architectural drawing), document
+mode: 3562 chars, largely `<firm name> SHEET 1 • … SHEET 2 • …`
 repeating. Page mode produced 280 chars on the same page.
 
 Note this defeats `CollapseRepeatedLines`, which squashes repeated *lines* — here
