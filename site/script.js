@@ -83,7 +83,7 @@
   if (copyBtn) {
     copyBtn.addEventListener('click', function () {
       var panel = document.querySelector('[role="tabpanel"]:not([hidden])');
-      var text = panel.textContent.replace(/ +#.*$/gm, '');
+      var text = panel.textContent.replace(/^#.*\n?/gm, '').replace(/ +#.*$/gm, '');
       var done = function () { copyBtn.textContent = 'Copied'; setTimeout(function () { copyBtn.textContent = 'Copy'; }, 2000); };
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).then(done, function () { copyBtn.textContent = 'Select and copy'; });

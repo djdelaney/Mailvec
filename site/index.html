@@ -670,16 +670,17 @@ mailvec doctor</pre>
 umask 077
 cp .env.example .env              # set OLLAMA_BASE_URL, and for a new
                                   # archive MAILVEC_REQUIRE_SEEDED_DB=0
-cp ops/mbsyncrc.container.example mbsyncrc
+cp ops/mbsyncrc.container.example mbsyncrc   # set your IMAP host and user
 install -d -m 700 secrets
-printf &#x27;%s&#x27; &#x27;&lt;IMAP app password&gt;&#x27; &gt; secrets/fastmail_password
 : &gt; secrets/embedding_api_key     # empty unless hosted embeddings
 mkdir -p data logs/mcp logs/indexer logs/embedder mail
+# stop here: edit the two files, then store your IMAP app password in
+# secrets/fastmail_password (the guide has a no-echo one-liner)
 sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
 docker compose up -d --build
 docker compose exec mcp mailvec doctor</pre>
 </div>
-<span style="margin-top: 10px; font-family: var(--mono); font-size: 12px; color: var(--muted)">Trimmed from the getting-started guides. Read the guide before you paste.</span>
+<span style="margin-top: 10px; font-family: var(--mono); font-size: 12px; color: var(--muted)">Trimmed from the getting-started guides. The Docker stack will not start until you add your IMAP password file.</span>
 </div>
 <div style="display: flex; flex-direction: column; gap: 18px">
 <div style="padding: 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface)">

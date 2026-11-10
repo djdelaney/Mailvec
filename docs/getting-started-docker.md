@@ -13,12 +13,18 @@ umask 077
 cp .env.example .env
 cp ops/mbsyncrc.container.example mbsyncrc
 install -d -m 700 secrets
-printf '%s' '<IMAP app password>' > secrets/fastmail_password
 : > secrets/embedding_api_key
-chmod 600 .env mbsyncrc secrets/fastmail_password secrets/embedding_api_key
 ```
 
-Replace the password placeholder. Set `OLLAMA_BASE_URL` in `.env` to the Ollama host's LAN URL, and edit `mbsyncrc` for your IMAP provider and account. The example's Maildir path, `/mail/Fastmail`, matches `compose.yml`; if you change it, change `Ingest__MaildirRoot` there too. Verify the permissions with `ls -l .env mbsyncrc secrets/*` (each file should be `-rw-------`).
+Then store the IMAP app password. Run this line on its own, in the same shell: it waits for you to paste the password and press Enter, shows nothing while you do, and writes it without a trailing newline.
+
+```sh
+stty -echo; IFS= read -r pw; stty echo; printf '%s' "$pw" > secrets/fastmail_password; unset pw
+```
+
+No step here writes a placeholder password, on purpose. Until `secrets/fastmail_password` exists, `docker compose up` refuses to create the stack (`bind source path does not exist`), so a block pasted whole cannot start a sync with made-up credentials.
+
+Set `OLLAMA_BASE_URL` in `.env` to the Ollama host's LAN URL, and edit `mbsyncrc` for your IMAP provider and account. The example's Maildir path, `/mail/Fastmail`, matches `compose.yml`; if you change it, change `Ingest__MaildirRoot` there too. Verify the permissions with `ls -l .env mbsyncrc secrets/*` (each file should be `-rw-------`; `chmod 600` any that is not).
 
 ## 2. Choose a database start
 
