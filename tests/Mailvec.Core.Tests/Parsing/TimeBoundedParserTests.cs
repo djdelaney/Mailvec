@@ -21,6 +21,7 @@ public class TimeBoundedParserTests
     {
         public ManualResetEventSlim Gate { get; } = new(initialState: true);
         public int RenderCalls;
+        public ManualResetEventSlim RenderStarted { get; } = new();
         public Exception? Throw { get; set; }
 
         private T Wait<T>(T value)
@@ -41,6 +42,7 @@ public class TimeBoundedParserTests
         public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes)
         {
             Interlocked.Increment(ref RenderCalls);
+            RenderStarted.Set();
             return Wait(new PdfRender(1, [new byte[] { 1 }]));
         }
 
@@ -112,6 +114,10 @@ public class TimeBoundedParserTests
         Should.Throw<ParseException>(() => parser.RenderPdfPages([], 1, 0, 1, null))
             .Kind.ShouldBe(ParseFailureKind.Unavailable);
 
+        // Wait for the first render to be running before counting, so a slow
+        // runner cannot make this read 0. Whatever the timing, a second render
+        // must never have been started.
+        inner.RenderStarted.Wait(TimeSpan.FromSeconds(30)).ShouldBeTrue();
         inner.RenderCalls.ShouldBe(1);
     }
 

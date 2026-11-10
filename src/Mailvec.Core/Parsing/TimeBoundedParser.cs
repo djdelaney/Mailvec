@@ -83,7 +83,7 @@ public sealed class TimeBoundedParser(IMailParser inner, TimeSpan timeout) : IMa
                 "PDF rendering is paused: an earlier render in this process overran its time limit and has not returned. " +
                 "It resumes when that render finishes or the process restarts.");
 
-        var work = Task.Run(() => Inner.RenderPdfPages(eml, partIndex, firstPage, maxPages, maxBytes));
+        var work = Start(() => Inner.RenderPdfPages(eml, partIndex, firstPage, maxPages, maxBytes));
         if (Finished(work)) return Unwrap(work);
 
         Interlocked.Increment(ref _stuckRenders);
@@ -97,7 +97,7 @@ public sealed class TimeBoundedParser(IMailParser inner, TimeSpan timeout) : IMa
 
     private T Bounded<T>(string what, Func<T> call)
     {
-        var work = Task.Run(call);
+        var work = Start(call);
         if (Finished(work)) return Unwrap(work);
 
         // Observe the eventual fault so an abandoned call cannot surface later
@@ -107,6 +107,17 @@ public sealed class TimeBoundedParser(IMailParser inner, TimeSpan timeout) : IMa
             ParseFailureKind.Crashed,
             $"The in-process parser did not finish {what} within {timeout.TotalSeconds:0} seconds and was abandoned.");
     }
+
+    /// <summary>
+    /// On a thread of its own, not the pool. The clock in <see cref="Finished"/>
+    /// starts when this returns, so a call queued behind a busy pool would be
+    /// timed for the wait as well as the work, and could be "abandoned" before
+    /// it had begun: a verdict against a document nothing had looked at. A
+    /// call that never returns also then costs one thread, not a pool worker
+    /// every other request is competing for.
+    /// </summary>
+    private static Task<T> Start<T>(Func<T> call) =>
+        Task.Factory.StartNew(call, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private bool Finished(Task work)
     {
