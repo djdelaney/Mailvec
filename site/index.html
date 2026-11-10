@@ -661,7 +661,9 @@ brew install isync jq
 brew install --cask ollama-app &amp;&amp; open -a Ollama
 ollama pull mxbai-embed-large
 ollama pull qwen2.5vl:7b          # local OCR, about 6 GB
+security add-generic-password -a you@fastmail.com -s mbsync -w   # app password, into the Keychain
 cp -n ops/mbsyncrc.example ~/.mbsyncrc   # -n keeps a config you already have
+chmod 600 ~/.mbsyncrc
 $EDITOR ~/.mbsyncrc
 mbsync -aV                        # first sync can take hours
 ./ops/install-all.sh

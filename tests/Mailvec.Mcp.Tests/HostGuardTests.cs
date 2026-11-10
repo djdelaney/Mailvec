@@ -10,10 +10,21 @@ public class HostGuardTests
     [InlineData("localhost")]
     [InlineData("127.0.0.1")]
     [InlineData("::1")]
+    [InlineData("[::1]")]     // what HostString.Host gives for `Host: [::1]:3333`
     [InlineData("LOCALHOST")] // case-insensitive
     public void Loopback_hosts_are_allowed(string host)
     {
         HostGuard.IsAllowed(host, origin: null, Default()).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void The_ipv6_loopback_reaches_the_guard_in_brackets()
+    {
+        // The premise behind allowing "[::1]": this is the string the guard is
+        // actually handed for a Host or Origin naming the IPv6 loopback.
+        new Microsoft.AspNetCore.Http.HostString("[::1]:3333").Host.ShouldBe("[::1]");
+        new Uri("http://[::1]:3333").Host.ShouldBe("[::1]");
+        HostGuard.IsAllowed("[::1]", origin: "http://[::1]:3333", Default()).ShouldBeTrue();
     }
 
     [Theory]

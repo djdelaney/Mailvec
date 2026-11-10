@@ -28,7 +28,10 @@ public static class HostGuard
     /// Host-header names that are always allowed, whatever <c>Mcp:AllowedHosts</c>
     /// says.
     /// </summary>
-    internal static readonly string[] Loopback = ["localhost", "127.0.0.1", "::1"];
+    // Both spellings of the IPv6 loopback: HostString.Host and Uri.Host keep
+    // the brackets ("[::1]"), so the bare form alone never matched a real
+    // request and `http://[::1]:3333` was refused.
+    internal static readonly string[] Loopback = ["localhost", "127.0.0.1", "::1", "[::1]"];
 
     /// <summary>
     /// Whether <c>Mcp:BindAddress</c> is a loopback address — i.e. whether this

@@ -10,7 +10,8 @@
 # so the grants persist across rebuilds, for the four .NET apphost binaries.
 #
 # Deliberately NOT hardened runtime and NOT notarized: neither is needed for a
-# local-only tool (the install scripts strip the quarantine xattr), and
+# local-only tool (binaries published on this machine never carry the
+# quarantine xattr, which only downloaded files get), and
 # hardened runtime would force CoreCLR JIT entitlements
 # (allow-jit / allow-unsigned-executable-memory / disable-library-validation).
 # We only need a stable signature + designated requirement, so we sign plain.

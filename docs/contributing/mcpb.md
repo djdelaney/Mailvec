@@ -49,7 +49,7 @@ sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
 
 Two deliberate divergences from the original plan, both documented in the script header:
 
-- **No hardened runtime, no notarization.** Neither is needed for a local-only tool (the install scripts strip the quarantine xattr), and hardened runtime would force CoreCLR JIT entitlements (`allow-jit` / `allow-unsigned-executable-memory` / `disable-library-validation`). A stable signature + designated requirement is all TCC needs.
+- **No hardened runtime, no notarization.** Neither is needed for a local-only tool (binaries built on the machine never carry the quarantine attribute, which only downloaded files get; nothing strips it), and hardened runtime would force CoreCLR JIT entitlements (`allow-jit` / `allow-unsigned-executable-memory` / `disable-library-validation`). A stable signature + designated requirement is all TCC needs.
 - **No secure timestamp** (`--timestamp=none`) — only notarization needs it, so signing stays offline and fast on every redeploy.
 
 **Contributors without a Developer ID cert** fall back to ad-hoc automatically and still build fine — but the TCC dialogs re-prompt on each redeploy (the script prints a one-line warning when this happens). Set `MAILVEC_SIGN_IDENTITY` to override autodetect.

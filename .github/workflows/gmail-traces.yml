@@ -22,7 +22,9 @@
 # The recorder runs inside the same pinned Alpine image the mbsync sidecar is
 # built from (Dockerfile, `AS mbsync`), so it records with the isync version
 # the deployment ships, not whatever the runner's package manager has. Keep
-# the digest in step with the Dockerfile's.
+# the digest in step with the Dockerfile's: Dependabot bumps the Dockerfile
+# and not this file, so ops/tests/test_record_provider_trace.py fails when
+# they differ.
 
 name: Gmail traces
 
@@ -46,7 +48,7 @@ env:
   # The traces ops/record-provider-trace.py knows how to record. Add one here
   # once its steps are in the script's TRACES table.
   TRACES: label-lifecycle
-  MBSYNC_IMAGE: alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+  MBSYNC_IMAGE: alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 jobs:
   record:

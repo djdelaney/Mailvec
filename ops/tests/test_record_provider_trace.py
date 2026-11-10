@@ -250,6 +250,15 @@ class Workflow(unittest.TestCase):
     2026-10-26 a failed run tried to, and only a permission error stopped it."""
     TEXT = (REPO / ".github" / "workflows" / "gmail-traces.yml").read_text()
 
+    def test_the_recorder_image_is_the_one_the_mbsync_sidecar_is_built_from(self):
+        # The header says the traces are recorded with the isync the
+        # deployment ships. Dependabot bumps the Dockerfile's digest and not
+        # the workflow's, and they had drifted apart unnoticed.
+        dockerfile = (REPO / "Dockerfile").read_text()
+        sidecar = re.search(r"^FROM (alpine:\S+) AS mbsync$", dockerfile, re.M).group(1)
+        recorder = re.search(r"^\s*MBSYNC_IMAGE: (\S+)$", self.TEXT, re.M).group(1)
+        self.assertEqual(recorder, sidecar)
+
     def test_only_the_output_directory_is_uploaded(self):
         paths = re.findall(r"^\s*path: (.+)$", self.TEXT, re.M)
         self.assertEqual(paths, ["${{ runner.temp }}/trace-out/"])

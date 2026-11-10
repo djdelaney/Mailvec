@@ -11,10 +11,14 @@
 #             ONLY path that runs a Dockerfile.
 #   promote — a v* tag push builds NOTHING. It finds the sha-<short> image the
 #             build job already published for the tagged commit and adds the
-#             v* tag to it. A release image is therefore byte-for-byte the build
-#             that passed CI on main, and a v* tag can only exist for a commit
-#             that went green on main — because nothing else ever produced a
-#             sha- image. It refuses if the v* tag is already in GHCR, so a
+#             v* tag to it. A release image is therefore byte-for-byte a build
+#             made from main, and a v* tag can only exist for a commit that
+#             was on main — because nothing else ever produced a sha- image.
+#             "Passed CI" holds for the workflow_run path only: a manual run
+#             builds main's head without waiting for CI, so a sha- image made
+#             that way has not been tested by this workflow. Don't dispatch
+#             manually for a commit you mean to release. It refuses if the v*
+#             tag is already in GHCR, so a
 #             re-run (or a re-pushed git tag) cannot re-point a release the
 #             homelab has pinned.
 #

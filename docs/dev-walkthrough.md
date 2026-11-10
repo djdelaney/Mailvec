@@ -12,7 +12,7 @@ Two options:
 
 ```sh
 export FASTMAIL_USER=you@example.com
-export FASTMAIL_APP_PASSWORD='<paste-here>'   # quote it; contains spaces
+read -rs FASTMAIL_APP_PASSWORD && export FASTMAIL_APP_PASSWORD   # paste, then Enter; keeps it out of shell history
 ./ops/dev-fetch-imap.py
 ```
 
