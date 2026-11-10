@@ -72,6 +72,15 @@ section[id] { scroll-margin-top: 16px; }
   .mv .lanes { grid-template-columns: minmax(0, 1fr) !important; }
   .mv .hide-sm { display: none !important; }
   .mv .optin-row { padding-left: 0 !important; }
+  /* Privacy diagram: boxes inside the Mac/Server variants stack like the rest, and the
+     labelled arrows turn only their line, so the label stays horizontal and clear of the boxes. */
+  .mv .pipe > [data-variant] > div { flex-basis: auto !important; margin-left: 0 !important; }
+  .mv .pipe > div.arw, .mv .pipe > [data-variant] > div.arw { transform: none; align-self: center; margin: 8px 0 !important; }
+  .mv .pipe div.arw > svg { transform: rotate(90deg) scale(.75); }
+  .mv .pipe div.arw > svg[width="96"] { margin: 30px 0; }
+  .mv .pipe div.arw > svg[width="120"] { margin: 39px 0; }
+  /* Keep the Copy button off the first command line. */
+  .mv #panel-mac, .mv #panel-docker { padding-top: 54px !important; }
   .menu-btn { display: flex; }
   #theme-toggle { margin-left: 0 !important; }
   nav { flex-wrap: wrap; }

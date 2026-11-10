@@ -24,7 +24,7 @@ The `-a` (account) and `-s` (service) values must match the `PassCmd` line in `~
 Copy the example and replace `you@fastmail.com` on both the `User` and `PassCmd` lines:
 
 ```sh
-cp ops/mbsyncrc.example ~/.mbsyncrc
+cp -n ops/mbsyncrc.example ~/.mbsyncrc   # -n never overwrites a config you already have
 chmod 600 ~/.mbsyncrc
 # then edit User + PassCmd in ~/.mbsyncrc
 ```

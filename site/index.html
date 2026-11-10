@@ -84,7 +84,7 @@
 </div>
 <figcaption style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 13px; color: var(--muted)">
 <svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true" style="flex: none"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg>
-<span>The table came from <b style="color: var(--ink); font-weight: 500">estimate-2231.pdf</b>, an attachment. Shown in Claude Desktop with a synthetic mailbox; every MCP client gets the same tools.</span>
+<span>The table came from <b style="color: var(--ink); font-weight: 500">Bayside-Estimate-2231.pdf</b>, an attachment. Shown in Claude Desktop with a synthetic mailbox; every MCP client gets the same tools.</span>
 </figcaption>
 </figure>
 </div>
@@ -112,11 +112,11 @@
 <span>the one you meant, which never says "quote"</span></div>
 <div style="border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 18px 20px; display: flex; flex-direction: column; gap: 8px">
 <div style="display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--muted)"><span>Marco Bell · Bayside Tile &amp; Bath</span><span style="font-family: var(--mono); font-size: 12px">Aug 18</span></div>
-<div style="font-weight: 600">Estimate #2231</div>
-<div style="font-size: 15px; color: var(--muted)">Hi Sam, attached is the estimate for the master bath. Let me know if you have questions.</div>
+<div style="font-weight: 600">Estimate #2231 - master bathroom remodel</div>
+<div style="font-size: 15px; color: var(--muted)">Hi Sam, Thanks for walking me through the space on Friday. The estimate for the master bathroom is attached …</div>
 <div style="display: flex; align-items: center; gap: 8px; margin-top: 6px; align-self: flex-start; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 12px">
 <svg width="14" height="16" viewBox="0 0 14 16" aria-hidden="true" style="fill: none; stroke: var(--muted); stroke-width: 1.4"><path d="M1 1h8l4 4v10H1z"></path><path d="M9 1v4h4"></path></svg>
-<span>estimate-2231.pdf · "remodel estimate … total $8,400"</span></div>
+<span>Bayside-Estimate-2231.pdf · "Master bathroom remodel … TOTAL $8,400.00"</span></div>
 </div>
 </div>
 </div>
@@ -176,26 +176,26 @@
 <p style="margin: 0; font-size: 18px; color: var(--muted); text-wrap: pretty">Keyword search finds the exact words: names, order numbers, domains. Semantic search finds the meaning: ask for "the contractor's quote" and get the email that says "estimate". Mailvec runs both and fuses the rankings, so you get exact matches and near-misses in one list, one result per email.</p>
 </div>
 
-<figure style="margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0" role="group" aria-label="Hybrid search diagram: a question goes to a keyword lane and a meaning lane, and the two rankings fuse into one list with Estimate #2231 first.">
+<figure style="margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0" role="group" aria-label="Hybrid search diagram, real results from the demo mailbox: the query contractor quote goes to a keyword lane, which returns three emails containing the word quote and misses the Bayside estimate thread, and a meaning lane, which finds that thread. The fused list holds all six.">
 <div style="display: flex; align-items: center; gap: 12px; max-width: 100%; box-sizing: border-box; padding: 14px 22px; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: 18px">
 <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" style="fill: none; stroke: currentColor; stroke-width: 2"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5L21 21"></path></svg>
-<span>how much did the contractor quote?</span></div>
+<span>contractor quote</span></div>
 <div class="lanes" style="width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px">
 <div style="display: flex; flex-direction: column; align-items: center">
 <svg width="12" height="44" viewBox="0 0 12 44" aria-hidden="true"><path d="M6 0v36" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M1.5 34L6 43l4.5-9z" style="fill: var(--ink)"></path></svg>
 <div style="width: 100%; box-sizing: border-box; border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface); padding: 18px; display: flex; flex-direction: column; gap: 12px">
 <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-weight: 600">Keyword lane</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">exact words · BM25</span></div>
-<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">1</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Re: did the <mark>contractor</mark> send a <mark>quote</mark>?</span><span style="font-size: 14px; color: var(--muted)">Ada · a reply in the thread</span></span></div>
-<div style="display: flex; gap: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted)"><span style="font-family: var(--mono); font-size: 13px">2</span><span style="display: flex; flex-direction: column; gap: 2px"><span>How to read a <mark>contractor</mark>'s <mark>quote</mark></span><span style="font-size: 14px">Home Weekly newsletter · not useful</span></span></div>
-<div style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Misses the estimate: it never says "contractor" or "quote".</div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted)"><span style="font-family: var(--mono); font-size: 13px">1</span><span style="display: flex; flex-direction: column; gap: 2px"><span>Kitchen renovation <mark>quote</mark></span><span style="font-size: 14px">Tiler Co · a different job</span></span></div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">2</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Your bathroom renovation <mark>quote</mark></span><span style="font-size: 14px; color: var(--muted)">Keel &amp; Plumb Renovations · the other bid</span></span></div>
+<div style="font-family: var(--mono); font-size: 12px; color: var(--muted)">3 results. None is the Bayside estimate: that thread never says "contractor" or "quote".</div>
 </div>
 </div>
 <div style="display: flex; flex-direction: column; align-items: center">
 <svg width="12" height="44" viewBox="0 0 12 44" aria-hidden="true"><path d="M6 0v36" style="stroke: var(--ink); stroke-width: 1.5"></path><path d="M1.5 34L6 43l4.5-9z" style="fill: var(--ink)"></path></svg>
 <div style="width: 100%; box-sizing: border-box; border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface); padding: 18px; display: flex; flex-direction: column; gap: 12px">
 <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-weight: 600">Meaning lane</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">semantic · vectors</span></div>
-<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">1</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Estimate #2231</span><span style="font-size: 14px; color: var(--muted)">Bayside Tile &amp; Bath · PDF says "<span style="text-decoration: underline dashed var(--signal); text-underline-offset: 4px">remodel estimate</span>"</span></span></div>
-<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">2</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Bathroom renovation proposal</span><span style="font-size: 14px; color: var(--muted)">Keel &amp; Plumb Renovations · the competing bid</span></span></div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">1</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Re: Estimate #2231 - master bathroom remodel</span><span style="font-size: 14px; color: var(--muted)">Sam Rivera · "go ahead with <span style="text-decoration: underline dashed var(--signal); text-underline-offset: 4px">estimate #2231</span>"</span></span></div>
+<div style="display: flex; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">2</span><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Re: Estimate #2231 - master bathroom remodel</span><span style="font-size: 14px; color: var(--muted)">Marco Bell · the start date and deposit</span></span></div>
 <div style="font-family: var(--mono); font-size: 12px; color: var(--muted)">No shared words with the question. Same meaning.</div>
 </div>
 </div>
@@ -204,40 +204,46 @@
 <svg width="14" height="44" viewBox="0 0 14 44" aria-hidden="true"><path d="M7 0v34" style="stroke: var(--signal); stroke-width: 2.5"></path><path d="M1 32L7 44l6-12z" style="fill: var(--signal)"></path></svg>
 <div style="width: min(720px, 100%); box-sizing: border-box; border: 2px solid var(--signal); border-radius: 12px; background: var(--surface); padding: 20px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow)">
 <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-weight: 600">Fused · one row per email</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">reciprocal rank fusion</span></div>
-<div style="display: flex; gap: 14px; align-items: flex-start; padding: 12px; border-radius: 6px; background: rgba(232,90,60,.08)"><span style="font-family: var(--mono); font-size: 13px; color: var(--signal-text); font-weight: 700">1</span><span style="flex: 1; display: flex; flex-direction: column; gap: 6px"><span style="font-weight: 600">Estimate #2231 <span style="font-weight: 400; color: var(--muted)">· Bayside Tile &amp; Bath</span></span><span style="align-self: flex-start; font-family: var(--mono); font-size: 12px; padding: 3px 8px; border: 1px solid var(--signal); border-radius: 4px; color: var(--signal-text)">matched in: estimate-2231.pdf</span></span></div>
-<div style="display: flex; gap: 14px; padding: 8px 12px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">2</span><span>Bathroom renovation proposal <span style="color: var(--muted)">· Keel &amp; Plumb</span></span></div>
-<div style="display: flex; gap: 14px; padding: 8px 12px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">3</span><span>Re: did the contractor send a quote? <span style="color: var(--muted)">· Ada</span></span></div>
-<div style="display: flex; gap: 14px; padding: 8px 12px; color: var(--muted)"><span style="font-family: var(--mono); font-size: 13px">4</span><span>How to read a contractor's quote · newsletter</span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">1</span><span>Your bathroom renovation quote <span style="color: var(--muted)">· Keel &amp; Plumb Renovations</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">2</span><span>Bathroom quotes <span style="color: var(--muted)">· Ada Example</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px"><span style="font-family: var(--mono); font-size: 13px; color: var(--muted)">3</span><span>Kitchen renovation quote <span style="color: var(--muted)">· Tiler Co</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px; border-radius: 6px; background: rgba(232,90,60,.08)"><span style="font-family: var(--mono); font-size: 13px; color: var(--signal-text); font-weight: 700">4</span><span style="font-weight: 600">Re: Estimate #2231 - master bathroom remodel <span style="font-weight: 400; color: var(--muted)">· Sam Rivera</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px; border-radius: 6px; background: rgba(232,90,60,.08)"><span style="font-family: var(--mono); font-size: 13px; color: var(--signal-text); font-weight: 700">5</span><span style="font-weight: 600">Re: Estimate #2231 - master bathroom remodel <span style="font-weight: 400; color: var(--muted)">· Marco Bell</span></span></div>
+<div style="display: flex; gap: 14px; padding: 8px 12px; border-radius: 6px; background: rgba(232,90,60,.08)"><span style="font-family: var(--mono); font-size: 13px; color: var(--signal-text); font-weight: 700">6</span><span style="font-weight: 600">Estimate #2231 - master bathroom remodel <span style="font-weight: 400; color: var(--muted)">· Marco Bell</span></span></div>
+<div style="align-self: flex-start; margin: 2px 12px 0; font-family: var(--mono); font-size: 12px; padding: 3px 8px; border: 1px solid var(--signal); border-radius: 4px; color: var(--signal-text)">4 to 6: found by meaning only</div>
 </div>
-<figcaption style="margin-top: 20px; font-family: var(--mono); font-size: 13px; color: var(--muted); text-align: center">Measured on a real mailbox: hybrid 0.916 NDCG@10, keyword 0.859, semantic 0.814. <a href="#proof">See the numbers</a></figcaption>
+<figcaption style="margin-top: 20px; font-family: var(--mono); font-size: 13px; color: var(--muted); text-align: center">Real results from the demo mailbox. Measured on a real mailbox: hybrid 0.916 NDCG@10, keyword 0.859, semantic 0.814. <a href="#proof">See the numbers</a></figcaption>
 </figure>
 
 <!-- S2 annotated JSON -->
 <div class="split" style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 40px; align-items: start; margin-top: 24px">
 <div style="border-radius: 10px; background: var(--term-bg); border: 1px solid var(--term-line); overflow: hidden; box-shadow: var(--shadow)">
-<div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--term-line); font-family: var(--mono); font-size: 12px; color: var(--term-muted)"><span>search_emails → response.json</span><span>S2 · illustrative</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--term-line); font-family: var(--mono); font-size: 12px; color: var(--term-muted)"><span>search_emails → response.json</span><span>demo mailbox · trimmed</span></div>
 <pre style="margin: 0; padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; color: var(--term-ink)">{
-  <span style="color: var(--term-key)">"query"</span>: <span style="color: var(--term-str)">"how much did the contractor quote?"</span>,
+  <span style="color: var(--term-key)">"query"</span>: <span style="color: var(--term-str)">"itemised estimate demolition tile labor"</span>,
   <span style="color: var(--term-key)">"mode"</span>: <span style="color: var(--term-str)">"hybrid"</span>,                         <span style="color: #F0603E">← 1</span>
-  <span style="color: var(--term-key)">"count"</span>: 10,
+  <span style="color: var(--term-key)">"count"</span>: 3,
   <span style="color: var(--term-key)">"results"</span>: [
     {
-      <span style="color: var(--term-key)">"subject"</span>: <span style="color: var(--term-str)">"Estimate #2231"</span>,
+      <span style="color: var(--term-key)">"id"</span>: 195,
+      <span style="color: var(--term-key)">"subject"</span>: <span style="color: var(--term-str)">"Estimate #2231 - master bathroom remodel"</span>,
       <span style="color: var(--term-key)">"fromName"</span>: <span style="color: var(--term-str)">"Marco Bell"</span>,
-      <span style="color: var(--term-key)">"dateSent"</span>: <span style="color: var(--term-str)">"2026-08-18T14:02:11Z"</span>,
-      <span style="color: var(--term-key)">"snippet"</span>: <span style="color: var(--term-str)">"…master bath remodel estimate…"</span>,
+      <span style="color: var(--term-key)">"dateSent"</span>: <span style="color: var(--term-str)">"2026-08-18T16:42:00-04:00"</span>,
+      <span style="color: var(--term-key)">"snippet"</span>: <span style="color: var(--term-str)">"… [tile] and vanity we talked about, and [labor]. Everything is [itemised] on …"</span>,
+      <span style="color: var(--term-key)">"bm25Rank"</span>: 1,
+      <span style="color: var(--term-key)">"vectorRank"</span>: 1,
       <span style="color: var(--term-key)">"matchedAttachment"</span>: {               <span style="color: #F0603E">← 2</span>
-        <span style="color: var(--term-key)">"partIndex"</span>: 2,
-        <span style="color: var(--term-key)">"fileName"</span>: <span style="color: var(--term-str)">"estimate-2231.pdf"</span>
+        <span style="color: var(--term-key)">"partIndex"</span>: 0,
+        <span style="color: var(--term-key)">"fileName"</span>: <span style="color: var(--term-str)">"Bayside-Estimate-2231.pdf"</span>
       },
-      <span style="color: var(--term-key)">"isRead"</span>: true,
-      <span style="color: var(--term-key)">"webmailLink"</span>: <span style="color: var(--term-str)">"[Estimate #2231](https://app.fastmail.com/…)"</span>  <span style="color: #F0603E">← 3</span>
+      <span style="color: var(--term-key)">"webmailLink"</span>: <span style="color: var(--term-str)">"[Estimate #2231 - master bathroom remodel](https://app.fastmail.com/…)"</span>,  <span style="color: #F0603E">← 3</span>
+      <span style="color: var(--term-key)">"isRead"</span>: true
     },
     …
   ],
-  <span style="color: var(--term-key)">"archiveStats"</span>: { <span style="color: var(--term-key)">"totalMessages"</span>: 41870, … },
+  <span style="color: var(--term-key)">"archiveStats"</span>: { <span style="color: var(--term-key)">"totalMessages"</span>: 289, … },
   <span style="color: var(--term-key)">"mailSync"</span>: {                            <span style="color: #F0603E">← 4</span>
-    <span style="color: var(--term-key)">"lastSyncAt"</span>: <span style="color: var(--term-str)">"2026-11-09T15:41:07Z"</span>,
+    <span style="color: var(--term-key)">"lastSyncAt"</span>: <span style="color: var(--term-str)">"2026-11-10T14:10:02+00:00"</span>,
     <span style="color: var(--term-key)">"ageSeconds"</span>: 38,
     <span style="color: var(--term-key)">"intervalSeconds"</span>: 60,
     <span style="color: var(--term-key)">"stale"</span>: false
@@ -307,45 +313,43 @@
 <div style="display: flex; flex-direction: column; gap: 18px">
 <div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>05 · What you can ask</span></div>
 <h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">If it's in your mail, you can ask about it.</h2>
-<p style="margin: 0; font-size: 16px; color: var(--muted)">Pick a question to see the tool call your agent makes. The same calls work from any MCP client.</p>
+<p style="margin: 0; font-size: 16px; color: var(--muted)">Pick a question to see the tool call your agent makes. Calls and results are from the demo mailbox; the same calls work from any MCP client.</p>
 </div>
 <div class="split" style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 32px; align-items: start">
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 12px">
-<button class="askcard" type="button" data-ask="0" data-call="search_emails(query: &quot;contractor quote bathroom&quot;)" data-result="Estimate #2231 from Bayside Tile &amp; Bath, matched in estimate-2231.pdf. Total $8,400." data-on="true" aria-pressed="true" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<button class="askcard" type="button" data-ask="0" data-call="search_emails(query: &quot;contractor quote bathroom&quot;)" data-result="Top five: Keel &amp; Plumb&#x27;s $11,250 quote, the three messages about Bayside&#x27;s Estimate #2231 ($8,400), and Ada&#x27;s note comparing the two." data-on="true" aria-pressed="true" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
 <span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">How much did the contractor quote for the bathroom?</span>
-<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">hybrid search + PDF text</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">hybrid search</span>
 </button>
-<button class="askcard" type="button" data-ask="1" data-call="search_emails(query: &quot;lease pets&quot;)
-get_attachment_text(id: 51207, partIndex: 2)" data-result="Section 7 of signed-scan.pdf, OCR&#x27;d locally. $500 pet deposit." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
-<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">What does the lease say about pets?</span>
-<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">scanned PDF · OCR</span>
+<button class="askcard" type="button" data-ask="1" data-call="get_attachment_text(id: 195, partIndex: 0)" data-result="644 characters of Bayside-Estimate-2231.pdf. Excludes electrical work beyond replacing existing fixtures; permit fees billed at cost." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">What does the Bayside estimate leave out?</span>
+<span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">PDF text</span>
 </button>
-<button class="askcard" type="button" data-ask="2" data-call="search_emails(fromContains: &quot;ledgerlane&quot;,
-  attachmentType: &quot;pdf&quot;,
-  dateFrom: &quot;2026-10-01&quot;, dateTo: &quot;2026-10-31&quot;)" data-result="Four messages, newest first. No search words needed." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
-<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">What PDFs did the accountant send last month?</span>
+<button class="askcard" type="button" data-ask="2" data-call="search_emails(folder: &quot;Receipts&quot;,
+  attachmentType: &quot;pdf&quot;)" data-result="Two messages, newest first: a scanned garden-centre receipt and Invoice 4417 from Harbor Hardware. No search words needed." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Which receipts came with a PDF?</span>
 <span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">filtered browse, no query</span>
 </button>
-<button class="askcard" type="button" data-ask="3" data-call="get_thread(messageId: &quot;&lt;permission-slip@…&gt;&quot;)" data-result="Seven messages in order, from the permission slip to the bus time change." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
-<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Summarise the thread about the school trip.</span>
+<button class="askcard" type="button" data-ask="3" data-call="get_thread(messageId: &quot;estimate-2231@baysidebath.example&quot;)" data-result="Three messages in order: Marco&#x27;s estimate, Sam&#x27;s go-ahead, and the October 5 start date." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Summarise the thread about the bathroom estimate.</span>
 <span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">get_thread</span>
 </button>
-<button class="askcard" type="button" data-ask="4" data-call="search_emails(query: &quot;test&quot;, dateFrom: &quot;2026-11-09&quot;)" data-result="Yes. mailSync.ageSeconds: 38, stale: false." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
-<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Did the test email I just sent arrive?</span>
+<button class="askcard" type="button" data-ask="4" data-call="search_emails(dateFrom: &quot;2026-08-25&quot;)" data-result="One message since then. mailSync.ageSeconds: 38, intervalSeconds: 60, stale: false." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Is my mail copy up to date?</span>
 <span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">sync freshness · server</span>
 </button>
-<button class="askcard" type="button" data-ask="5" data-call="get_email_headers(id: 48213)" data-result="Authentication-Results: dkim=pass, spf=pass, dmarc=pass." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
-<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Show me the DKIM and SPF headers on that message.</span>
+<button class="askcard" type="button" data-ask="5" data-call="get_email_headers(id: 195)" data-result="Seven fields: Date, From, To, Subject, Message-ID, MIME-Version, Content-Type." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Show me the raw headers on the estimate email.</span>
 <span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">get_email_headers</span>
 </button>
-<button class="askcard" type="button" data-ask="6" data-call="get_attachment_page_image(id: 39114,
-  partIndex: 1, page: 3)" data-result="A PNG of the page, for when tables, forms or signatures matter." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
-<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Show me page 3 of the insurance policy.</span>
+<button class="askcard" type="button" data-ask="6" data-call="get_attachment_page_image(id: 195,
+  partIndex: 0, page: 1)" data-result="Page 1 of 1 as a JPEG, for when tables, forms or signatures matter." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Show me the estimate as it looks on the page.</span>
 <span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">rendered page image</span>
 </button>
-<button class="askcard" type="button" data-ask="7" data-call="search_emails(folder: &quot;Newsletters&quot;,
-  unread: true, dateFrom: &quot;2026-11-02&quot;)" data-result="Six unread. Nothing gets marked read unless you ask." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
-<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">Which newsletters haven&#x27;t I read this week?</span>
+<button class="askcard" type="button" data-ask="7" data-call="search_emails(unread: true,
+  dateFrom: &quot;2026-01-01&quot;)" data-result="Two unread: &quot;About the car share&quot; and &quot;About borrowing the ladder&quot;. Nothing gets marked read unless you ask." data-on="false" aria-pressed="false" style="text-align: left; min-height: 112px; box-sizing: border-box; padding: 16px 18px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); display: flex; flex-direction: column; justify-content: space-between; gap: 12px">
+<span style="font-family: var(--serif); font-size: 19px; line-height: 1.3">What haven&#x27;t I read this year?</span>
 <span style="align-self: flex-start; font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--line)">unread filter</span>
 </button>
 </div>
@@ -359,7 +363,7 @@ get_attachment_text(id: 51207, partIndex: 2)" data-result="Section 7 of signed-s
 </div>
 <div style="display: flex; gap: 10px; align-items: flex-start; font-size: 15px">
 <svg width="18" height="10" viewBox="0 0 22 10" aria-hidden="true" style="flex: none; margin-top: 7px"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg>
-<span id="ask-result" aria-live="polite">Estimate #2231 from Bayside Tile &amp; Bath, matched in estimate-2231.pdf. Total $8,400.</span></div>
+<span id="ask-result" aria-live="polite">Top five: Keel &amp; Plumb&#x27;s $11,250 quote, the three messages about Bayside&#x27;s Estimate #2231 ($8,400), and Ada&#x27;s note comparing the two.</span></div>
 </div>
 </div>
 </div>
@@ -375,14 +379,14 @@ get_attachment_text(id: 51207, partIndex: 2)" data-result="Section 7 of signed-s
 <p style="margin: 0; font-size: 18px; color: var(--muted); text-wrap: pretty">Mailvec extracts the text from PDFs, Word documents, spreadsheets, slides, calendar invites and contact cards, and indexes it with the email. When a search hit came from an attachment, the result says which one. An agent can read the extracted text, or look at a rendered page when the layout matters: tables, forms, signatures.</p>
 </div>
 <figure style="margin: 0; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); padding: 22px; display: flex; flex-direction: column; gap: 14px" role="group" aria-label="Attachment flow: a born-digital PDF is extracted directly; a scanned PDF and an inline photo are rendered and read by a local vision model; all three become searchable text. An encrypted PDF stops with a reported error.">
-<div style="display: flex; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line)"><span style="font-weight: 600">Lease renewal</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">1 email · 4 attachments</span></div>
+<div style="display: flex; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line)"><span style="font-weight: 600">What happens to each attachment</span><span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">by file type</span></div>
 
 <div style="display: grid; grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) minmax(110px, 140px); gap: 12px; align-items: center">
-<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px">lease-2027.pdf</span>
+<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere">Bayside-Estimate-2231.pdf</span>
 <span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><span>text layer, extracted</span><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true" style="margin-left: -8px"><path d="M0 0l8 5-8 5z" style="fill: var(--ink)"></path></svg></span>
 <span style="font-size: 14px; font-weight: 600; padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--signal); text-align: center">searchable text</span>
 
-<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px">signed-scan.pdf</span>
+<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px">scan-2025-03-14.pdf</span>
 <span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><span>render → <span style="color: var(--local)">qwen2.5vl:7b</span></span><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true" style="margin-left: -8px"><path d="M0 0l8 5-8 5z" style="fill: var(--ink)"></path></svg></span>
 <span style="font-size: 14px; font-weight: 600; padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--signal); text-align: center">searchable text</span>
 
@@ -390,7 +394,7 @@ get_attachment_text(id: 51207, partIndex: 2)" data-result="Section 7 of signed-s
 <span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><span>same OCR path</span><span style="flex: 1; height: 1.5px; background: var(--ink)"></span><svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true" style="margin-left: -8px"><path d="M0 0l8 5-8 5z" style="fill: var(--ink)"></path></svg></span>
 <span style="font-size: 14px; font-weight: 600; padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--signal); text-align: center">searchable text</span>
 
-<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted)">deposit-locked.pdf</span>
+<span style="font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted)">statement-2025-02.pdf</span>
 <span style="display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted)"><span style="flex: 1; height: 1.5px; background: repeating-linear-gradient(90deg, var(--muted) 0 5px, transparent 5px 9px)"></span><span>password-protected</span><span style="flex: 1; height: 1.5px; background: repeating-linear-gradient(90deg, var(--muted) 0 5px, transparent 5px 9px)"></span><span style="width: 2px; height: 14px; background: var(--muted)"></span></span>
 <span style="display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; padding: 8px 10px; border-radius: 6px; border: 1.5px dashed var(--muted); color: var(--muted); text-align: center"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" style="flex: none; stroke: currentColor; stroke-width: 1.6"><path d="M2 2l8 8M10 2l-8 8"></path></svg>can't read (encrypted)</span>
 </div>
@@ -405,14 +409,14 @@ get_attachment_text(id: 51207, partIndex: 2)" data-result="Section 7 of signed-s
 <p style="margin: 0; font-size: 15px; color: var(--muted)">A hosted OCR provider is available if you want it faster; it's off unless you turn it on.</p>
 </div>
 <div style="border-radius: 12px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); padding: 18px; display: flex; flex-direction: column; gap: 14px">
-<div style="align-self: flex-end; max-width: 85%; padding: 10px 14px; border-radius: 14px 14px 4px 14px; background: var(--band); font-size: 15px">What's the pet deposit in the lease?</div>
+<div style="align-self: flex-end; max-width: 85%; padding: 10px 14px; border-radius: 14px 14px 4px 14px; background: var(--band); font-size: 15px">How much was the compost on that scanned receipt?</div>
 <div style="display: flex; gap: 14px; align-items: flex-start">
 <div style="flex: none; width: 128px; height: 166px; box-sizing: border-box; padding: 12px 10px; background: #FBF8F0; border: 1px solid #D6CDB9; border-radius: 3px; display: flex; flex-direction: column; gap: 5px; transform: rotate(-1.2deg)">
 <span style="height: 5px; width: 60%; background: #3a352e"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 3px; width: 80%; background: #bdb3a0"></span><span style="margin-top: 4px; height: 4px; width: 45%; background: #3a352e"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 12px; border: 1.5px solid #E85A3C; border-radius: 2px"></span><span style="height: 3px; background: #bdb3a0"></span><span style="height: 3px; width: 70%; background: #bdb3a0"></span><span style="margin-top: auto; height: 8px; width: 50%; border-bottom: 1px solid #3a352e"></span></div>
 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; font-size: 15px">
-<span style="font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere">get_attachment_page_image · page 3</span>
-<span>Section 7 sets a <b style="font-weight: 600">$500 refundable pet deposit</b>, one cat or dog under 40 lb.</span>
-<span style="font-family: var(--mono); font-size: 11.5px; color: var(--muted)">S5 · placeholder</span>
+<span style="font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere">get_attachment_text · scan-2025-03-14.pdf · OCR text</span>
+<span>Greenleaf Garden Centre, receipt 20931: two 40 L bags of compost at 6.50 each, <b style="font-weight: 600">total 13.00</b>.</span>
+<span style="font-family: var(--mono); font-size: 11.5px; color: var(--muted)">demo mailbox · transcribed by qwen2.5vl:7b</span>
 </div>
 </div>
 </div>
@@ -569,43 +573,41 @@ get_attachment_text(id: 51207, partIndex: 2)" data-result="Section 7 of signed-s
 <p style="margin: 0; font-size: 14px; color: var(--muted)">Gmail behaviour is tested against recordings from a real Gmail test account, re-recorded weekly in CI. OCR engines were compared head to head before choosing a default.</p>
 </figure>
 <div style="border-radius: 10px; background: var(--term-bg); border: 1px solid var(--term-line); overflow: hidden; box-shadow: var(--shadow)">
-<div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--term-line); font-family: var(--mono); font-size: 12px; color: var(--term-muted)"><span>~ — zsh · Mac install</span><span>S3 · illustrative</span></div>
-<pre style="margin: 0; padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; color: var(--term-ink)"><span style="color: var(--term-muted)">$</span> mailvec doctor
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--term-line); font-family: var(--mono); font-size: 12px; color: var(--term-muted)"><span>the author&#x27;s server · Docker install</span><span>real run · 2 addresses redacted</span></div>
+<pre style="margin: 0; padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; color: var(--term-ink)"><span style="color: var(--term-muted)">$</span> docker compose exec mcp mailvec doctor
 
 Mailvec preflight
 =================
 
 Configuration
-  <span style="color: #7FC98F">✓</span> Version                v0.12.0 (cli + mcp in lockstep)
-  <span style="color: #7FC98F">✓</span> Embedding profile      ollama-legacy (ollama, provider ollama) — mxbai-embed-large @1024d, space ollama:mxbai-embed-large:1024
-  <span style="color: #7FC98F">✓</span> Database               /Users/sam/Library/Application Support/Mailvec/archive.sqlite (3.12 GB)
-  <span style="color: #7FC98F">✓</span> Schema                 version 14 (current)
-  <span style="color: #7FC98F">✓</span> vec0.dylib             /Users/sam/.local/share/mailvec/cli/runtimes/osx-arm64/native/vec0.dylib
-  <span style="color: #7FC98F">✓</span> Maildir root           /Users/sam/Mail/Fastmail
+  <span style="color: #7FC98F">✓</span> Version             v0.12.0 (cli + mcp in lockstep)
+  <span style="color: #7FC98F">✓</span> Embedding profile   ollama-legacy (ollama, provider ollama) — mxbai-embed-large @1024d, space ollama:mxbai-embed-large:1024
+  <span style="color: #7FC98F">✓</span> Database            /data/archive.sqlite (4.51 GB)
+  <span style="color: #7FC98F">✓</span> Schema              version 14 (current)
+  <span style="color: #7FC98F">✓</span> vec0.dylib          /app/cli/vec0.so
+  <span style="color: #7FC98F">✓</span> Maildir root        /mail/Fastmail
 
 Pipeline
-  <span style="color: #7FC98F">✓</span> Embedding model        mxbai-embed-large (1024d, matches config)
-  <span style="color: #7FC98F">✓</span> Embedding cover        41,870 / 41,870 messages (100.0%, 212,406 chunks)
-  <span style="color: #7FC98F">✓</span> Last indexed           2026-11-09 10:41 (41s ago)
-  <span style="color: #7FC98F">✓</span> Ollama                 reachable at http://127.0.0.1:11434 (configured model: mxbai-embed-large)
-  <span style="color: #7FC98F">✓</span> Orphan vectors         none
-  <span style="color: #7FC98F">✓</span> Parser                 in-process — this binary carries MimeKit, PdfPig, OpenXml and PDFium itself
-  <span style="color: #7FC98F">✓</span> OCR model              ollama qwen2.5vl:7b available
+  <span style="color: #7FC98F">✓</span> Embedding model     mxbai-embed-large (1024d, matches config)
+  <span style="color: #7FC98F">✓</span> Embedding cover     79,444 / 79,444 messages (100.0%, 330,061 chunks)
+  <span style="color: #7FC98F">✓</span> Last indexed        2026-11-10 13:45 (26m ago)
+  <span style="color: #7FC98F">✓</span> Ollama              reachable at http://‹redacted›:11434 (configured model: mxbai-embed-large)
+  <span style="color: #7FC98F">✓</span> Orphan vectors      none
+  <span style="color: #7FC98F">✓</span> Parser              remote parse service at http://parse:3400 answers /up
+  <span style="color: #7FC98F">✓</span> OCR model           mistral-ocr mistral-ocr-4-0 @ https://‹redacted› — configured; no credentials in this process by design. Check it where OCR runs: `docker compose exec embedder mailvec doctor`.
 
 Services (launchd)
-  <span style="color: #7FC98F">✓</span> com.mailvec.mbsync     loaded — runs on schedule (last exit: 0)
-  <span style="color: #7FC98F">✓</span> com.mailvec.indexer    running (pid 812)
-  <span style="color: #7FC98F">✓</span> com.mailvec.embedder   running (pid 815)
-  <span style="color: #7FC98F">✓</span> com.mailvec.mcp        running (pid 819)
-  <span style="color: #7FC98F">✓</span> mbsync stderr          no recent errors
+  <span style="color: #7FC98F">✓</span> mbsync sync         last successful sync 53s ago
+  <span style="color: #7FC98F">✓</span> Supervisor          compose (no launchd in a container)
+  <span style="color: #7FC98F">✓</span> mbsync stderr       n/a in a container — the sidecar writes stderr to `docker compose logs mbsync`. Sync outcome is covered by the `mbsync sync` check.
 
 External tools
-  <span style="color: #7FC98F">✓</span> mbsync                 /opt/homebrew/bin/mbsync
+  <span style="color: #7FC98F">✓</span> mbsync              n/a — IMAP sync runs in the mbsync sidecar container
 
 MCP
-  <span style="color: #7FC98F">✓</span> MCP /health            200 ok (http://127.0.0.1:3333/health)
+  <span style="color: #7FC98F">✓</span> MCP /health         200 ok (http://127.0.0.1:3333/health)
 
-<span style="color: #7FC98F">20 pass</span>, 0 warn, 0 fail
+<span style="color: #7FC98F">18 pass</span>, 0 warn, 0 fail
 All clear.</pre>
 </div>
 </div>
@@ -659,7 +661,8 @@ brew install isync jq
 brew install --cask ollama-app &amp;&amp; open -a Ollama
 ollama pull mxbai-embed-large
 ollama pull qwen2.5vl:7b          # local OCR, about 6 GB
-cp ops/mbsyncrc.example ~/.mbsyncrc &amp;&amp; $EDITOR ~/.mbsyncrc
+cp -n ops/mbsyncrc.example ~/.mbsyncrc   # -n keeps a config you already have
+$EDITOR ~/.mbsyncrc
 mbsync -aV                        # first sync can take hours
 ./ops/install-all.sh
 mailvec doctor</pre>
@@ -676,7 +679,7 @@ sudo chown -R 10001:10001 data logs mail mbsyncrc secrets/*
 docker compose up -d --build
 docker compose exec mcp mailvec doctor</pre>
 </div>
-<span style="margin-top: 10px; font-family: var(--mono); font-size: 12px; color: var(--muted)">S4 · from docs/getting-started-*.md, trimmed</span>
+<span style="margin-top: 10px; font-family: var(--mono); font-size: 12px; color: var(--muted)">Trimmed from the getting-started guides. Read the guide before you paste.</span>
 </div>
 <div style="display: flex; flex-direction: column; gap: 18px">
 <div style="padding: 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface)">

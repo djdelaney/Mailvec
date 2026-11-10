@@ -24,13 +24,13 @@ The included mbsync example uses Fastmail. Change its `Host`, `User`, and `PassC
 ```sh
 mkdir -p ~/Mail/Fastmail
 security add-generic-password -a you@fastmail.com -s mbsync -w
-cp ops/mbsyncrc.example ~/.mbsyncrc
+cp -n ops/mbsyncrc.example ~/.mbsyncrc   # -n never overwrites a config you already have
 chmod 600 ~/.mbsyncrc
 $EDITOR ~/.mbsyncrc                   # set User and PassCmd for your account
 mbsync -aV                            # first sync can take hours
 ```
 
-The Keychain entry must match `PassCmd`. For a large archive, run the first sync in `tmux` or `screen`.
+If you already use mbsync, `cp -n` leaves your `~/.mbsyncrc` alone: add the account, stores and channel from `ops/mbsyncrc.example` to it by hand. The Keychain entry must match `PassCmd`. For a large archive, run the first sync in `tmux` or `screen`.
 
 ## 3. Install the services and connect a client
 

@@ -31,7 +31,7 @@ GitHub Pages, via [`.github/workflows/pages.yml`](../../.github/workflows/pages.
 
 ## Validation checklist (against the demo mailbox)
 
-All mail content on the page is invented to match the synthetic demo mailbox (`assets/screenshots/demo-mail.py`: Sam Rivera, Bayside Tile & Bath, Keel & Plumb). Anything marked "illustrative" or "placeholder" needs replacing with a real capture or confirming.
+All mail content on the page is invented to match the synthetic demo mailbox (`assets/screenshots/demo-mail.py`: Sam Rivera, Bayside Tile & Bath, Keel & Plumb). Anything the page labels "illustrative" needs replacing with a real capture or confirming. The S-numbers below (S1 to S5) are names for those captures in these notes only; they are not shown on the page.
 
 Checked against the code at v0.12.0 (schema 14), 2026-11-09. Re-check after any tool-surface change, and recount the stats at launch.
 
@@ -48,11 +48,18 @@ Checked against the code at v0.12.0 (schema 14), 2026-11-09. Re-check after any 
 - **Stats**: ~1,460 test methods (1,386 xUnit `[Fact]`/`[Theory]` plus 75 Python), shown as 1,400+.
 - **Links**: GitHub, docs, licence, both getting-started guides, DevCorpus and Knapper all return 200. The Pages URL itself 404s until the site is deployed.
 
+**Captured from the demo mailbox (2026-11-10, v0.12.0)**
+
+Dev corpus (default options, 289 messages) plus `demo-mail.py`, indexed and embedded with the working-tree binaries and `mxbai-embed-large`, queried through the MCP server over HTTP. Message ids (195 and so on) come from that run; re-check them after regenerating.
+
+- **Hybrid search diagram** (section 03): the three lists are the real `keyword`, `semantic` and `hybrid` results for `contractor quote`. The earlier drawing put the estimate first in the fused list; it is really 4th to 6th, behind the three emails that contain the word "quote". The diagram now shows that.
+- **Response sample** (section 03): a real `search_emails` response, trimmed. Two inputs were stand-ins: `Fastmail__AccountId=u00000000` so that `webmailLink` is emitted, and a hand-written `.mailvec-mbsync-sync` marker (38 s old, 60 s interval) so that `mailSync` is, since no mbsync sidecar runs on the dev Mac.
+- **Example questions** (section 05): all eight calls were run and the results are what came back. The questions were rewritten to ones the demo mailbox can answer; the lease, accountant, school-trip, DKIM and insurance-policy examples are gone.
+- **Attachment flow** (section 06): `Bayside-Estimate-2231.pdf` (`done`), `scan-2025-03-14.pdf` (`ocr`) and `statement-2025-02.pdf` (`encrypted`) are real demo attachments with those statuses.
+- **Scans** (section 06): with `qwen2.5vl:7b` pulled, the embedder's OCR pass transcribed `scan-2025-03-14.pdf` (70 characters, `ocr_model = ollama:qwen2.5vl:7b`). The exchange under "Scans too" quotes that text as `get_attachment_text` returned it; a keyword search for `compost receipt` finds the message through it.
+- **`mailvec doctor`** (section 09): a real run from the author's Docker deployment (`docker compose exec mcp mailvec doctor`, 2026-11-10), verbatim except that the Ollama LAN address and the hosted OCR endpoint hostname are replaced with `‹redacted›`. It shows that deployment's hosted OCR provider by name; the author chose to publish that. When recapturing, redact the same two values before the text goes into `site/`. The capture is v0.12.0 output: the next release renames the `vec0.dylib` row to `sqlite-vec` and the container heading to "Services (compose)", so recapture once the server runs it.
+
 **Still open**
 
-1. **Example questions** (section 05): the ids (48213, 51207, 39114), the `ledgerlane` sender and the results are invented. Replace them with real ones from the demo mailbox, or add matching demo mail.
-2. **Hybrid search diagram** (section 03): the "Ada" reply and the "Home Weekly" newsletter don't exist in the demo yet. Confirm the lanes and fused order against what the demo actually returns.
-3. **S2 values** (section 03): field names are right; values still need a dev-server capture.
-4. **S3 `mailvec doctor`**: replace with a real capture. The ✓ glyph falls back to a system font (JetBrains Mono's latin subset lacks it).
-5. **S5 pet deposit** (section 06): the scanned lease, "section 7", "$500" and `signed-scan.pdf` are invented. Capture a real `get_attachment_page_image` result, or add a scanned lease to the demo.
-6. **Attachment flow** (section 06): filenames are invented. Encrypted PDFs are recorded as `extraction_status = encrypted` and surfaced through `get_email`; check the wording against that.
+1. **Inline-photo OCR** (section 06): the `IMG_0412.jpg` row in the attachment flow is an example name, not a demo file. The dev corpus images are all under the 50 KB `ImageOcrMinBytes` gate, so the image pass skipped them, as designed. Add a larger photographed document to the demo to capture this row.
+2. The ✓ glyph falls back to a system font (JetBrains Mono's latin subset lacks it).

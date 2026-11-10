@@ -1,5 +1,7 @@
 # Mailvec
 
+**[djdelaney.github.io/Mailvec](https://djdelaney.github.io/Mailvec/)** — what it does, with diagrams.
+
 Mailvec pulls one IMAP account into a searchable local archive and gives MCP clients access to it. Search combines keyword (FTS5) and semantic (sqlite-vec) results. [`mbsync`](https://isync.sourceforge.io/) handles the pull-only mail sync, so Fastmail, iCloud, Gmail, and other IMAP servers can be used.
 
 <p align="center">
@@ -26,7 +28,7 @@ Choose the machine that will hold the Maildir and database:
 | **One Apple Silicon Mac** | [macOS getting started](docs/getting-started-macos.md) — launchd services and local Ollama | [Local client setup](docs/clients/README.md) |
 | **Always-on Linux Docker host** | [Docker getting started](docs/getting-started-docker.md) — compose stack and an external Ollama host | [Remote access through Cloudflare](docs/remote-access-cloudflare.md), if you want clients outside the stack |
 
-Both paths start with an IMAP account and provider-appropriate credentials (Fastmail, Gmail, and iCloud use app-specific passwords). The macOS path is the simplest single-machine install. The author's deployment runs in Docker; the Mac is now a frozen-corpus development machine. **Do not run install scripts on that development machine**; see [local development](docs/contributing/local-dev-dataset.md).
+Both paths start with an IMAP account and provider-appropriate credentials (Fastmail, Gmail, and iCloud use app-specific passwords). The macOS path is the simplest single-machine install. The author's deployment runs in Docker. Contributors: read [local development](docs/contributing/local-dev-dataset.md) before running the install scripts on a machine that holds a frozen eval corpus.
 
 After installation, run `mailvec doctor` and `mailvec status` (or `docker compose exec mcp mailvec doctor` and `status` in Docker). Keyword search works while the initial embedding pass is still running; a large archive can take hours or days to finish embedding.
 
