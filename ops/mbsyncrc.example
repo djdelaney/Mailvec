@@ -23,11 +23,20 @@ Far     :fastmail-remote:
 Near    :fastmail-local:
 # Which IMAP folders to mirror. Fastmail "labels" are exposed as IMAP folders,
 # so this is the knob for filtering them. Examples:
-#   Patterns *                    sync everything (default)
+#   Patterns *                    sync everything
 #   Patterns INBOX                inbox only — archived/labelled mail won't sync
 #   Patterns INBOX INBOX/*        inbox plus its sub-folders
 #   Patterns * !Archive !Trash    everything except the named folders
-Patterns *
+#
+# The default below syncs everything EXCEPT the spam folder, under the names
+# the common providers give it. Anyone can put mail in your spam folder, and
+# whatever syncs is parsed, indexed, OCR'd and returned by search alongside
+# your real mail, so leaving it out is the safer starting point. Folders are
+# matched by name only: if your provider calls its spam folder something else,
+# add it here. A name with a space needs the quotes, with the ! inside them.
+# To index spam anyway, replace the line with `Patterns *`. Trash is synced;
+# add !Trash (Gmail: "![Gmail]/Trash") to leave deleted mail out as well.
+Patterns * !Spam !Junk "!Junk Mail" "!Junk E-mail" "!Bulk Mail" "![Gmail]/Spam"
 Create  Near
 SyncState *
 # Read-only sync: changes in Fastmail flow down, never up.

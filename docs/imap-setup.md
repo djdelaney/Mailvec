@@ -39,9 +39,15 @@ mbsync -aV       # -a = all channels, -V = verbose
 
 Run inside `tmux` / `screen` for a big archive so a closed terminal doesn't kill it. Subsequent syncs are incremental and finish in seconds. The indexer (and embedder) can start against `~/Mail/Fastmail/` while mbsync is still working — they'll pick up new messages as they land.
 
-## Folder filtering (Fastmail labels gotcha)
+## Folder filtering
 
-Fastmail exposes labels as IMAP folders, so a message with two labels lives in two folders. With the example's `Patterns *`, mbsync downloads both copies and the indexer logs spurious `Content changed; cleared embeddings` warnings on the second one — Fastmail's IMAP serializer regenerates the multipart boundary string per folder, so the body bytes hash differently across copies despite being the same email. Final search results are correct, just at the cost of re-embedding every multi-labelled message. To avoid it, narrow `Patterns` (e.g. `Patterns INBOX`); the [example](../ops/mbsyncrc.example) shows the common forms.
+The example config syncs every folder except the spam folder, matched by the names common providers use (`Spam`, `Junk`, `Junk Mail`, `[Gmail]/Spam` and a few more). Anyone can put a message in your spam folder, and whatever syncs is parsed, indexed, OCR'd and returned by search next to your real mail. Folders are matched by name only, so check the list against your provider. To index spam anyway, use `Patterns *`. Trash is synced by default; add `!Trash` to leave it out.
+
+Changing `Patterns` on an existing install stops new mail arriving for an excluded folder but does not remove what is already indexed. Delete that folder from the local Maildir to drop it; the indexer then treats its messages as deleted.
+
+### Fastmail labels
+
+Fastmail exposes labels as IMAP folders, so a message with two labels lives in two folders. With the example's `Patterns` line (everything except the spam folder), mbsync downloads both copies and the indexer logs spurious `Content changed; cleared embeddings` warnings on the second one — Fastmail's IMAP serializer regenerates the multipart boundary string per folder, so the body bytes hash differently across copies despite being the same email. Final search results are correct, just at the cost of re-embedding every multi-labelled message. To avoid it, narrow `Patterns` (e.g. `Patterns INBOX`); the [example](../ops/mbsyncrc.example) shows the common forms.
 
 ## Scheduling
 

@@ -92,13 +92,13 @@ The MCP service shares the internal `parse` network to call the parser and rejec
 By default the `mbsync` service syncs every `MBSYNC_INTERVAL_SECONDS` (60). To have new mail land within seconds, which helps when a Claude session is waiting on a test message, list folders to watch in `.env`:
 
 ```sh
-MBSYNC_IDLE_FOLDERS=INBOX,Junk Mail,Alerts
+MBSYNC_IDLE_FOLDERS=INBOX,Alerts
 ```
 
 The sidecar then runs [goimapnotify](https://gitlab.com/shackra/goimapnotify), which holds one IMAP IDLE connection per folder. When one reports new mail, the next sync starts within about 5 seconds (the wake is checked in 5-second steps, and never sooner than 5 seconds after the previous sync), instead of waiting out the interval. That 5 seconds is Mailvec's share only; the server's own delivery time comes first and usually dominates. Observed 2026-10-03 against Fastmail: the IDLE event arrived 21 s after the message's `Date:` header, and the sync started 4 s after that. A wake 20 to 30 s after sending is the watcher working, not failing. Only new mail triggers this. Flag changes, moves and deletions in any folder still wait for the interval. The event goimapnotify itself raises for every folder when it starts is not a wake: a container start or watcher restart adds no extra sync.
 
 - **Names.** Use folder names exactly as the IMAP server lists them; names may contain spaces. To see them, enable IDLE with any valid folder such as `INBOX`, then run `docker compose exec mbsync goimapnotify -conf /tmp/mbsync-idle.yaml -list`. The folder must also be included by `Patterns` in `mbsyncrc`, or the sync it triggers won't pull it.
-- **Limits.** Up to 10 folders, each one IMAP connection on top of mbsync's own. Mail that fails SPF, DKIM or DMARC usually lands in Junk Mail, so watch it too if you test mail paths.
+- **Limits.** Up to 10 folders, each one IMAP connection on top of mbsync's own. The example `mbsyncrc` leaves the spam folder out of the sync, so watching it does nothing unless you changed `Patterns` to include it.
 - **Connection.** The watcher's config is generated at startup from the first `IMAPAccount` block of `mbsyncrc` (Host, Port, User, Pass or PassCmd). It connects with implicit TLS and certificate verification only (`TLSType IMAPS`, which the example uses) and refuses other TLS modes. `AuthMechs XOAUTH2` (Gmail, Office 365) is carried over: the watcher then sends the `PassCmd` output as the OAuth2 token, as mbsync does, so the same token command serves both; a literal `Pass` with XOAUTH2 leaves IDLE off with a reason. It opens folders read-only (`EXAMINE`), so watching changes nothing on the server.
 - **Apply.** The `mbsync` image must be from the release that introduced this setting or later; an older image has no goimapnotify and ignores the variable **silently**, with no log line at all. Then recreate the service so it reads the new environment: `docker compose up -d mbsync`. Its log should show `IDLE enabled for: …`, then one `Watching mailbox` line per folder. If neither appears, check the running image with `docker inspect` before suspecting the configuration.
 
