@@ -48,7 +48,7 @@ docker compose exec mcp mailvec status
 docker compose exec mcp mailvec search "a phrase from a known email"
 ```
 
-The services run as uid 10001 by default. If a service refuses to start, `docker compose logs <service>` gives the missing ownership or configuration step. Replace the sample search phrase with something in your mail after the first sync. The first IMAP pull and embedding pass can take hours or days; message counts and embedding coverage in `status` should increase. Verify a real OCR render if OCR is enabled; the [rollout checklist](deploy-docker.md#rollout-checklist) covers the remaining checks. New mail arrives on a 60-second sync timer; to have it land within seconds, see the optional [new-mail push](deploy-docker.md#new-mail-push-imap-idle). The deployment is read-only; to let agents mark mail read, add the optional [mark-read](deploy-docker.md#optional-mark-read) component.
+The services run as uid 10001 by default. If a service refuses to start, `docker compose logs <service>` gives the missing ownership or configuration step. Replace the sample search phrase with something in your mail after the first sync. The first IMAP pull and embedding pass can take hours or days; message counts and embedding coverage in `status` should increase. Verify a real OCR render if OCR is enabled; the [rollout checklist](deploy-docker.md#rollout-checklist) covers the remaining checks. New mail arrives on a 60-second sync timer; to have it land within seconds, see the optional [new-mail push](deploy-docker.md#new-mail-push-imap-idle). The deployment is read-only; to let agents mark mail read, add the optional [mark-read](deploy-docker.md#optional-mark-read) component (Linux host only).
 
 ## 4. Connect a client
 
@@ -62,6 +62,11 @@ Docker on a Mac runs the same Linux images inside a lightweight VM, so the parse
 
 **Prerequisites.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [OrbStack](https://orbstack.dev/), and give its VM at least 8 GB of memory (Docker Desktop: Settings → Resources). The overlay needs Docker Engine 26.0 and Compose 2.26 or later (for volume subpath mounts); check with `docker version --format '{{.Server.Version}}'` and `docker compose version`. Install Ollama as the native app (`brew install --cask ollama-app`), pull `mxbai-embed-large` (and `qwen2.5vl:7b` for local OCR), and enable **Open at Login**. Ollama stays outside Docker so it can use the Mac's GPU; containers reach it at `host.docker.internal`.
 
+Two things to set in Docker itself:
+
+- **Start at login.** The services restart on their own once Docker is running, but nothing starts Docker: turn on its start-at-login setting, or mail stops syncing after a reboot until you open the app.
+- **Disk.** The archive, the whole Maildir and the logs live on the Docker VM's disk, not in the compose directory. Docker Desktop caps that disk (Settings → Resources); raise the cap if your mailbox is large, and leave room for the archive as well as the mail. Once the stack is up, `docker compose exec mcp df -h /data /mail` shows what is used and free.
+
 **Changes to the steps above:**
 
 1. **Step 1.** Do everything as written, then set these in `.env` (each key once; replace the empty `MAILVEC_UID=` / `MAILVEC_GID=` lines already there):
@@ -73,8 +78,9 @@ Docker on a Mac runs the same Linux images inside a lightweight VM, so the parse
    ```
 
    Leave `OLLAMA_BASE_URL` empty: the overlay defaults it to `http://host.docker.internal:11434`. The services then run as your Mac account, which owns `mbsyncrc` and `secrets/*`, so no `sudo chown` is needed. Both values are required with the overlay: `volume-init` stops the stack from starting while either is empty.
-2. **Step 3.** Skip the `mkdir` and `chown` line. The archive, Maildir and logs live in Docker volumes (`mailvec_data`, `mailvec_mail`, `mailvec_logs`) on the VM's own disk, because SQLite needs real file locking, and a one-shot `volume-init` service gives them to `MAILVEC_UID` before each start. Run `docker compose up -d --build`; the build is native arm64. To pull published images instead, see [Images and updates](deploy-docker.md#images-and-updates).
-3. **Step 4.** No tunnel needed. The overlay publishes MCP on `127.0.0.1:3333` only:
+2. **Step 2.** Applies as written: for a new archive set `MAILVEC_REQUIRE_SEEDED_DB=0`. To bring an archive over from the native install on this Mac, leave it at `1` and follow [Moving from the native install](deploy-docker.md#moving-from-the-native-install).
+3. **Step 3.** Skip the `mkdir` and `chown` lines and run the rest. The archive, Maildir and logs live in Docker volumes (`mailvec_data`, `mailvec_mail`, `mailvec_logs`) on the VM's own disk, because SQLite needs real file locking, and a one-shot `volume-init` service gives them to `MAILVEC_UID` before each start. Run `docker compose up -d --build`; the build is native arm64. To pull published images instead, see [Images and updates](deploy-docker.md#images-and-updates).
+4. **Step 4.** No tunnel needed. The overlay publishes MCP on `127.0.0.1:3333` only:
    - **Claude Code:** `claude mcp add --transport http mailvec http://127.0.0.1:3333`
    - **Claude Desktop:** run the server over stdio inside the running container, with no port involved. Add this to `~/Library/Application Support/Claude/claude_desktop_config.json` and restart Claude Desktop:
 
@@ -91,4 +97,4 @@ Docker on a Mac runs the same Linux images inside a lightweight VM, so the parse
 
      Use the absolute path to `docker` (`which docker`), because Claude Desktop starts servers without your shell's `PATH`. The stack must be running.
 
-**Check it:** `docker compose ps` shows every service running and `volume-init` exited 0; `docker compose exec mcp mailvec doctor` reports the parser as `remote parse service … answers /up` and Ollama reachable; `curl -s http://127.0.0.1:3333/up` answers. Any process on this Mac, under any account, can call the published port with no authentication, which is the posture the native install had; see [Security](security.md#docker-on-a-mac). Backups, migration from the native install, and the volume commands are in [Docker on a Mac](deploy-docker.md#docker-on-a-mac).
+**Check it:** `docker compose ps -a` shows every service running and `volume-init` exited with code 0 (plain `ps` hides exited containers); `docker compose exec mcp mailvec doctor` reports the parser as `remote parse service … answers /up` and Ollama reachable; `curl -s http://127.0.0.1:3333/up` answers. Any process on this Mac, under any account, can call the published port with no authentication, which is the posture the native install had; see [Security](security.md#docker-on-a-mac). Backups, reading the log files, migration from the native install, and the volume commands are in [Docker on a Mac](deploy-docker.md#docker-on-a-mac).

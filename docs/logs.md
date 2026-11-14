@@ -61,6 +61,13 @@ they already exist wrong: `sudo chown -R 10001:10001 logs`.
 Because the chmod lands on the host directory, expect `./logs/<service>` to
 become `0700 10001:10001`; tailing from the host needs `sudo`.
 
+Under Docker on a Mac (`compose.macos.yml`) there are no host directories: the
+three log directories are subpaths of the `mailvec_logs` named volume, created
+and chowned by the overlay's `volume-init` service, so the `mkdir` and `chown`
+above do not apply. Read the files through the container:
+`docker compose exec <service> ls /logs`, then
+`docker compose exec <service> tail -n 100 /logs/<file>`.
+
 Note the console sink is also live in containers (`MAILVEC_LAUNCHD` is
 deliberately unset), so the same lines go to `docker logs`. That copy is
 governed by the Docker daemon's logging driver, not by anything Serilog does —

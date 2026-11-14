@@ -110,7 +110,7 @@ This is a latency optimisation only, and every failure falls back to the interva
 
 ## Optional: mark-read
 
-The `mark_read` MCP tool lets an agent set or clear the read flag on mail, for example a scheduled agent that triages monitoring alerts and marks the routine ones read. It is off unless you add it, and a deployment without it stays read-only. Security implications: [Security model](security.md#optional-mark-read).
+The `mark_read` MCP tool lets an agent set or clear the read flag on mail, for example a scheduled agent that triages monitoring alerts and marks the routine ones read. It is off unless you add it, and a deployment without it stays read-only. It is for a Linux host: the [Mac overlay](#docker-on-a-mac) refuses to start with it. Security implications: [Security model](security.md#optional-mark-read).
 
 To enable it:
 
@@ -165,6 +165,8 @@ docker compose start indexer embedder
 
 Docker Desktop and OrbStack keep volumes inside their VM disk image, so a Time Machine backup of the Mac is not a usable archive backup; keep the copies this produces.
 
+**Logs.** There is no `./logs` directory on a Mac: each service's log files are in the `mailvec_logs` volume, mounted at `/logs` in that service. `docker compose logs <service>` shows the same lines; to read the files, go through the container, for example `docker compose exec indexer ls /logs` and `docker compose exec indexer tail -n 100 /logs/<file>`. See [Logs](logs.md#in-containers).
+
 ### Moving from the native install
 
 1. Take a snapshot while the native install is still running: `ops/export-db.sh --out ~/mailvec-archive-snapshot.sqlite`.
@@ -180,7 +182,7 @@ Docker Desktop and OrbStack keep volumes inside their VM disk image, so a Time M
    ```
 
    The copy runs as root in the `volume-init` container, and the next `up` gives the file to the service uid. Use the same command to restore a backup into a stopped stack.
-4. The `mbsync` container pulls the Maildir into its volume from scratch; the indexer then reconciles message locations, as described in [Migrating the archive](#migrating-the-archive-from-a-macos-install). Use `ops/mbsyncrc.container.example` as the starting point for `./mbsyncrc`: the native `~/.mbsyncrc` points at host paths and the Keychain, neither of which exists in the container. Don't run `purge-deleted` until the first pull has finished.
+4. The `mbsync` container pulls the Maildir into its volume from scratch; the indexer then reconciles message locations, as described in [Migrating the archive](#migrating-the-archive-from-a-macos-install). Use `ops/mbsyncrc.container.example` as the starting point for `./mbsyncrc`: the native `~/.mbsyncrc` points at host paths and the Keychain, neither of which exists in the container. Until the pull finishes, search is incomplete: the seeded archive lists every message, the Maildir volume starts empty, and after holding off for an hour (`Indexer:MassDeletionHoldMinutes`) the indexer marks the messages whose files have not arrived yet as deleted. They come back as mbsync delivers them. Compare `docker compose exec mcp mailvec status` with the native install's message count before relying on search, and don't run `purge-deleted` until the first pull has finished: it would remove those messages and their vectors for good.
 5. Repoint clients ([On a Mac](getting-started-docker.md#on-a-mac), step 4) and remove the old MCPB extension from Claude Desktop.
 
 The old `~/Mail` and the native archive under `~/Library/Application Support/Mailvec` are not touched; delete them once the Docker stack has caught up.

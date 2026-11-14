@@ -17,7 +17,7 @@ Start with one installation path. The pages below are grouped by the task you ar
 ## Use and operate
 
 - [Reading and searching attachments](attachments.md) and [Fastmail deep links](fastmail-deep-links.md).
-- [Docker deployment](deploy-docker.md): compose layout, image releases, [Docker on a Mac](deploy-docker.md#docker-on-a-mac), migration, backup, and rollout checks. Optional extras: [new-mail push](deploy-docker.md#new-mail-push-imap-idle) and [mark-read](deploy-docker.md#optional-mark-read), which lets agents mark mail read.
+- [Docker deployment](deploy-docker.md): compose layout, image releases, [Docker on a Mac](deploy-docker.md#docker-on-a-mac), migration, backup, and rollout checks. Optional extras: [new-mail push](deploy-docker.md#new-mail-push-imap-idle) and [mark-read](deploy-docker.md#optional-mark-read), which lets agents mark mail read (Linux host only).
 - [Logs](logs.md), [Uptime Kuma monitoring](monitoring-uptime-kuma.md), and the [security model](security.md).
 - *Deprecated:* [macOS operations](install-macos.md) for the native launchd install: mechanics, backups, and uninstall.
 
