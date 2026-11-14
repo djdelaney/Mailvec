@@ -61,6 +61,13 @@ services:
   # so the chown pass is best-effort and a second walk decides: anything
   # still not owned is an error. Files the services create are already theirs.
   #
+  # /mail/Fastmail is the Maildir root compose.yml gives the services
+  # (Ingest__MaildirRoot). It is created here, before anything starts,
+  # because the indexer turns its file watcher off for good if the root is
+  # missing at startup and then only sees new mail on its periodic scan;
+  # otherwise mbsync creates it and the two race. Change it here too if you
+  # change the root.
+  #
   # The log mounts below use `volume.subpath`, which needs Docker Engine 26.0
   # and Compose 2.26 or later.
   volume-init:
@@ -86,7 +93,7 @@ services:
         echo "volume-init: the mark-read component is not supported with compose.macos.yml. Its queue is a bind mount from the Mac, and the mount boundary that keeps mcp from writing outside the inbox has only been tested on a Linux host. In .env, remove compose.mark-read.yml from COMPOSE_FILE and comment out MBSYNC_MARK_READ_FOLDERS. Nothing was started." >&2;
         exit 1;
         fi;
-        mkdir -p /data /mail /logs/mcp /logs/indexer /logs/embedder;
+        mkdir -p /data /mail/Fastmail /logs/mcp /logs/indexer /logs/embedder;
         unowned() { find /data /mail /logs -ignore_readdir_race \( ! -user "$$MAILVEC_UID" -o ! -group "$$MAILVEC_GID" \) "$$@"; };
         unowned -exec chown -h "$$MAILVEC_UID:$$MAILVEC_GID" {} + || true;
         left="$$(unowned -print -quit 2>/dev/null || true)";
