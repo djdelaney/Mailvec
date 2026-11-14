@@ -145,6 +145,10 @@ To disable it, remove both `.env` lines, put `Sync Pull` back, and run `docker c
 - **Ollama** defaults to `http://host.docker.internal:11434`, the native Ollama app on the same Mac.
 - **MCP** is published on `127.0.0.1:3333` for local clients. Nothing is published on the LAN.
 
+The overlay needs Docker Engine 26.0 and Compose 2.26 or later, above the 25.0.5 floor for a Linux host, because the per-service log mounts are volume subpaths. Check with `docker version --format '{{.Server.Version}}'` and `docker compose version`.
+
+The optional [mark-read](#optional-mark-read) component is not supported with the overlay yet. `compose.mark-read.yml` bind-mounts `./mark-read` from the Mac, which goes through the file sharing the overlay moves everything else off, and its mount boundary has only been tested on a Linux host.
+
 `mbsyncrc` and `secrets/*` are still bind mounts. With `MAILVEC_UID`/`MAILVEC_GID` set to your Mac account they are readable as-is. If a service refuses to start saying one of them is not readable by its uid, the Docker version is presenting shared files under a different owner; check with `docker compose run --rm --no-deps --entrypoint ls mbsync -ln /etc/mbsyncrc /run/secrets`.
 
 **Backups.** The archive is not a file in Finder. Copy it out through a container after a checkpoint, as in [Backups](#backups):

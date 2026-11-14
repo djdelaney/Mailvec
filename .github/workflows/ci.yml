@@ -20,9 +20,10 @@
 #            the job for why a macOS-only suite could not catch a per-RID
 #            native break, and did not for three days.
 #
-#   image  — builds both Docker images on a native amd64 and a native arm64
-#            runner and runs ops/image-smoke.sh against each: the only job
-#            that exercises what the Dockerfile actually ships.
+#   image  — on pull requests, builds both Docker images on a native amd64
+#            and a native arm64 runner and runs ops/image-smoke.sh against
+#            each: the only job that exercises what the Dockerfile actually
+#            ships. Pushes to main get the same check in publish-images.yml.
 #
 # The version-lockstep check mirrors the guard in ops/release.sh (and
 # ops/build-mcpb.sh's plain build) so drift between Directory.Build.props and
@@ -254,8 +255,14 @@ jobs:
   #
   # Reads the publish workflow's build cache (same scopes) but never writes
   # it, so a PR cannot seed the cache main's published images build from.
+  #
+  # Pull requests only. On a push to main, publish-images.yml builds the same
+  # commit for both architectures and runs the same script against the bytes
+  # it pushed, before tagging anything; building here as well would double
+  # the work and lengthen the wait `promote` has to sit out.
   image:
     name: Image smoke (linux/${{ matrix.arch }})
+    if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     strategy:

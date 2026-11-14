@@ -4,8 +4,9 @@
 #   ops/image-smoke.sh <app-image> [<mbsync-image>]
 #
 # Run by .github/workflows/ci.yml (every PR, on an amd64 and an arm64 runner)
-# and by publish-images.yml (before each architecture's image is pushed), and
-# runnable by hand on a Mac against a local `docker compose build`:
+# and by publish-images.yml (against each architecture's image after it is
+# pushed by digest and before anything is tagged), and runnable by hand on a
+# Mac against a local `docker compose build`:
 #
 #   ops/image-smoke.sh mailvec:local mailvec-mbsync:local
 #
@@ -62,7 +63,9 @@ hardened=(--read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --se
 wait_http() {
     local url="$1" name="$2" code
     for _ in $(seq 1 60); do
-        code="$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$url" || true)"
+        # --max-time: a server that accepts and never answers must count as
+        # one failed attempt, not hold the loop (and the job) open.
+        code="$(curl -s --noproxy '*' --max-time 5 -o /dev/null -w '%{http_code}' "$url" || true)"
         if [ "$code" != "000" ]; then
             echo "$code"
             return 0

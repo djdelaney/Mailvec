@@ -54,6 +54,15 @@ services:
   # Only entries not already owned are changed, so an unchanged volume costs
   # one stat per file. Root, but with only the capabilities a chown needs, no
   # network, and the volumes as its only mounts.
+  #
+  # It also runs on an `up` against a stack that is already running, while
+  # mbsync and the indexer create and remove files in these volumes. A file
+  # that vanishes mid-walk must not fail the run (that would fail the `up`),
+  # so the chown pass is best-effort and a second walk decides: anything
+  # still not owned is an error. Files the services create are already theirs.
+  #
+  # The log mounts below use `volume.subpath`, which needs Docker Engine 26.0
+  # and Compose 2.26 or later.
   volume-init:
     image: ${MAILVEC_IMAGE:-mailvec:local}
     # Same image as the .NET services. The build block only matters on a
@@ -68,14 +77,26 @@ services:
     command:
       - >-
         set -e;
+        if [ -z "$$MAILVEC_UID" ] || [ -z "$$MAILVEC_GID" ]; then
+        echo "volume-init: MAILVEC_UID and MAILVEC_GID are not set. In .env, set them to your Mac account (id -u, id -g): that account owns mbsyncrc and secrets/*, and the services must run as it." >&2;
+        exit 1;
+        fi;
         mkdir -p /data /mail /logs/mcp /logs/indexer /logs/embedder;
-        find /data /mail /logs \( ! -user "$$MAILVEC_UID" -o ! -group "$$MAILVEC_GID" \)
-        -exec chown -h "$$MAILVEC_UID:$$MAILVEC_GID" {} +;
+        unowned() { find /data /mail /logs -ignore_readdir_race \( ! -user "$$MAILVEC_UID" -o ! -group "$$MAILVEC_GID" \) "$$@"; };
+        unowned -exec chown -h "$$MAILVEC_UID:$$MAILVEC_GID" {} + || true;
+        left="$$(unowned -print -quit 2>/dev/null || true)";
+        if [ -n "$$left" ]; then
+        echo "volume-init: $$left is still not owned by $$MAILVEC_UID:$$MAILVEC_GID" >&2;
+        exit 1;
+        fi;
         chmod 700 /data /mail /logs;
         echo "volume-init: volumes owned by $$MAILVEC_UID:$$MAILVEC_GID"
     environment:
-      MAILVEC_UID: ${MAILVEC_UID:-10001}
-      MAILVEC_GID: ${MAILVEC_GID:-10001}
+      # No default, on purpose: compose.yml falls back to 10001, which on a
+      # Mac owns neither mbsyncrc nor secrets/*, and the services' own
+      # preflight would then suggest chowning those files to it.
+      MAILVEC_UID: ${MAILVEC_UID:-}
+      MAILVEC_GID: ${MAILVEC_GID:-}
     network_mode: none
     read_only: true
     cap_drop: [ALL]
