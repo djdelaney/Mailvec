@@ -50,8 +50,8 @@ RUN set -eux; \
     # Only /app/parse may carry a parser. The indexer, embedder, mcp and cli
     # binaries still LINK Mailvec.Parsing.dll (for Parser:Mode=inprocess on a
     # macOS install), so every library it depends on is deleted from their
-    # directories: MimeKit, PdfPig, OpenXml, AngleSharp, PDFium, SkiaSharp,
-    # LibTiff. With those gone, Parser:Mode=inprocess in a container fails
+    # directories: MimeKit (MimeKit.Core + MimeKit.Cryptography, since 5.0),
+    # PdfPig, OpenXml, AngleSharp, PDFium, SkiaSharp, LibTiff. With those gone, Parser:Mode=inprocess in a container fails
     # loudly (FileNotFoundException at the first parse) instead of silently
     # widening the attack surface back to every privileged process. The
     # sentinel `test -e` BEFORE each delete is the guard against a package
@@ -59,21 +59,21 @@ RUN set -eux; \
     # privileged directory with nothing failing, so the build fails instead.
     # ------------------------------------------------------------------
     for svc in indexer embedder mcp cli; do \
-        for sentinel in MimeKit.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so Mailvec.Parsing.dll; do \
+        for sentinel in MimeKit.Core.dll MimeKit.Cryptography.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so Mailvec.Parsing.dll; do \
             test -e "/app/${svc}/${sentinel}" || { echo "expected /app/${svc}/${sentinel} before stripping; a package bump may have renamed it" >&2; exit 1; }; \
         done; \
-        rm -f "/app/${svc}/MimeKit.dll" "/app/${svc}/BouncyCastle.Cryptography.dll" \
+        rm -f "/app/${svc}/MimeKit.Core.dll" "/app/${svc}/MimeKit.Cryptography.dll" "/app/${svc}/BouncyCastle.Cryptography.dll" \
               "/app/${svc}"/UglyToad.PdfPig*.dll \
               "/app/${svc}"/DocumentFormat.OpenXml*.dll "/app/${svc}/System.IO.Packaging.dll" \
               "/app/${svc}/AngleSharp.dll" \
               "/app/${svc}/PDFtoImage.dll" "/app/${svc}/SkiaSharp.dll" "/app/${svc}/BitMiracle.LibTiff.NET.dll" \
               "/app/${svc}/libpdfium.so" "/app/${svc}/libSkiaSharp.so"; \
-        for gone in MimeKit.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so; do \
+        for gone in MimeKit.Core.dll MimeKit.Cryptography.dll BouncyCastle.Cryptography.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so; do \
             test ! -e "/app/${svc}/${gone}"; \
         done; \
     done; \
     # And the one directory that must still carry them.
-    for keep in MimeKit.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so; do \
+    for keep in MimeKit.Core.dll UglyToad.PdfPig.dll DocumentFormat.OpenXml.dll AngleSharp.dll libpdfium.so libSkiaSharp.so; do \
         test -e "/app/parse/${keep}" || { echo "/app/parse/${keep} missing" >&2; exit 1; }; \
     done
 

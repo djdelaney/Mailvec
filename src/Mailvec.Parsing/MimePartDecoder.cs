@@ -20,7 +20,7 @@ public static class MimePartDecoder
     {
         ArgumentNullException.ThrowIfNull(eml);
         using var stream = new MemoryStream(eml, writable: false);
-        return MimeMessage.Load(stream);
+        return MimeMessage.Load(MimeParsing.Options, stream);
     }
 
     /// <summary>

@@ -19,7 +19,7 @@ public class ParserBoundaryTests
 {
     private static readonly string[] ParserAssemblies =
     [
-        "MimeKit", "BouncyCastle.Cryptography",
+        "MimeKit", "MimeKit.Core", "MimeKit.Cryptography", "BouncyCastle.Cryptography",
         "UglyToad.PdfPig", "UglyToad.PdfPig.Core", "UglyToad.PdfPig.Tokenization", "UglyToad.PdfPig.Fonts",
         "DocumentFormat.OpenXml", "DocumentFormat.OpenXml.Framework", "System.IO.Packaging",
         "AngleSharp",
@@ -61,6 +61,8 @@ public class ParserBoundaryTests
 
         refs.ShouldNotContain("Mailvec.Core");
         refs.ShouldContain("Mailvec.Parsing.Contracts");
-        refs.ShouldContain("MimeKit");
+        // MimeKit 5 ships the parser as MimeKit.Core (the MimeKit package is
+        // only a meta-package over Core and Cryptography).
+        refs.ShouldContain("MimeKit.Core");
     }
 }

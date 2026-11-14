@@ -25,7 +25,7 @@ public sealed class MessageParser
         ArgumentException.ThrowIfNullOrWhiteSpace(emlPath);
 
         using var stream = File.OpenRead(emlPath);
-        var mime = MimeMessage.Load(stream);
+        var mime = MimeMessage.Load(Mailvec.Parsing.MimeParsing.Options, stream);
         var size = new FileInfo(emlPath).Length;
         return Parse(mime, size);
     }

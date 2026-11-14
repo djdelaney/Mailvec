@@ -74,23 +74,35 @@ public class MessageBodyHasherTests
     // hasher is consistent with itself but says nothing about whether the
     // bytes MimeKit produces today match the ones already stored in the
     // archive. A MimeKit upgrade that perturbs Body.WriteTo — header folding,
-    // a transfer-encoding default, boundary handling — changes every
-    // content_hash in the corpus at once. Nothing else would notice: the
-    // indexer reads it as a genuine body change on each message it re-parses,
-    // clears embedded_at, and re-embeds the whole archive, which surfaces only
-    // as an embedder backlog that nobody ordered.
+    // a transfer-encoding default, boundary handling — changes the
+    // content_hash of every stored message of the affected shape at once.
+    // Nothing else would notice: the indexer reads it as a genuine body change
+    // on each such message it re-parses, resets its attachments (OCR verdicts
+    // included) and re-embeds it, which surfaces only as an embedder and OCR
+    // backlog that nobody ordered.
     //
-    // So this pins literal bytes. If it fails after a dependency bump, the
-    // hasher is not broken — the library's serialization moved, and the
-    // decision to make is whether to take the bump and eat a full re-embed
-    // (see "mailvec switch-model" for the cost shape) or hold the version.
-    // Update the constant ONLY together with that decision.
+    // So this pins literal bytes, in the three shapes that have moved or that
+    // matter most. If one fails after a dependency bump, the hasher is not
+    // broken: the library's serialization moved. The decision is whether to
+    // take the bump and let every message of that shape re-index as it is next
+    // re-parsed, or hold the version. Measure how much of a real mailbox has
+    // the shape before deciding; ops/UPGRADING.md has the method. Update a
+    // constant ONLY together with that decision.
+    //
+    // MimeKit 5.0 (taken 2026-11-14) moved two of the three. Its default
+    // parser keeps the raw boundary lines and the writer reproduces them, so
+    // (a) a CRLF-stored multipart no longer gets LF boundary lines mixed in, and
+    // (b) a multipart whose file ends at the closing delimiter with no newline
+    // keeps that, where 4.x appended one. The LF shape with a final newline,
+    // which is what mbsync writes, hashes identically under 4.18 and 5.0.
+    // Measured against a real mailbox, a minority of messages had shape (b)
+    // and none had (a); the bump was taken and those re-index on re-parse.
 
     /// <summary>
     /// A fixed raw message covering the shapes whose serialization is most
     /// likely to drift between MimeKit versions: a multipart boundary, a
     /// quoted-printable non-ASCII text part, an HTML part, a folded part
-    /// header, and a base64 attachment.
+    /// header, and a base64 attachment. Stored with CRLF line endings.
     /// </summary>
     private const string PinnedRaw =
         "From: Alice <alice@example.com>\r\n" +
@@ -120,19 +132,40 @@ public class MessageBodyHasherTests
         "JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSPj4Kc3RyZWFtCngB\r\n" +
         "--MVBOUND--\r\n";
 
-    // MimeKit 4.18.0. See the comment above before changing this value.
-    private const string PinnedHash = "18b826cc3860828d824ddbac10cf91b626a8ed5536788630e8256f32c73c776e";
+    // MimeKit 5.0.0. Under 4.x this was 18b826cc…776e, the LF hash below.
+    private const string PinnedCrlfHash = "388f05d5e7b51734256c25454759a59fbc8a280ada9e04ece1d942450f530bef";
+
+    // MimeKit 4.18 and 5.0.0 agree on this one. It is the shape mbsync writes.
+    private const string PinnedLfHash = "18b826cc3860828d824ddbac10cf91b626a8ed5536788630e8256f32c73c776e";
+
+    // MimeKit 5.0.0. Under 4.x this was also the LF hash above.
+    private const string PinnedLfNoFinalNewlineHash = "46525f7a2ac4a5c2f3fad65dfaeddffa97a06ae6cddadf487800e0b6e0a175dd";
+
+    private const string TripwireReason =
+        "MimeKit's body serialization changed for this shape. Every stored content_hash of a message "
+        + "with this shape is now stale, so each such message re-parsed will read as a body change and "
+        + "re-index (attachments, OCR and embeddings). Take that deliberately or hold the version: "
+        + "don't just update the constant.";
+
+    private static string HashOf(string raw) =>
+        MessageBodyHasher.Hash(MimeMessage.Load(Mailvec.Parsing.MimeParsing.Options, new MemoryStream(Encoding.ASCII.GetBytes(raw))));
 
     [Fact]
     public void Serialized_body_bytes_are_pinned_across_library_upgrades()
     {
-        var mime = MimeMessage.Load(new MemoryStream(Encoding.ASCII.GetBytes(PinnedRaw)));
+        HashOf(PinnedRaw).ShouldBe(PinnedCrlfHash, TripwireReason);
+    }
 
-        MessageBodyHasher.Hash(mime).ShouldBe(
-            PinnedHash,
-            "MimeKit's body serialization changed. Every stored content_hash is now stale, so "
-            + "the next scan that re-parses a message will read it as a body change and re-embed "
-            + "the corpus. Take that deliberately or hold the version — don't just update the constant.");
+    [Fact]
+    public void Serialized_body_bytes_are_pinned_for_the_LF_shape_mbsync_writes()
+    {
+        HashOf(PinnedRaw.Replace("\r\n", "\n")).ShouldBe(PinnedLfHash, TripwireReason);
+    }
+
+    [Fact]
+    public void Serialized_body_bytes_are_pinned_for_a_multipart_with_no_newline_after_the_closing_boundary()
+    {
+        HashOf(PinnedRaw.Replace("\r\n", "\n").TrimEnd('\n')).ShouldBe(PinnedLfNoFinalNewlineHash, TripwireReason);
     }
 
     private static MimeMessage Build(string body, string? subject = "Test", IReadOnlyList<(string Name, string Value)>? extraHeaders = null)

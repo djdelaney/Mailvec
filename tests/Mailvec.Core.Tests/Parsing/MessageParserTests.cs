@@ -195,4 +195,54 @@ public class MessageParserTests
         att.FileName.ShouldBe("photo.png");
         att.ContentType.ShouldBe("image/png");
     }
+
+    // ---- Header length (MimeKit 5) ------------------------------------------
+    //
+    // MimeKit 5 added ParserOptions.MaxHeaderLength, 16 KB by default, and
+    // throws FormatException past it. MimeKit 4 had no limit and real mail
+    // carries longer fields, so at the default those messages stop parsing:
+    // an indexed one on its next re-parse, a new one before it is ever
+    // indexed. Both production parse paths must use MimeParsing.Options.
+
+    private static byte[] MessageWithLongToHeader(int recipients)
+    {
+        var to = string.Join(",\r\n ", Enumerable.Range(0, recipients).Select(i => $"recipient{i:D5}@example.com"));
+        var raw =
+            "From: Alice <alice@example.com>\r\n" +
+            $"To: {to}\r\n" +
+            "Subject: long header\r\n" +
+            "Message-Id: <long-header@example.com>\r\n" +
+            "MIME-Version: 1.0\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            "\r\n" +
+            "body\r\n";
+        return System.Text.Encoding.ASCII.GetBytes(raw);
+    }
+
+    [Fact]
+    public void A_header_field_over_MimeKits_default_limit_still_parses_on_both_paths()
+    {
+        var bytes = MessageWithLongToHeader(1500);
+        bytes.Length.ShouldBeGreaterThan(40_000);
+
+        // The guard against a vacuous test: MimeKit's own default refuses it.
+        Should.Throw<FormatException>(() => MimeKit.MimeMessage.Load(new MemoryStream(bytes)));
+
+        var viaBytes = new Mailvec.Parsing.InProcessParser(extractor: null).ParseMessage(bytes, extractAttachmentText: false);
+        viaBytes.MessageId.ShouldBe("long-header@example.com");
+        viaBytes.ToAddresses.Count.ShouldBe(1500);
+
+        var path = Path.Combine(Path.GetTempPath(), $"mailvec-long-header-{Guid.NewGuid():N}.eml");
+        File.WriteAllBytes(path, bytes);
+        try
+        {
+            var viaFile = _parser.ParseFile(path);
+            viaFile.MessageId.ShouldBe("long-header@example.com");
+            viaFile.ToAddresses.Count.ShouldBe(1500);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
