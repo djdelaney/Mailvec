@@ -154,8 +154,44 @@ A TFM bump (e.g. `net10.0` → `net11.0`) has fanout:
 3. Rebuild + reinstall the MCPB with `--bump` so end-users' Claude Desktop instances pick up the new self-contained runtime.
 4. Move the Dockerfile's `dotnet/sdk` and `dotnet/aspnet` FROMs to the new major (tag **and** digest) in the same change. The container publish is framework-dependent, so the `aspnet` image must carry the TFM's runtime — a `net10.0` app will not start on `aspnet:11.0`, and the reverse fails the same way. Move the `Microsoft.Extensions.*` / `Microsoft.AspNetCore.*` / `Microsoft.Data.Sqlite.Core` band to the new major at the same time, the whole cluster at once.
 5. Dependabot is told to ignore majors for those packages and both images (`.github/dependabot.yml`), so it will not propose this for you, and it won't propose the *next* major either until you revisit those ignore rules.
+6. Move `dotnet-version` in every workflow that installs an SDK (`grep -rn dotnet-version .github/workflows`). On 2026-11-14 that was four places: `ci.yml` (twice), `gmail-traces.yml`, `cloud-smoke.yml`.
+7. Remove package references that the new shared framework now supplies. NuGet reports each one as `NU1510` ("will not be pruned … does not need to be referenced explicitly"), and `TreatWarningsAsErrors` turns that into a build failure. Delete the `PackageReference` lines **and** the `PackageVersion` entries in `Directory.Packages.props`; don't `NoWarn` it. For `net11.0` the affected references were `Microsoft.Extensions.Options` and `Microsoft.Extensions.Logging.Abstractions`, in `Mailvec.Core`, `Mailvec.Parsing` and `Mailvec.OcrBench`. The full list for 11 is in Microsoft's breaking-change note "Some Microsoft.Extensions packages included in shared framework". Expect more of the same at 12.
+
+Steps 1–3 apply only to the deprecated launchd/MCPB install; skip them once it is removed.
 
 Bundle size grows roughly with each runtime major.
+
+**Check before a TFM bump, in this order:**
+
+1. **Is it a support-window gain?** Look up the end-of-support dates on Microsoft's [.NET support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core) page. An STS release can end on the *same day* as the LTS before it, which makes the move a cost with no runway.
+2. **Does every host's CPU meet the new floor?** .NET 11 raised the x86/x64 minimum from x86-64-v1 to x86-64-v2 (CX16, POPCNT, SSE3, SSSE3, SSE4.1, SSE4.2). Below it the process refuses to start ("The current CPU is missing one or more of the baseline instruction sets"). ReadyToRun code now targets x86-64-v3 on Linux, and a v2-only CPU falls back to the JIT at startup. arm64 floors did not move. The trap is a VM: a hypervisor CPU model such as QEMU's `kvm64` presents x86-64-v1 even on a modern host. Verify inside the VM that runs the containers, not on the hypervisor:
+   ```sh
+   for x in cx16 popcnt pni ssse3 sse4_1 sse4_2 avx2 bmi2 fma movbe; do grep -qw "$x" /proc/cpuinfo && echo "$x ok" || echo "$x MISSING"; done
+   ```
+   (`pni` is how Linux names SSE3. The first six are the v2 floor, and the rest are the v3 ReadyToRun target.)
+3. **Trial-build without touching the working tree.** Export `HEAD` to a scratch directory, retarget it there, and build, test and smoke-test inside the new SDK container. Nothing on the host changes, so the frozen-corpus machine is safe:
+   ```sh
+   git archive HEAD | tar -x -C "$SCRATCH" && cd "$SCRATCH"   # then retarget, bump the cluster, fix NU1510
+   docker run --rm -v "$PWD":/src -w /src -e VSTEST_ARTIFACTS_BASE_DIRECTORY=/tmp \
+     mcr.microsoft.com/dotnet/sdk:<major>.0 \
+     bash -c './ops/fetch-sqlite-vec.sh && dotnet build Mailvec.slnx -c Release && dotnet test Mailvec.slnx -c Release --no-build'
+   # then point the Dockerfile FROMs at the new major and run:
+   docker build -t mailvec-trial --target runtime . && ops/image-smoke.sh mailvec-trial
+   ```
+   The `VSTEST_ARTIFACTS_BASE_DIRECTORY` variable silences a .NET 11 SDK warning: in a container the default `/run/user/<uid>` does not exist. Two `DoctorCommandHelpersTests` (`InContainer_is_false_on_a_normal_dev_machine`, `Mixed_binaries_warn_and_name_both_versions`) fail in **any** container, on 10 as well as 11. They assume a Mac, so they are not a TFM regression.
+
+### .NET 11 assessment (observed 2026-11-14, not adopted)
+
+Evaluated at GA (SDK 11.0.100) and deliberately **not** taken. Re-check the dates before acting on this.
+
+- **Support:** .NET 11 (STS) and .NET 10 (LTS) both end on 2028-11-14. Moving to 11 bought no runway and added a TFM hop before .NET 12, the next LTS (expected 2027-11). The plan was to go from 10 straight to 12.
+- **Trial result:** after steps 2, 4 and 7 above, the solution built clean with warnings as errors. All tests passed apart from the two container-only failures noted above. The linux/arm64 image passed `ops/image-smoke.sh`: vec0 loaded, `/up` answered, PdfPig + MimeKit extracted text, and PDFium + SkiaSharp rendered a page. `MessageBodyHasherTests.Serialized_body_bytes_are_pinned_across_library_upgrades` passed, so stored `content_hash` values survive the runtime change. Not run: the amd64 image, or an eval baseline.
+- **Breaking changes reviewed against this codebase.** None required a code change, but re-check them at the next major:
+  - *ConcurrencyLimiter middleware removed* (ASP.NET Core 11). Not used here: the `/mcp` limit is `AddRateLimiter` + `RateLimitPartition.GetConcurrencyLimiter`.
+  - *Kestrel rejects connection-specific headers on HTTP/2 and HTTP/3*. The tunnel reaches mcp over HTTP/1.1. If that hop is ever switched to h2c, re-check it.
+  - *Empty strings in chained configuration override earlier providers*. Applies only to `AddConfiguration(IConfiguration)` chaining. `AddMailvecSharedConfig` inserts a `JsonConfigurationSource` directly, so this is unaffected. A future refactor that chains config would change what an empty env value means.
+  - *`IHost.RunAsync` throws when a `BackgroundService` fails*. Exit code becomes non-zero instead of 0. `restart: unless-stopped` restarts on either, so this changes nothing in compose and makes the failure visible.
+  - *`PackagePart.GetStream()` non-seekable in ReadWrite packages*. OpenXml opens attachments read-only, which was already forward-only.
 
 ## sqlite-vec dylib
 
