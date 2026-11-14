@@ -43,6 +43,17 @@ Two dated observations make a config edit on inference unsafe:
   but does not explain the missing xUnit major. #34's body also listed a
   `System.CommandLine` bump absent from its branch, so inspect group PR diffs
   rather than relying on their descriptions.
+- On 2026-11-14, .NET 11.0.0 shipped and #70 (`dotnet-and-mcp`) carried
+  10.0.14 → 11.0.0 majors for most of the cluster alongside 10.0.15 patches
+  — so a group whose patterns name the packages DOES propose majors. It moved
+  only part of the cluster (Hosting and Logging.Console stayed on 10), and its
+  description again listed two bumps its diff did not make. The same run's
+  `docker-all` PR (#68) moved the `dotnet/sdk` and `dotnet/aspnet` base images
+  to 11.0 under a `net10.0` TFM, which would not start: the publish is
+  framework-dependent. Both were closed and the 10.0.15 band applied by hand.
+  `dependabot.yml` now ignores majors for the .NET-band packages and the two
+  .NET images; a TFM bump (below) is when those move, together and by hand.
+  This still says nothing about the catch-all `nuget-minor-patch` question.
 
 The job log's per-dependency skip reason and group assignment would settle the
 question. If unavailable, test explicit `patterns: ["*"]` or reordered groups
@@ -128,6 +139,8 @@ A TFM bump (e.g. `net10.0` → `net11.0`) has fanout:
 1. Install the matching SDK on the build host — `ops/build-mcpb.sh` runs `dotnet publish -c Release -r osx-arm64 --self-contained true` and ships the runtime inside the bundle.
 2. Re-run `ops/install-stdio-launcher.sh` so the stdio launcher at `~/.local/bin/mailvec-mcp-stdio` (which exports `DOTNET_ROOT`) resolves to a runtime that exists. It republishes, re-signs, and rewrites the launcher — all three matter here, since the launcher is what bakes in the `DOTNET_ROOT` that a TFM bump invalidates.
 3. Rebuild + reinstall the MCPB with `--bump` so end-users' Claude Desktop instances pick up the new self-contained runtime.
+4. Move the Dockerfile's `dotnet/sdk` and `dotnet/aspnet` FROMs to the new major (tag **and** digest) in the same change. The container publish is framework-dependent, so the `aspnet` image must carry the TFM's runtime — a `net10.0` app will not start on `aspnet:11.0`, and the reverse fails the same way. Move the `Microsoft.Extensions.*` / `Microsoft.AspNetCore.*` / `Microsoft.Data.Sqlite.Core` band to the new major at the same time, the whole cluster at once.
+5. Dependabot is told to ignore majors for those packages and both images (`.github/dependabot.yml`), so it will not propose this for you, and it won't propose the *next* major either until you revisit those ignore rules.
 
 Bundle size grows roughly with each runtime major.
 
