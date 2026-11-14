@@ -393,6 +393,16 @@ Docker is now the only supported deployment. The native macOS install ran every 
 - **The native launchd install and MCPB bundle are deprecated**, with notices on their docs. `mailvec doctor` reports an in-process parser as a warning instead of ok.
 - Also in v0.13.1: MimeKit 5 (a minority of messages re-hash and re-index on their next re-parse; see `ops/UPGRADING.md`), the .NET 10.0.15 servicing band, and dependency bumps. No tool-surface change: patch bump (0.13.0 → 0.13.1).
 
+## ✅ .NET 11 (no schema change, released in v0.14.0, 2026-11-14)
+
+The whole stack moves from .NET 10 to .NET 11: the target framework, the `Microsoft.Extensions.*` / `AspNetCore.*` / `Data.Sqlite.Core` band (11.0.0), and both images' `dotnet/sdk` and `dotnet/aspnet` bases. Upgrade notes and the breaking-change review are in `ops/UPGRADING.md`.
+
+- **x86 hosts need an x86-64-v2 CPU.** The .NET 11 runtime refuses to start below it. Check inside the VM that runs the containers, since a hypervisor CPU model like `kvm64` hides a modern host's instruction sets. The command is in `ops/UPGRADING.md`. arm64 is unchanged.
+- `Microsoft.Extensions.Options` and `Logging.Abstractions` are now part of the shared framework, so their package references are gone.
+- The Claude cloud environment installs the SDK from Canonical's `ppa:dotnet/backports`, because Ubuntu 24.04's archive carries only LTS SDKs. Re-paste `ops/claude-cloud-setup.sh` into the environment settings.
+- Also since v0.13.1: cloudflared 2026.11.0 in `compose.yml`, which includes the upstream Access fix VULN-170057.
+- A runtime move with no tool-surface or schema change, released as a minor bump (0.13.1 → 0.14.0) so the tag name flags it.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.
