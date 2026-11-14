@@ -55,4 +55,4 @@ if ! dotnet build src/Mailvec.Mcp/Mailvec.Mcp.csproj -c Debug --nologo -v quiet 
     exit 1
 fi
 
-exec dotnet src/Mailvec.Mcp/bin/Debug/net10.0/Mailvec.Mcp.dll --stdio
+exec dotnet src/Mailvec.Mcp/bin/Debug/net11.0/Mailvec.Mcp.dll --stdio

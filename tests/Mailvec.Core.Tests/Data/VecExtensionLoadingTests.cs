@@ -86,7 +86,7 @@ public sealed class VecExtensionLoadingTests : IDisposable
         File.WriteAllText(Path.Combine(Dir("repo"), "Mailvec.slnx"), "");
         var expected = Plant("repo");
 
-        ConnectionFactory.ResolveRelative(Relative, Dir("repo", "tests", "X", "bin", "Debug", "net10.0")).ShouldBe(expected);
+        ConnectionFactory.ResolveRelative(Relative, Dir("repo", "tests", "X", "bin", "Debug", "net11.0")).ShouldBe(expected);
     }
 
     [Fact]

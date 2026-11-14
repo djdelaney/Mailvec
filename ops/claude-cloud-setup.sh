@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude cloud environment setup for Mailvec: the .NET 10 SDK (+ sqlite3 CLI).
+# Claude cloud environment setup for Mailvec: the .NET 11 SDK (+ sqlite3 CLI).
 #
 # THIS FILE IS THE MASTER COPY. The claude.ai environment's "Setup script"
 # field holds a PASTE of it: the setup script runs before the repository is
@@ -29,21 +29,33 @@ set -euxo pipefail
 rm -f /etc/apt/sources.list.d/*deadsnakes* /etc/apt/sources.list.d/*ondrej*
 
 # `apt-get update` exits 100 if ANY configured source is unreachable, even
-# when the Ubuntu archive that carries dotnet-sdk-10.0 updated fine. Tolerate
-# it, then judge the outcome by what actually got installed.
+# when the source that carries dotnet-sdk-11.0 updated fine. Tolerate it, then
+# judge the outcome by what actually got installed.
 apt-get update || echo "WARNING: apt-get update reported errors (exit $?); continuing"
 
-# ── .NET 10 SDK ──────────────────────────────────────────────────────────────
-# Ubuntu's own archive build. No system libraries beyond it are needed: SQLite
-# is bundled (SQLitePCLRaw.bundle_e_sqlite3), PDFium comes through NuGet, and
-# SkiaSharp is the NativeAssets.Linux.NoDependencies build.
+# .NET 11 is an STS release, and Ubuntu 24.04's own archive carries only the
+# LTS SDKs (dotnet-sdk-10.0 there; no dotnet-sdk-11.0 in noble, -updates or
+# -backports, checked 2026-11-14). Canonical publishes STS builds in its
+# ppa:dotnet/backports instead (same packaging as the archive build, signed by
+# Launchpad). Re-check at the next TFM bump: an LTS (.NET 12) should be back in
+# the archive and this PPA can go. NOT YET VERIFIED from a cloud session: if
+# the egress allowlist refuses ppa.launchpadcontent.net, the SDK check below
+# fails the setup, which is the intended loud outcome.
+apt-get install -y software-properties-common
+add-apt-repository -y --no-update ppa:dotnet/backports
+apt-get update || echo "WARNING: apt-get update reported errors (exit $?); continuing"
+
+# ── .NET 11 SDK ──────────────────────────────────────────────────────────────
+# Canonical's build, from the PPA above. No system libraries beyond it are
+# needed: SQLite is bundled (SQLitePCLRaw.bundle_e_sqlite3), PDFium comes
+# through NuGet, and SkiaSharp is the NativeAssets.Linux.NoDependencies build.
 #
 # sqlite3 is for inspecting a dev database by hand. It is not a Mailvec
 # dependency and cannot read the vec0 tables unless the extension is loaded.
-apt-get install -y dotnet-sdk-10.0 sqlite3
+apt-get install -y dotnet-sdk-11.0 sqlite3
 dotnet --list-sdks
-dotnet --list-sdks | grep -q '^10\.' \
-  || { echo ".NET 10 SDK not installed" >&2; exit 1; }
+dotnet --list-sdks | grep -q '^11\.' \
+  || { echo ".NET 11 SDK not installed" >&2; exit 1; }
 command -v sqlite3
 
 echo "setup complete"
