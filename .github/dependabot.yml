@@ -91,6 +91,15 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "Microsoft.Data.Sqlite.Core"
         update-types: ["version-update:semver-major"]
+      # MimeKit 5 is a migration, not a bump (#73, 2026-11-14): it changes the
+      # serialized body bytes, so MessageBodyHasher's pinned hash fails and
+      # every re-parsed message would read as a content change and re-embed;
+      # it ships as MimeKit.Core, which ParserBoundaryTests and the Dockerfile's
+      # parser-strip assertion name; and a Message-ID parsing change silently
+      # duplicates rows (CLAUDE.md, "Indexing & change detection"). Plan it,
+      # then remove this. 4.x patches and minors still flow.
+      - dependency-name: "MimeKit"
+        update-types: ["version-update:semver-major"]
     groups:
       # Each group below batches its cluster into one PR when the members have
       # updates in the same run. It cannot force them to move together — see
