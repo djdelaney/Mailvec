@@ -383,7 +383,7 @@ The smaller findings of a security review, each closed with a test that fails wi
 - Ignore files cover `.env.*`, compose overrides and `mbsyncrc` copies. The docs state a Docker Engine floor of 25.0.5 for the internal networks (CVE-2024-29018).
 - Tool-surface change (the new `search_emails` error): minor bump (0.12.2 → 0.13.0).
 
-## 🚧 Docker everywhere: arm64 images and Docker on a Mac (no schema change, unreleased)
+## ✅ Docker everywhere: arm64 images and Docker on a Mac (no schema change, released in v0.13.1, 2026-11-14)
 
 Docker is now the only supported deployment. The native macOS install ran every mail parser inside the processes that hold the archive and API keys; Docker isolates them in the `parse` container, and on a Mac it adds a VM around the whole stack.
 
@@ -391,6 +391,7 @@ Docker is now the only supported deployment. The native macOS install ran every 
 - **`ops/image-smoke.sh`**, the first test of the images themselves: the CLI creates an archive (sqlite-vec loads), mcp answers `/up`, the parse service under compose's hardening extracts a PDF's text and renders a page (PDFium, SkiaSharp), and the mbsync image's binaries run. CI runs it on both architectures for every PR. Checked by removing `libpdfium.so` and `vec0.so` from a built image; each fails it.
 - **`compose.macos.yml`** for Docker Desktop: data, Maildir and logs in named volumes (handed to the service uid by a one-shot `volume-init`), Ollama at `host.docker.internal`, mcp on `127.0.0.1:3333`, and Claude Desktop over `docker exec … --stdio`. Docs cover setup and backups. The overlay needs Docker Engine 26.0 and Compose 2.26, requires `MAILVEC_UID`/`MAILVEC_GID` to be set, and refuses to start with the mark-read component, which stays Linux-only for now.
 - **The native launchd install and MCPB bundle are deprecated**, with notices on their docs. `mailvec doctor` reports an in-process parser as a warning instead of ok.
+- Also in v0.13.1: MimeKit 5 (a minority of messages re-hash and re-index on their next re-parse; see `ops/UPGRADING.md`), the .NET 10.0.15 servicing band, and dependency bumps. No tool-surface change: patch bump (0.13.0 → 0.13.1).
 
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
