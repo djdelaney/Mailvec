@@ -4,7 +4,7 @@
 
 ## Native macOS install (deprecated)
 
-> **Deprecated.** The native launchd install runs every mail parser (MIME, PDF, Office, image, including native PDFium) inside the services that hold your archive and any API key, with no sandbox or memory limit around them. Run Mailvec with [Docker on the Mac](../getting-started-docker.md#on-a-mac) instead, where parsing is isolated in its own container; an existing install can [move across](../deploy-docker.md#moving-from-the-native-install). This page stays for existing installs until the native install is removed.
+> **Deprecated.** The native launchd install runs every mail parser (MIME, PDF, Office, image, including native PDFium) inside the services that hold your archive and any API key, with no sandbox or memory limit around them. Run Mailvec with [Docker on the Mac](../getting-started-docker.md#on-a-mac) instead, where parsing is isolated in its own container. This page stays for existing installs until the native install is removed.
 
 The rest of this page applies after the [native macOS installation](../getting-started-macos.md). It uses the archive and user settings installed on that same Mac.
 

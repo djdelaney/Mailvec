@@ -3,7 +3,7 @@
 Docker is how Mailvec is deployed, on either of two hosts:
 
 - **An always-on Linux Docker host.** Ollama runs on a reachable host outside the stack. The MCP server has **no published host port**; to use it from Claude or another remote client, finish with the [Cloudflare Access setup](remote-access-cloudflare.md).
-- **An Apple Silicon Mac**, with Docker Desktop or OrbStack and Ollama as the native Mac app. Follow the steps below with the changes in [On a Mac](#on-a-mac).
+- **An Apple Silicon Mac**, with Docker Desktop and Ollama as the native Mac app. Follow the steps below with the changes in [On a Mac](#on-a-mac).
 
 Either way, every mail parser runs in the separate `parse` container, with no access to the archive, your credentials or the network. The older native macOS install ran them inside the services themselves and is [deprecated](getting-started-macos.md) for that reason.
 
@@ -60,7 +60,7 @@ For future updates and backups, use the [Docker deployment runbook](deploy-docke
 
 Docker on a Mac runs the same Linux images inside a lightweight VM, so the parser isolation above holds unchanged, with the VM as one more boundary around it. [`compose.macos.yml`](../compose.macos.yml) adjusts the three things a Mac does differently: storage, Ollama and client access. The images are published for linux/arm64 and linux/amd64, so Docker picks the one matching the Mac; Apple Silicon is the tested target.
 
-**Prerequisites.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [OrbStack](https://orbstack.dev/), and give its VM at least 8 GB of memory (Docker Desktop: Settings → Resources). The overlay needs Docker Engine 26.0 and Compose 2.26 or later (for volume subpath mounts); check with `docker version --format '{{.Server.Version}}'` and `docker compose version`. Install Ollama as the native app (`brew install --cask ollama-app`), pull `mxbai-embed-large` (and `qwen2.5vl:7b` for local OCR), and enable **Open at Login**. Ollama stays outside Docker so it can use the Mac's GPU; containers reach it at `host.docker.internal`.
+**Prerequisites.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and give its VM at least 8 GB of memory (Settings → Resources). The overlay needs Docker Engine 26.0 and Compose 2.26 or later (for volume subpath mounts); check with `docker version --format '{{.Server.Version}}'` and `docker compose version`. Install Ollama as the native app (`brew install --cask ollama-app`), pull `mxbai-embed-large` (and `qwen2.5vl:7b` for local OCR), and enable **Open at Login**. Ollama stays outside Docker so it can use the Mac's GPU; containers reach it at `host.docker.internal`.
 
 Two things to set in Docker itself:
 
@@ -78,7 +78,7 @@ Two things to set in Docker itself:
    ```
 
    Leave `OLLAMA_BASE_URL` empty: the overlay defaults it to `http://host.docker.internal:11434`. The services then run as your Mac account, which owns `mbsyncrc` and `secrets/*`, so no `sudo chown` is needed. Both values are required with the overlay: `volume-init` stops the stack from starting while either is empty. When it refuses, `docker compose up` only reports that `volume-init` exited with code 1; the reason is in `docker compose logs volume-init`.
-2. **Step 2.** Applies as written: for a new archive set `MAILVEC_REQUIRE_SEEDED_DB=0`. To bring an archive over from the native install on this Mac, leave it at `1` and follow [Moving from the native install](deploy-docker.md#moving-from-the-native-install).
+2. **Step 2.** Applies as written: for a new archive set `MAILVEC_REQUIRE_SEEDED_DB=0`.
 3. **Step 3.** Skip the `mkdir` and `chown` lines and run the rest. The archive, Maildir and logs live in Docker volumes (`mailvec_data`, `mailvec_mail`, `mailvec_logs`) on the VM's own disk, because SQLite needs real file locking, and a one-shot `volume-init` service gives them to `MAILVEC_UID` before each start. Run `docker compose up -d --build`; the build is native arm64. To pull published images instead, see [Images and updates](deploy-docker.md#images-and-updates).
 4. **Step 4.** No tunnel needed. The overlay publishes MCP on `127.0.0.1:3333` only:
    - **Claude Code:** `claude mcp add --transport http mailvec http://127.0.0.1:3333`
@@ -97,4 +97,4 @@ Two things to set in Docker itself:
 
      Use the absolute path to `docker` (`which docker`), because Claude Desktop starts servers without your shell's `PATH`. The stack must be running.
 
-**Check it:** `docker compose ps -a` shows every service running and `volume-init` exited with code 0 (plain `ps` hides exited containers); `docker compose exec mcp mailvec doctor` reports the parser as `remote parse service … answers /up` and Ollama reachable; `curl -s http://127.0.0.1:3333/up` answers. Any process on this Mac, under any account, can call the published port with no authentication, which is the posture the native install had; see [Security](security.md#docker-on-a-mac). Backups, reading the log files, migration from the native install, and the volume commands are in [Docker on a Mac](deploy-docker.md#docker-on-a-mac).
+**Check it:** `docker compose ps -a` shows every service running and `volume-init` exited with code 0 (plain `ps` hides exited containers); `docker compose exec mcp mailvec doctor` reports the parser as `remote parse service … answers /up` and Ollama reachable; `curl -s http://127.0.0.1:3333/up` answers. Any process on this Mac, under any account, can call the published port with no authentication, which is the posture the native install had; see [Security](security.md#docker-on-a-mac). Backups, restoring one, reading the log files, and the volume commands are in [Docker on a Mac](deploy-docker.md#docker-on-a-mac).

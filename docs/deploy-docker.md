@@ -21,8 +21,6 @@ Check the result with `docker compose ps`, `docker compose exec mcp mailvec doct
 
 ## Migrating the archive from a macOS install
 
-To move to Docker on the **same Mac**, follow [Moving from the native install](#moving-from-the-native-install) instead; this section is for a separate Linux host.
-
 Export a consistent snapshot with `ops/export-db.sh` on the source Mac. Copy the snapshot to the Docker host before starting the stack:
 
 ```sh
@@ -163,29 +161,22 @@ fi
 docker compose start indexer embedder
 ```
 
-Docker Desktop and OrbStack keep volumes inside their VM disk image, so a Time Machine backup of the Mac is not a usable archive backup; keep the copies this produces.
+Docker Desktop keeps volumes inside its VM disk image, so a Time Machine backup of the Mac is not a usable archive backup; keep the copies this produces.
 
 **Logs.** There is no `./logs` directory on a Mac: each service's log files are in the `mailvec_logs` volume, mounted at `/logs` in that service. `docker compose logs <service>` shows the same lines; to read the files, go through the container, for example `docker compose exec indexer ls /logs` and `docker compose exec indexer tail -n 100 /logs/<file>`. See [Logs](logs.md#in-containers).
 
-### Moving from the native install
+**Restore.** To put a backup back, stop the stack and copy the file into the data volume through the `volume-init` container; the next `up` gives it to the service uid:
 
-1. Take a snapshot while the native install is still running: `ops/export-db.sh --out ~/mailvec-archive-snapshot.sqlite`.
-2. Remove the launchd agents with `ops/install.sh --uninstall` (not `ops/stop.sh`, which leaves them to restart at login). Port 3333 must be free before the stack starts, and only one indexer may run against a mailbox.
-3. Prepare the compose directory as in [Get started with Docker](getting-started-docker.md#on-a-mac), keeping `MAILVEC_REQUIRE_SEEDED_DB=1`. Seed the archive into its volume (this creates the volumes), then start:
+```sh
+docker compose down
+docker compose run --rm --no-deps --cap-add DAC_OVERRIDE \
+  -v <backup-path>:/seed/archive.sqlite:ro volume-init \
+  'rm -f /data/archive.sqlite /data/archive.sqlite-wal /data/archive.sqlite-shm && cp /seed/archive.sqlite /data/archive.sqlite'
+docker compose up -d
+docker compose exec mcp mailvec status
+```
 
-   ```sh
-   docker compose run --rm --no-deps --cap-add DAC_OVERRIDE \
-     -v ~/mailvec-archive-snapshot.sqlite:/seed/archive.sqlite:ro volume-init \
-     'rm -f /data/archive.sqlite /data/archive.sqlite-wal /data/archive.sqlite-shm && cp /seed/archive.sqlite /data/archive.sqlite'
-   docker compose up -d
-   docker compose exec mcp mailvec status
-   ```
-
-   The copy runs as root in the `volume-init` container, and the next `up` gives the file to the service uid. Use the same command to restore a backup into a stopped stack.
-4. The `mbsync` container pulls the Maildir into its volume from scratch; the indexer then reconciles message locations, as described in [Migrating the archive](#migrating-the-archive-from-a-macos-install). Use `ops/mbsyncrc.container.example` as the starting point for `./mbsyncrc`: the native `~/.mbsyncrc` points at host paths and the Keychain, neither of which exists in the container. Until the pull finishes, search is incomplete: the seeded archive lists every message, the Maildir volume starts empty, and after holding off for an hour (`Indexer:MassDeletionHoldMinutes`) the indexer marks the messages whose files have not arrived yet as deleted. They come back as mbsync delivers them. Compare `docker compose exec mcp mailvec status` with the native install's message count before relying on search, and don't run `purge-deleted` until the first pull has finished: it would remove those messages and their vectors for good.
-5. Repoint clients ([On a Mac](getting-started-docker.md#on-a-mac), step 4) and remove the old MCPB extension from Claude Desktop.
-
-The old `~/Mail` and the native archive under `~/Library/Application Support/Mailvec` are not touched; delete them once the Docker stack has caught up.
+`<backup-path>` must be an absolute path. The old `-wal` and `-shm` files belong to the archive being replaced and are removed with it.
 
 ## Resource limits
 

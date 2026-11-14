@@ -1,5 +1,5 @@
 # Overlay for running the stack under Docker on an Apple Silicon Mac (Docker
-# Desktop or OrbStack), with Ollama running natively on the same Mac. Enable
+# Desktop), with Ollama running natively on the same Mac. Enable
 # it in .env:
 #
 #   COMPOSE_FILE=compose.yml:compose.macos.yml
@@ -31,7 +31,7 @@
 #
 #   2. OLLAMA. Run Ollama as the native Mac app, which uses the GPU; a
 #      container cannot. Containers reach it at host.docker.internal, which
-#      Docker Desktop and OrbStack resolve to the Mac. Override with
+#      Docker Desktop resolves to the Mac. Override with
 #      OLLAMA_BASE_URL in .env if Ollama runs elsewhere.
 #
 #   3. CLIENT ACCESS. mcp is published on the Mac's loopback only, for Claude

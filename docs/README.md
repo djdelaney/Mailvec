@@ -7,8 +7,7 @@ Start with one installation path. The pages below are grouped by the task you ar
 | Task | Guide |
 | --- | --- |
 | Always-on Linux host | [Get started with Docker](getting-started-docker.md) |
-| A Mac, with Docker Desktop or OrbStack | [Get started with Docker → On a Mac](getting-started-docker.md#on-a-mac) |
-| Moving a native macOS install to Docker | [Moving from the native install](deploy-docker.md#moving-from-the-native-install) |
+| A Mac, with Docker Desktop | [Get started with Docker → On a Mac](getting-started-docker.md#on-a-mac) |
 | Claude Desktop, Claude Code, and other local MCP clients | [Local client setup](clients/README.md) |
 | IMAP providers, app passwords and folder filtering (examples use the native install; the provider notes apply to Docker's `mbsyncrc` too) | [IMAP setup](imap-setup.md) |
 | *Deprecated:* native macOS install (launchd) | [Get started on macOS](getting-started-macos.md) |

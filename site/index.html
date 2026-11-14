@@ -630,7 +630,7 @@ All clear.</pre>
 </div>
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px">
 <article style="padding: 28px; border: 1.5px solid var(--ink); border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
-<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Mac · Docker Desktop or OrbStack</span>
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Mac · Docker Desktop</span>
 <h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 30px">One Mac</h3>
 <p style="margin: 0; font-size: 16px; color: var(--muted)">The same Docker stack on your Mac, with Ollama as the native app so it can use the GPU. Connect Claude Desktop, Claude Code or any local MCP client. Everything stays on the Mac.</p>
 <a href="https://github.com/djdelaney/Mailvec/blob/main/docs/getting-started-docker.md#on-a-mac" style="margin-top: auto; font-weight: 500">Mac guide →</a></article>
@@ -656,7 +656,7 @@ All clear.</pre>
 <div style="position: relative; border-radius: 0 10px 10px 10px; background: var(--term-bg); border: 1px solid var(--term-line); overflow: hidden">
 <button id="copy-cmds" type="button" aria-label="Copy commands" style="position: absolute; right: 10px; top: 10px; height: 34px; padding: 0 12px; border: 1px solid var(--term-line); border-radius: 6px; background: transparent; color: var(--term-ink); font-family: var(--mono); font-size: 12px">Copy</button>
 <pre id="panel-mac" role="tabpanel" aria-labelledby="tab-mac" tabindex="0" style="margin: 0; padding: 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; color: var(--term-ink); white-space: pre">git clone https://github.com/djdelaney/Mailvec &amp;&amp; cd Mailvec
-brew install --cask ollama-app &amp;&amp; open -a Ollama   # plus Docker Desktop or OrbStack
+brew install --cask ollama-app &amp;&amp; open -a Ollama   # plus Docker Desktop
 ollama pull mxbai-embed-large
 ollama pull qwen2.5vl:7b          # local OCR, about 6 GB
 umask 077
@@ -693,7 +693,7 @@ docker compose exec mcp mailvec doctor</pre>
 <ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; color: var(--muted)">
 <li>An IMAP account and an app password</li>
 <li>Ollama with <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">mxbai-embed-large</code>, plus <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">qwen2.5vl:7b</code> (about 6 GB) for local OCR</li>
-<li>Docker: Docker Desktop or OrbStack on a Mac, Docker Compose on Linux</li>
+<li>Docker: Docker Desktop on a Mac, Docker Compose on Linux</li>
 <li>Roughly 4–5 GB of disk per 75,000 messages, plus the mail itself</li>
 </ul>
 </div>

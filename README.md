@@ -25,10 +25,10 @@ Mailvec is deployed with Docker. Choose the machine that will hold the Maildir a
 
 | Host | Start here | Client connection |
 | --- | --- | --- |
-| **A Mac** (Docker Desktop or OrbStack) | [Docker getting started → On a Mac](docs/getting-started-docker.md#on-a-mac) — compose stack plus native Ollama on the same Mac | Local: Claude Code over `127.0.0.1:3333`, Claude Desktop over `docker exec` |
+| **A Mac** (Docker Desktop) | [Docker getting started → On a Mac](docs/getting-started-docker.md#on-a-mac) — compose stack plus native Ollama on the same Mac | Local: Claude Code over `127.0.0.1:3333`, Claude Desktop over `docker exec` |
 | **Always-on Linux Docker host** | [Docker getting started](docs/getting-started-docker.md) — compose stack and an external Ollama host | [Remote access through Cloudflare](docs/remote-access-cloudflare.md), if you want clients outside the stack |
 
-Both start with an IMAP account and provider-appropriate credentials (Fastmail, Gmail, and iCloud use app-specific passwords). The author's deployment runs on a Linux host. The older native macOS install (launchd services, MCPB bundle) is **deprecated**: it runs every mail parser inside the services that hold the archive and API keys. Existing installs can [move to Docker on the same Mac](docs/deploy-docker.md#moving-from-the-native-install). Contributors: read [local development](docs/contributing/local-dev-dataset.md) before running the install scripts on a machine that holds a frozen eval corpus.
+Both start with an IMAP account and provider-appropriate credentials (Fastmail, Gmail, and iCloud use app-specific passwords). The author's deployment runs on a Linux host. The older native macOS install (launchd services, MCPB bundle) is **deprecated**: it runs every mail parser inside the services that hold the archive and API keys. Contributors: read [local development](docs/contributing/local-dev-dataset.md) before running the install scripts on a machine that holds a frozen eval corpus.
 
 After installation, run `docker compose exec mcp mailvec doctor` and `docker compose exec mcp mailvec status`. Keyword search works while the initial embedding pass is still running; a large archive can take hours or days to finish embedding.
 
