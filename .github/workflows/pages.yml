@@ -36,5 +36,12 @@ jobs:
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
+      # deploy-pages looks the artifact up by name the moment it starts, and
+      # the artifact listing can lag the upload: on 2026-11-14 it reported
+      # "Found 0 artifact(s)" 0.3 s after the upload had finalized. A re-run
+      # cannot recover from that (the first attempt's artifact has appeared by
+      # then, so it finds two); only a fresh run can. Wait instead.
+      - name: Let the artifact listing catch up
+        run: sleep 15
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
