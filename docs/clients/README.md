@@ -1,6 +1,12 @@
 # Connect a local MCP client
 
-These steps apply after the [macOS installation](../getting-started-macos.md). They use the archive and user settings installed on that same Mac. A Docker deployment behind Cloudflare uses [one remote connector](../remote-access-cloudflare.md) instead.
+**Docker on a Mac** (the supported local setup): connect Claude Code to `http://127.0.0.1:3333`, and Claude Desktop through `docker exec` over stdio, as in [Get started with Docker → On a Mac](../getting-started-docker.md#on-a-mac), step 4. Any other client that accepts a local HTTP MCP server uses the same URL. A Docker deployment on a Linux host behind Cloudflare uses [one remote connector](../remote-access-cloudflare.md) instead.
+
+## Native macOS install (deprecated)
+
+> **Deprecated.** The native launchd install runs every mail parser (MIME, PDF, Office, image, including native PDFium) inside the services that hold your archive and any API key, with no sandbox or memory limit around them. Run Mailvec with [Docker on the Mac](../getting-started-docker.md#on-a-mac) instead, where parsing is isolated in its own container. This page stays for existing installs until the native install is removed.
+
+The rest of this page applies after the [native macOS installation](../getting-started-macos.md). It uses the archive and user settings installed on that same Mac.
 
 | Client | Connection | Guide |
 | --- | --- | --- |
@@ -8,7 +14,7 @@ These steps apply after the [macOS installation](../getting-started-macos.md). T
 | Claude Code | Local HTTP service at `127.0.0.1:3333` | [Claude Code](claude-code.md) |
 | Other local MCP clients | Generic stdio launcher or local HTTP | See below |
 
-## Other local clients
+### Other local clients
 
 For a client that accepts a local HTTP MCP server, use `http://127.0.0.1:3333`. For a client that needs stdio, publish the generic launcher once:
 

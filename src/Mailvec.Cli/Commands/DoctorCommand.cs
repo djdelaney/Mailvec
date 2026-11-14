@@ -1141,7 +1141,7 @@ internal static class DoctorCommand
         }
 
         if (parser.Mode != ParserRegistration.RemoteMode)
-            return DoctorCheck.Ok("Parser", "in-process — this binary carries MimeKit, PdfPig, OpenXml and PDFium itself", "pipeline");
+            return InProcessParserCheck();
 
         var endpoint = options.Endpoint ?? "?";
         if (skipNet)
@@ -1156,6 +1156,19 @@ internal static class DoctorCommand
                 "timeout or its request budget and should be back within seconds.",
                 "pipeline");
     }
+
+    // A warning, not ok: in-process parsing is the native launchd install's
+    // posture, and that install is deprecated precisely because of it. The
+    // decoders, native PDFium among them, then run on attacker-chosen bytes
+    // inside the processes that hold the archive and any hosted API key, with
+    // no memory limit around them. Still the right mode for `dotnet run` on a
+    // development machine, which is why this never fails.
+    internal static DoctorCheck InProcessParserCheck() =>
+        DoctorCheck.Warn("Parser",
+            "in-process, NOT isolated — this process runs MimeKit, PdfPig, OpenXml and PDFium on mail content itself, " +
+            "beside the archive and any API key. Fine for development. To deploy, use Docker (docs/getting-started-docker.md, " +
+            "including on a Mac), where every parse runs in the separate `parse` service. See docs/security.md.",
+            "pipeline");
 
     internal static bool InContainer() =>
         string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)

@@ -1,5 +1,7 @@
 # Claude Code
 
+> **Deprecated setup.** This page describes the native macOS install. With Docker on a Mac, follow [Get started with Docker → On a Mac](../getting-started-docker.md#on-a-mac), step 4, instead.
+
 **Transport**: HTTP (Streamable HTTP), against the launchd-managed MCP server on `127.0.0.1:3333`. Complete the [macOS installation](../getting-started-macos.md) first.
 
 Claude Code can talk to local HTTP MCP servers directly — no stdio launcher, no bundle. The launchd service installed by `ops/install.sh` keeps the server running across reboots.

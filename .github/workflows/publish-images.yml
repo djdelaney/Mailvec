@@ -1,16 +1,30 @@
 # Build the two deploy images (app + mbsync sidecar) in CI and push to GHCR,
-# so the homelab VM can `docker compose pull` instead of building on-host
-# (docs/deploy-docker.md "Prebuilt images"). linux/amd64 only — the deploy VM
-# is x86 and the natives (vec0.so, PDFium/SkiaSharp) are fetched by TARGETARCH
-# inside the build, so a CI build is equivalent to an on-host one.
+# so a deployment can `docker compose pull` instead of building on-host
+# (docs/deploy-docker.md "Images and updates"). Each tag is a multi-platform
+# index: linux/amd64 for an x86 Linux host (the author's homelab VM) and
+# linux/arm64 for Docker on an Apple Silicon Mac (or an arm64 Linux host).
+# Docker pulls the manifest for its own architecture from the index, so a
+# host that pinned a tag before arm64 existed needs no change.
 #
-# Two jobs, and only one of them builds:
+# Each architecture is built on a NATIVE runner, never under QEMU: emulated
+# `dotnet publish` is slow and unsupported by Microsoft, and the natives
+# (vec0.so, PDFium/SkiaSharp) are fetched by TARGETARCH inside the build, so
+# a native CI build is equivalent to one on the target host.
+#
+# Three jobs, and only one of them builds:
 #
 #   build   — green CI on a push to main (or a manual run on main) builds the
-#             tested commit and publishes sha-<short> + :latest. This is the
+#             tested commit once per architecture, pushes each image by
+#             digest only (no tag), pulls it back and runs
+#             ops/image-smoke.sh against exactly those bytes. This is the
 #             ONLY path that runs a Dockerfile.
+#   merge   — only if every architecture built and passed its smoke test,
+#             combines the per-architecture digests into one index per image
+#             and tags it sha-<short> + :latest. A failure in either
+#             architecture therefore publishes no tag at all; the untagged
+#             digests it leaves are pruned by cleanup.yml.
 #   promote — a v* tag push builds NOTHING. It finds the sha-<short> image the
-#             build job already published for the tagged commit and adds the
+#             merge job already published for the tagged commit and adds the
 #             v* tag to it. A release image is therefore byte-for-byte a build
 #             made from main, and a v* tag can only exist for a commit that
 #             was on main — because nothing else ever produced a sha- image.
@@ -67,17 +81,28 @@ jobs:
         github.event.workflow_run.head_branch == 'main' &&
         github.event.workflow_run.head_repository.full_name == github.repository
       )
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
     strategy:
+      # One architecture failing must stop the other from being published:
+      # merge needs both, and a half-built release is not one.
+      fail-fast: true
       matrix:
         include:
-          - name: app
-            image: ghcr.io/${{ github.repository_owner }}/mailvec
-            target: runtime   # explicit: never depend on "last stage wins"
-          - name: mbsync
-            image: ghcr.io/${{ github.repository_owner }}/mailvec-mbsync
-            target: mbsync
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    # Each leg sets differently named outputs (app_amd64, app_arm64, ...), so
+    # the matrix legs cannot overwrite each other's; merge reads all four.
+    outputs:
+      app_amd64: ${{ steps.out.outputs.app_amd64 }}
+      app_arm64: ${{ steps.out.outputs.app_arm64 }}
+      mbsync_amd64: ${{ steps.out.outputs.mbsync_amd64 }}
+      mbsync_arm64: ${{ steps.out.outputs.mbsync_arm64 }}
+    env:
+      APP_IMAGE: ghcr.io/${{ github.repository_owner }}/mailvec
+      MBSYNC_IMAGE: ghcr.io/${{ github.repository_owner }}/mailvec-mbsync
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -110,6 +135,8 @@ jobs:
           # pinned by digest like every other executable in the supply chain
           # (docs/security.md "Executable supply chain"). Left unset it defaults
           # to the moving tag moby/buildkit:buildx-stable-1. Bump deliberately.
+          # The digest is a multi-platform index, so the arm64 runner gets
+          # an arm64 buildkit from the same pin.
           driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
@@ -118,48 +145,144 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute tags
-        id: tags
-        run: |
-          set -euo pipefail
-          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
-          echo "tags=${{ matrix.image }}:sha-${SHORT_SHA},${{ matrix.image }}:latest" >> "$GITHUB_OUTPUT"
-          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Publishing: ${{ matrix.image }}:sha-${SHORT_SHA} + :latest"
+      - name: Record revision
+        id: rev
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+      # Pushed by digest with NO tag: nothing can pull these by name until
+      # merge has seen both architectures pass the smoke test. Provenance
+      # (SLSA) + SBOM ride along as OCI attestations; what they buy is the
+      # ability to answer "which commit produced the digest running in the
+      # homelab?" from the registry rather than from memory, and to check a
+      # future advisory against what's actually in a deployed image without
+      # rebuilding it. Inspect with:
+      #   docker buildx imagetools inspect <ref> --format '{{json .Provenance}}'
+      - name: Build and push app (linux/${{ matrix.arch }}, by digest)
+        id: app
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
-          target: ${{ matrix.target }}
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          # Build provenance (SLSA) + an SBOM, attached to the image as OCI
-          # attestations. Two lines, so worth taking even though nothing
-          # currently consumes them: what they buy is the ability to answer
-          # "which commit produced the digest running in the homelab?" from the
-          # registry rather than from memory, and to check a future advisory
-          # against what's actually in a deployed image without rebuilding it.
-          # Inspect with: docker buildx imagetools inspect <ref> --format '{{json .Provenance}}'
+          target: runtime   # explicit: never depend on "last stage wins"
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.APP_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           provenance: true
           sbom: true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.tags.outputs.revision }}
-          # Scoped per image so app/mbsync don't evict each other. NOTE:
-          # cleanup.yml's cache prune is scoped to nuget-* keys precisely so
-          # it doesn't thrash these buildx entries; GitHub's own 7-day-unused
-          # / 10GB LRU eviction manages them.
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.revision }}
+          # Scoped per image AND architecture so neither evicts another.
+          # NOTE: cleanup.yml's cache prune is scoped to nuget-* keys precisely
+          # so it doesn't thrash these buildx entries; GitHub's own
+          # 7-day-unused / 10GB LRU eviction manages them.
+          cache-from: type=gha,scope=app-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=app-${{ matrix.arch }}
+
+      - name: Build and push mbsync (linux/${{ matrix.arch }}, by digest)
+        id: mbsync
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          target: mbsync
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.MBSYNC_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: true
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.revision }}
+          cache-from: type=gha,scope=mbsync-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=mbsync-${{ matrix.arch }}
+
+      # Pull back the digests just pushed and smoke-test THOSE, on the
+      # architecture they were built for — not a rebuild, not a local copy.
+      # The same script runs on every PR (ci.yml), so a failure here is the
+      # rare case where the registry copy differs from the tested build.
+      - name: Smoke-test the pushed images
+        env:
+          APP_REF: ${{ env.APP_IMAGE }}@${{ steps.app.outputs.digest }}
+          MBSYNC_REF: ${{ env.MBSYNC_IMAGE }}@${{ steps.mbsync.outputs.digest }}
+          MAILVEC_SMOKE_EXPECT_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker pull "$APP_REF"
+          docker pull "$MBSYNC_REF"
+          ops/image-smoke.sh "$APP_REF" "$MBSYNC_REF"
+
+      - name: Hand the digests to merge
+        id: out
+        env:
+          ARCH: ${{ matrix.arch }}
+          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          MBSYNC_DIGEST: ${{ steps.mbsync.outputs.digest }}
+        run: |
+          set -euo pipefail
+          echo "app_${ARCH}=${APP_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "mbsync_${ARCH}=${MBSYNC_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "linux/${ARCH}: app ${APP_DIGEST}, mbsync ${MBSYNC_DIGEST}"
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # imagetools create combines the per-architecture indexes (each holding
+      # one image and its provenance/SBOM attestations) into a single index
+      # listing all of them, so cleanup.yml's prune sees every child directly
+      # under the tagged root and protects it.
+      - name: Tag sha-<short> + latest across both architectures
+        env:
+          APP_IMAGE: ghcr.io/${{ github.repository_owner }}/mailvec
+          MBSYNC_IMAGE: ghcr.io/${{ github.repository_owner }}/mailvec-mbsync
+          APP_AMD64: ${{ needs.build.outputs.app_amd64 }}
+          APP_ARM64: ${{ needs.build.outputs.app_arm64 }}
+          MBSYNC_AMD64: ${{ needs.build.outputs.mbsync_amd64 }}
+          MBSYNC_ARM64: ${{ needs.build.outputs.mbsync_arm64 }}
+        run: |
+          set -euo pipefail
+          for d in "$APP_AMD64" "$APP_ARM64" "$MBSYNC_AMD64" "$MBSYNC_ARM64"; do
+            if [[ ! "$d" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::A per-architecture digest is missing or malformed ('$d'); refusing to tag a partial image." >&2
+              exit 1
+            fi
+          done
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          publish() {
+            local image="$1" amd64="$2" arm64="$3"
+            echo "Publishing: ${image}:sha-${SHORT_SHA} + :latest"
+            docker buildx imagetools create \
+              --tag "${image}:sha-${SHORT_SHA}" --tag "${image}:latest" \
+              "${image}@${amd64}" "${image}@${arm64}"
+            docker buildx imagetools inspect "${image}:sha-${SHORT_SHA}"
+            # Both platforms must be in what was just tagged.
+            platforms="$(docker buildx imagetools inspect --raw "${image}:sha-${SHORT_SHA}" | jq -r '.manifests[] | select(.platform) | "\(.platform.os)/\(.platform.architecture)"')"
+            for want in linux/amd64 linux/arm64; do
+              grep -qw "$want" <<<"$platforms" || { echo "::error::${image}:sha-${SHORT_SHA} lacks ${want} (has: ${platforms})" >&2; exit 1; }
+            done
+          }
+          publish "$APP_IMAGE" "$APP_AMD64" "$APP_ARM64"
+          publish "$MBSYNC_IMAGE" "$MBSYNC_AMD64" "$MBSYNC_ARM64"
 
   promote:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # Long enough to wait out the build job: ops/release.sh --ship tags the
+    # Long enough to wait out build + merge: ops/release.sh --ship tags the
     # moment CI goes green, which is BEFORE the workflow_run build of that same
     # commit has pushed its sha- image.
-    timeout-minutes: 45
+    timeout-minutes: 65
     strategy:
       matrix:
         include:
@@ -214,23 +337,24 @@ jobs:
           # The build job publishes sha-<short> only for a commit that passed CI
           # on a push to main, so its existence IS the proof. Wait for it: the
           # tag usually lands while that build is still running.
-          for attempt in $(seq 1 80); do
+          for attempt in $(seq 1 120); do
             if docker buildx imagetools inspect "$SOURCE" >/dev/null 2>&1; then
               break
             fi
-            if [[ "$attempt" == 80 ]]; then
-              echo "ERROR: no $SOURCE after 40 minutes. A v* tag can only be promoted from a commit" >&2
+            if [[ "$attempt" == 120 ]]; then
+              echo "ERROR: no $SOURCE after 60 minutes. A v* tag can only be promoted from a commit" >&2
               echo "       that passed CI on main and was published by the build job. Is the tagged" >&2
               echo "       commit on main, and did its CI + 'Publish images' runs go green?" >&2
               exit 1
             fi
-            echo "Waiting for $SOURCE (attempt $attempt/80)..."
+            echo "Waiting for $SOURCE (attempt $attempt/120)..."
             sleep 30
           done
 
-          # Copies the source index (image + its provenance/SBOM attestations)
-          # under the new name; the platform manifest — the bytes that run — is
-          # the one CI built and tested.
+          # Copies the source index (both architectures' images + their
+          # provenance/SBOM attestations) under the new name; the platform
+          # manifests — the bytes that run — are the ones the build job
+          # smoke-tested.
           docker buildx imagetools create --tag "$TARGET" "$SOURCE"
           docker buildx imagetools inspect "$TARGET"
           echo "Promoted $SOURCE -> $TARGET"

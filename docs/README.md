@@ -6,18 +6,19 @@ Start with one installation path. The pages below are grouped by the task you ar
 
 | Task | Guide |
 | --- | --- |
-| One-machine Apple Silicon install | [Get started on macOS](getting-started-macos.md) |
 | Always-on Linux host | [Get started with Docker](getting-started-docker.md) |
-| IMAP credentials and first sync on macOS | [IMAP setup](imap-setup.md) |
+| A Mac, with Docker Desktop | [Get started with Docker → On a Mac](getting-started-docker.md#on-a-mac) |
 | Claude Desktop, Claude Code, and other local MCP clients | [Local client setup](clients/README.md) |
+| IMAP providers, app passwords and folder filtering (examples use the native install; the provider notes apply to Docker's `mbsyncrc` too) | [IMAP setup](imap-setup.md) |
+| *Deprecated:* native macOS install (launchd) | [Get started on macOS](getting-started-macos.md) |
 | Remote Claude connector behind Cloudflare Access | [Remote access](remote-access-cloudflare.md) |
 
 ## Use and operate
 
 - [Reading and searching attachments](attachments.md) and [Fastmail deep links](fastmail-deep-links.md).
-- [macOS operations](install-macos.md): launchd mechanics, backups, migration, and uninstall.
-- [Docker deployment](deploy-docker.md): compose layout, image releases, migration, backup, and rollout checks. Optional extras: [new-mail push](deploy-docker.md#new-mail-push-imap-idle) and [mark-read](deploy-docker.md#optional-mark-read), which lets agents mark mail read.
+- [Docker deployment](deploy-docker.md): compose layout, image releases, [Docker on a Mac](deploy-docker.md#docker-on-a-mac), migration, backup, and rollout checks. Optional extras: [new-mail push](deploy-docker.md#new-mail-push-imap-idle) and [mark-read](deploy-docker.md#optional-mark-read), which lets agents mark mail read (Linux host only).
 - [Logs](logs.md), [Uptime Kuma monitoring](monitoring-uptime-kuma.md), and the [security model](security.md).
+- *Deprecated:* [macOS operations](install-macos.md) for the native launchd install: mechanics, backups, and uninstall.
 
 ## Develop
 

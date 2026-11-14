@@ -1,6 +1,6 @@
 # Docker deployment
 
-Mailvec runs as a Compose stack with `mbsync`, indexer, embedder, parser, and MCP services. Ollama runs at a reachable URL outside the stack. Follow [Get started with Docker](getting-started-docker.md) for a new install; this page covers migration and operations. The MCP service publishes no host port. Remote access, if needed, uses [Cloudflare Tunnel and Access](remote-access-cloudflare.md).
+Mailvec runs as a Compose stack with `mbsync`, indexer, embedder, parser, and MCP services, on a Linux Docker host or under Docker on a Mac. Ollama runs at a reachable URL outside the stack. Follow [Get started with Docker](getting-started-docker.md) for a new install; this page covers migration and operations. On a Linux host the MCP service publishes no host port, and remote access, if needed, uses [Cloudflare Tunnel and Access](remote-access-cloudflare.md). A Mac adds the `compose.macos.yml` overlay; see [Docker on a Mac](#docker-on-a-mac) for what it changes.
 
 Use Docker Engine 25.0.5 or later. The `indexer` and `parse` services sit on `internal` networks so that they have no route out, and before that release the engine's embedded DNS server still forwarded their lookups to external nameservers when the host's resolver was on a loopback address (systemd-resolved's `127.0.0.53`), which is a data path out of a container that is meant to have none (CVE-2024-29018; also fixed in 23.0.11 and in every release from 26.0.0). Check with `docker version --format '{{.Server.Version}}'`.
 
@@ -15,7 +15,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Use `v<version>` tags for durable pins; `sha-<gitsha>` tags are pruned. Images for releases before v0.12.1 are no longer pullable: an earlier cleanup job removed their manifests. For a verified immutable pin, append each image's digest (`:vX.Y.Z@sha256:...`). Get it with `docker buildx imagetools inspect <image>:vX.Y.Z --format '{{json .Manifest.Digest}}'`. Do not use `--build` with GHCR references; it retags a local build under those names. Do not enable automatic image updates: startup can migrate the archive. Take a [backup](#backups) before updating. `docker compose restart` retains old environment and container settings; use `up -d` to apply changes.
+Each tag is a multi-platform image covering linux/amd64 and linux/arm64, and Docker pulls the one matching the host, so the same reference works on an x86 Linux host and on an Apple Silicon Mac. Releases published before multi-platform support are linux/amd64 only; check a tag with `docker buildx imagetools inspect <image>:vX.Y.Z` and look for `linux/arm64`. Use `v<version>` tags for durable pins; `sha-<gitsha>` tags are pruned. Images for releases before v0.12.1 are no longer pullable: an earlier cleanup job removed their manifests. For a verified immutable pin, append each image's digest (`:vX.Y.Z@sha256:...`). Get it with `docker buildx imagetools inspect <image>:vX.Y.Z --format '{{json .Manifest.Digest}}'`; that is the digest of the multi-platform index, so the pin stays valid on either architecture. Do not use `--build` with GHCR references; it retags a local build under those names. Do not enable automatic image updates: startup can migrate the archive. Take a [backup](#backups) before updating. `docker compose restart` retains old environment and container settings; use `up -d` to apply changes.
 
 Check the result with `docker compose ps`, `docker compose exec mcp mailvec doctor`, and `docker compose exec mcp mailvec status`. Release creation is governed by [CLAUDE.md](../CLAUDE.md#releases).
 
@@ -108,7 +108,7 @@ This is a latency optimisation only, and every failure falls back to the interva
 
 ## Optional: mark-read
 
-The `mark_read` MCP tool lets an agent set or clear the read flag on mail, for example a scheduled agent that triages monitoring alerts and marks the routine ones read. It is off unless you add it, and a deployment without it stays read-only. Security implications: [Security model](security.md#optional-mark-read).
+The `mark_read` MCP tool lets an agent set or clear the read flag on mail, for example a scheduled agent that triages monitoring alerts and marks the routine ones read. It is off unless you add it, and a deployment without it stays read-only. It is for a Linux host: the [Mac overlay](#docker-on-a-mac) refuses to start with it. Security implications: [Security model](security.md#optional-mark-read).
 
 To enable it:
 
@@ -134,6 +134,49 @@ Verify it:
 A message is refused (`forbidden_folder`) unless **every** folder it is in is allowed, because marking one copy read marks the whole email read on the server. Requests wake the sync loop, so a change usually reaches the server within about 5 seconds.
 
 To disable it, remove both `.env` lines, put `Sync Pull` back, and run `docker compose up -d`. Requests still queued are never applied.
+
+## Docker on a Mac
+
+`compose.macos.yml` (enabled with `COMPOSE_FILE=compose.yml:compose.macos.yml` in `.env`) keeps every service, image, network and hardening setting from `compose.yml`, and changes three things:
+
+- **Storage.** `/data`, `/mail` and `/logs` are the named volumes `mailvec_data`, `mailvec_mail` and `mailvec_logs` instead of `./data`, `./mail` and `./logs`. They live on the Docker VM's disk, where SQLite gets real POSIX locking; a bind mount shared from macOS does not promise that, and can present Mac files as root-owned inside the container. The one-shot `volume-init` service runs before the others on every `up`, gives the volumes to `MAILVEC_UID:MAILVEC_GID`, and creates the Maildir root so the indexer's file watcher has something to watch from its first start. If `up` fails saying `volume-init` didn't complete successfully, the reason (an unset uid, the mark-read component, a file it could not hand over) is in `docker compose logs volume-init`. `docker compose down` keeps the volumes; `down -v` **deletes the archive and the Maildir**.
+- **Ollama** defaults to `http://host.docker.internal:11434`, the native Ollama app on the same Mac.
+- **MCP** is published on `127.0.0.1:3333` for local clients. Nothing is published on the LAN.
+
+The overlay needs Docker Engine 26.0 and Compose 2.26 or later, above the 25.0.5 floor for a Linux host, because the per-service log mounts are volume subpaths. Check with `docker version --format '{{.Server.Version}}'` and `docker compose version`.
+
+The optional [mark-read](#optional-mark-read) component is not supported with the overlay yet. `compose.mark-read.yml` bind-mounts `./mark-read` from the Mac, which goes through the file sharing the overlay moves everything else off, and its mount boundary has only been tested on a Linux host. The overlay refuses the combination: with `compose.mark-read.yml` in `COMPOSE_FILE` or `MBSYNC_MARK_READ_FOLDERS` set, `volume-init` exits with an error and no service starts.
+
+`mbsyncrc` and `secrets/*` are still bind mounts. With `MAILVEC_UID`/`MAILVEC_GID` set to your Mac account they are readable as-is. If a service refuses to start saying one of them is not readable by its uid, the Docker version is presenting shared files under a different owner; check with `docker compose run --rm --no-deps --entrypoint ls mbsync -ln /etc/mbsyncrc /run/secrets`.
+
+**Backups.** The archive is not a file in Finder. Copy it out through a container after a checkpoint, as in [Backups](#backups):
+
+```sh
+docker compose stop indexer embedder
+if docker compose exec -T mcp mailvec checkpoint; then
+  docker compose cp mcp:/data/archive.sqlite <backup-path>
+else
+  echo 'Checkpoint failed; no copy made' >&2
+fi
+docker compose start indexer embedder
+```
+
+Docker Desktop keeps volumes inside its VM disk image, so a Time Machine backup of the Mac is not a usable archive backup; keep the copies this produces.
+
+**Logs.** There is no `./logs` directory on a Mac: each service's log files are in the `mailvec_logs` volume, mounted at `/logs` in that service. `docker compose logs <service>` shows the same lines; to read the files, go through the container, for example `docker compose exec indexer ls /logs` and `docker compose exec indexer tail -n 100 /logs/<file>`. See [Logs](logs.md#in-containers).
+
+**Restore.** To put a backup back, stop the stack and copy the file into the data volume through the `volume-init` container; the next `up` gives it to the service uid:
+
+```sh
+docker compose down
+docker compose run --rm --no-deps --cap-add DAC_OVERRIDE \
+  -v <backup-path>:/seed/archive.sqlite:ro volume-init \
+  'rm -f /data/archive.sqlite /data/archive.sqlite-wal /data/archive.sqlite-shm && cp /seed/archive.sqlite /data/archive.sqlite'
+docker compose up -d
+docker compose exec mcp mailvec status
+```
+
+`<backup-path>` must be an absolute path. The old `-wal` and `-shm` files belong to the archive being replaced and are removed with it.
 
 ## Resource limits
 

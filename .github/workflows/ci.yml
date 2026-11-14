@@ -1,4 +1,4 @@
-# CI for Mailvec. Two independent jobs:
+# CI for Mailvec. Three independent jobs:
 #
 #   dotnet — fetch vec0.dylib, build all projects (TreatWarningsAsErrors is on,
 #            so a warning fails here), run the full xUnit suite. No Ollama is
@@ -19,6 +19,11 @@
 #   dotnet-linux — the same suite on the deploy platform. See the comment on
 #            the job for why a macOS-only suite could not catch a per-RID
 #            native break, and did not for three days.
+#
+#   image  — on pull requests, builds both Docker images on a native amd64
+#            and a native arm64 runner and runs ops/image-smoke.sh against
+#            each: the only job that exercises what the Dockerfile actually
+#            ships. Pushes to main get the same check in publish-images.yml.
 #
 # The version-lockstep check mirrors the guard in ops/release.sh (and
 # ops/build-mcpb.sh's plain build) so drift between Directory.Build.props and
@@ -167,12 +172,12 @@ jobs:
   #
   # Cheap to add: Linux runners bill at 1x against macOS's 10x, and this job is
   # the faster of the two. It does NOT replace the macOS job — macOS is a
-  # supported install target (launchd agents, the MCPB bundle) and the
-  # development platform, so dropping it would just relocate the blind spot.
+  # development platform (and the deprecated launchd install still builds
+  # there), so dropping it would just relocate the blind spot.
   #
   # Note this still isn't the container: it tests against the SDK image's
   # runtime, not the Dockerfile's layout. A break in how the image copies
-  # natives would need an image smoke test, which is separate work.
+  # natives is the `image` job's to catch.
   dotnet-linux:
     name: Build + .NET tests (Linux)
     runs-on: ubuntu-latest
@@ -235,3 +240,75 @@ jobs:
       - name: mbsync sidecar tests (sync loop + IDLE)
         run: python3 -m unittest discover -s ops/tests -v
 
+  # The images, per architecture. Every deployment is Docker: linux/amd64 on
+  # an x86 Linux host, linux/arm64 under Docker on an Apple Silicon Mac. The
+  # two suites above run the code on macOS arm64 and Linux x64, but neither
+  # runs the IMAGE — what the Dockerfile fetched for its TARGETARCH, copied
+  # and stripped — and nothing at all ran linux/arm64 before it shipped.
+  # ops/image-smoke.sh starts each binary the way compose does and checks the
+  # natives load (sqlite-vec, PDFium, SkiaSharp, mbsync, goimapnotify).
+  #
+  # Native runners, never QEMU: emulated `dotnet publish` is slow and
+  # unsupported. ubuntu-24.04-arm is free for public repositories.
+  # publish-images.yml runs the same script against the bytes it pushes;
+  # this job is what makes a failure show up on the PR instead of after merge.
+  #
+  # Reads the publish workflow's build cache (same scopes) but never writes
+  # it, so a PR cannot seed the cache main's published images build from.
+  #
+  # Pull requests only. On a push to main, publish-images.yml builds the same
+  # commit for both architectures and runs the same script against the bytes
+  # it pushed, before tagging anything; building here as well would double
+  # the work and lengthen the wait `promote` has to sit out.
+  image:
+    name: Image smoke (linux/${{ matrix.arch }})
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      # Report both architectures: one failing says nothing about the other.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          # Same digest-pinned builder as publish-images.yml.
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build app image (linux/${{ matrix.arch }})
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          target: runtime
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: mailvec:smoke
+          cache-from: type=gha,scope=app-${{ matrix.arch }}
+
+      - name: Build mbsync image (linux/${{ matrix.arch }})
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          target: mbsync
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: mailvec-mbsync:smoke
+          cache-from: type=gha,scope=mbsync-${{ matrix.arch }}
+
+      - name: Smoke-test the images
+        env:
+          MAILVEC_SMOKE_EXPECT_ARCH: ${{ matrix.arch }}
+        run: ops/image-smoke.sh mailvec:smoke mailvec-mbsync:smoke
