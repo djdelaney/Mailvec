@@ -81,6 +81,11 @@ services:
         echo "volume-init: MAILVEC_UID and MAILVEC_GID are not set. In .env, set them to your Mac account (id -u, id -g): that account owns mbsyncrc and secrets/*, and the services must run as it." >&2;
         exit 1;
         fi;
+        case "$$MAILVEC_COMPOSE_FILE" in *mark-read*) mark_read=1 ;; *) mark_read= ;; esac;
+        if [ -n "$$mark_read" ] || [ -n "$$MBSYNC_MARK_READ_FOLDERS" ]; then
+        echo "volume-init: the mark-read component is not supported with compose.macos.yml. Its queue is a bind mount from the Mac, and the mount boundary that keeps mcp from writing outside the inbox has only been tested on a Linux host. In .env, remove compose.mark-read.yml from COMPOSE_FILE and comment out MBSYNC_MARK_READ_FOLDERS. Nothing was started." >&2;
+        exit 1;
+        fi;
         mkdir -p /data /mail /logs/mcp /logs/indexer /logs/embedder;
         unowned() { find /data /mail /logs -ignore_readdir_race \( ! -user "$$MAILVEC_UID" -o ! -group "$$MAILVEC_GID" \) "$$@"; };
         unowned -exec chown -h "$$MAILVEC_UID:$$MAILVEC_GID" {} + || true;
@@ -97,6 +102,14 @@ services:
       # preflight would then suggest chowning those files to it.
       MAILVEC_UID: ${MAILVEC_UID:-}
       MAILVEC_GID: ${MAILVEC_GID:-}
+      # Read only to refuse the mark-read component, which is not supported
+      # with this overlay (docs/deploy-docker.md "Docker on a Mac"). Either
+      # sign of it stops the stack here, before any service starts: without
+      # this, mark_read would just report itself unavailable, or run on a
+      # mount boundary nobody has tested. The folder list catches an overlay
+      # added with -f instead of COMPOSE_FILE; mark-read is off without it.
+      MAILVEC_COMPOSE_FILE: ${COMPOSE_FILE:-}
+      MBSYNC_MARK_READ_FOLDERS: ${MBSYNC_MARK_READ_FOLDERS:-}
     network_mode: none
     read_only: true
     cap_drop: [ALL]
