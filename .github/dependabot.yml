@@ -77,6 +77,20 @@ updates:
       # PDFtoImage one minor at a time. Bump it BY HAND when a PDFtoImage
       # update lands — see ops/UPGRADING.md "Cluster-pin invariants".
       - dependency-name: "SkiaSharp"
+      # The .NET servicing band moves with the TFM, not on its own. A .NET
+      # major (10 → 11) for these is a TFM bump (net10.0 in
+      # Directory.Build.props, the Dockerfile's sdk/aspnet images, the MCPB
+      # runtime — see ops/UPGRADING.md ".NET SDK / runtime"), done by hand in
+      # one change. Proposed as a group PR it arrives half-applied: on
+      # 2026-11-14 (#70) most of Microsoft.Extensions.* went to 11.0.0 while
+      # Hosting and Logging.Console stayed on 10 — the cluster skew
+      # UPGRADING.md warns surfaces at runtime, not build. Patches still flow.
+      - dependency-name: "Microsoft.Extensions.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Microsoft.AspNetCore.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Microsoft.Data.Sqlite.Core"
+        update-types: ["version-update:semver-major"]
     groups:
       # Each group below batches its cluster into one PR when the members have
       # updates in the same run. It cannot force them to move together — see
@@ -152,6 +166,15 @@ updates:
       interval: "weekly"
     assignees:
       - "djdelaney"
+    # The .NET images' major tag IS the runtime the framework-dependent publish
+    # needs: aspnet:11.0 cannot start a net10.0 app. #68 (2026-11-14) proposed
+    # exactly that. Digest refreshes within 10.0 still flow; the major moves
+    # with the TFM, by hand (ops/UPGRADING.md ".NET SDK / runtime").
+    ignore:
+      - dependency-name: "dotnet/sdk"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "dotnet/aspnet"
+        update-types: ["version-update:semver-major"]
     groups:
       docker-all:
         patterns: ["*"]
