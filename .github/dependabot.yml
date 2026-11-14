@@ -31,8 +31,8 @@
 # Central Package Management is on: every version lives in the root
 # Directory.Packages.props and csproj files carry no Version attribute. The
 # per-project `directories` list is how Dependabot finds the projects that
-# resolve against it — the root holds Mailvec.slnx (the .NET 10 XML solution
-# format), which Dependabot's NuGet support may not parse. Note the list is
+# resolve against it — the root holds Mailvec.slnx (the XML solution format .NET 10+
+# emits), which Dependabot's NuGet support may not parse. Note the list is
 # not the full scope: Dependabot also discovered `.config/dotnet-tools.json`
 # on its own, which is why PRs can touch a directory not named here.
 
@@ -78,7 +78,7 @@ updates:
       # update lands — see ops/UPGRADING.md "Cluster-pin invariants".
       - dependency-name: "SkiaSharp"
       # The .NET servicing band moves with the TFM, not on its own. A .NET
-      # major (10 → 11) for these is a TFM bump (net10.0 in
+      # major (11 → 12) for these is a TFM bump (net11.0 in
       # Directory.Build.props, the Dockerfile's sdk/aspnet images, the MCPB
       # runtime — see ops/UPGRADING.md ".NET SDK / runtime"), done by hand in
       # one change. Proposed as a group PR it arrives half-applied: on
@@ -167,8 +167,9 @@ updates:
     assignees:
       - "djdelaney"
     # The .NET images' major tag IS the runtime the framework-dependent publish
-    # needs: aspnet:11.0 cannot start a net10.0 app. #68 (2026-11-14) proposed
-    # exactly that. Digest refreshes within 10.0 still flow; the major moves
+    # needs: aspnet:12.0 cannot start a net11.0 app. #68 (2026-11-14) proposed
+    # the 10 → 11 version of exactly that. Digest refreshes within 11.0 still
+    # flow; the major moves
     # with the TFM, by hand (ops/UPGRADING.md ".NET SDK / runtime").
     ignore:
       - dependency-name: "dotnet/sdk"

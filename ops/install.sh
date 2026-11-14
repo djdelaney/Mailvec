@@ -191,7 +191,7 @@ fi
 
 DOTNET_BIN="$(command -v dotnet || true)"
 if [[ -z "$DOTNET_BIN" ]]; then
-    echo "install.sh: dotnet not on PATH. Install .NET 10 SDK first." >&2
+    echo "install.sh: dotnet not on PATH. Install .NET 11 SDK first." >&2
     exit 1
 fi
 
@@ -204,9 +204,9 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 # `command -v dotnet` alone accepted a machine with only .NET 8/9, which
-# then died mid-publish with NETSDK1045 — loud, but not "install .NET 10".
-if ! dotnet --list-sdks 2>/dev/null | grep -q "^10\."; then
-    echo "install.sh: no .NET 10 SDK found (dotnet is $DOTNET_BIN). Install it: brew install --cask dotnet-sdk" >&2
+# then died mid-publish with NETSDK1045 — loud, but not "install .NET 11".
+if ! dotnet --list-sdks 2>/dev/null | grep -q "^11\."; then
+    echo "install.sh: no .NET 11 SDK found (dotnet is $DOTNET_BIN). Install it: brew install --cask dotnet-sdk" >&2
     exit 1
 fi
 

@@ -16,14 +16,14 @@
 # com.mailvec.mbsync launchd interval job for container deployments.
 
 # Bases are pinned by DIGEST; the version tag stays in the comment for humans.
-# A tag like `10.0` is a moving pointer that picks up .NET servicing patches —
+# A tag like `11.0` is a moving pointer that picks up .NET servicing patches —
 # which is exactly why it must not be what a reproducible build resolves. The
 # tradeoff is real and worth stating: a digest pin freezes those patches too, so
 # it is only safe because .github/dependabot.yml has the `docker` ecosystem
 # enabled and bumps these weekly. If Dependabot is ever turned off, go back to
 # tags rather than sitting on a frozen base.
-#   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb AS build
+#   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:11.0
+FROM mcr.microsoft.com/dotnet/sdk:11.0@sha256:65f3c7c6a25a239ab3e6719f2896147e7b68242ff2d8818dd70498bde6ef8bea AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
@@ -830,7 +830,7 @@ USER 10001:10001
 CMD ["mbsync-loop"]
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:bfd912c83295ce66d4b706ebb8541b9f14259b0e76fbb88b2751f58ce2399d2e AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:11.0@sha256:bc0d6653979efba491ab3d6f589d691f96c309c3c3ef81325efa6978e7b7f242 AS runtime
 # curl is for the compose healthcheck against /health.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \

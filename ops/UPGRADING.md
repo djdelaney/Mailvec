@@ -145,19 +145,22 @@ Practical consequences when planning the deploy:
 
 ## .NET SDK / runtime
 
-`net10.0` is declared once in `Directory.Build.props`; that's the only place to change it. There is no `global.json`, so the SDK floats to whatever's installed locally.
+`net11.0` is declared once in `Directory.Build.props` for the solution; that's the place to change it. `tools/Mailvec.ParserBench` (outside `Mailvec.slnx`) declares its own and moves with it. There is no `global.json`, so the SDK floats to whatever's installed locally.
 
-A TFM bump (e.g. `net10.0` → `net11.0`) has fanout:
+A TFM bump (e.g. `net11.0` → `net12.0`) has fanout:
 
 1. Install the matching SDK on the build host — `ops/build-mcpb.sh` runs `dotnet publish -c Release -r osx-arm64 --self-contained true` and ships the runtime inside the bundle.
 2. Re-run `ops/install-stdio-launcher.sh` so the stdio launcher at `~/.local/bin/mailvec-mcp-stdio` (which exports `DOTNET_ROOT`) resolves to a runtime that exists. It republishes, re-signs, and rewrites the launcher — all three matter here, since the launcher is what bakes in the `DOTNET_ROOT` that a TFM bump invalidates.
 3. Rebuild + reinstall the MCPB with `--bump` so end-users' Claude Desktop instances pick up the new self-contained runtime.
-4. Move the Dockerfile's `dotnet/sdk` and `dotnet/aspnet` FROMs to the new major (tag **and** digest) in the same change. The container publish is framework-dependent, so the `aspnet` image must carry the TFM's runtime — a `net10.0` app will not start on `aspnet:11.0`, and the reverse fails the same way. Move the `Microsoft.Extensions.*` / `Microsoft.AspNetCore.*` / `Microsoft.Data.Sqlite.Core` band to the new major at the same time, the whole cluster at once.
+4. Move the Dockerfile's `dotnet/sdk` and `dotnet/aspnet` FROMs to the new major (tag **and** digest) in the same change. The container publish is framework-dependent, so the `aspnet` image must carry the TFM's runtime — a `net11.0` app will not start on `aspnet:12.0`, and the reverse fails the same way. Move the `Microsoft.Extensions.*` / `Microsoft.AspNetCore.*` / `Microsoft.Data.Sqlite.Core` band to the new major at the same time, the whole cluster at once.
 5. Dependabot is told to ignore majors for those packages and both images (`.github/dependabot.yml`), so it will not propose this for you, and it won't propose the *next* major either until you revisit those ignore rules.
 6. Move `dotnet-version` in every workflow that installs an SDK (`grep -rn dotnet-version .github/workflows`). On 2026-11-14 that was four places: `ci.yml` (twice), `gmail-traces.yml`, `cloud-smoke.yml`.
 7. Remove package references that the new shared framework now supplies. NuGet reports each one as `NU1510` ("will not be pruned … does not need to be referenced explicitly"), and `TreatWarningsAsErrors` turns that into a build failure. Delete the `PackageReference` lines **and** the `PackageVersion` entries in `Directory.Packages.props`; don't `NoWarn` it. For `net11.0` the affected references were `Microsoft.Extensions.Options` and `Microsoft.Extensions.Logging.Abstractions`, in `Mailvec.Core`, `Mailvec.Parsing` and `Mailvec.OcrBench`. The full list for 11 is in Microsoft's breaking-change note "Some Microsoft.Extensions packages included in shared framework". Expect more of the same at 12.
 
-Steps 1–3 apply only to the deprecated launchd/MCPB install; skip them once it is removed.
+8. Move the SDK the Claude cloud environment installs (`ops/claude-cloud-setup.sh`, then re-paste it into the environment settings). An LTS SDK comes from Ubuntu's archive; an STS one does not, and needs `ppa:dotnet/backports` (see the script's comment).
+9. Update the SDK named in the deprecated install's prerequisite check (`ops/install.sh`, `ops/install-all.sh`, `docs/getting-started-macos.md`), and `ops/run-mcp-stdio.sh`, which runs a `bin/Debug/<tfm>/` path directly. `git grep -n 'net<old>\.0\|\.NET <old>'` finds the stragglers.
+
+Steps 1–3 and 9 apply only to the deprecated launchd/MCPB install; skip them once it is removed.
 
 Bundle size grows roughly with each runtime major.
 
@@ -180,13 +183,14 @@ Bundle size grows roughly with each runtime major.
    ```
    The `VSTEST_ARTIFACTS_BASE_DIRECTORY` variable silences a .NET 11 SDK warning: in a container the default `/run/user/<uid>` does not exist. Two `DoctorCommandHelpersTests` (`InContainer_is_false_on_a_normal_dev_machine`, `Mixed_binaries_warn_and_name_both_versions`) fail in **any** container, on 10 as well as 11. They assume a Mac, so they are not a TFM regression.
 
-### .NET 11 assessment (observed 2026-11-14, not adopted)
+### .NET 10 → 11 (2026-11-14)
 
-Evaluated at GA (SDK 11.0.100) and deliberately **not** taken. Re-check the dates before acting on this.
+Adopted at GA (SDK 11.0.100), after first being assessed and set aside. Re-check the dates before relying on this for the next move.
 
-- **Support:** .NET 11 (STS) and .NET 10 (LTS) both end on 2028-11-14. Moving to 11 bought no runway and added a TFM hop before .NET 12, the next LTS (expected 2027-11). The plan was to go from 10 straight to 12.
-- **Trial result:** after steps 2, 4 and 7 above, the solution built clean with warnings as errors. All tests passed apart from the two container-only failures noted above. The linux/arm64 image passed `ops/image-smoke.sh`: vec0 loaded, `/up` answered, PdfPig + MimeKit extracted text, and PDFium + SkiaSharp rendered a page. `MessageBodyHasherTests.Serialized_body_bytes_are_pinned_across_library_upgrades` passed, so stored `content_hash` values survive the runtime change. Not run: the amd64 image, or an eval baseline.
-- **Breaking changes reviewed against this codebase.** None required a code change, but re-check them at the next major:
+- **Support:** .NET 11 (STS) and .NET 10 (LTS) both end on 2028-11-14, so the move bought no support runway; it was taken for its own sake. .NET 12, the next LTS, is expected 2027-11. Move to it before 11's end of support.
+- **Trial result (before adopting):** after steps 2, 4 and 7 above, the solution built clean with warnings as errors. All tests passed apart from the two container-only failures noted above. The linux/arm64 image passed `ops/image-smoke.sh`: vec0 loaded, `/up` answered, PdfPig + MimeKit extracted text, and PDFium + SkiaSharp rendered a page. `MessageBodyHasherTests.Serialized_body_bytes_are_pinned_across_library_upgrades` passed, so stored `content_hash` values survive the runtime change. Not run: the amd64 image, or an eval baseline.
+- **Adoption result:** all 1,807 tests passed on macOS arm64 (no container failures there). The checkout needed `ops/fetch-sqlite-vec.sh` first, which is unrelated to the TFM: without `vec0.dylib`, every database test fails with "sqlite-vec extension not found". The cloud environment's move to `ppa:dotnet/backports` was **not** verified from a cloud session when it landed.
+- **Breaking changes reviewed against this codebase.** None required a code change beyond step 7, but re-check them at the next major:
   - *ConcurrencyLimiter middleware removed* (ASP.NET Core 11). Not used here: the `/mcp` limit is `AddRateLimiter` + `RateLimitPartition.GetConcurrencyLimiter`.
   - *Kestrel rejects connection-specific headers on HTTP/2 and HTTP/3*. The tunnel reaches mcp over HTTP/1.1. If that hop is ever switched to h2c, re-check it.
   - *Empty strings in chained configuration override earlier providers*. Applies only to `AddConfiguration(IConfiguration)` chaining. `AddMailvecSharedConfig` inserts a `JsonConfigurationSource` directly, so this is unaffected. A future refactor that chains config would change what an empty env value means.

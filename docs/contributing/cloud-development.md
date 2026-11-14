@@ -16,7 +16,7 @@ so each installs different things:
 
 | | Runs | Installs |
 |---|---|---|
-| **Setup script** (claude.ai environment settings) | Before the repo is cloned. Cached as a filesystem snapshot for about a week. | The .NET 10 SDK and the `sqlite3` CLI: [`ops/claude-cloud-setup.sh`](../../ops/claude-cloud-setup.sh) |
+| **Setup script** (claude.ai environment settings) | Before the repo is cloned. Cached as a filesystem snapshot for about a week. | The .NET 11 SDK (from Canonical's `ppa:dotnet/backports`) and the `sqlite3` CLI: [`ops/claude-cloud-setup.sh`](../../ops/claude-cloud-setup.sh) |
 | **SessionStart hook** ([`.claude/settings.json`](../../.claude/settings.json)) | After the clone, on every startup and resume | The sqlite-vec loadable into `runtimes/<rid>/native/`: [`ops/claude-session-start.sh`](../../ops/claude-session-start.sh) → [`ops/fetch-sqlite-vec.sh`](../../ops/fetch-sqlite-vec.sh) |
 
 sqlite-vec can't go in the setup script. It installs into the checkout's
@@ -31,7 +31,13 @@ In the environment's settings (at [claude.ai/code](https://claude.ai/code), open
 1. **Network access: Trusted** (the default). Setup and build need the Ubuntu
    archive, nuget.org, and GitHub release downloads
    (`release-assets.githubusercontent.com`, for sqlite-vec). All are on the
-   default allowlist.
+   default allowlist. Since the move to .NET 11 (an STS release, which
+   Ubuntu 24.04's archive does not carry), setup also needs Launchpad's PPA
+   host, `ppa.launchpadcontent.net`, for `ppa:dotnet/backports`. **Not yet
+   verified against the allowlist.** If it is refused, setup fails at its SDK
+   check: add the host under a custom allowlist, or move setup to
+   Microsoft's `dotnet-install.sh`. After the first successful setup, delete
+   this caveat.
 2. **Environment variables:**
    ```
    DOTNET_NOLOGO=1

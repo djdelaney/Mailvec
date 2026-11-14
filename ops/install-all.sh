@@ -7,7 +7,7 @@
 #                                  CLI shim, run mailvec doctor
 #
 # Prerequisites NOT handled by this script:
-# - .NET 10 SDK on PATH (`brew install --cask dotnet-sdk`)
+# - .NET 11 SDK on PATH (`brew install --cask dotnet-sdk`)
 # - mbsync (`brew install isync`)
 # - Ollama, via the cask (`brew install --cask ollama-app`), NOT the `ollama`
 #   formula — the formula bottle has shipped without the GGML llama-server, so

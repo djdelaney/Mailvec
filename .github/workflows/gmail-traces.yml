@@ -109,10 +109,10 @@ jobs:
         if: always()
         run: sudo rm -rf "$RUNNER_TEMP/trace-work"
 
-      - name: Set up .NET 10 SDK
+      - name: Set up .NET 11 SDK
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "11.0.x"
 
       - name: Fetch sqlite-vec extension
         run: ./ops/fetch-sqlite-vec.sh

@@ -147,7 +147,7 @@ public class AttachmentTextExtractor(
 
     // .NET ships only UTF-*, ASCII, and Latin1 wired up by default — legacy
     // codepages like windows-1252 need CodePagesEncodingProvider registered
-    // first (the type is in the shared framework on net10.0, no package needed),
+    // first (the type is in the shared framework, no package needed),
     // or Encoding.GetEncoding("windows-1252") throws ArgumentException. Do it
     // once per process in the static ctor and cache the resolved encoding so the
     // per-attachment decode fallback (text/plain + calendar) never re-resolves.

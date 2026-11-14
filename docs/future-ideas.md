@@ -87,7 +87,7 @@ Two things to know before recovering it, because neither is visible in the diff:
 ## Packaged distribution (installer + notarized artifacts)
 
 Today the **only** way to get any part of Mailvec is to build from source: clone
-the repo, install the prereqs via Homebrew (including the .NET 10 SDK), then
+the repo, install the prereqs via Homebrew (including the .NET 11 SDK), then
 `ops/install-all.sh`. That's fine for the author and for contributors; it's a
 real adoption wall for anyone else. A distribution story would have two
 artifacts, both buildable from the existing scripts:
