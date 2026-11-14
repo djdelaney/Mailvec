@@ -17,23 +17,23 @@ Mailvec pulls one IMAP account into a searchable local archive and gives MCP cli
 - An MCP server for searching mail, reading threads, and viewing attachment text or images in Claude and other MCP clients. See [attachment capabilities](docs/attachments.md).
 - A `mailvec` CLI for status, diagnostics, maintenance, and retrieval evals.
 
-The pipeline is `IMAP → mbsync → Maildir → indexer → SQLite`; the embedder adds vectors, and the MCP server reads the archive. The Docker deployment also isolates mail parsing in a separate service. See the [documentation index](docs/README.md) for architecture and operator guides.
+The pipeline is `IMAP → mbsync → Maildir → indexer → SQLite`; the embedder adds vectors, and the MCP server reads the archive. Mailvec runs as a Docker Compose stack, which isolates mail parsing in a separate container with no access to the archive, your credentials or the network. See the [documentation index](docs/README.md) for architecture and operator guides.
 
 ## Get started
 
-Choose the machine that will hold the Maildir and database:
+Mailvec is deployed with Docker. Choose the machine that will hold the Maildir and database:
 
-| Deployment | Start here | Client connection |
+| Host | Start here | Client connection |
 | --- | --- | --- |
-| **One Apple Silicon Mac** | [macOS getting started](docs/getting-started-macos.md) — launchd services and local Ollama | [Local client setup](docs/clients/README.md) |
+| **A Mac** (Docker Desktop or OrbStack) | [Docker getting started → On a Mac](docs/getting-started-docker.md#on-a-mac) — compose stack plus native Ollama on the same Mac | Local: Claude Code over `127.0.0.1:3333`, Claude Desktop over `docker exec` |
 | **Always-on Linux Docker host** | [Docker getting started](docs/getting-started-docker.md) — compose stack and an external Ollama host | [Remote access through Cloudflare](docs/remote-access-cloudflare.md), if you want clients outside the stack |
 
-Both paths start with an IMAP account and provider-appropriate credentials (Fastmail, Gmail, and iCloud use app-specific passwords). The macOS path is the simplest single-machine install. The author's deployment runs in Docker. Contributors: read [local development](docs/contributing/local-dev-dataset.md) before running the install scripts on a machine that holds a frozen eval corpus.
+Both start with an IMAP account and provider-appropriate credentials (Fastmail, Gmail, and iCloud use app-specific passwords). The author's deployment runs on a Linux host. The older native macOS install (launchd services, MCPB bundle) is **deprecated**: it runs every mail parser inside the services that hold the archive and API keys. Existing installs can [move to Docker on the same Mac](docs/deploy-docker.md#moving-from-the-native-install). Contributors: read [local development](docs/contributing/local-dev-dataset.md) before running the install scripts on a machine that holds a frozen eval corpus.
 
-After installation, run `mailvec doctor` and `mailvec status` (or `docker compose exec mcp mailvec doctor` and `status` in Docker). Keyword search works while the initial embedding pass is still running; a large archive can take hours or days to finish embedding.
+After installation, run `docker compose exec mcp mailvec doctor` and `docker compose exec mcp mailvec status`. Keyword search works while the initial embedding pass is still running; a large archive can take hours or days to finish embedding.
 
 ## Privacy and scope
 
-Mailvec is for one account and one owner. Ollama is the default for embeddings and OCR. Hosted embedding or OCR providers send mail content to the configured service and require an explicit opt-in. A local MCP server binds to loopback; the Docker deployment publishes no host port by default. Read the [security model](docs/security.md) before exposing the server or enabling hosted providers.
+Mailvec is for one account and one owner. Ollama is the default for embeddings and OCR. Hosted embedding or OCR providers send mail content to the configured service and require an explicit opt-in. On a Linux host the MCP server publishes no host port by default; on a Mac it is published on loopback only. Read the [security model](docs/security.md) before exposing the server or enabling hosted providers.
 
 For installation details, backups, operations, development, and design history, use the [documentation index](docs/README.md). The [changelog](CHANGELOG.md) records project history, and [CLAUDE.md](CLAUDE.md) is the contributor guide for code changes.

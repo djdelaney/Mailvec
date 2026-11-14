@@ -1,6 +1,6 @@
 # Docker deployment
 
-Mailvec runs as a Compose stack with `mbsync`, indexer, embedder, parser, and MCP services. Ollama runs at a reachable URL outside the stack. Follow [Get started with Docker](getting-started-docker.md) for a new install; this page covers migration and operations. The MCP service publishes no host port. Remote access, if needed, uses [Cloudflare Tunnel and Access](remote-access-cloudflare.md).
+Mailvec runs as a Compose stack with `mbsync`, indexer, embedder, parser, and MCP services, on a Linux Docker host or under Docker on a Mac. Ollama runs at a reachable URL outside the stack. Follow [Get started with Docker](getting-started-docker.md) for a new install; this page covers migration and operations. On a Linux host the MCP service publishes no host port, and remote access, if needed, uses [Cloudflare Tunnel and Access](remote-access-cloudflare.md). A Mac adds the `compose.macos.yml` overlay; see [Docker on a Mac](#docker-on-a-mac) for what it changes.
 
 Use Docker Engine 25.0.5 or later. The `indexer` and `parse` services sit on `internal` networks so that they have no route out, and before that release the engine's embedded DNS server still forwarded their lookups to external nameservers when the host's resolver was on a loopback address (systemd-resolved's `127.0.0.53`), which is a data path out of a container that is meant to have none (CVE-2024-29018; also fixed in 23.0.11 and in every release from 26.0.0). Check with `docker version --format '{{.Server.Version}}'`.
 
@@ -15,11 +15,13 @@ docker compose pull
 docker compose up -d
 ```
 
-Use `v<version>` tags for durable pins; `sha-<gitsha>` tags are pruned. Images for releases before v0.12.1 are no longer pullable: an earlier cleanup job removed their manifests. For a verified immutable pin, append each image's digest (`:vX.Y.Z@sha256:...`). Get it with `docker buildx imagetools inspect <image>:vX.Y.Z --format '{{json .Manifest.Digest}}'`. Do not use `--build` with GHCR references; it retags a local build under those names. Do not enable automatic image updates: startup can migrate the archive. Take a [backup](#backups) before updating. `docker compose restart` retains old environment and container settings; use `up -d` to apply changes.
+Each tag is a multi-platform image covering linux/amd64 and linux/arm64, and Docker pulls the one matching the host, so the same reference works on an x86 Linux host and on an Apple Silicon Mac. Releases published before multi-platform support are linux/amd64 only; check a tag with `docker buildx imagetools inspect <image>:vX.Y.Z` and look for `linux/arm64`. Use `v<version>` tags for durable pins; `sha-<gitsha>` tags are pruned. Images for releases before v0.12.1 are no longer pullable: an earlier cleanup job removed their manifests. For a verified immutable pin, append each image's digest (`:vX.Y.Z@sha256:...`). Get it with `docker buildx imagetools inspect <image>:vX.Y.Z --format '{{json .Manifest.Digest}}'`; that is the digest of the multi-platform index, so the pin stays valid on either architecture. Do not use `--build` with GHCR references; it retags a local build under those names. Do not enable automatic image updates: startup can migrate the archive. Take a [backup](#backups) before updating. `docker compose restart` retains old environment and container settings; use `up -d` to apply changes.
 
 Check the result with `docker compose ps`, `docker compose exec mcp mailvec doctor`, and `docker compose exec mcp mailvec status`. Release creation is governed by [CLAUDE.md](../CLAUDE.md#releases).
 
 ## Migrating the archive from a macOS install
+
+To move to Docker on the **same Mac**, follow [Moving from the native install](#moving-from-the-native-install) instead; this section is for a separate Linux host.
 
 Export a consistent snapshot with `ops/export-db.sh` on the source Mac. Copy the snapshot to the Docker host before starting the stack:
 
@@ -134,6 +136,50 @@ Verify it:
 A message is refused (`forbidden_folder`) unless **every** folder it is in is allowed, because marking one copy read marks the whole email read on the server. Requests wake the sync loop, so a change usually reaches the server within about 5 seconds.
 
 To disable it, remove both `.env` lines, put `Sync Pull` back, and run `docker compose up -d`. Requests still queued are never applied.
+
+## Docker on a Mac
+
+`compose.macos.yml` (enabled with `COMPOSE_FILE=compose.yml:compose.macos.yml` in `.env`) keeps every service, image, network and hardening setting from `compose.yml`, and changes three things:
+
+- **Storage.** `/data`, `/mail` and `/logs` are the named volumes `mailvec_data`, `mailvec_mail` and `mailvec_logs` instead of `./data`, `./mail` and `./logs`. They live on the Docker VM's disk, where SQLite gets real POSIX locking; a bind mount shared from macOS does not promise that, and can present Mac files as root-owned inside the container. The one-shot `volume-init` service runs before the others on every `up` and gives the volumes to `MAILVEC_UID:MAILVEC_GID`. `docker compose down` keeps the volumes; `down -v` **deletes the archive and the Maildir**.
+- **Ollama** defaults to `http://host.docker.internal:11434`, the native Ollama app on the same Mac.
+- **MCP** is published on `127.0.0.1:3333` for local clients. Nothing is published on the LAN.
+
+`mbsyncrc` and `secrets/*` are still bind mounts. With `MAILVEC_UID`/`MAILVEC_GID` set to your Mac account they are readable as-is. If a service refuses to start saying one of them is not readable by its uid, the Docker version is presenting shared files under a different owner; check with `docker compose run --rm --no-deps --entrypoint ls mbsync -ln /etc/mbsyncrc /run/secrets`.
+
+**Backups.** The archive is not a file in Finder. Copy it out through a container after a checkpoint, as in [Backups](#backups):
+
+```sh
+docker compose stop indexer embedder
+if docker compose exec -T mcp mailvec checkpoint; then
+  docker compose cp mcp:/data/archive.sqlite <backup-path>
+else
+  echo 'Checkpoint failed; no copy made' >&2
+fi
+docker compose start indexer embedder
+```
+
+Docker Desktop and OrbStack keep volumes inside their VM disk image, so a Time Machine backup of the Mac is not a usable archive backup; keep the copies this produces.
+
+### Moving from the native install
+
+1. Take a snapshot while the native install is still running: `ops/export-db.sh --out ~/mailvec-archive-snapshot.sqlite`.
+2. Remove the launchd agents with `ops/install.sh --uninstall` (not `ops/stop.sh`, which leaves them to restart at login). Port 3333 must be free before the stack starts, and only one indexer may run against a mailbox.
+3. Prepare the compose directory as in [Get started with Docker](getting-started-docker.md#on-a-mac), keeping `MAILVEC_REQUIRE_SEEDED_DB=1`. Seed the archive into its volume (this creates the volumes), then start:
+
+   ```sh
+   docker compose run --rm --no-deps --cap-add DAC_OVERRIDE \
+     -v ~/mailvec-archive-snapshot.sqlite:/seed/archive.sqlite:ro volume-init \
+     'rm -f /data/archive.sqlite /data/archive.sqlite-wal /data/archive.sqlite-shm && cp /seed/archive.sqlite /data/archive.sqlite'
+   docker compose up -d
+   docker compose exec mcp mailvec status
+   ```
+
+   The copy runs as root in the `volume-init` container, and the next `up` gives the file to the service uid. Use the same command to restore a backup into a stopped stack.
+4. The `mbsync` container pulls the Maildir into its volume from scratch; the indexer then reconciles message locations, as described in [Migrating the archive](#migrating-the-archive-from-a-macos-install). Use `ops/mbsyncrc.container.example` as the starting point for `./mbsyncrc`: the native `~/.mbsyncrc` points at host paths and the Keychain, neither of which exists in the container. Don't run `purge-deleted` until the first pull has finished.
+5. Repoint clients ([On a Mac](getting-started-docker.md#on-a-mac), step 4) and remove the old MCPB extension from Claude Desktop.
+
+The old `~/Mail` and the native archive under `~/Library/Application Support/Mailvec` are not touched; delete them once the Docker stack has caught up.
 
 ## Resource limits
 

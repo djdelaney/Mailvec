@@ -1,0 +1,159 @@
+# Overlay for running the stack under Docker on an Apple Silicon Mac (Docker
+# Desktop or OrbStack), with Ollama running natively on the same Mac. Enable
+# it in .env:
+#
+#   COMPOSE_FILE=compose.yml:compose.macos.yml
+#
+# Setup and verification: docs/getting-started-docker.md "On a Mac".
+#
+# Everything about the parse boundary is unchanged from compose.yml: the same
+# images (linux/arm64 here), the same internal networks, the same hardening.
+# Docker on a Mac runs inside a Linux VM, so a container escape lands in that
+# VM rather than in macOS. What this overlay changes is only what a Mac does
+# differently from a Linux host:
+#
+#   1. STORAGE. ./data, ./mail and ./logs become Docker named volumes, which
+#      live on the VM's own Linux disk. Two reasons. SQLite WAL needs real
+#      POSIX locking and shared-memory semantics, which a bind mount shared
+#      through the VM's file-sharing layer does not promise (the same reason
+#      compose.yml forbids NFS/SMB). And the bind mounts' ownership is not the
+#      host's: depending on the Docker Desktop version, a file shared from the
+#      Mac can appear root-owned in the container, which the non-root services
+#      then cannot use. A named volume is ordinary ext4 that `volume-init`
+#      below can chown. The cost: the archive is not a file in Finder. Back up
+#      and migrate through the commands in docs/deploy-docker.md, which go
+#      through a container.
+#
+#      mbsyncrc and secrets/* stay bind mounts. They are small, read-only and
+#      read once at startup; set MAILVEC_UID/MAILVEC_GID in .env to your Mac
+#      account (`id -u`, `id -g`) so the services run as the owner of those
+#      files. The entrypoint preflight names any file it cannot read.
+#
+#   2. OLLAMA. Run Ollama as the native Mac app, which uses the GPU; a
+#      container cannot. Containers reach it at host.docker.internal, which
+#      Docker Desktop and OrbStack resolve to the Mac. Override with
+#      OLLAMA_BASE_URL in .env if Ollama runs elsewhere.
+#
+#   3. CLIENT ACCESS. mcp is published on the Mac's loopback only, for Claude
+#      Code and other local clients. This is the posture the native install
+#      had (127.0.0.1:3333, no auth): any process on this Mac, under any
+#      account, can call every tool. That is why it binds 127.0.0.1 and not
+#      the LAN — see compose.yml's mcp `ports:` comment and docs/security.md
+#      before changing it. Claude Desktop needs no port at all: it can run
+#      the server over stdio with `docker exec` (see the getting-started doc).
+#      The Cloudflare tunnel profile still works on a Mac if you want remote
+#      clients, but nothing here needs it.
+
+x-ollama: &mac-ollama
+  Ollama__BaseUrl: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+
+services:
+  # One-shot, before every start: gives the named volumes to the service uid.
+  # Docker creates a new named volume root-owned, and anything seeded into one
+  # through a root helper container (docs/deploy-docker.md) is root-owned too.
+  # Only entries not already owned are changed, so an unchanged volume costs
+  # one stat per file. Root, but with only the capabilities a chown needs, no
+  # network, and the volumes as its only mounts.
+  volume-init:
+    image: ${MAILVEC_IMAGE:-mailvec:local}
+    # Same image as the .NET services. The build block only matters on a
+    # fresh build-on-host checkout: without it, a plain `up` would try to PULL
+    # mailvec:local for this service before the others had built it.
+    build:
+      context: .
+      target: runtime
+    init: true
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        set -e;
+        mkdir -p /data /mail /logs/mcp /logs/indexer /logs/embedder;
+        find /data /mail /logs \( ! -user "$$MAILVEC_UID" -o ! -group "$$MAILVEC_GID" \)
+        -exec chown -h "$$MAILVEC_UID:$$MAILVEC_GID" {} +;
+        chmod 700 /data /mail /logs;
+        echo "volume-init: volumes owned by $$MAILVEC_UID:$$MAILVEC_GID"
+    environment:
+      MAILVEC_UID: ${MAILVEC_UID:-10001}
+      MAILVEC_GID: ${MAILVEC_GID:-10001}
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    # CHOWN to change owners; DAC_READ_SEARCH to walk directories the service
+    # uid made 0700 on an earlier run; FOWNER for the chmod of directories it
+    # has just given away.
+    cap_add: [CHOWN, DAC_READ_SEARCH, FOWNER]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "1"
+    volumes:
+      - data:/data
+      - mail:/mail
+      - logs:/logs
+
+  mcp:
+    environment:
+      <<: *mac-ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:3333:3333"
+    volumes:
+      - data:/data
+      - mail:/mail:ro
+      - type: volume
+        source: logs
+        target: /logs
+        volume:
+          subpath: mcp
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+
+  indexer:
+    environment:
+      <<: *mac-ollama
+    volumes:
+      - data:/data
+      - mail:/mail:ro
+      - type: volume
+        source: logs
+        target: /logs
+        volume:
+          subpath: indexer
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+
+  embedder:
+    environment:
+      <<: *mac-ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - data:/data
+      - mail:/mail:ro
+      - type: volume
+        source: logs
+        target: /logs
+        volume:
+          subpath: embedder
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+
+  mbsync:
+    volumes:
+      - mail:/mail
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+
+volumes:
+  data:
+  mail:
+  logs:

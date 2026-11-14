@@ -85,4 +85,18 @@ public sealed class DoctorCommandOutputTests
         check.Detail.ShouldContain("5 more");
         check.Detail.ShouldContain("not indexed");
     }
+
+    [Fact]
+    public void An_in_process_parser_warns_that_parsing_is_not_isolated()
+    {
+        // The native install's parser posture is why it is deprecated: doctor
+        // must not green-tick it. A warning, never a failure, because the same
+        // mode is what `dotnet run` uses on a development machine.
+        var check = DoctorCommand.InProcessParserCheck();
+
+        check.Status.ShouldBe("warn");
+        check.Name.ShouldBe("Parser");
+        check.Detail.ShouldContain("NOT isolated");
+        check.Detail.ShouldContain("Docker");
+    }
 }

@@ -1,5 +1,8 @@
 # Mailvec homelab stack. Follow docs/getting-started-docker.md for first
 # setup; docs/deploy-docker.md covers migration, updates, and recovery.
+# On a Mac, layer compose.macos.yml over this file (COMPOSE_FILE in .env);
+# it swaps the bind mounts below for named volumes and publishes mcp on
+# loopback, and changes nothing else.
 #
 # Set `umask 077` before creating .env, mbsyncrc, or files in secrets/:
 # they hold mailbox and tunnel credentials. Check each file is mode 0600.

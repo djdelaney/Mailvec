@@ -383,6 +383,15 @@ The smaller findings of a security review, each closed with a test that fails wi
 - Ignore files cover `.env.*`, compose overrides and `mbsyncrc` copies. The docs state a Docker Engine floor of 25.0.5 for the internal networks (CVE-2024-29018).
 - Tool-surface change (the new `search_emails` error): minor bump (0.12.2 → 0.13.0).
 
+## 🚧 Docker everywhere: arm64 images and Docker on a Mac (no schema change, unreleased)
+
+Docker is now the only supported deployment. The native macOS install ran every mail parser inside the processes that hold the archive and API keys; Docker isolates them in the `parse` container, and on a Mac it adds a VM around the whole stack.
+
+- **Multi-platform images.** `publish-images.yml` builds linux/amd64 and linux/arm64 on native runners, pushes each by digest, smoke-tests the pushed bytes, and only then tags one `sha-<short>` + `latest` index covering both. `promote` copies that index to `v*` unchanged and now waits up to 60 minutes for it.
+- **`ops/image-smoke.sh`**, the first test of the images themselves: the CLI creates an archive (sqlite-vec loads), mcp answers `/up`, the parse service under compose's hardening extracts a PDF's text and renders a page (PDFium, SkiaSharp), and the mbsync image's binaries run. CI runs it on both architectures for every PR. Checked by removing `libpdfium.so` and `vec0.so` from a built image; each fails it.
+- **`compose.macos.yml`** for Docker Desktop or OrbStack: data, Maildir and logs in named volumes (handed to the service uid by a one-shot `volume-init`), Ollama at `host.docker.internal`, mcp on `127.0.0.1:3333`, and Claude Desktop over `docker exec … --stdio`. Docs cover setup, backups, and moving from the native install.
+- **The native launchd install and MCPB bundle are deprecated**, with notices on their docs. `mailvec doctor` reports an in-process parser as a warning instead of ok.
+
 ## ❌ Phase 5 — Support for non-Claude local agents (dropped 2026-08-10)
 
 Was: per-client stdio/HTTP config for Gemini CLI (`~/.gemini/settings.json`), Codex CLI (`~/.codex/config.toml`), and ChatGPT desktop, plus snippets in `docs/clients/` — no protocol changes, just config and spawning-quirk capture.

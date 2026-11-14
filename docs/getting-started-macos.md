@@ -1,5 +1,7 @@
 # Get started on macOS
 
+> **Deprecated.** The native launchd install runs every mail parser (MIME, PDF, Office, image, including native PDFium) inside the services that hold your archive and any API key, with no sandbox or memory limit around them. Run Mailvec with [Docker on the Mac](getting-started-docker.md#on-a-mac) instead, where parsing is isolated in its own container; an existing install can [move across](deploy-docker.md#moving-from-the-native-install). This page stays for existing installs until the native install is removed.
+
 This path installs Mailvec on one Apple Silicon Mac: `mbsync` pulls mail, launchd runs the services, and clients connect locally. It requires macOS 14+, the .NET 10 SDK, and a reachable Ollama instance. Intel Macs are not supported by the install scripts or MCPB bundle.
 
 > **Maintainers:** the Mac used for this repository's frozen eval corpus must not run `ops/install.sh`, `ops/install-all.sh`, or `ops/redeploy.sh`. Follow [the local development workflow](contributing/local-dev-dataset.md) there. The steps below are for a machine that will actually serve mail.

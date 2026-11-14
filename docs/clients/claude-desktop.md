@@ -1,5 +1,7 @@
 # Claude Desktop
 
+> **Deprecated setup.** This page describes the native macOS install. With Docker on a Mac, follow [Get started with Docker → On a Mac](../getting-started-docker.md#on-a-mac), step 4, instead.
+
 **Transport**: stdio, via the MCPB bundle. Complete the [macOS installation](../getting-started-macos.md) first.
 
 Claude Desktop's Custom Connectors UI accepts an MCPB bundle directly, which packages a self-contained binary and the `vec0.dylib` in one file. The MCPB path is preferred over `~/.local/bin/mailvec-mcp-stdio` here because:

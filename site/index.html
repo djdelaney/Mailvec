@@ -128,7 +128,7 @@
 <div style="display: flex; flex-direction: column; gap: 20px; max-width: 760px">
 <div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>02 · How it works</span></div>
 <h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Mail flows one way. Your agent reads your copy.</h2>
-<p style="margin: 0; font-size: 18px; color: var(--muted); text-wrap: pretty">Mailvec keeps a complete, continuously-synced copy of your mailbox. mbsync pulls mail from your IMAP server. The indexer reads every message and extracts text from attachments. The embedder turns it into vectors with a local model, and OCRs scanned documents. Your AI agent asks questions through the MCP server. New mail arrives on a timer (every minute on the server install, every ten on a Mac), or within seconds with IMAP push on the server.</p>
+<p style="margin: 0; font-size: 18px; color: var(--muted); text-wrap: pretty">Mailvec keeps a complete, continuously-synced copy of your mailbox. mbsync pulls mail from your IMAP server. The indexer reads every message and extracts text from attachments. The embedder turns it into vectors with a local model, and OCRs scanned documents. Your AI agent asks questions through the MCP server. New mail arrives on a one-minute timer, or within seconds with IMAP push.</p>
 </div>
 
 <figure style="margin: 0; display: flex; flex-direction: column; gap: 16px" role="group" aria-label="Pipeline diagram: your mail provider syncs over IMAP into mbsync, then Maildir, the indexer and the archive, all on your hardware; the embedder and a local Ollama model build vectors and OCR scans; the read-only MCP server answers your AI agent.">
@@ -256,7 +256,7 @@
 <li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">1</span><span><b style="font-weight: 600">mode</b> says how it searched: keyword, semantic or hybrid.</span></li>
 <li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">2</span><span><b style="font-weight: 600">matchedAttachment</b> names the file the hit came from, so the agent can open the right one.</span></li>
 <li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">3</span><span><b style="font-weight: 600">webmailLink</b> is a ready-made link to the message in Fastmail, built by the server so a hostile subject can't forge it.</span></li>
-<li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">4</span><span><b style="font-weight: 600">mailSync</b> says how fresh the copy is, so the agent can tell you when it's behind. Server install only.</span></li>
+<li style="display: flex; gap: 14px"><span style="flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--signal); color: #141210; font-family: var(--mono); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">4</span><span><b style="font-weight: 600">mailSync</b> says how fresh the copy is, so the agent can tell you when it's behind.</span></li>
 </ol>
 </div>
 </div>
@@ -290,7 +290,7 @@
 <div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
 <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round"><path d="M2 14s4.5-8 12-8 12 8 12 8-4.5 8-12 8S2 14 2 14z"></path><circle cx="14" cy="14" r="3.5"></circle><path d="M5 25L23 3" style="stroke: var(--signal)"></path></svg>
 <h3 style="margin: 0; font-size: 18px; font-weight: 600">Look, don't touch</h3>
-<p style="margin: 0; font-size: 15px; color: var(--muted)">Agents can search and read. They can't send, reply, move or delete. Mark-as-read is a separate opt-in on the server install.</p></div>
+<p style="margin: 0; font-size: 15px; color: var(--muted)">Agents can search and read. They can't send, reply, move or delete. Mark-as-read is a separate opt-in.</p></div>
 <div style="background: var(--bg); padding: 28px 24px; display: flex; flex-direction: column; gap: 10px">
 <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style="fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round"><rect x="3" y="5" width="15" height="11" rx="1.5"></rect><rect x="19" y="10" width="7" height="13" rx="1.5"></rect><path d="M7 21h9" style="stroke: var(--signal)"></path></svg>
 <h3 style="margin: 0; font-size: 18px; font-weight: 600">Any agent that speaks MCP</h3>
@@ -431,7 +431,7 @@
 <div style="display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)"><svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M0 4h16v2H0z" style="fill: var(--signal)"></path><path d="M15 0l7 5-7 5z" style="fill: var(--signal)"></path></svg><span>07 · Privacy</span></div>
 <h2 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.015em">Private by design.</h2>
 </div>
-<p style="margin: 0; font-size: 17px; color: var(--muted); text-wrap: pretty">Your mail is copied to a disk you own and indexed there. By default nothing leaves your network except the IMAP sync itself: embeddings and OCR run on your own Ollama. On a single Mac the server only listens on localhost. On a Docker host it publishes no ports at all; remote clients such as claude.ai and the Claude iPhone app reach it through a Cloudflare Tunnel behind Cloudflare Access, which can be checked again at the server. Hosted embedding and OCR providers exist for people who want them, and each one is an explicit opt-in.</p>
+<p style="margin: 0; font-size: 17px; color: var(--muted); text-wrap: pretty">Your mail is copied to a disk you own and indexed there. By default nothing leaves your network except the IMAP sync itself: embeddings and OCR run on your own Ollama. Every attachment and message is parsed in its own container, with no access to your archive, your credentials or the network. On a Mac the server listens on localhost only. On a Linux host it publishes no ports at all; remote clients such as claude.ai and the Claude iPhone app reach it through a Cloudflare Tunnel behind Cloudflare Access, which can be checked again at the server. Hosted embedding and OCR providers exist for people who want them, and each one is an explicit opt-in.</p>
 </div>
 
 <figure style="margin: 0; display: flex; flex-direction: column; gap: 20px" role="group" aria-label="Where your mail goes">
@@ -618,7 +618,7 @@ All clear.</pre>
 <div class="wrap" style="max-width: 1200px; margin: 0 auto; padding: 40px 32px; display: flex; flex-direction: column; gap: 14px">
 <div style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline"><span style="flex: 0 0 80px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">Mail</span><span style="font-size: 18px">Fastmail · Gmail · iCloud · any IMAP server (via mbsync)</span><span style="font-size: 14px; color: var(--muted)">Fastmail results link straight to the message.</span></div>
 <div id="clients" style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline"><span style="flex: 0 0 80px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">Clients</span><span style="font-size: 18px">Any MCP client, local over stdio or HTTP, remote over OAuth: Claude Desktop · Claude Code · claude.ai · Claude for iPhone · your own agent</span></div>
-<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline"><span style="flex: 0 0 80px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">Guides</span><span style="font-size: 15px; color: var(--muted)">Step-by-step setup for Claude Desktop, Claude Code and claude.ai. Other local clients use the generic stdio launcher or <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">http://127.0.0.1:3333</code>. Pair it with a local model and nothing leaves the machine at all.</span></div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline"><span style="flex: 0 0 80px; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted)">Guides</span><span style="font-size: 15px; color: var(--muted)">Step-by-step setup for Claude Desktop, Claude Code and claude.ai. Other local clients on a Mac use <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">http://127.0.0.1:3333</code>. Pair it with a local model and nothing leaves the machine at all.</span></div>
 </div>
 </section>
 
@@ -630,10 +630,10 @@ All clear.</pre>
 </div>
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px">
 <article style="padding: 28px; border: 1.5px solid var(--ink); border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
-<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Apple Silicon · macOS 14+</span>
+<span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Mac · Docker Desktop or OrbStack</span>
 <h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 30px">One Mac</h3>
-<p style="margin: 0; font-size: 16px; color: var(--muted)">Install mbsync and Ollama with Homebrew, sync your mail, run one installer, connect Claude Desktop, Claude Code or any local MCP client. Everything stays on the Mac.</p>
-<a href="https://github.com/djdelaney/Mailvec/blob/main/docs/getting-started-macos.md" style="margin-top: auto; font-weight: 500">Mac guide →</a></article>
+<p style="margin: 0; font-size: 16px; color: var(--muted)">The same Docker stack on your Mac, with Ollama as the native app so it can use the GPU. Connect Claude Desktop, Claude Code or any local MCP client. Everything stays on the Mac.</p>
+<a href="https://github.com/djdelaney/Mailvec/blob/main/docs/getting-started-docker.md#on-a-mac" style="margin-top: auto; font-weight: 500">Mac guide →</a></article>
 <article style="padding: 28px; border: 1.5px solid var(--ink); border-radius: 12px; display: flex; flex-direction: column; gap: 12px">
 <span style="font-family: var(--mono); font-size: 12px; color: var(--muted)">Linux · Docker Compose</span>
 <h3 style="margin: 0; font-family: var(--serif); font-weight: 500; font-size: 30px">Always-on server</h3>
@@ -651,23 +651,26 @@ All clear.</pre>
 <div style="display: flex; flex-direction: column">
 <div role="tablist" aria-label="Install path" style="display: flex; gap: 4px">
 <button class="tab" role="tab" type="button" id="tab-mac" data-tab="mac" data-on="true" aria-selected="true" aria-controls="panel-mac" style="height: 44px; padding: 0 18px; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 13px">Mac</button>
-<button class="tab" role="tab" type="button" id="tab-docker" data-tab="docker" data-on="false" aria-selected="false" aria-controls="panel-docker" tabindex="-1" style="height: 44px; padding: 0 18px; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 13px">Docker</button>
+<button class="tab" role="tab" type="button" id="tab-docker" data-tab="docker" data-on="false" aria-selected="false" aria-controls="panel-docker" tabindex="-1" style="height: 44px; padding: 0 18px; border: 1px solid var(--line); border-bottom: none; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 13px">Linux</button>
 </div>
 <div style="position: relative; border-radius: 0 10px 10px 10px; background: var(--term-bg); border: 1px solid var(--term-line); overflow: hidden">
 <button id="copy-cmds" type="button" aria-label="Copy commands" style="position: absolute; right: 10px; top: 10px; height: 34px; padding: 0 12px; border: 1px solid var(--term-line); border-radius: 6px; background: transparent; color: var(--term-ink); font-family: var(--mono); font-size: 12px">Copy</button>
 <pre id="panel-mac" role="tabpanel" aria-labelledby="tab-mac" tabindex="0" style="margin: 0; padding: 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; color: var(--term-ink); white-space: pre">git clone https://github.com/djdelaney/Mailvec &amp;&amp; cd Mailvec
-brew install --cask dotnet-sdk
-brew install isync jq
-brew install --cask ollama-app &amp;&amp; open -a Ollama
+brew install --cask ollama-app &amp;&amp; open -a Ollama   # plus Docker Desktop or OrbStack
 ollama pull mxbai-embed-large
 ollama pull qwen2.5vl:7b          # local OCR, about 6 GB
-security add-generic-password -a you@fastmail.com -s mbsync -w   # app password, into the Keychain
-cp -n ops/mbsyncrc.example ~/.mbsyncrc   # -n keeps a config you already have
-chmod 600 ~/.mbsyncrc
-$EDITOR ~/.mbsyncrc
-mbsync -aV                        # first sync can take hours
-./ops/install-all.sh
-mailvec doctor</pre>
+umask 077
+cp .env.example .env              # COMPOSE_FILE=compose.yml:compose.macos.yml,
+                                  # MAILVEC_UID / MAILVEC_GID = your id -u / id -g,
+                                  # and for a new archive MAILVEC_REQUIRE_SEEDED_DB=0
+cp ops/mbsyncrc.container.example mbsyncrc   # set your IMAP host and user
+install -d -m 700 secrets
+: &gt; secrets/embedding_api_key     # empty unless hosted embeddings
+# stop here: edit the two files, then store your IMAP app password in
+# secrets/fastmail_password (the guide has a no-echo one-liner)
+docker compose up -d --build
+docker compose exec mcp mailvec doctor
+claude mcp add --transport http mailvec http://127.0.0.1:3333</pre>
 <pre id="panel-docker" role="tabpanel" aria-labelledby="tab-docker" tabindex="0" hidden style="margin: 0; padding: 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.75; color: var(--term-ink); white-space: pre">git clone https://github.com/djdelaney/Mailvec &amp;&amp; cd Mailvec
 umask 077
 cp .env.example .env              # set OLLAMA_BASE_URL, and for a new
@@ -690,7 +693,7 @@ docker compose exec mcp mailvec doctor</pre>
 <ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; color: var(--muted)">
 <li>An IMAP account and an app password</li>
 <li>Ollama with <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">mxbai-embed-large</code>, plus <code style="font-family: var(--mono); font-size: 13px; color: var(--ink)">qwen2.5vl:7b</code> (about 6 GB) for local OCR</li>
-<li>.NET 10 SDK (Mac) or Docker Compose (server)</li>
+<li>Docker: Docker Desktop or OrbStack on a Mac, Docker Compose on Linux</li>
 <li>Roughly 4–5 GB of disk per 75,000 messages, plus the mail itself</li>
 </ul>
 </div>
