@@ -20,7 +20,7 @@ dotnet restore && dotnet build
 - **The MCP SDK sets a floor on the `Microsoft.Extensions.*` cluster, so the two clusters move together.** MCP 2.0.0 depends on `Microsoft.Extensions.*` / `System.*` at `10.0.10`; bumping MCP alone against a `10.0.9` cluster fails restore with `NU1109` (package downgrade) from an unrelated project — the error names `Mailvec.Cli.Tests` and a transitive `Diagnostics.Abstractions` chain, which points nowhere near the MCP bump that caused it. Bump both in the same commit.
 - **MCP 2.0.0 adds `Microsoft.Extensions.AI.Abstractions` to the graph** (a transitive of `ModelContextProtocol.Core`). Nothing references it directly; it matters only because it ships inside the self-contained MCPB bundle.
 - **`SkiaSharp` follows `PDFtoImage`, never its own cadence.** PDFtoImage 5.4.0 declares `SkiaSharp [4.150.1, )`, and CPM means the single pinned version is what *both* the renderer and the test-side PNG decoder resolve to — so pinning below the floor breaks restore, and pinning ahead runs PDFium against a SkiaSharp it wasn't built with. Bump the two together. `.github/dependabot.yml` carries an `ignore` for SkiaSharp so it can't drift ahead one minor at a time; a *group* can't express this, because groups batch whatever updates exist rather than holding a member back. Don't trust the version named in this bullet once you're bumping past it — re-derive the floor from the nuspec of the PDFtoImage you're moving to, which is authoritative and can't go stale here: `curl -s https://api.nuget.org/v3-flatcontainer/pdftoimage/<version>/pdftoimage.nuspec | grep SkiaSharp`.
-- `MimeKit` and `AngleSharp` are independent — bump on their own cadence. **AngleSharp still deserves a look on the way past**: it drives `HtmlToText`, so a behaviour change moves `body_text` for newly-parsed mail and for anything `rebuild-bodies` touches — which is the moment it reaches the index. Run `mailvec rebuild-bodies` (a dry run) first to see how many bodies the bump actually changes, and capture an eval baseline before the `rebuild-bodies --reembed --apply` that follows.
+- `MimeKit` and `AngleSharp` are independent — bump on their own cadence. **A MimeKit major is a migration** (5.0 is ignored in `dependabot.yml`; see "Dependabot major-update coverage" below for why). **AngleSharp still deserves a look on the way past**: it drives `HtmlToText`, so a behaviour change moves `body_text` for newly-parsed mail and for anything `rebuild-bodies` touches — which is the moment it reaches the index. Run `mailvec rebuild-bodies` (a dry run) first to see how many bodies the bump actually changes, and capture an eval baseline before the `rebuild-bodies --reembed --apply` that follows.
 
 ### Dependabot major-update coverage (open investigation)
 
@@ -29,7 +29,8 @@ changing the groups in [`.github/dependabot.yml`](../.github/dependabot.yml).
 The question is whether the `nuget-minor-patch` catch-all, declared before
 `nuget-major`, can prevent major-only updates from appearing. The config's
 first-match comment suggests yes; GitHub's documented `update-types` behavior
-suggests otherwise. The repo has no known `nuget-major` PR.
+suggests otherwise. The first `nuget-major` PR appeared on 2026-11-14 (#73,
+MimeKit 5.0.0; see the last observation below), so the group can fire.
 
 Two dated observations make a config edit on inference unsafe:
 
@@ -54,6 +55,17 @@ Two dated observations make a config edit on inference unsafe:
   `dependabot.yml` now ignores majors for the .NET-band packages and the two
   .NET images; a TFM bump (below) is when those move, together and by hand.
   This still says nothing about the catch-all `nuget-minor-patch` question.
+- Later on 2026-11-14, the run after #71 merged opened #73, the first
+  `nuget-major` PR: MimeKit 4.18.2 → 5.0.0. So a major CAN reach
+  `nuget-major` despite the pattern-less catch-all declared ahead of it, and
+  the xUnit miss in August needs another explanation. #73 failed the pinned
+  body-hash test and `ParserBoundaryTests` (the assembly is now
+  `MimeKit.Core`) and was closed; `dependabot.yml` now ignores MimeKit majors
+  until that migration is planned. Both #73 and the same run's
+  `nuget-minor-patch` PR (#72) again listed bumps their diffs did not make
+  (System.CommandLine 3.0.0; Test.Sdk 18.12.0 and System.CommandLine 2.0.15).
+  Four group PRs in one day did this, so treat it as how Dependabot behaves
+  here, not as a one-off.
 
 The job log's per-dependency skip reason and group assignment would settle the
 question. If unavailable, test explicit `patterns: ["*"]` or reordered groups
