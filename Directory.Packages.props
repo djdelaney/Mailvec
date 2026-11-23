@@ -15,7 +15,7 @@
     <PackageVersion Include="MimeKit"                           Version="5.0.0" />
 
     <!-- HTML parsing for HTML-to-text conversion -->
-    <PackageVersion Include="AngleSharp"                        Version="1.10.3" />
+    <PackageVersion Include="AngleSharp"                        Version="1.10.5" />
 
     <!-- Attachment text extraction (PDF + DOCX). Pure-managed; no native deps. -->
     <PackageVersion Include="PdfPig"                            Version="0.1.16" />
@@ -52,7 +52,7 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="11.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console"          Version="11.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Http"                     Version="11.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience"          Version="11.0.1" />
 
     <!-- Serilog: rolling-file logging in-process, replaces a custom rotator. -->
     <PackageVersion Include="Serilog"                                       Version="4.4.0" />
@@ -79,7 +79,7 @@
     <PackageVersion Include="xunit"                             Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio"         Version="4.0.1" />
     <PackageVersion Include="Shouldly"                          Version="4.3.0" />
-    <PackageVersion Include="coverlet.collector"                Version="10.1.0" />
+    <PackageVersion Include="coverlet.collector"                Version="10.1.1" />
     <!-- Test-only reference: decode rendered PNGs to assert dimensions /
          non-blank / per-region content for the PDF page-image tool. NOT an
          independent pin — CPM means this one version IS the SkiaSharp the
