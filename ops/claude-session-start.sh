@@ -3,11 +3,15 @@
 # installs the sqlite-vec loadable into runtimes/<rid>/native/ so
 # `dotnet build` / `dotnet test` work in a fresh checkout.
 #
-# Why a hook and not the environment's setup script: the setup script runs
-# before the repository is cloned (and is then cached for ~a week), while
-# runtimes/ is a gitignored directory INSIDE the checkout. The hook runs after
-# the clone, on every startup and resume. It delegates to
-# ops/fetch-sqlite-vec.sh, so the SHA-256 pin lives in exactly one place.
+# The environment's setup script (master copy: Knapper's
+# ops/claude-cloud-setup.sh) installs it too: setup runs after the
+# clone, from the directory holding the checkouts, and calls the same fetch
+# script. Each covers a case the other misses. Setup runs only when a
+# container is built fresh and its result may be reused from a cache, while
+# this hook runs on every startup and resume; but a session carrying several
+# repositories never loads this repo's .claude/settings.json, so there only
+# setup installs it. Both delegate to ops/fetch-sqlite-vec.sh, so the SHA-256
+# pin lives in exactly one place.
 #
 # Local sessions (the dev Mac) exit immediately: CLAUDE_CODE_REMOTE is "true"
 # only on the cloud VM. Nothing here touches the database, the Maildir or

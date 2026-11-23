@@ -11,40 +11,46 @@ to re-check it.
 
 ## Setting up the environment
 
-The environment is provisioned in two steps. Each runs at a different time,
-so each installs different things:
+The environment can serve Mailvec alone or alongside other repositories in
+the same session. It is provisioned in two steps, which run at different
+times:
 
 | | Runs | Installs |
 |---|---|---|
-| **Setup script** (claude.ai environment settings) | Before the repo is cloned. Cached as a filesystem snapshot for about a week. | The .NET 11 SDK (from Canonical's `ppa:dotnet/backports`) and the `sqlite3` CLI: [`ops/claude-cloud-setup.sh`](../../ops/claude-cloud-setup.sh) |
-| **SessionStart hook** ([`.claude/settings.json`](../../.claude/settings.json)) | After the clone, on every startup and resume | The sqlite-vec loadable into `runtimes/<rid>/native/`: [`ops/claude-session-start.sh`](../../ops/claude-session-start.sh) → [`ops/fetch-sqlite-vec.sh`](../../ops/fetch-sqlite-vec.sh) |
+| **Setup script** (claude.ai environment settings) | As root, after the session's repositories are cloned, starting in the directory that holds the checkouts. Only when a container is built fresh; its result may be cached and reused. | The .NET 11 SDK (Microsoft's tarball, checked against the published SHA-512), pinned ripgrep, the `sqlite3` CLI, and sqlite-vec for any checkout carrying `ops/fetch-sqlite-vec.sh`. The master copy is [Knapper's `ops/claude-cloud-setup.sh`](https://github.com/djdelaney/Knapper/blob/main/ops/claude-cloud-setup.sh), which serves Knapper as well; Mailvec doesn't use the ripgrep. |
+| **SessionStart hook** ([`.claude/settings.json`](../../.claude/settings.json)) | After the clone, on every startup and resume, in a session whose project is this repository | The sqlite-vec loadable into `runtimes/<rid>/native/`: [`ops/claude-session-start.sh`](../../ops/claude-session-start.sh) → [`ops/fetch-sqlite-vec.sh`](../../ops/fetch-sqlite-vec.sh) |
 
-sqlite-vec can't go in the setup script. It installs into the checkout's
-gitignored `runtimes/` directory, which `Directory.Build.props` copies into
-every `bin/`, and the checkout doesn't exist yet when the setup script runs.
-Routing it through `fetch-sqlite-vec.sh` also keeps that library's SHA-256 pin
-in one place. The hook exits immediately unless `CLAUDE_CODE_REMOTE=true`, so
-on the dev Mac it does nothing.
+sqlite-vec installs into the checkout's gitignored `runtimes/` directory,
+which `Directory.Build.props` copies into every `bin/`. Both steps install it,
+because each misses a case. A session carrying several repositories never
+loads this repo's `.claude/settings.json`, so the hook does not run there and
+only setup installs it; without it about 650 tests fail with "sqlite-vec
+extension not found" (observed 2026-11-23). Setup, in turn, runs only for a
+fresh container, while the hook runs on every startup and resume and
+otherwise just reports "already installed". Both go through
+`fetch-sqlite-vec.sh`, which keeps the library's SHA-256 pin in one place.
+The hook exits immediately unless `CLAUDE_CODE_REMOTE=true`, so on the dev
+Mac it does nothing.
 
 In the environment's settings (at [claude.ai/code](https://claude.ai/code), open the environment for editing; Anthropic's [cloud environments guide](https://code.claude.com/docs/en/cloud-environments#configure-your-environment) shows where):
 
-1. **Network access: Trusted** (the default). Setup and build need the Ubuntu
-   archive, nuget.org, and GitHub release downloads
-   (`release-assets.githubusercontent.com`, for sqlite-vec). All are on the
-   default allowlist. Since the move to .NET 11 (an STS release, which
-   Ubuntu 24.04's archive does not carry), setup also needs Launchpad's PPA
-   host, `ppa.launchpadcontent.net`, for `ppa:dotnet/backports`. **Not yet
-   verified against the allowlist.** If it is refused, setup fails at its SDK
-   check: add the host under a custom allowlist, or move setup to
-   Microsoft's `dotnet-install.sh`. After the first successful setup, delete
-   this caveat.
+1. **Network access.** Setup and build need the Ubuntu archive, nuget.org,
+   Microsoft's `builds.dotnet.microsoft.com` (the SDK's release metadata and
+   tarball), and GitHub release downloads (`release-assets.githubusercontent.com`,
+   for ripgrep and sqlite-vec). A refused host fails setup at the step that
+   needed it; add it under a custom allowlist.
 2. **Environment variables:**
    ```
    DOTNET_NOLOGO=1
    DOTNET_CLI_TELEMETRY_OPTOUT=1
+   VSTEST_ARTIFACTS_BASE_DIRECTORY=/tmp
    ```
+   The last one is for `dotnet test` as root in a container: the SDK wants a
+   private directory under `/run/user/0`, which does not exist here, and
+   without the variable every test project prints a warning that blames an
+   outdated `Microsoft.NET.Test.Sdk`.
 3. **Setup script:** paste the whole of
-   [`ops/claude-cloud-setup.sh`](../../ops/claude-cloud-setup.sh).
+   [Knapper's `ops/claude-cloud-setup.sh`](https://github.com/djdelaney/Knapper/blob/main/ops/claude-cloud-setup.sh).
 4. **API credential (optional, for hosted embeddings):** under **API
    credentials**, add a **Bearer** credential: allowed website
    `api.fireworks.ai`, header `Authorization`, prefix `Bearer`, and as the
@@ -56,15 +62,16 @@ In the environment's settings (at [claude.ai/code](https://claude.ai/code), open
    only. Used by the dev corpus's `--embedding fireworks`
    ([dev-corpus.md](dev-corpus.md#embeddings)).
 
-**The file in the repo is the master copy; the settings field holds a
-paste.** Change the script through a PR like any other file, then re-paste
-it. Re-pasting also rebuilds the environment cache. CI checks that the script
-parses, but nothing can check that the pasted copy matches the file. CI also
-runs the hook after its own sqlite-vec fetch and requires it to report the
-install as current (the `dotnet-linux` job in `ci.yml`).
+**The file in Knapper is the master copy; the settings field holds a
+paste.** This repo keeps no copy, so the two cannot drift apart. Change the script through a PR there, then re-paste it. Re-pasting also
+rebuilds the environment cache. Knapper's CI checks that the script parses
+and that its ripgrep pin matches Knapper's, but nothing can check that the
+pasted copy matches the file. This repo's CI runs the hook after its own
+sqlite-vec fetch and requires it to report the install as current (the
+`dotnet-linux` job in `ci.yml`).
 
-Setup output is written live and also to `/var/log/mailvec-setup.log`, which
-a session can read afterwards.
+Setup output is written live and also to `/var/log/dotnet-env-setup.log`,
+which a session can read afterwards.
 
 ## Checking a new environment
 
@@ -87,20 +94,21 @@ any Mailvec or mail connector. Run each step even if an earlier one fails.
    against the current branch proves nothing. The last command is what names
    the code under test. If no remote branch other than a session-created
    `claude/...` one points at HEAD, say so at the top of your report: the
-   results describe an older commit. Also quote the "Claude cloud session:
-   sqlite-vec …" line from your starting context: "installed" means a fresh
-   clone, "already installed" means this checkout existed before the session
-   started (a continued session, which never pulls). Test HEAD as it is; do
+   results describe an older commit. (The hook's "already installed" no
+   longer distinguishes a continued session from a fresh one: the setup
+   script installs sqlite-vec before the hook runs.) Test HEAD as it is; do
    not pull.
 
-1. Setup script. Run `tail -1 /var/log/mailvec-setup.log` (expect
-   "setup complete") and `grep -nE '^(E|W):|WARNING' /var/log/mailvec-setup.log`
+1. Setup script. Run `tail -1 /var/log/dotnet-env-setup.log` (expect
+   "setup complete") and `grep -nE '^(E|W):|WARNING' /var/log/dotnet-env-setup.log`
    (expect no output). If the log is missing, say so. That means the setup
-   script in the environment settings is not the current
-   ops/claude-cloud-setup.sh.
+   script in the environment settings is not the current shared one (the
+   master copy is Knapper's ops/claude-cloud-setup.sh).
 
 2. SessionStart hook. Quote the "Claude cloud session: sqlite-vec …" line
-   from your starting context, or say it is absent. Then run
+   from your starting context, or say it is absent. It is absent in a session
+   carrying several repositories, where the hook does not run and the setup
+   script installed the library instead. Then run
    `CLAUDE_CODE_REMOTE=true ops/claude-session-start.sh` and quote its
    output (expect "already installed"), plus
    `ls -l runtimes/linux-x64/native/` and `cat runtimes/linux-x64/native/VERSION`.
@@ -199,7 +207,10 @@ and their failure signatures are worth recognising:
   `dev-corpus`): HEAD behind the pushed branch, re-reporting a failure
   already fixed. The `dev-corpus` case was a continued session: its
   starting line said sqlite-vec was "already installed", which a fresh clone
-  never says. Step 0 now reports both signs. In a continued session,
+  never said. Step 0 reported both signs until the setup script began
+  installing sqlite-vec (2026-11), which makes the hook say "already
+  installed" in fresh sessions too; the branch check is the sign that
+  remains. In a continued session,
   `git pull --ff-only` and re-running the affected step is quicker than a
   new session.
 
