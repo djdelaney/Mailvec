@@ -88,11 +88,37 @@ public class MaildirWatcherTests : IDisposable
         using var watcher = BuildWatcher(_root, debounceMs: 100);
         watcher.Start();
 
+        // The constructor created INBOX/, INBOX/cur and INBOX/tmp milliseconds
+        // before Start(). macOS FSEvents delivers changes in delayed, batched
+        // groups, so those creations can arrive after the stream starts, and
+        // INBOX/cur is not a tmp/ path: the watcher rightly pulses for it, and
+        // this test failed with nothing wrong in the filter. Let any such
+        // startup pulse land and drain it, so the only event left to judge is
+        // the tmp/ write below. On Linux, inotify reports nothing from before
+        // the watch existed, so this returns after one quiet window.
+        await DrainStartupPulsesAsync(watcher);
+
         File.WriteAllText(Path.Combine(_root, "INBOX", "tmp", "partial"), "in-flight");
 
         // Wait past the debounce; we expect no pulse.
         var pulsed = await WaitForPulseAsync(watcher, TimeSpan.FromMilliseconds(500));
         pulsed.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// Read and discard pulses until one quiet window passes with none, so a
+    /// test that asserts "no pulse" judges only the events it caused itself.
+    /// Bounded: a watcher that never goes quiet fails here, by name, rather
+    /// than hanging the run.
+    /// </summary>
+    private static async Task DrainStartupPulsesAsync(MaildirWatcher w)
+    {
+        for (var round = 0; round < 10; round++)
+        {
+            if (!await WaitForPulseAsync(w, TimeSpan.FromMilliseconds(500)))
+                return;
+        }
+        throw new ShouldAssertException("watcher kept pulsing after Start() with no writes from the test");
     }
 
     [Theory]
