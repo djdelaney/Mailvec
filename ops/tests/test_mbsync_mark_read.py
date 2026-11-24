@@ -403,6 +403,64 @@ class MarkReadScriptTests(unittest.TestCase):
         self.assertEqual(list((self.queue / "done").iterdir()), [])
         self.assertEqual(list((self.queue / "work").iterdir()), [])
 
+    def locked_directory(self, path):
+        """A non-empty directory this uid cannot search: `rm -rf` fails on it
+        without CAP_DAC_OVERRIDE, which the sidecar does not have."""
+        path.mkdir(parents=True)
+        (path / "inner").write_text("x")
+        path.chmod(0)
+        self.addCleanup(lambda: path.exists() and path.chmod(0o700))
+        return path
+
+    def unlock_everything(self):
+        for root, dirs, _ in os.walk(self.queue):
+            for d in dirs:
+                os.chmod(os.path.join(root, d), 0o700)
+
+    @unittest.skipIf(os.geteuid() == 0, "root removes anything")
+    def test_a_directory_that_cannot_be_removed_neither_wedges_apply_nor_keeps_waking_the_loop(self):
+        # Planted by a compromised mcp, under a valid request name and under
+        # an invalid one. Before: `pending` stayed true (a sync every 5 s for
+        # good), and a valid-named one that reached work/ failed every later
+        # `apply` at its first line.
+        self.addCleanup(self.unlock_everything)
+        self.locked_directory(self.inbox / "20261024T060000000Z-trap.req")
+        self.locked_directory(self.inbox / "a b.req")
+        self.message("Alerts", "1.host,U=1:2,")
+        self.request("read\tAlerts\t1.host,U=1")
+
+        first = self.run_script("apply")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(self.outcomes(), ["ok"])
+        self.assertIn("could not be removed", first.stderr)
+        self.assertNotEqual(self.run_script("pending").returncode, 0, "a directory is not a pending request")
+
+        # And the next request still applies, without repeating the note.
+        self.message("Alerts", "2.host,U=2:2,")
+        self.request("read\tAlerts\t2.host,U=2", name="20261024T080000000Z-b.req")
+        second = self.run_script("apply")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(self.outcomes("20261024T080000000Z-b.req"), ["ok"])
+        self.assertNotIn("could not be removed", second.stderr)
+        self.assertEqual(list((self.queue / "work").iterdir()), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root removes anything")
+    def test_a_work_directory_that_cannot_be_cleared_is_set_aside_not_fatal(self):
+        # What a directory swapped in between the type check and the rename
+        # would leave behind.
+        self.addCleanup(self.unlock_everything)
+        self.locked_directory(self.queue / "work" / "20261024T060000000Z-trap.req")
+        self.message("Alerts", "1.host,U=1:2,")
+        self.request("read\tAlerts\t1.host,U=1")
+
+        r = self.run_script("apply")
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.outcomes(), ["ok"])
+        self.assertEqual(list((self.queue / "work").iterdir()), [])
+        self.assertEqual(len(list(self.queue.glob("stuck.*"))), 1)
+        self.assertEqual(list(self.inbox.iterdir()), [])
+
     def test_a_request_name_with_unexpected_characters_is_dropped_unread(self):
         self.message("Alerts", "1.host,U=1:2,")
         self.request("read\tAlerts\t1.host,U=1", name="a b\n$(x).req")

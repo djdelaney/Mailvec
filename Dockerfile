@@ -743,6 +743,14 @@ well_formed() {
     awk -F '\t' 'NR > 1 { if (NF != 3) bad = 1; for (i = 1; i <= NF; i++) if ($i ~ /[[:cntrl:]]/) bad = 1 } END { exit bad }' "$1"
 }
 
+# Said at most once an hour: this runs every sync, and the directory stays
+# until someone removes it on the host.
+note_junk() {
+    [ -z "$(find "${Q}/.junk-noted" -mmin -60 2>/dev/null)" ] || return 0
+    : > "${Q}/.junk-noted"
+    say "a directory in ${INBOX} could not be removed and is being ignored; remove it on the host"
+}
+
 apply_all() {
     # chmod as well as the umask: a done/ created before the umask landed is
     # 0755, and its records stay readable until they expire.
@@ -750,17 +758,37 @@ apply_all() {
     # work/ is this script's alone, so whatever is in it was left by a run
     # that was interrupted. Start empty: a leftover with a request's name
     # would otherwise be what the rename below lands on.
-    { rm -rf "${WORK}" && mkdir -m 700 "${WORK}"; } || { say "could not prepare ${WORK}"; return 1; }
+    #
+    # A directory this uid cannot search (mode 000, with something inside)
+    # cannot be removed without CAP_DAC_OVERRIDE, and this container has no
+    # capabilities. One that reached work/ would make that `rm -rf` fail on
+    # every run from then on, with nothing applied again. So a work/ that will
+    # not clear is renamed aside (a rename within ${Q} needs nothing from the
+    # directory itself) and a fresh one made. Nothing here uses chmod to get
+    # in: the tree was mcp's, and chmod follows a link.
+    rm -rf "${Q}"/stuck.* 2>/dev/null
+    if ! rm -rf "${WORK}" 2>/dev/null; then
+        mv "${WORK}" "${Q}/stuck.$(date +%s).$$" 2>/dev/null || { say "could not prepare ${WORK}"; return 1; }
+        say "set aside a work directory that could not be removed (${Q}/stuck.*; remove it on the host)"
+    fi
+    mkdir -m 700 "${WORK}" || { say "could not prepare ${WORK}"; return 1; }
     for req in "${INBOX}"/*.req; do
         # -L as well: a dangling link fails -e and would sit in the inbox forever.
         { [ -e "$req" ] || [ -L "$req" ]; } || continue
+        # A directory is never a request and is never moved into work/. One
+        # that will not go is left where it is: `pending` does not count it,
+        # so it costs a line in the log and no sync.
+        if [ -d "$req" ] && [ ! -L "$req" ]; then
+            rm -rf "$req" 2>/dev/null || note_junk
+            continue
+        fi
         name="${req##*/}"
         # The name becomes a path under work/ and done/ and goes into the log.
         case "$name" in *[!A-Za-z0-9._-]*) rm -rf "$req"; say "removed a request with an unexpected file name"; continue ;; esac
         staged="${WORK}/${name}"
         # Out of mcp's reach first; see TRUST above. Nothing reads $req.
         mv "$req" "$staged" 2>/dev/null || { say "could not take ${name} from the inbox"; continue; }
-        if [ -L "$staged" ] || [ ! -f "$staged" ]; then rm -rf "$staged"; say "removed ${name}: not a regular file"; continue; fi
+        if [ -L "$staged" ] || [ ! -f "$staged" ]; then rm -rf "$staged" 2>/dev/null; say "removed ${name}: not a regular file"; continue; fi
         out="${DONE}/${name}"
         rm -f "${out}.tmp"
         if [ -n "$(find "$staged" -mmin +"${MBSYNC_MARK_READ_EXPIRE_MINUTES}" 2>/dev/null)" ]; then
@@ -815,7 +843,11 @@ case "${1:-}" in
         ;;
     apply) apply_all ;;
     pending)
-        for req in "${INBOX}"/*.req; do { [ -e "$req" ] || [ -L "$req" ]; } && exit 0; done
+        # Not a directory: `apply` cannot always remove one, and counting it
+        # here would wake a sync every few seconds for as long as it stays.
+        for req in "${INBOX}"/*.req; do
+            if [ -L "$req" ] || { [ -e "$req" ] && [ ! -d "$req" ]; }; then exit 0; fi
+        done
         exit 1
         ;;
     *) echo "usage: mbsync-mark-read preflight|marker <seconds>|apply|pending" >&2; exit 2 ;;
