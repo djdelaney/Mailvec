@@ -26,6 +26,22 @@ public sealed class EmbedderOptions
     public int ChunkSizeTokens { get; set; } = 200;
     public int ChunkOverlapTokens { get; set; } = 32;
 
+    /// <summary>
+    /// Most chunks embedded for one message, body and attachments together
+    /// (body first). Each attachment's text is capped but their number is not,
+    /// so without this one message with many large text attachments is tens of
+    /// thousands of chunks: embedded in one batch, held in memory at once,
+    /// written in one transaction, and billed by a hosted provider. Text past
+    /// the cap stays keyword-searchable; it just has no vectors.
+    /// </summary>
+    /// <remarks>
+    /// 4096 is ~3.3M chars at the default chunk size. The largest message in
+    /// the 82k-message development corpus has 2,397 chunks, so the default
+    /// truncates nothing there; lowering it below that changes retrieval and
+    /// wants an eval run. Values under 1 are read as 1.
+    /// </remarks>
+    public int MaxChunksPerMessage { get; set; } = 4096;
+
     // Below this threshold (chars in the trimmed body), the message's body
     // is not embedded — only its attachments (if any) are. Rationale:
     // very-short bodies (e.g. user replies like "I'm willing to help.")

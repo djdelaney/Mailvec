@@ -153,10 +153,12 @@ internal static class Documents
     /// <summary>
     /// A DOCX whose one part expands far past the extractor's per-part
     /// character ceiling while the package stays small — the zip-bomb shape
-    /// OfficePartLimitTests pins.
+    /// OfficePartLimitTests pins. The paragraphs are empty on purpose: the
+    /// part is streamed, so a bomb made of text is cut off at the text ceiling
+    /// and comes back 'done'. Markup with no text is what reaches the ceiling.
     /// </summary>
     public static byte[] DocxBomb() =>
-        Docx(Enumerable.Repeat("MAILVEC DEV CORPUS ZIP BOMB PARAGRAPH PADDING", 900_000).ToArray());
+        Docx(Enumerable.Repeat("", 1_500_000).ToArray());
 
     public static byte[] Xlsx(params string[] cells) => Zip(
         ("[Content_Types].xml",

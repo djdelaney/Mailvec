@@ -120,6 +120,57 @@ public class ImageRendererTests
         ImageRenderer.TryNormalize(tiff, maxDecodedPixels: 3000).ShouldNotBeNull();
     }
 
+    /// <summary>
+    /// A hand-written 150-byte little-endian TIFF: a 64x64 image whose tile
+    /// size, samples per pixel and bits per sample are the caller's. Written
+    /// by hand because LibTiff's writer refuses to produce the hostile ones.
+    /// </summary>
+    private static byte[] MakeTiledTiff(uint tileEdge, uint samplesPerPixel = 1, uint bitsPerSample = 8, uint tileDepth = 1)
+    {
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms);
+        w.Write((byte)'I'); w.Write((byte)'I'); w.Write((ushort)42); w.Write((uint)24);
+        w.Write(new byte[16]); // the "pixel data", at offset 8
+        List<(ushort Tag, ushort Type, uint Value)> tags =
+        [
+            (256, 4, 64), (257, 4, 64), (258, 3, bitsPerSample), (259, 3, 1), (262, 3, 1),
+            (277, 3, samplesPerPixel), (322, 4, tileEdge), (323, 4, tileEdge), (324, 4, 8), (325, 4, 16),
+        ];
+        if (tileDepth != 1) tags.Add((32998, 4, tileDepth)); // TILEDEPTH
+        w.Write((ushort)tags.Count);
+        foreach (var (tag, type, value) in tags) { w.Write(tag); w.Write(type); w.Write((uint)1); w.Write(value); }
+        w.Write((uint)0);
+        w.Flush();
+        return ms.ToArray();
+    }
+
+    // The pixel ceiling reads two tags; LibTiff sizes its decode buffer from
+    // four others. Before the buffer check, the 32768 case allocated 2 GB for
+    // a 64x64 image and then decoded it — so "returns null" alone would not
+    // prove much, and the allocation is asserted too. The first case is the
+    // control: the same file with a sane tile size must still decode, or a
+    // fixture LibTiff simply cannot read would pass every row below.
+    [Theory]
+    [InlineData(16u, 1u, 8u, 1u, true)]
+    [InlineData(32768u, 1u, 8u, 1u, false)]   // 1 GB tile
+    [InlineData(16384u, 4u, 8u, 1u, false)]   // 1 GB tile through samples per pixel
+    [InlineData(65536u, 1u, 8u, 1u, false)]   // tile area that wraps a 32-bit product
+    [InlineData(16u, 60000u, 8u, 1u, false)]  // absurd channel count
+    [InlineData(16u, 1u, 64u, 1u, false)]     // a depth the RGBA reader cannot decode
+    [InlineData(16u, 1u, 8u, 65536u, false)]  // a 3-D tile: a third multiplier
+    public void A_tiff_whose_tags_size_a_huge_decode_buffer_is_refused_without_allocating_it(
+        uint tileEdge, uint samples, uint bits, uint tileDepth, bool decodes)
+    {
+        var tiff = MakeTiledTiff(tileEdge, samples, bits, tileDepth);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = ImageRenderer.TryNormalize(tiff);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        (result is not null).ShouldBe(decodes);
+        allocated.ShouldBeLessThan(16L * 1024 * 1024);
+    }
+
     [Fact]
     public void MaxDecodedPixels_bounds_the_raster_a_single_attachment_can_allocate()
     {

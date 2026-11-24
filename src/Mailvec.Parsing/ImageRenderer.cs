@@ -182,9 +182,17 @@ public static class ImageRenderer
 
         // The IFD tags are the header equivalent of SKCodec.Info: dimensions
         // before any raster allocation. Same ceiling, same reason.
-        int width = tiff.GetField(TiffTag.IMAGEWIDTH)[0].ToInt();
-        int height = tiff.GetField(TiffTag.IMAGELENGTH)[0].ToInt();
+        if (TagInt(tiff, TiffTag.IMAGEWIDTH) is not { } width || TagInt(tiff, TiffTag.IMAGELENGTH) is not { } height)
+            return null;
         if (width <= 0 || height <= 0 || (long)width * height > maxDecodedPixels) return null;
+
+        // Width and height are not the only tags that size an allocation.
+        // LibTiff decodes through a buffer of one whole tile or strip, sized
+        // from the tile dimensions, rows per strip, samples per pixel and bits
+        // per sample — all of them the sender's numbers, none of them bounded
+        // by the pixel count above. A 150-byte file declaring a 64x64 image in
+        // 32768x32768 tiles allocated 2 GB here and then decoded successfully.
+        if (!TiffBuffersWithin(tiff, maxDecodedPixels * 4)) return null;
 
         // ReadRGBAImageOriented gives a top-left-origin ABGR-packed raster,
         // decoding any TIFF flavour (tiled/striped, 1/8/16-bit, palette, CMYK…)
@@ -194,21 +202,77 @@ public static class ImageRenderer
             return null;
 
         // Repack ABGR ints → RGBA bytes (via the LibTiff channel accessors, so
-        // this is endian-independent) and copy into a Skia-owned bitmap.
-        var pixels = new byte[width * height * 4];
-        for (int i = 0; i < raster.Length; i++)
+        // this is endian-independent) a row at a time, straight into the
+        // Skia-owned bitmap. A full-size intermediate byte[] here made the peak
+        // three rasters (480 MB at the pixel ceiling) rather than two.
+        var bmp = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        try
         {
-            int p = raster[i];
-            int o = i * 4;
-            pixels[o]     = (byte)Tiff.GetR(p);
-            pixels[o + 1] = (byte)Tiff.GetG(p);
-            pixels[o + 2] = (byte)Tiff.GetB(p);
-            pixels[o + 3] = (byte)Tiff.GetA(p);
+            var dest = bmp.GetPixels();
+            int rowBytes = bmp.RowBytes;
+            var row = new byte[width * 4];
+            for (int y = 0; y < height; y++)
+            {
+                int start = y * width;
+                for (int x = 0; x < width; x++)
+                {
+                    int p = raster[start + x];
+                    int o = x * 4;
+                    row[o]     = (byte)Tiff.GetR(p);
+                    row[o + 1] = (byte)Tiff.GetG(p);
+                    row[o + 2] = (byte)Tiff.GetB(p);
+                    row[o + 3] = (byte)Tiff.GetA(p);
+                }
+                Marshal.Copy(row, 0, dest + (nint)((long)y * rowBytes), row.Length);
+            }
+            return bmp;
+        }
+        catch
+        {
+            bmp.Dispose();
+            throw;
+        }
+    }
+
+    private static int? TagInt(Tiff tiff, TiffTag tag) =>
+        tiff.GetField(tag) is { Length: > 0 } v ? v[0].ToInt() : null;
+
+    /// <summary>
+    /// True when every buffer LibTiff will size from this directory's tags fits
+    /// in <paramref name="maxBytes"/>. Checked twice over: from the raw tags in
+    /// 64-bit arithmetic (the library's own size functions return int, and a
+    /// product that wraps is the input this exists for), and from those
+    /// functions, which see what the tags alone do not (subsampling, planar
+    /// layout).
+    /// </summary>
+    private static bool TiffBuffersWithin(Tiff tiff, long maxBytes)
+    {
+        long samples = tiff.GetFieldDefaulted(TiffTag.SAMPLESPERPIXEL) is { Length: > 0 } s ? s[0].ToInt() : 1;
+        long bits = tiff.GetFieldDefaulted(TiffTag.BITSPERSAMPLE) is { Length: > 0 } b ? b[0].ToInt() : 1;
+        // What the RGBA reader can decode at all: up to 16 bits a sample, and
+        // no real image has more than a handful of extra channels.
+        if (samples is < 1 or > 8 || bits is < 1 or > 16) return false;
+        long bytesPerPixel = samples * ((bits + 7) / 8);
+
+        if (tiff.IsTiled())
+        {
+            if (TagInt(tiff, TiffTag.TILEWIDTH) is not { } tw || TagInt(tiff, TiffTag.TILELENGTH) is not { } tl) return false;
+            if (tw <= 0 || tl <= 0) return false;
+            // A 3-D tile is nothing the RGBA reader decodes, and its depth is a
+            // third multiplier the area check below does not see.
+            if (TagInt(tiff, TiffTag.TILEDEPTH) is { } depth && depth != 1) return false;
+            if ((long)tw * tl > maxBytes / bytesPerPixel) return false;
+            long tile = tiff.TileSize();
+            if (tile <= 0 || tile > maxBytes) return false;
+        }
+        else
+        {
+            long strip = tiff.StripSize();
+            if (strip <= 0 || strip > maxBytes) return false;
         }
 
-        var bmp = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
-        Marshal.Copy(pixels, 0, bmp.GetPixels(), pixels.Length);
-        return bmp;
+        long scanline = tiff.ScanlineSize();
+        return scanline > 0 && scanline <= maxBytes;
     }
 
     private sealed class SilentTiffErrorHandler : TiffErrorHandler

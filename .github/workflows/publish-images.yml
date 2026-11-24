@@ -109,7 +109,8 @@ jobs:
           # Under workflow_run, github.sha is the default-branch head at
           # trigger time, which may have advanced past the commit CI actually
           # tested — build exactly what passed.
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
 
       # workflow_run only fires on a green CI. A manual run has no such
       # trigger, so it checks for itself: no successful CI push run for this
@@ -227,7 +228,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:
@@ -290,6 +292,8 @@ jobs:
           - image: ghcr.io/${{ github.repository_owner }}/mailvec-mbsync
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Verify release tag matches <Version>
         run: |

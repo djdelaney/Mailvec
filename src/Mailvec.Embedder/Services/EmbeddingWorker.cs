@@ -564,6 +564,8 @@ public sealed class EmbeddingWorker(
     internal IReadOnlyList<TextChunk> BuildChunksForMessage(UnembeddedMessage m)
     {
         var combined = new List<TextChunk>();
+        var maxChunks = Math.Max(1, embedderOptions.Value.MaxChunksPerMessage);
+        bool truncated = false;
 
         var trimmedBodyLength = m.BodyText?.Trim().Length ?? 0;
         var minBodyChars = Math.Max(0, embedderOptions.Value.MinBodyCharsForVector);
@@ -574,16 +576,21 @@ public sealed class EmbeddingWorker(
             var bodyChunks = chunker.Chunk(BuildEmbeddingText(m.Subject, m.BodyText ?? string.Empty, m.AttachmentNames));
             foreach (var c in bodyChunks)
             {
+                if (combined.Count >= maxChunks) { truncated = true; break; }
                 combined.Add(c with { Index = combined.Count, Source = "body", AttachmentId = null });
             }
         }
 
         foreach (var att in m.Attachments)
         {
+            // Checked before chunking, not only while adding: the attachments
+            // past the cap are the ones not worth splitting into chunks at all.
+            if (combined.Count >= maxChunks) { truncated = true; break; }
             var prefixed = PrefixAttachmentText(att.FileName, att.Text);
             var attChunks = chunker.Chunk(prefixed);
             foreach (var c in attChunks)
             {
+                if (combined.Count >= maxChunks) { truncated = true; break; }
                 combined.Add(c with
                 {
                     Index = combined.Count,
@@ -591,6 +598,13 @@ public sealed class EmbeddingWorker(
                     AttachmentId = att.AttachmentId,
                 });
             }
+        }
+
+        if (truncated)
+        {
+            logger.LogWarning(
+                "Message {Id} has more text than {Max} chunks hold (Embedder:MaxChunksPerMessage); the rest is keyword-searchable only.",
+                m.Id, maxChunks);
         }
 
         return combined;

@@ -21,6 +21,7 @@ fetched messages are skipped.
 import email
 import imaplib
 import os
+import ssl
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +40,8 @@ def main() -> int:
     host = os.environ.get("IMAP_HOST", "imap.fastmail.com")
     folder = os.environ.get("IMAP_FOLDER", "INBOX")
 
+    # Real mail lands here: owner-only files and directories.
+    os.umask(0o077)
     cur = root / folder / "cur"
     cur.mkdir(parents=True, exist_ok=True)
 
@@ -48,7 +51,9 @@ def main() -> int:
 
     existing_uids = {p.name.split(".")[0] for p in cur.iterdir() if p.is_file()}
 
-    with imaplib.IMAP4_SSL(host, 993) as M:
+    # imaplib's default context verifies nothing (CERT_NONE, no hostname
+    # check); the login below would hand the password to whoever answers.
+    with imaplib.IMAP4_SSL(host, 993, ssl_context=ssl.create_default_context()) as M:
         M.login(user, password)
         M.select(folder, readonly=True)
 
@@ -58,7 +63,8 @@ def main() -> int:
             return 1
 
         uids = data[0].split()
-        new_uids = [u for u in uids if u.decode() not in existing_uids]
+        # The UID becomes a file name, and it is the server's string.
+        new_uids = [u for u in uids if u.isdigit() and u.decode() not in existing_uids]
         print(f"Server reports {len(uids)} messages; {len(new_uids)} new since last run.")
 
         for i, uid in enumerate(new_uids, 1):

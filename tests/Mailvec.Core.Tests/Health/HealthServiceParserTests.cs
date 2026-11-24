@@ -68,10 +68,29 @@ public class HealthServiceParserTests
             "a parse service outage is the parse container's outage; restarting mcp for it would be wrong");
     }
 
+    [Fact]
+    public async Task The_up_shape_of_the_check_never_probes_the_parser_and_reports_the_same_status()
+    {
+        // /up reports nothing about the parser and is polled from the internet;
+        // it used to pay for this probe (and the vision one) on every request.
+        using var db = new TempDatabase();
+        var parser = new FakeParser(ParserRegistration.RemoteMode, reachable: true);
+        var options = new ParserOptions { Mode = "remote", Endpoint = "http://parse:3400" };
+
+        var full = await Build(db, parser, options).CheckAsync();
+        parser.Probes.ShouldBe(1);
+        var lean = await Build(db, parser, options).CheckAsync(informationalProbes: false);
+
+        parser.Probes.ShouldBe(1, "the lean check must not have probed");
+        lean.Status.ShouldBe(full.Status);
+        lean.Parser.ShouldNotBeNull().Reachable.ShouldBeNull();
+    }
+
     private sealed class FakeParser(string mode, bool reachable) : IMailParser
     {
+        public int Probes;
         public string Mode => mode;
-        public Task<bool> ProbeAsync(CancellationToken ct = default) => Task.FromResult(reachable);
+        public Task<bool> ProbeAsync(CancellationToken ct = default) { Probes++; return Task.FromResult(reachable); }
         public ParsedMessage ParseMessage(byte[] eml, bool extractAttachmentText) => throw new NotSupportedException();
         public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex) => throw new NotSupportedException();
         public PartInfo DescribePart(byte[] eml, int partIndex) => throw new NotSupportedException();

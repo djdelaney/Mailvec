@@ -61,4 +61,15 @@ public class SearchDateParserTests
         SearchDateParser.TryParse(" 2024-06-30 ", isUpperBound: true, out var bound).ShouldBeTrue();
         bound.ShouldNotBeNull().Hour.ShouldBe(23);
     }
+
+    [Fact]
+    public void The_last_representable_day_is_a_valid_upper_bound()
+    {
+        // "Everything up to the end of time" is a shape a client really sends.
+        // Stepping to the next midnight first overflowed DateTimeOffset here.
+        SearchDateParser.TryParse("9999-12-31", isUpperBound: true, out var bound).ShouldBeTrue();
+
+        var b = bound.ShouldNotBeNull();
+        (b.Year, b.Month, b.Day, b.Hour, b.Minute, b.Second).ShouldBe((9999, 12, 31, 23, 59, 59));
+    }
 }

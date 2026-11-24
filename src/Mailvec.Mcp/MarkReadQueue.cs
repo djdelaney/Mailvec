@@ -137,6 +137,9 @@ public sealed class MarkReadQueue(IOptions<McpOptions> mcp, IOptions<IngestOptio
         var info = name.IndexOf(":2,", StringComparison.Ordinal);
         var baseName = info >= 0 ? name[..info] : name;
         var dir = parts.Length == 2 ? "." : string.Join('/', parts[..^2]);
+        // The request file is tab-separated, one target per line. A name that
+        // carries either separator cannot be written as one field.
+        if (dir.Any(char.IsControl) || baseName.Any(char.IsControl)) return null;
         return new RequestTarget(dir, baseName);
     }
 

@@ -278,7 +278,8 @@ static async Task RunHttp(string[] args)
     // look healthy forever. Pinned by ProgramHttpTests.
     var upEndpoint = app.MapGet("/up", async (HealthService health, CancellationToken ct) =>
     {
-        var report = await health.CheckAsync(ct).ConfigureAwait(false);
+        // No vision or parser probe: neither is in UpReport or the status.
+        var report = await health.CheckAsync(ct, informationalProbes: false).ConfigureAwait(false);
         // Booleans yes, values no — see UpReport. The JSONata paths here are
         // deliberately identical to /health's, because seven Uptime Kuma
         // monitors read them; changing a name silently breaks a monitor rather

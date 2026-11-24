@@ -61,12 +61,31 @@ public class OfficePartLimitTests
     }
 
     [Fact]
-    public void A_docx_whose_xml_expands_past_the_part_limit_fails_instead_of_expanding()
+    public void A_docx_whose_text_expands_past_the_part_limit_is_cut_off_instead_of_expanding()
     {
+        // Streamed like the slides: the read stops at the most text we keep,
+        // long before the part limit, so the bomb yields truncated text
+        // rather than 'failed', having allocated little more than that text.
         var package = Docx(BombRepeats);
         package.Length.ShouldBeLessThan(25 * 1024 * 1024); // passes the input gate
 
+        long before = GC.GetAllocatedBytesForCurrentThread();
         var result = Extract(package, "bomb.docx", DocxType);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull().Length.ShouldBeLessThanOrEqualTo(2_100_000);
+        allocated.ShouldBeLessThan(AllocationCeilingBytes);
+    }
+
+    [Fact]
+    public void A_docx_of_markup_past_the_part_limit_fails()
+    {
+        // With no text to stop on, the per-part ceiling restated for the
+        // streaming reader is what ends the read.
+        var package = DocxWithBody(Repeat("<w:p/>", 6_000_000)); // 36M chars > 32M
+
+        var result = Extract(package, "markup.docx", DocxType);
 
         result.Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
         result.Text.ShouldBeNull();
@@ -82,12 +101,26 @@ public class OfficePartLimitTests
     }
 
     [Fact]
-    public void An_xlsx_whose_xml_expands_past_the_part_limit_fails_instead_of_expanding()
+    public void An_xlsx_whose_text_expands_past_the_part_limit_is_cut_off_instead_of_expanding()
     {
         var package = Xlsx(BombRepeats);
         package.Length.ShouldBeLessThan(25 * 1024 * 1024);
 
+        long before = GC.GetAllocatedBytesForCurrentThread();
         var result = Extract(package, "bomb.xlsx", XlsxType);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull().Length.ShouldBeLessThanOrEqualTo(2_100_000);
+        allocated.ShouldBeLessThan(AllocationCeilingBytes);
+    }
+
+    [Fact]
+    public void An_xlsx_of_markup_past_the_part_limit_fails()
+    {
+        var package = XlsxWithStrings(Repeat("<si/>", 7_000_000)); // 35M chars > 32M
+
+        var result = Extract(package, "markup.xlsx", XlsxType);
 
         result.Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
         result.Text.ShouldBeNull();
@@ -180,6 +213,146 @@ public class OfficePartLimitTests
         result.Text.ShouldBeNull();
     }
 
+    // ── Nesting depth ────────────────────────────────────────────────────────
+    // The SDK's DOM is built by recursion. Before every part was streamed, a
+    // 6 KB DOCX of 100,000 nested paragraphs ended the process with a stack
+    // overflow — which takes the test host with it, so a regression here does
+    // not show up as a failed assertion but as a run that never reports. Each
+    // format nests in a part the old code DOM-loaded.
+
+    private const int HostileDepth = 100_000;
+
+    private static string Nested(string open, string close, int depth) => Repeat(open, depth) + Repeat(close, depth);
+
+    [Fact]
+    public void A_docx_nested_past_any_real_document_fails_without_overflowing_the_stack()
+    {
+        var package = DocxWithBody(Nested("<w:p>", "</w:p>", HostileDepth));
+        package.Length.ShouldBeLessThan(16 * 1024);
+
+        Extract(package, "deep.docx", DocxType).Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
+    public void An_xlsx_nested_past_any_real_document_fails_without_overflowing_the_stack()
+    {
+        Extract(XlsxWithStrings(Nested("<si>", "</si>", HostileDepth)), "deep.xlsx", XlsxType)
+            .Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
+    public void An_xlsx_workbook_part_nested_past_any_real_document_fails_too()
+    {
+        var package = XlsxWithStrings("<si><t>MAILVEC</t></si>", workbookExtra: Nested("<x>", "</x>", HostileDepth));
+
+        Extract(package, "deep.xlsx", XlsxType).Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
+    public void A_pptx_nested_past_any_real_document_fails_without_overflowing_the_stack()
+    {
+        // Once in a slide, once in presentation.xml (the slide id list).
+        Extract(PptxWith(slideBody: Nested("<a:p>", "</a:p>", HostileDepth)), "deep.pptx", PptxType)
+            .Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+        Extract(PptxWith(slideBody: "<a:p><a:r><a:t>MAILVEC</a:t></a:r></a:p>", presentationExtra: Nested("<p:x>", "</p:x>", HostileDepth)), "deep.pptx", PptxType)
+            .Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+    }
+
+    [Fact]
+    public void Nesting_a_real_document_reaches_still_extracts()
+    {
+        // The control for the four above: well under the limit, text at the bottom.
+        int depth = AttachmentTextExtractor.MaxXmlDepth / 2;
+        var package = DocxWithBody(Repeat("<w:tbl>", depth) + "<w:p><w:r><w:t>MAILVEC DEEP</w:t></w:r></w:p>" + Repeat("</w:tbl>", depth));
+
+        var result = Extract(package, "nested.docx", DocxType);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull().ShouldContain("MAILVEC DEEP");
+    }
+
+    // ── Package metadata ─────────────────────────────────────────────────────
+    // [Content_Types].xml and the .rels parts are parsed while the package is
+    // being opened, before the per-part limit applies to anything. Measured
+    // before the check: 66 KB with one long attribute allocated 1.8 GB. The
+    // A_normal_* tests above are the control (same templates, sane metadata).
+
+    private const int MetadataBombChars = 16_000_000;
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Package_metadata_that_inflates_past_any_real_document_is_refused_before_the_package_is_opened(bool inContentTypes)
+    {
+        var padding = new string('a', MetadataBombChars);
+        var package = DocxWithBody("<w:p><w:r><w:t>MAILVEC</w:t></w:r></w:p>",
+            contentTypeSuffix: inContentTypes ? padding : "",
+            relTargetSuffix: inContentTypes ? "" : padding);
+        package.Length.ShouldBeLessThan(64 * 1024);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var result = Extract(package, "meta.docx", DocxType);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusFailed);
+        // The package parser would have built the 16M-char string several times over.
+        allocated.ShouldBeLessThan(8L * 1024 * 1024);
+    }
+
+    [Fact]
+    public void Bytes_that_are_not_a_zip_are_left_for_the_sdk_to_name()
+    {
+        // An encrypted Office file is an OLE container, not a ZIP. The check
+        // must not turn "encrypted" into "failed" by answering first.
+        AttachmentTextExtractor.OfficePackageMetadataWithinLimits([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0]).ShouldBeTrue();
+    }
+
+    // ── What the streamed DOCX read keeps ────────────────────────────────────
+
+    [Fact]
+    public void Docx_text_keeps_paragraph_breaks_space_only_runs_and_nothing_outside_paragraphs()
+    {
+        var package = DocxWithBody(
+            """<w:p><w:r><w:t>MAILVEC</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>ONE</w:t></w:r></w:p>"""
+            + "\n  <w:p>\n    <w:r>\n      <w:t>SECOND</w:t>\n    </w:r>\n  </w:p>\n"
+            + "<w:p/><w:p><w:r><w:t>   </w:t></w:r></w:p>"
+            + "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>CELL</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+            + "<w:sectPr>stray</w:sectPr>");
+
+        var result = Extract(package, "shape.docx", DocxType);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ShouldBe(["MAILVEC ONE", "SECOND", "CELL"]);
+    }
+
+    [Fact]
+    public void A_paragraph_nested_in_another_gets_its_own_line()
+    {
+        // A text box: w:p inside w:p. The DOM read returned the box's text twice
+        // (once inside the outer paragraph's InnerText); the streamed read must
+        // return it once and not glued to what surrounds it.
+        var package = DocxWithBody(
+            "<w:p><w:r><w:t>OUTER</w:t></w:r><w:r><w:txbxContent><w:p><w:r><w:t>BOX</w:t></w:r></w:p></w:txbxContent></w:r><w:r><w:t>REST</w:t></w:r></w:p>");
+
+        var result = Extract(package, "textbox.docx", DocxType);
+
+        result.Text.ShouldNotBeNull().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ShouldBe(["OUTER", "BOX", "REST"]);
+    }
+
+    [Fact]
+    public void Slide_text_in_the_strict_drawingml_namespace_is_read_too()
+    {
+        var package = PptxWith(
+            """<s:p xmlns:s="http://purl.oclc.org/ooxml/drawingml/main"><s:r><s:t>MAILVEC STRICT</s:t></s:r></s:p>""");
+
+        var result = Extract(package, "strict.pptx", PptxType);
+
+        result.Status.ShouldBe(AttachmentTextExtractor.StatusDone);
+        result.Text.ShouldNotBeNull().ShouldContain("MAILVEC STRICT");
+    }
+
     // ── Hand-built packages ──────────────────────────────────────────────────
     // Built by hand rather than through the SDK's authoring API because the
     // point is a part far larger than anything we would assemble node by node.
@@ -209,17 +382,23 @@ public class OfficePartLimitTests
 
     private static string Repeat(string unit, int times) => string.Concat(Enumerable.Repeat(unit, times));
 
-    private static byte[] Docx(int repeats) => Zip(
+    private static byte[] Docx(int repeats) =>
+        DocxWithBody(Repeat("<w:p><w:r><w:t>MAILVEC PARAGRAPH TEXT CONTENT PADDING</w:t></w:r></w:p>", repeats));
+
+    private static byte[] DocxWithBody(string bodyXml, string contentTypeSuffix = "", string relTargetSuffix = "") => Zip(
         ("[Content_Types].xml",
-         $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="{CtNs}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="{DocxType}.main+xml"/></Types>"""),
+         $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="{CtNs}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml{contentTypeSuffix}"/><Override PartName="/word/document.xml" ContentType="{DocxType}.main+xml"/></Types>"""),
         ("_rels/.rels",
-         $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{RelsNs}"><Relationship Id="rId1" Type="{OfficeDocRel}" Target="word/document.xml"/></Relationships>"""),
+         $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{RelsNs}"><Relationship Id="rId1" Type="{OfficeDocRel}" Target="word/document.xml{relTargetSuffix}"/></Relationships>"""),
         ("word/document.xml",
          """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>"""
-         + Repeat("<w:p><w:r><w:t>MAILVEC PARAGRAPH TEXT CONTENT PADDING</w:t></w:r></w:p>", repeats)
+         + bodyXml
          + "</w:body></w:document>"));
 
-    private static byte[] Xlsx(int repeats) => Zip(
+    private static byte[] Xlsx(int repeats) =>
+        XlsxWithStrings(Repeat("<si><t>MAILVEC SHARED STRING CELL TEXT PADDING</t></si>", repeats));
+
+    private static byte[] XlsxWithStrings(string stringsXml, string workbookExtra = "") => Zip(
         ("[Content_Types].xml",
          $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="{CtNs}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="{XlsxType}.main+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>"""),
         ("_rels/.rels",
@@ -227,13 +406,18 @@ public class OfficePartLimitTests
         ("xl/_rels/workbook.xml.rels",
          $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{RelsNs}"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>"""),
         ("xl/workbook.xml",
-         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="MAILVEC SHEET" sheetId="1" r:id="rId9" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></sheets></workbook>"""),
+         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="MAILVEC SHEET" sheetId="1" r:id="rId9" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></sheets>"""
+         + workbookExtra
+         + "</workbook>"),
         ("xl/sharedStrings.xml",
          """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"""
-         + Repeat("<si><t>MAILVEC SHARED STRING CELL TEXT PADDING</t></si>", repeats)
+         + stringsXml
          + "</sst>"));
 
-    private static byte[] Pptx(int repeats) => Zip(
+    private static byte[] Pptx(int repeats) =>
+        PptxWith(Repeat("<a:p><a:r><a:t>MAILVEC SLIDE RUN TEXT CONTENT PADDING</a:t></a:r></a:p>", repeats));
+
+    private static byte[] PptxWith(string slideBody, string presentationExtra = "") => Zip(
         ("[Content_Types].xml",
          $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="{CtNs}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/ppt/presentation.xml" ContentType="{PptxType}.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>"""),
         ("_rels/.rels",
@@ -241,10 +425,12 @@ public class OfficePartLimitTests
         ("ppt/_rels/presentation.xml.rels",
          $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{RelsNs}"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>"""),
         ("ppt/presentation.xml",
-         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst></p:presentation>"""),
+         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst>"""
+         + presentationExtra
+         + "</p:presentation>"),
         ("ppt/slides/slide1.xml",
          """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody>"""
-         + Repeat("<a:p><a:r><a:t>MAILVEC SLIDE RUN TEXT CONTENT PADDING</a:t></a:r></a:p>", repeats)
+         + slideBody
          + "</p:txBody></p:sp></p:spTree></p:cSld></p:sld>"));
 
     private static byte[] PptxDeck(int slides, int emptyShapesPerSlide)

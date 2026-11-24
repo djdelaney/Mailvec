@@ -31,7 +31,26 @@ public class HealthServiceOcrTests
         repo.Upsert(parsed, "INBOX", "INBOX/cur", id + ".eml", DateTimeOffset.UtcNow);
     }
 
-    private static HealthService Build(TempDatabase db, EmbedderOptions emb) =>
+    [Fact]
+    public async Task The_up_shape_of_the_check_never_probes_the_vision_provider()
+    {
+        // The vision probe is an uncached outbound request (to a hosted
+        // provider, a billed one) and /up reports nothing it learns.
+        using var db = new TempDatabase();
+        var vision = new FakeVision(available: true);
+        var emb = new EmbedderOptions { OcrEnabled = true, ImageOcrEnabled = true };
+
+        var full = await Build(db, emb, vision).CheckAsync();
+        vision.Probes.ShouldBe(1);
+        var lean = await Build(db, emb, vision).CheckAsync(informationalProbes: false);
+
+        vision.Probes.ShouldBe(1, "the lean check must not have probed");
+        lean.Status.ShouldBe(full.Status);
+        lean.Ocr.Stalled.ShouldBe(full.Ocr.Stalled);
+        lean.Ocr.ModelAvailable.ShouldBeNull();
+    }
+
+    private static HealthService Build(TempDatabase db, EmbedderOptions emb, IVisionClient? vision = null) =>
         new(db.Connections,
             new MetadataRepository(db.Connections),
             new EmbeddingService(new FakeEmbedding(), Tests.Embedding.TestProfiles.Legacy()),
@@ -39,7 +58,7 @@ public class HealthServiceOcrTests
             Microsoft.Extensions.Options.Options.Create(new ArchiveOptions { DatabasePath = db.DatabasePath }),
             Microsoft.Extensions.Options.Options.Create(new OllamaOptions()),
             new MessageRepository(db.Connections),
-            new FakeVision(available: true),
+            vision ?? new FakeVision(available: true),
             Microsoft.Extensions.Options.Options.Create(emb));
 
     [Fact]
@@ -100,6 +119,7 @@ public class HealthServiceOcrTests
     {
         public Task<string> OcrAsync(byte[] image, CancellationToken ct = default) => Task.FromResult("");
         public Task<string> OcrImageAsync(byte[] image, CancellationToken ct = default) => Task.FromResult("");
-        public Task<bool> IsModelAvailableAsync(CancellationToken ct = default) => Task.FromResult(available);
+        public int Probes;
+        public Task<bool> IsModelAvailableAsync(CancellationToken ct = default) { Probes++; return Task.FromResult(available); }
     }
 }

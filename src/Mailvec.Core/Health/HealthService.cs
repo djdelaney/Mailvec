@@ -100,7 +100,13 @@ public sealed class HealthService(
         return DateTimeOffset.UtcNow - lastSuccess > OcrHealthKeys.StalledAfter;
     }
 
-    public async Task<HealthReport> CheckAsync(CancellationToken ct = default)
+    /// <param name="informationalProbes">
+    /// False skips the vision and parser probes, whose results never change
+    /// <see cref="HealthReport.Status"/>: <c>/up</c> reports neither, is polled
+    /// from the internet, and the vision probe is an uncached outbound request
+    /// to Ollama or a hosted provider. Their fields then read as unknown.
+    /// </param>
+    public async Task<HealthReport> CheckAsync(CancellationToken ct = default, bool informationalProbes = true)
     {
         var (total, deleted, embedded, chunks, lastIndexedAt) = ReadCounts();
 
@@ -159,7 +165,7 @@ public sealed class HealthService(
         // pressure whose 429s then read as false outages. 15s coalesces
         // concurrent monitor polls while staying far fresher than any
         // monitor's own interval.
-        var visionProbeTask = ocrEnabled && vision is not null
+        var visionProbeTask = informationalProbes && ocrEnabled && vision is not null
             ? vision.ProbeAsync(ct)
             : null;
         // The parser's reachability is informational, like Services: a parse
@@ -170,7 +176,7 @@ public sealed class HealthService(
         // service is down, and serialised behind an unreachable Ollama's 7 s
         // it pushed /health past the 10 s healthcheck budget — a restart of a
         // working mcp container for two outages that are neither of them its own.
-        var parserProbeTask = parser?.ProbeAsync(ct);
+        var parserProbeTask = informationalProbes ? parser?.ProbeAsync(ct) : null;
         var (embedProbe, liveDigest) = await GetProbeCachedAsync(ct).ConfigureAwait(false);
         var ollamaReachable = embedProbe.IsAvailable;
         var visionProbe = visionProbeTask is null ? null : await visionProbeTask.ConfigureAwait(false);

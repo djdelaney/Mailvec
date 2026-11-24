@@ -41,5 +41,23 @@ class ManualRunGate(unittest.TestCase):
         self.assertRegex((REPO / ".github" / "workflows" / "ci.yml").read_text(), r"(?m)^  push:\n    branches: \[main\]")
 
 
+class Checkouts(unittest.TestCase):
+    def test_no_checkout_names_a_ref_that_can_move_between_jobs(self):
+        # github.ref on a manual run is refs/heads/main, resolved again by
+        # each job: two architectures could build two different commits.
+        refs = re.findall(r"(?m)^\s+ref: (.*)$", TEXT)
+        self.assertTrue(refs)
+        for ref in refs:
+            self.assertNotIn("github.ref", ref)
+            self.assertIn("github.sha", ref)
+
+    def test_no_checkout_leaves_the_token_in_the_work_tree(self):
+        steps = re.split(r"(?m)^      - ", TEXT)
+        checkouts = [s for s in steps if s.startswith("uses: actions/checkout@")]
+        self.assertEqual(len(checkouts), TEXT.count("actions/checkout@"))
+        for step in checkouts:
+            self.assertIn("persist-credentials: false", step)
+
+
 if __name__ == "__main__":
     unittest.main()

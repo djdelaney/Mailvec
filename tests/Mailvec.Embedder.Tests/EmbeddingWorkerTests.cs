@@ -443,6 +443,49 @@ public class EmbeddingWorkerTests : IDisposable
     }
 
     [Fact]
+    public void BuildChunksForMessage_stops_at_the_per_message_chunk_cap_body_first()
+    {
+        // Each attachment's text is capped, their number is not: without a
+        // per-message ceiling one message is as many chunks as its sender
+        // likes, embedded in one batch.
+        var worker = BuildWorker(_ => Ok([HotVector(0)]), embedderOpts: new EmbedderOptions
+        {
+            MaxChunksPerMessage = 5,
+        });
+
+        var msg = new UnembeddedMessage(
+            Id: 1,
+            BodyText: new string('a', 2000),            // 3+ chunks on its own
+            Subject: "Subj",
+            AttachmentNames: "a.txt b.txt c.txt",
+            Attachments:
+            [
+                new AttachmentEmbeddingPayload(7, 0, "a.txt", new string('p', 2000)),
+                new AttachmentEmbeddingPayload(8, 1, "b.txt", new string('q', 2000)),
+                new AttachmentEmbeddingPayload(9, 2, "c.txt", new string('r', 2000)),
+            ]);
+
+        var chunks = worker.BuildChunksForMessage(msg);
+
+        chunks.Count.ShouldBe(5);
+        for (int i = 0; i < chunks.Count; i++) chunks[i].Index.ShouldBe(i);
+        // The body is kept whole before any attachment gets a chunk, and the
+        // attachments past the cap contribute nothing.
+        chunks[0].Source.ShouldBe("body");
+        chunks.Count(c => c.Source == "body").ShouldBeGreaterThanOrEqualTo(3);
+        chunks.ShouldNotContain(c => c.AttachmentId == 9);
+    }
+
+    [Fact]
+    public void The_default_chunk_cap_is_above_the_largest_real_message()
+    {
+        // 2,397 chunks is the largest message in the 82k-message development
+        // corpus. A default under that silently drops real text from the
+        // vector leg; lowering it is a retrieval change and wants an eval run.
+        new EmbedderOptions().MaxChunksPerMessage.ShouldBeGreaterThan(2397);
+    }
+
+    [Fact]
     public void BuildChunksForMessage_disabled_threshold_keeps_short_body()
     {
         // MinBodyCharsForVector = 0 means "always embed body, even tiny ones".

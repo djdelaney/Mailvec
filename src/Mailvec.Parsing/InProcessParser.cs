@@ -90,12 +90,30 @@ public sealed class InProcessParser : IMailParser
     private static PdfRender RenderCore(byte[] pdf, int firstPage, int maxPages)
     {
         int pageCount = PdfRenderer.PageCount(pdf);
-        int first = Math.Max(0, firstPage);
-        int end = Math.Min(pageCount, first + Math.Max(0, maxPages));
-        var pages = new List<byte[]>(Math.Max(0, end - first));
-        for (int p = first; p < end; p++)
-            pages.Add(PdfRenderer.RenderPageJpeg(pdf, p));
+        var (start, end) = PageRange(pageCount, firstPage, maxPages);
+        var pages = new List<byte[]>(end - start);
+        if (end > start)
+        {
+            // Read once: asking per page made a render of P pages cost P size passes.
+            var sizes = PdfRenderer.PageSizes(pdf);
+            for (int p = start; p < end; p++)
+                pages.Add(PdfRenderer.RenderPageJpeg(pdf, p, sizes[p]));
+        }
         return new PdfRender(pageCount, pages);
+    }
+
+    /// <summary>
+    /// The half-open page range a request covers. In 64-bit arithmetic:
+    /// <c>first + maxPages</c> as ints wrapped negative for a large
+    /// <paramref name="maxPages"/>, and the list capacity computed from it
+    /// came out near <see cref="int.MaxValue"/>.
+    /// </summary>
+    internal static (int Start, int End) PageRange(int pageCount, int firstPage, int maxPages)
+    {
+        int count = Math.Max(0, pageCount);
+        int start = Math.Min(count, Math.Max(0, firstPage));
+        int end = (int)Math.Min(count, (long)start + Math.Max(0, maxPages));
+        return (start, end);
     }
 
     public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes)

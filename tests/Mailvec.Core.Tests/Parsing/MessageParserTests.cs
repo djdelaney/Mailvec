@@ -174,6 +174,53 @@ public class MessageParserTests
         att.SizeBytes.ShouldBe(90);   // decoded; the encoded base64 would be 120
     }
 
+    // Every other text source was capped (HTML input, each attachment); a
+    // text/plain body was bounded only by the message size limit, so one large
+    // text mail became tens of thousands of chunks in a single embed batch.
+    [Fact]
+    public void An_oversized_plain_text_body_is_cut_to_the_body_ceiling()
+    {
+        var lines = new System.Text.StringBuilder();
+        for (int i = 0; lines.Length < MessageParser.MaxBodyTextChars + 200_000; i++)
+            lines.Append("Paragraph ").Append(i).Append(" of an ordinary but very long message.\n");
+
+        var parsed = ParseRaw(
+            "From: a@example.com\nMessage-ID: <big@example.com>\nSubject: big\n" +
+            "Content-Type: text/plain; charset=utf-8\n\n" + lines);
+
+        var body = parsed.BodyText.ShouldNotBeNull();
+        body.Length.ShouldBeLessThanOrEqualTo(MessageParser.MaxBodyTextChars);
+        body.Length.ShouldBeGreaterThan(MessageParser.MaxBodyTextChars / 2); // cut, not dropped
+        body.ShouldStartWith("Paragraph 0 ");
+    }
+
+    [Fact]
+    public void An_oversized_html_body_is_cut_to_the_html_ceiling_and_still_yields_text()
+    {
+        var html = "<html><body><p>MAILVEC OPENING</p>" +
+            string.Concat(Enumerable.Repeat("<p>filler paragraph text</p>", MessageParser.MaxBodyHtmlChars / 20)) +
+            "</body></html>";
+        html.Length.ShouldBeGreaterThan(MessageParser.MaxBodyHtmlChars);
+
+        var parsed = ParseRaw(
+            "From: a@example.com\nMessage-ID: <bightml@example.com>\nSubject: big\n" +
+            "Content-Type: text/html; charset=utf-8\n\n" + html);
+
+        parsed.BodyHtml.ShouldNotBeNull().Length.ShouldBeLessThanOrEqualTo(MessageParser.MaxBodyHtmlChars);
+        parsed.BodyText.ShouldNotBeNull().ShouldContain("MAILVEC OPENING");
+    }
+
+    [Fact]
+    public void The_body_cut_never_leaves_half_a_surrogate_pair()
+    {
+        var text = "ab\U0001F600cd"; // the emoji is chars 2 and 3
+
+        MessageParser.CapChars(text, 3).ShouldBe("ab");
+        MessageParser.CapChars(text, 4).ShouldBe("ab\U0001F600");
+        MessageParser.CapChars(text, 100).ShouldBeSameAs(text);
+        MessageParser.CapChars(null, 3).ShouldBeNull();
+    }
+
     private ParsedMessage ParseRaw(string raw)
     {
         using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(raw.Replace("\r\n", "\n").Replace("\n", "\r\n")));
