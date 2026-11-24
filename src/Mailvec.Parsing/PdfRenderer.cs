@@ -44,19 +44,16 @@ public static class PdfRenderer
     public static int PageCount(byte[] pdf) => Conversion.GetPageCount(pdf);
 
     /// <summary>Render a single 0-based page index to JPEG bytes, long edge capped at <see cref="MaxEdgePx"/>.</summary>
-    public static byte[] RenderPageJpeg(byte[] pdf, int pageIndex)
-    {
-        var sizePt = Conversion.GetPageSizes(pdf)[pageIndex]; // PDF user units (points = 1/72")
-        int w = (int)Math.Round(sizePt.Width / 72.0 * Dpi);
-        int h = (int)Math.Round(sizePt.Height / 72.0 * Dpi);
+    public static byte[] RenderPageJpeg(byte[] pdf, int pageIndex) =>
+        RenderPageJpeg(pdf, pageIndex, PageSizes(pdf)[pageIndex]);
 
-        int longEdge = Math.Max(w, h);
-        if (longEdge > MaxEdgePx)
-        {
-            double scale = (double)MaxEdgePx / longEdge;
-            w = Math.Max(1, (int)Math.Round(w * scale));
-            h = Math.Max(1, (int)Math.Round(h * scale));
-        }
+    /// <summary>Every page's size in PDF user units (points). Read once per document, not once per page.</summary>
+    public static IList<System.Drawing.SizeF> PageSizes(byte[] pdf) => Conversion.GetPageSizes(pdf);
+
+    /// <summary>Render one page whose size the caller already read with <see cref="PageSizes"/>.</summary>
+    public static byte[] RenderPageJpeg(byte[] pdf, int pageIndex, System.Drawing.SizeF sizePt)
+    {
+        var (w, h) = TargetPixels(sizePt.Width, sizePt.Height);
 
         using var bitmap = Conversion.ToImage(
             pdf, page: pageIndex,
@@ -64,5 +61,30 @@ public static class PdfRenderer
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Jpeg, JpegQuality);
         return data.ToArray();
+    }
+
+    /// <summary>
+    /// Pixel size to render a page of the given size (points) at, long edge
+    /// capped at <see cref="MaxEdgePx"/>. The page size comes from the
+    /// document's /MediaBox, so it is whatever the sender wrote: the scaling is
+    /// done in floating point and each edge clamped to [1, MaxEdgePx] before
+    /// it becomes an int, and a size that is not a positive finite number is
+    /// refused rather than rounded to a 0-pixel render.
+    /// </summary>
+    internal static (int Width, int Height) TargetPixels(double widthPt, double heightPt)
+    {
+        if (!double.IsFinite(widthPt) || !double.IsFinite(heightPt) || widthPt <= 0 || heightPt <= 0)
+            throw new InvalidDataException("The PDF page has no usable size.");
+
+        double w = widthPt / 72.0 * Dpi;
+        double h = heightPt / 72.0 * Dpi;
+        double longEdge = Math.Max(w, h);
+        if (longEdge > MaxEdgePx)
+        {
+            double scale = MaxEdgePx / longEdge;
+            w *= scale;
+            h *= scale;
+        }
+        return ((int)Math.Clamp(Math.Round(w), 1, MaxEdgePx), (int)Math.Clamp(Math.Round(h), 1, MaxEdgePx));
     }
 }

@@ -46,17 +46,29 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory, long? maxReques
         NoNullElements(parsed.ToAddresses, "toAddresses");
         NoNullElements(parsed.CcAddresses, "ccAddresses");
         NoNullElements(parsed.Attachments, "attachments");
+        CheckMessage(parsed, eml.LongLength);
         return parsed;
     }
 
-    public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex) =>
-        PostEml<ExtractionResult>(ParserWire.PartText(partIndex), eml)!;
+    public ExtractionResult ExtractAttachmentText(byte[] eml, int partIndex)
+    {
+        var result = PostEml<ExtractionResult>(ParserWire.PartText(partIndex), eml)!;
+        if (!KnownStatuses.Contains(result.Status)) throw NotOurs("an extraction status that is not one of ours");
+        return result;
+    }
 
     public PartInfo DescribePart(byte[] eml, int partIndex) =>
         PostEml<PartInfo>(ParserWire.Part(partIndex), eml)!;
 
-    public DecodedPart DecodePart(byte[] eml, int partIndex, long? maxBytes) =>
-        PostEml<DecodedPart>(Query(ParserWire.PartBytes(partIndex), ("maxBytes", maxBytes)), eml)!;
+    public DecodedPart DecodePart(byte[] eml, int partIndex, long? maxBytes)
+    {
+        var part = PostEml<DecodedPart>(Query(ParserWire.PartBytes(partIndex), ("maxBytes", maxBytes)), eml)!;
+        // The ceiling is the caller's budget, and the host enforces it while
+        // decoding. A part that comes back over it was not decoded by our host.
+        if (maxBytes is { } cap && part.Bytes.LongLength > cap)
+            throw NotOurs("a part larger than the ceiling it was asked to enforce");
+        return part;
+    }
 
     public PdfRender RenderPdfPages(byte[] eml, int partIndex, int firstPage, int maxPages, long? maxBytes)
     {
@@ -69,7 +81,65 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory, long? maxReques
             throw new ParseException(ParseFailureKind.Crashed,
                 $"The parse service returned {render.Pages.Count} page(s) where at most {maxPages} were requested.");
         NoNullElements(render.Pages, "pages");
+        foreach (var page in render.Pages) CheckJpeg(page);
         return render;
+    }
+
+    // ---- What a result has to look like before a caller acts on it ----------
+    //
+    // The parse service handles sender-chosen bytes and is assumed capable of
+    // answering anything. ParserWire.Json and ResponseShape settle whether a
+    // body is the right SHAPE; these settle whether its values are ones our
+    // host can produce, because the callers write them into the archive, hand
+    // them to an MCP client, or send them to a vision provider. A violation
+    // says something about the service, never the document: Crashed.
+
+    /// <summary>
+    /// Ceiling on one rendered or normalized image. Both rasterisers cap the
+    /// long edge at <see cref="RasterLimits.MaxEdgePx"/> and encode JPEG, so a
+    /// real one is a few hundred KB; this is what bounds the bytes mcp returns
+    /// to a client and the embedder posts to a vision provider.
+    /// </summary>
+    internal const int MaxImageBytes = 8 * 1024 * 1024;
+
+    private static readonly HashSet<string> KnownStatuses = new(StringComparer.Ordinal)
+    {
+        ExtractionStatus.Done, ExtractionStatus.NoText, ExtractionStatus.Ocr, ExtractionStatus.Unsupported,
+        ExtractionStatus.Oversize, ExtractionStatus.Encrypted, ExtractionStatus.Failed,
+    };
+
+    private static ParseException NotOurs(string what) =>
+        new(ParseFailureKind.Crashed, $"The parse service returned {what}.");
+
+    private static void CheckJpeg(byte[] image)
+    {
+        if (image.Length > MaxImageBytes) throw NotOurs("an image larger than any it renders");
+        if (image.Length < 3 || image[0] != 0xFF || image[1] != 0xD8 || image[2] != 0xFF)
+            throw NotOurs("an image that is not a JPEG");
+    }
+
+    private static void CheckMessage(ParsedMessage parsed, long emlLength)
+    {
+        // MessageRepository.Upsert stores these verbatim.
+        if (parsed.RawHeaders.Length != 0) throw NotOurs("raw headers, which the parser never sends");
+        if (parsed.SizeBytes != emlLength) throw NotOurs("a message size that is not the size of the message sent");
+        // Non-empty only. No length ceiling: real mail carries odd ids, and a
+        // wrong refusal here would stop that message from ever being indexed.
+        if (parsed.MessageId.Length == 0 || parsed.ThreadId.Length == 0)
+            throw NotOurs("an empty message or thread id");
+        if (parsed.ContentHash.Length != 64 || !parsed.ContentHash.All(char.IsAsciiHexDigit))
+            throw NotOurs("a content hash that is not a SHA-256");
+
+        var seen = new HashSet<int>();
+        foreach (var attachment in parsed.Attachments)
+        {
+            // part_index is how a row is mapped back to a MIME part, and
+            // (message_id, part_index) is unique in the schema.
+            if (attachment.PartIndex < 0 || !seen.Add(attachment.PartIndex))
+                throw NotOurs("a negative or repeated attachment part index");
+            if (attachment.ExtractionStatus is { } status && !KnownStatuses.Contains(status))
+                throw NotOurs("an extraction status that is not one of ours");
+        }
     }
 
     /// <summary>
@@ -90,8 +160,15 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory, long? maxReques
         }
     }
 
-    public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes) =>
-        PostEml<NormalizedImage>(Query(ParserWire.PartImage(partIndex), ("maxBytes", maxBytes)), eml, allowNoContent: true);
+    public NormalizedImage? NormalizeImage(byte[] eml, int partIndex, long? maxBytes)
+    {
+        var image = PostEml<NormalizedImage>(Query(ParserWire.PartImage(partIndex), ("maxBytes", maxBytes)), eml, allowNoContent: true);
+        if (image is null) return null;
+        if (image.Width is < 1 or > RasterLimits.MaxEdgePx || image.Height is < 1 or > RasterLimits.MaxEdgePx)
+            throw NotOurs("an image with dimensions outside what it renders");
+        CheckJpeg(image.Jpeg);
+        return image;
+    }
 
     public string? BodyTextFromHtml(string html, string? subject)
     {
@@ -227,13 +304,35 @@ public sealed class RemoteParser(Func<HttpClient> clientFactory, long? maxReques
         try
         {
             if (response.Content.Headers.ContentLength == 0) return null;
-            using var stream = response.Content.ReadAsStream();
-            return JsonSerializer.Deserialize<ParseError>(stream, ParserWire.Json);
+            // Already buffered under MaxResponseBytes. An error from our host is
+            // a few hundred bytes; anything larger is not read as one.
+            var body = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+            if (body.Length > MaxErrorBodyBytes) return null;
+            var error = JsonSerializer.Deserialize<ParseError>(body, ParserWire.Json);
+            return error is null ? null : error with { Message = Clean(error.Message)!, Describe = Clean(error.Describe) };
         }
         catch (JsonException)
         {
             return null; // not our body — a proxy or Kestrel's own error page
         }
+    }
+
+    private const int MaxErrorBodyBytes = 16 * 1024;
+    private const int MaxErrorTextChars = 300;
+
+    /// <summary>
+    /// Error text from the service ends up in exception messages, which are
+    /// logged and, for some, shown to an MCP client. Keep it one short line.
+    /// </summary>
+    private static string? Clean(string? text)
+    {
+        if (text is null) return null;
+        var cut = text.Length > MaxErrorTextChars ? text[..MaxErrorTextChars] : text;
+        return string.Create(cut.Length, cut, static (span, source) =>
+        {
+            for (var i = 0; i < span.Length; i++)
+                span[i] = char.IsControl(source[i]) || char.IsSurrogate(source[i]) ? ' ' : source[i];
+        });
     }
 
     private static Exception MapError(HttpStatusCode status, ParseError? error)

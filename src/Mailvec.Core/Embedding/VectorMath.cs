@@ -26,6 +26,17 @@ public static class VectorMath
         if (norm == 0d || Math.Abs(norm - 1d) <= epsilon) return;
 
         var inv = (float)(1d / norm);
-        for (int i = 0; i < vec.Length; i++) vec[i] *= inv;
+        if (float.IsFinite(inv))
+        {
+            for (int i = 0; i < vec.Length; i++) vec[i] *= inv;
+            return;
+        }
+
+        // A norm so small that its inverse does not fit a float: multiplying by
+        // that infinity turned every zero component into NaN, after the
+        // caller's finiteness check. Dividing in double cannot overflow (no
+        // component exceeds the norm). Kept off the path above so vectors that
+        // normalized before still come out bit for bit the same.
+        for (int i = 0; i < vec.Length; i++) vec[i] = (float)(vec[i] / norm);
     }
 }

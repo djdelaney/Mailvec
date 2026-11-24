@@ -307,9 +307,11 @@ public class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            // Unexpected — keep the full stack so we can dig in, but not the
-            // filename (PII); the extension is enough to correlate.
-            logger.LogWarning(ex, "PDF text extraction failed unexpectedly for {Ext} attachment", FileKind(fileName));
+            // Unexpected — keep where it was thrown so we can dig in, but not
+            // the exception's message (a parser's can quote the document) and
+            // not the filename (PII); the extension is enough to correlate.
+            logger.LogWarning("PDF text extraction failed unexpectedly for {Ext} attachment: {Error} {Stack}",
+                FileKind(fileName), ex.GetType().Name, ex.StackTrace);
             return new ExtractionResult(null, StatusFailed);
         }
     }

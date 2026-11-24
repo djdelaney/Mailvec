@@ -152,9 +152,11 @@ public sealed class ViewAttachmentTool(
         {
             att = extractor.ExtractInMemory(msg, partIndex, _mcp.AttachmentInlineMaxBytes);
         }
-        catch (ArgumentOutOfRangeException ex)
+        catch (ArgumentOutOfRangeException)
         {
-            throw new McpException(ex.Message);
+            // Our own words, not the exception's: in the container that text
+            // comes from the parse service.
+            throw new McpException($"partIndex {partIndex} is out of range for message {msg.Id}. Call get_email to list its attachments.");
         }
         catch (FileNotFoundException ex)
         {

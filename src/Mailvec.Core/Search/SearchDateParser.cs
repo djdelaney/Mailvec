@@ -36,7 +36,8 @@ public static class SearchDateParser
             // exclusive" because SearchFilterSql compares with <=; the
             // datetime() wrapper truncates to whole seconds, so 23:59:59.9999999
             // compares as 23:59:59 and still includes everything on the day.
-            parsed = parsed.AddDays(1).AddTicks(-1);
+            // Added as one step: AddDays(1) first overflows on 9999-12-31.
+            parsed = parsed.AddTicks(TimeSpan.TicksPerDay - 1);
         }
 
         bound = parsed;
