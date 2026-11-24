@@ -1,11 +1,8 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 using System.Xml;
 using DocumentFormat.OpenXml.Packaging;
-using DocumentFormat.OpenXml.Wordprocessing;
-using A = DocumentFormat.OpenXml.Drawing;
-using P = DocumentFormat.OpenXml.Presentation;
-using S = DocumentFormat.OpenXml.Spreadsheet;
 using Microsoft.Extensions.Logging;
 using MimeKit;
 using UglyToad.PdfPig;
@@ -131,19 +128,34 @@ public class AttachmentTextExtractor(
     internal static readonly OpenSettings OfficeOpenSettings = new() { MaxCharactersInPart = MaxCharactersInOfficePart };
 
     /// <summary>
-    /// For the PPTX slide read, which streams each slide part itself and so is
-    /// not covered by <see cref="OfficeOpenSettings"/>. Same per-part ceiling,
-    /// no DTDs, no external resolution.
+    /// For <see cref="StreamPart"/>, which reads each part's stream itself and
+    /// so is not covered by <see cref="OfficeOpenSettings"/>. Same per-part
+    /// ceiling, no DTDs, no external resolution. Whitespace is kept: a run that
+    /// is only a space is how Word separates two words.
     /// </summary>
-    private static readonly XmlReaderSettings SlideReaderSettings = new()
+    private static readonly XmlReaderSettings PartReaderSettings = new()
     {
         DtdProcessing = DtdProcessing.Prohibit,
         XmlResolver = null,
         MaxCharactersInDocument = MaxCharactersInOfficePart,
         IgnoreComments = true,
         IgnoreProcessingInstructions = true,
-        IgnoreWhitespace = true,
     };
+
+    /// <summary>
+    /// Deepest element nesting accepted in an Open XML part. Real documents
+    /// nest a few dozen levels (tables in tables in text boxes); see
+    /// <see cref="StreamPart"/> for what unbounded depth cost.
+    /// </summary>
+    internal const int MaxXmlDepth = 256;
+
+    // Limits on the package's own metadata; see OfficePackageMetadataWithinLimits.
+    private const int MaxOfficePackageEntries = 10_000;
+    private const long MaxOfficeMetadataEntryBytes = 2 * 1024 * 1024;
+    private const long MaxOfficeMetadataTotalBytes = 8 * 1024 * 1024;
+
+    private const string RelationshipsNamespace = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    private const string StrictRelationshipsNamespace = "http://purl.oclc.org/ooxml/officeDocument/relationships";
 
     // .NET ships only UTF-*, ASCII, and Latin1 wired up by default — legacy
     // codepages like windows-1252 need CodePagesEncodingProvider registered
@@ -302,27 +314,69 @@ public class AttachmentTextExtractor(
         }
     }
 
+    /// <summary>
+    /// Extract text from a .docx: one line per paragraph of the main document
+    /// body. Streamed, never <c>MainDocumentPart.Document</c>; see
+    /// <see cref="StreamPart"/> for why no Open XML part is DOM-loaded here.
+    /// </summary>
     private ExtractionResult ExtractDocx(byte[] bytes, string? fileName)
     {
         try
         {
+            if (!OfficePackageMetadataWithinLimits(bytes)) return OversizedPackageMetadata(fileName);
             using var ms = new MemoryStream(bytes, writable: false);
             using var doc = WordprocessingDocument.Open(ms, isEditable: false, OfficeOpenSettings);
-            var body = doc.MainDocumentPart?.Document?.Body;
-            if (body is null) return new ExtractionResult(null, StatusNoText);
+            if (doc.MainDocumentPart is not { } main) return new ExtractionResult(null, StatusNoText);
 
             var sb = new StringBuilder(Math.Min(bytes.Length, 65_536));
-            // Walk paragraphs explicitly so we keep paragraph breaks; the
-            // default InnerText flattens everything onto one line, which
-            // hurts the chunker's paragraph-aware splitting.
-            foreach (var para in body.Descendants<Paragraph>())
+            var line = new StringBuilder();
+            var clock = Stopwatch.StartNew();
+            // Paragraphs are kept apart (one per line) for the chunker's
+            // paragraph-aware splitting. A paragraph's text is every text node
+            // inside it — runs, deleted runs, field codes — which is what the
+            // SDK's InnerText returned when this walked the DOM. A paragraph
+            // nested in another (a text box) ends the line it is on.
+            bool inBody = false, inTextLeaf = false;
+            int paragraphs = 0;
+            var read = StreamPart(main, clock, sb, reader =>
             {
-                if (sb.Length >= MaxExtractedTextChars) break;
-                var text = para.InnerText;
-                if (!string.IsNullOrWhiteSpace(text))
+                switch (reader.NodeType)
                 {
-                    sb.AppendLine(text);
+                    case XmlNodeType.Element:
+                        bool word = IsWordprocessingMl(reader.NamespaceURI);
+                        inTextLeaf = word && !reader.IsEmptyElement && reader.LocalName is "t" or "delText" or "instrText";
+                        if (!word || reader.IsEmptyElement) break;
+                        if (reader.LocalName == "body") inBody = true;
+                        else if (inBody && reader.LocalName == "p")
+                        {
+                            // The outer paragraph's text so far is its own line,
+                            // not a prefix glued onto the nested one's.
+                            if (paragraphs > 0) FlushLine(line, sb);
+                            paragraphs++;
+                        }
+                        break;
+                    case XmlNodeType.EndElement:
+                        inTextLeaf = false;
+                        if (!IsWordprocessingMl(reader.NamespaceURI)) break;
+                        if (reader.LocalName == "body") inBody = false;
+                        else if (reader.LocalName == "p" && paragraphs > 0)
+                        {
+                            paragraphs--;
+                            FlushLine(line, sb);
+                        }
+                        break;
+                    case XmlNodeType.Text or XmlNodeType.CDATA when paragraphs > 0:
+                    case XmlNodeType.Whitespace or XmlNodeType.SignificantWhitespace when paragraphs > 0 && inTextLeaf:
+                        line.Append(reader.Value);
+                        // A paragraph that never ends must not outgrow the most text we keep.
+                        if (line.Length >= MaxExtractedTextChars) FlushLine(line, sb);
+                        break;
                 }
+            });
+            if (read == PartRead.OverBudget)
+            {
+                FlushLine(line, sb); // keep the paragraph the clock ran out in
+                return OverBudget(sb, fileName);
             }
 
             return BuildResult(sb.ToString());
@@ -333,8 +387,7 @@ public class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "DOCX text extraction failed for {Ext} attachment", FileKind(fileName));
-            return new ExtractionResult(null, StatusFailed);
+            return OfficeExtractionFailed("DOCX", fileName, ex);
         }
     }
 
@@ -350,34 +403,57 @@ public class AttachmentTextExtractor(
     {
         try
         {
+            if (!OfficePackageMetadataWithinLimits(bytes)) return OversizedPackageMetadata(fileName);
             using var ms = new MemoryStream(bytes, writable: false);
             using var doc = SpreadsheetDocument.Open(ms, isEditable: false, OfficeOpenSettings);
-            var workbookPart = doc.WorkbookPart;
-            if (workbookPart is null) return new ExtractionResult(null, StatusNoText);
+            if (doc.WorkbookPart is not { } workbookPart) return new ExtractionResult(null, StatusNoText);
 
             var sb = new StringBuilder(Math.Min(bytes.Length, 65_536));
+            var clock = Stopwatch.StartNew();
 
             // Sheet names are often the most descriptive labels ("Guest List",
-            // "Budget", "Vendors").
-            var sheets = workbookPart.Workbook?.Sheets?.Elements<S.Sheet>();
-            if (sheets is not null)
+            // "Budget", "Vendors"): workbook > sheets > sheet/@name.
+            var read = StreamPart(workbookPart, clock, sb, reader =>
             {
-                foreach (var sheet in sheets)
-                {
-                    if (!string.IsNullOrWhiteSpace(sheet.Name?.Value)) sb.AppendLine(sheet.Name!.Value);
-                }
-            }
+                if (reader.NodeType != XmlNodeType.Element || reader.Depth != 2) return;
+                if (reader.LocalName != "sheet" || !IsSpreadsheetMl(reader.NamespaceURI)) return;
+                var name = reader.GetAttribute("name");
+                if (!string.IsNullOrWhiteSpace(name)) sb.AppendLine(name);
+            });
 
-            var stringTable = workbookPart.SharedStringTablePart?.SharedStringTable;
-            if (stringTable is not null)
+            if (read == PartRead.Completed && workbookPart.SharedStringTablePart is { } strings)
             {
-                foreach (var item in stringTable.Elements<S.SharedStringItem>())
+                // One line per shared-string item: sst > si, and every text
+                // node under it (plain, rich-text runs, phonetic runs).
+                var line = new StringBuilder();
+                bool inItem = false, inTextLeaf = false;
+                read = StreamPart(strings, clock, sb, reader =>
                 {
-                    if (sb.Length >= MaxExtractedTextChars) break;
-                    var text = item.InnerText;
-                    if (!string.IsNullOrWhiteSpace(text)) sb.AppendLine(text);
-                }
+                    switch (reader.NodeType)
+                    {
+                        case XmlNodeType.Element:
+                            bool sheet = IsSpreadsheetMl(reader.NamespaceURI);
+                            inTextLeaf = sheet && !reader.IsEmptyElement && reader.LocalName == "t";
+                            if (sheet && reader.Depth == 1 && reader.LocalName == "si" && !reader.IsEmptyElement) inItem = true;
+                            break;
+                        case XmlNodeType.EndElement:
+                            inTextLeaf = false;
+                            if (inItem && reader.Depth == 1)
+                            {
+                                inItem = false;
+                                FlushLine(line, sb);
+                            }
+                            break;
+                        case XmlNodeType.Text or XmlNodeType.CDATA when inItem:
+                        case XmlNodeType.Whitespace or XmlNodeType.SignificantWhitespace when inItem && inTextLeaf:
+                            line.Append(reader.Value);
+                            if (line.Length >= MaxExtractedTextChars) FlushLine(line, sb);
+                            break;
+                    }
+                });
+                if (read == PartRead.OverBudget) FlushLine(line, sb); // keep the item the clock ran out in
             }
+            if (read == PartRead.OverBudget) return OverBudget(sb, fileName);
 
             return BuildResult(sb.ToString());
         }
@@ -387,8 +463,7 @@ public class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "XLSX text extraction failed for {Ext} attachment", FileKind(fileName));
-            return new ExtractionResult(null, StatusFailed);
+            return OfficeExtractionFailed("XLSX", fileName, ex);
         }
     }
 
@@ -402,52 +477,45 @@ public class AttachmentTextExtractor(
     {
         try
         {
+            if (!OfficePackageMetadataWithinLimits(bytes)) return OversizedPackageMetadata(fileName);
             using var ms = new MemoryStream(bytes, writable: false);
             using var doc = PresentationDocument.Open(ms, isEditable: false, OfficeOpenSettings);
-            var presentationPart = doc.PresentationPart;
-            var slideIdList = presentationPart?.Presentation?.SlideIdList;
-            if (slideIdList is null) return new ExtractionResult(null, StatusNoText);
+            if (doc.PresentationPart is not { } presentationPart) return new ExtractionResult(null, StatusNoText);
 
             var sb = new StringBuilder(Math.Min(bytes.Length, 65_536));
             var clock = Stopwatch.StartNew();
-            foreach (var slideId in slideIdList.Elements<P.SlideId>())
+
+            // Presentation order is the slide id list (presentation > sldIdLst
+            // > sldId/@r:id), not the order of the slide parts in the package.
+            var slideRelIds = new List<string>();
+            var read = StreamPart(presentationPart, clock, sb, reader =>
+            {
+                if (reader.NodeType != XmlNodeType.Element || reader.Depth != 2) return;
+                if (reader.LocalName != "sldId" || !IsPresentationMl(reader.NamespaceURI)) return;
+                var relId = reader.GetAttribute("id", RelationshipsNamespace) ?? reader.GetAttribute("id", StrictRelationshipsNamespace);
+                // The package's entry cap bounds real decks; this bounds a list of ids with no slides behind them.
+                if (relId is not null && slideRelIds.Count < MaxOfficePackageEntries) slideRelIds.Add(relId);
+            });
+            if (read == PartRead.OverBudget) return OverBudget(sb, fileName);
+            if (slideRelIds.Count == 0) return new ExtractionResult(null, StatusNoText);
+
+            foreach (var relId in slideRelIds)
             {
                 if (sb.Length >= MaxExtractedTextChars) break;
                 if (clock.Elapsed > ExtractionBudget) return OverBudget(sb, fileName);
-                if (slideId.RelationshipId?.Value is not { } relId) continue;
-                if (presentationPart!.GetPartById(relId) is not SlidePart slidePart) continue;
+                if (!presentationPart.TryGetPartById(relId, out var part) || part is not SlidePart slidePart) continue;
 
-                // Streamed with a plain XmlReader, never slidePart.Slide.
-                // Loading the DOM keeps every slide's tree rooted until the
-                // package is disposed, and MaxCharactersInPart is a PER-PART
-                // limit, so a deck of N slides each just under it allocated N
-                // times the ceiling: measured, a 166 KB deck of four slides
-                // holding only empty shapes reached a 1.5 GB heap, and
-                // MaxExtractedTextChars never fired because there was no text
-                // to count. The reader holds one node at a time and allocates
-                // nothing per element. It is opened on the part's stream, which
-                // bypasses OfficeOpenSettings, so the same per-part ceiling is
-                // restated in SlideReaderSettings.
                 bool wroteAny = false;
                 bool inTextRun = false;
-                int sinceCheck = 0;
-                using var stream = slidePart.GetStream(FileMode.Open, FileAccess.Read);
-                using var reader = XmlReader.Create(stream, SlideReaderSettings);
-                while (reader.Read())
+                read = StreamPart(slidePart, clock, sb, reader =>
                 {
-                    if (++sinceCheck >= NodesPerBudgetCheck)
-                    {
-                        sinceCheck = 0;
-                        if (clock.Elapsed > ExtractionBudget) return OverBudget(sb, fileName);
-                    }
-
                     switch (reader.NodeType)
                     {
                         case XmlNodeType.Element:
                             // a:t, the DrawingML text run every visible string lives in.
                             inTextRun = !reader.IsEmptyElement
                                 && reader.LocalName == "t"
-                                && reader.NamespaceURI == DrawingMlNamespace;
+                                && IsDrawingMl(reader.NamespaceURI);
                             break;
                         case XmlNodeType.EndElement:
                             inTextRun = false;
@@ -459,8 +527,8 @@ public class AttachmentTextExtractor(
                             wroteAny = true;
                             break;
                     }
-                    if (sb.Length >= MaxExtractedTextChars) break;
-                }
+                });
+                if (read == PartRead.OverBudget) return OverBudget(sb, fileName);
                 if (wroteAny) sb.AppendLine();
             }
 
@@ -472,9 +540,148 @@ public class AttachmentTextExtractor(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "PPTX text extraction failed for {Ext} attachment", FileKind(fileName));
-            return new ExtractionResult(null, StatusFailed);
+            return OfficeExtractionFailed("PPTX", fileName, ex);
         }
+    }
+
+    private enum PartRead { Completed, TextCeiling, OverBudget }
+
+    /// <summary>
+    /// Reads one Open XML part node by node, calling <paramref name="onNode"/>
+    /// for each, until the part ends, <paramref name="collected"/> holds the
+    /// most text we keep, or <see cref="ExtractionBudget"/> runs out.
+    /// </summary>
+    /// <remarks>
+    /// Every part is read this way, and none through the SDK's typed DOM
+    /// (<c>part.Document</c>, <c>.Workbook</c>, <c>.SharedStringTable</c>,
+    /// <c>.Presentation</c>, <c>.Slide</c>), for three reasons the DOM cannot
+    /// be configured out of:
+    /// <list type="bullet">
+    /// <item>The SDK builds its tree by recursion, one stack frame set per
+    /// level of nesting, and nothing limits the nesting. Measured: a 6 KB
+    /// DOCX of 100,000 nested paragraphs ended the process with a stack
+    /// overflow, which no catch block sees. The reader keeps its own stack on
+    /// the heap, and anything past <see cref="MaxXmlDepth"/> is refused
+    /// here.</item>
+    /// <item><c>InnerText</c> on nested elements re-walks each subtree once
+    /// per ancestor: 20,000 levels (1.9 KB) took 7 s with no text to trip the
+    /// text ceiling and no budget check to stop it.</item>
+    /// <item>A loaded tree stays rooted until the package closes, and
+    /// <c>MaxCharactersInPart</c> is per part, so a deck of N slides each
+    /// just under it allocated N times the ceiling: a 166 KB deck of four
+    /// slides of empty shapes reached a 1.5 GB heap.</item>
+    /// </list>
+    /// The reader is opened on the part's stream, which bypasses
+    /// <see cref="OfficeOpenSettings"/>, so <see cref="PartReaderSettings"/>
+    /// restates the per-part ceiling.
+    /// </remarks>
+    private PartRead StreamPart(OpenXmlPart part, Stopwatch clock, StringBuilder collected, Action<XmlReader> onNode)
+    {
+        int sinceCheck = 0;
+        using var stream = part.GetStream(FileMode.Open, FileAccess.Read);
+        using var reader = XmlReader.Create(stream, PartReaderSettings);
+        while (reader.Read())
+        {
+            if (reader.Depth > MaxXmlDepth)
+                throw new InvalidDataException("An Open XML part is nested deeper than any real document.");
+            if (++sinceCheck >= NodesPerBudgetCheck)
+            {
+                sinceCheck = 0;
+                if (clock.Elapsed > ExtractionBudget) return PartRead.OverBudget;
+            }
+
+            onNode(reader);
+            if (collected.Length >= MaxExtractedTextChars) return PartRead.TextCeiling;
+        }
+        return PartRead.Completed;
+    }
+
+    private static void FlushLine(StringBuilder line, StringBuilder into)
+    {
+        if (line.Length == 0) return;
+        bool blank = true;
+        for (int i = 0; i < line.Length && blank; i++) blank = char.IsWhiteSpace(line[i]);
+        if (!blank) into.Append(line).AppendLine();
+        line.Clear();
+    }
+
+    private static bool IsWordprocessingMl(string ns) =>
+        ns is "http://schemas.openxmlformats.org/wordprocessingml/2006/main" or "http://purl.oclc.org/ooxml/wordprocessingml/main";
+
+    private static bool IsSpreadsheetMl(string ns) =>
+        ns is "http://schemas.openxmlformats.org/spreadsheetml/2006/main" or "http://purl.oclc.org/ooxml/spreadsheetml/main";
+
+    private static bool IsDrawingMl(string ns) =>
+        ns is DrawingMlNamespace or "http://purl.oclc.org/ooxml/drawingml/main";
+
+    private static bool IsPresentationMl(string ns) =>
+        ns is "http://schemas.openxmlformats.org/presentationml/2006/main" or "http://purl.oclc.org/ooxml/presentationml/main";
+
+    /// <summary>
+    /// False when the package's own bookkeeping — <c>[Content_Types].xml</c>
+    /// and the <c>.rels</c> parts — inflates past what any real document
+    /// carries, or the archive has an absurd number of entries.
+    /// </summary>
+    /// <remarks>
+    /// <c>System.IO.Packaging</c> parses these while the package is being
+    /// OPENED, before <see cref="OfficeOpenSettings"/> applies to anything, and
+    /// with no limit of its own. Measured: a 66 KB DOCX with one long attribute
+    /// in <c>[Content_Types].xml</c> allocated 1.8 GB, a 408 KB one 9.6 GB.
+    /// Sizes are counted while inflating: the length in a ZIP header is the
+    /// sender's claim. Bytes that are not a ZIP at all pass, so the SDK still
+    /// gets to report an encrypted (OLE) document as encrypted.
+    /// </remarks>
+    internal static bool OfficePackageMetadataWithinLimits(byte[] bytes)
+    {
+        try
+        {
+            using var ms = new MemoryStream(bytes, writable: false);
+            using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
+            if (zip.Entries.Count > MaxOfficePackageEntries) return false;
+
+            long total = 0;
+            var buffer = new byte[81_920];
+            foreach (var entry in zip.Entries)
+            {
+                // Some writers store backslash separators; the name is only matched here, never opened.
+                var name = entry.FullName.Replace('\\', '/').TrimStart('/');
+                if (!name.StartsWith("[Content_Types].xml", StringComparison.OrdinalIgnoreCase)
+                    && !name.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)
+                    && !name.Contains(".rels/", StringComparison.OrdinalIgnoreCase)) continue;
+
+                long size = 0;
+                using var stream = entry.Open();
+                int n;
+                while ((n = stream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    size += n;
+                    total += n;
+                    if (size > MaxOfficeMetadataEntryBytes || total > MaxOfficeMetadataTotalBytes) return false;
+                }
+            }
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return true;
+        }
+    }
+
+    private ExtractionResult OversizedPackageMetadata(string? fileName)
+    {
+        logger.LogWarning("Refusing {Ext} attachment: its package metadata is larger than any real document's", FileKind(fileName));
+        return new ExtractionResult(null, StatusFailed);
+    }
+
+    /// <summary>
+    /// Type name only. The SDK's messages quote the document — a part URI, an
+    /// attribute value — and a crafted package makes that string as long as it
+    /// likes.
+    /// </summary>
+    private ExtractionResult OfficeExtractionFailed(string format, string? fileName, Exception ex)
+    {
+        logger.LogWarning("{Format} text extraction failed for {Ext} attachment: {Error}", format, FileKind(fileName), ex.GetType().Name);
+        return new ExtractionResult(null, StatusFailed);
     }
 
     private static ExtractionResult ExtractText(byte[] bytes, string? declaredCharset)

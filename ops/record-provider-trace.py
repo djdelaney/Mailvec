@@ -46,6 +46,7 @@ import os
 import pathlib
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -187,7 +188,11 @@ class Account:
     """One IMAP session against the test account."""
 
     def __init__(self, user, password):
-        self.imap = imaplib.IMAP4_SSL(HOST, 993, timeout=NETWORK_TIMEOUT_SECONDS)
+        # imaplib's default context verifies nothing (CERT_NONE, no hostname
+        # check), so without this the login below hands the app password to
+        # whoever answers on port 993.
+        self.imap = imaplib.IMAP4_SSL(
+            HOST, 993, ssl_context=ssl.create_default_context(), timeout=NETWORK_TIMEOUT_SECONDS)
         self.imap.login(user, password)
 
     def close(self):
@@ -549,6 +554,16 @@ def build_trace(name, definition, recorded_steps, mbsync_version, today):
     }
 
 
+def write_private(path, text):
+    """Create the file owner-only, rather than world-readable until a chmod lands."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        # An existing file keeps its old mode through O_CREAT, so tighten it
+        # before the text goes in rather than after.
+        os.fchmod(f.fileno(), 0o600)
+        f.write(text)
+
+
 def record(name, user, password, work, out):
     definition = TRACES[name]
     seeded = {seed_id(k) for k in definition["seeds"]}
@@ -556,8 +571,7 @@ def record(name, user, password, work, out):
     mail = work / "Mail"
     mail.mkdir(parents=True)
     config = work / "mbsyncrc"
-    config.write_text(mbsyncrc(user, mail))
-    config.chmod(0o600)
+    write_private(config, mbsyncrc(user, mail))
     version = subprocess.run(["mbsync", "--version"], capture_output=True, text=True).stdout.strip().removeprefix("isync ")
 
     account = Account(user, password)

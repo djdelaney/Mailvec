@@ -30,11 +30,37 @@ public sealed class MessageParser
         return Parse(mime, size);
     }
 
+    /// <summary>
+    /// Most plain-text body kept from one message. The same figure as the
+    /// per-attachment text ceiling, and for the same reason: every other text
+    /// source is capped (HTML input at 1M chars, each attachment at 2M) and a
+    /// <c>text/plain</c> body was the one that was not, bounded only by the
+    /// message size limit. One 48 MB text mail became ~70,000 chunks, all
+    /// embedded in a single batch. The largest real body in the 82k-message
+    /// development corpus is under 150K chars.
+    /// </summary>
+    internal const int MaxBodyTextChars = 2_000_000;
+
+    /// <summary>
+    /// Most HTML kept in <c>body_html</c>. Above the 1M chars
+    /// <see cref="HtmlToText"/> reads, so the stored HTML always covers what
+    /// <c>body_text</c> was derived from; the largest real one in the same
+    /// corpus is 540K.
+    /// </summary>
+    internal const int MaxBodyHtmlChars = 4_000_000;
+
+    /// <summary>Truncates without leaving half a surrogate pair at the end.</summary>
+    internal static string? CapChars(string? text, int maxChars)
+    {
+        if (text is null || text.Length <= maxChars) return text;
+        return text[..(char.IsHighSurrogate(text[maxChars - 1]) ? maxChars - 1 : maxChars)];
+    }
+
     public ParsedMessage Parse(MimeMessage mime, long sizeBytes)
     {
         ArgumentNullException.ThrowIfNull(mime);
 
-        var bodyHtml = mime.HtmlBody;
+        var bodyHtml = CapChars(mime.HtmlBody, MaxBodyHtmlChars);
         // Prefer the HTML rendition when present: many senders (American
         // Airlines, marketing platforms in general) ship a text/plain
         // multipart alternative that's a broken markdown-ish dump from their
@@ -46,7 +72,7 @@ public sealed class MessageParser
         // `mailvec rebuild-bodies` writes.
         var bodyText = !string.IsNullOrEmpty(bodyHtml)
             ? HtmlToText.Convert(bodyHtml)
-            : mime.TextBody;
+            : CapChars(mime.TextBody, MaxBodyTextChars);
 
         // Strip quoted reply chains so each message contributes only its new
         // content. Without this, BM25 over-rewards replies that quote the

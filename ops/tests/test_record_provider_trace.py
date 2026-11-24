@@ -10,8 +10,10 @@ import json
 import pathlib
 import re
 import shutil
+import ssl
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("record_provider_trace", REPO / "ops" / "record-provider-trace.py")
@@ -293,6 +295,52 @@ class TraceShape(unittest.TestCase):
         self.assertIn(f"Timeout {rpt.NETWORK_TIMEOUT_SECONDS}", cfg)
         self.assertIn('Path "/tmp/mail dir/"', cfg)
         self.assertNotIn("Pass ", cfg)
+
+
+class Tls(unittest.TestCase):
+    """imaplib verifies nothing unless it is handed a context that does."""
+
+    def _captured_context(self, call):
+        seen = {}
+
+        class FakeImap:
+            def __init__(self, host, port, *, ssl_context=None, timeout=None):
+                seen["context"] = ssl_context
+
+            def login(self, user, password):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch("imaplib.IMAP4_SSL", FakeImap):
+            call()
+        return seen["context"]
+
+    def test_the_recorder_logs_in_over_a_verified_connection(self):
+        ctx = self._captured_context(lambda: rpt.Account("user@gmail.com", "pw"))
+        self.assertIsInstance(ctx, ssl.SSLContext)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+
+    def test_the_dev_fetch_script_passes_a_verifying_context_too(self):
+        source = (REPO / "ops" / "dev-fetch-imap.py").read_text()
+        calls = re.findall(r"IMAP4_SSL\(([^\n]*)", source)
+        self.assertTrue(calls)
+        for call in calls:
+            self.assertIn("ssl_context=ssl.create_default_context()", call)
+
+    def test_the_generated_config_is_created_owner_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "mbsyncrc"
+            path.write_text("old")
+            path.chmod(0o644)
+            rpt.write_private(path, "new")
+            self.assertEqual(path.read_text(), "new")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":
